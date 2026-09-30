@@ -5,6 +5,7 @@ lint:            ## run yamllint, ansible-lint, shellcheck, syntax-check (in con
 	@DOCKER="$(DOCKER)" scripts/lint.sh
 
 validate:        ## render every kustomization under cluster/ and validate it against real schemas
+	@scripts/check-secrets-encrypted.sh
 	@scripts/check-cilium-values.sh
 	@DOCKER="$(DOCKER)" scripts/validate-cluster.sh
 

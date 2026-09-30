@@ -15,4 +15,4 @@ Argo CD decrypts via the KSOPS plugin (Kustomize generator).
 - Secrets are versioned, reviewable (keys visible, values encrypted) and rotated by re-encrypting.
 - No external vault to run. Losing the age private key means re-creating all secrets, which is a
   known and cheap operation here.
-- `pre-commit`/CI check refuses any `kind: Secret` that is not SOPS-encrypted.
+- CI (`scripts/check-secrets-encrypted.sh`) refuses any `kind: Secret` under `cluster/` that is not SOPS-encrypted.

@@ -48,6 +48,8 @@ jobs:
         # PyYAML and Jinja2 only; both scripts read YAML, and the Cilium check renders the Ansible
         # role's Jinja templates to compare resolved values.
         run: pip install 'PyYAML==6.0.2' 'Jinja2==3.1.6'
+      - name: no plaintext Secret objects (ADR 0006)
+        run: scripts/check-secrets-encrypted.sh
       - name: ansible and argo cd must agree about cilium
         run: scripts/check-cilium-values.sh
       - name: kustomize build + kubeconform
