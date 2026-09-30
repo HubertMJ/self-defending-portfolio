@@ -1,0 +1,11 @@
+# Gateway API CRDs, standard channel, pinned to the version Cilium 1.19.8 implements (v1.4.1 —
+# see ADR 0010). Standard, not experimental: the experimental channel carries TCPRoute/TLSRoute and
+# alpha fields that nothing here uses, and installing CRDs nobody reconciles is noise.
+#
+# These land in sync wave -2 because Cilium's operator only creates the `cilium` GatewayClass if
+# gateway.networking.k8s.io/v1 GatewayClass already exists (gatewayAPI.gatewayClass.create: auto).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.4.1/standard-install.yaml

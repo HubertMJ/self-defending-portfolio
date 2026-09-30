@@ -1,0 +1,18 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: cloudflared
+
+resources:
+  - namespace.yaml
+  - deployment.yaml
+  - ciliumnetworkpolicy.yaml
+
+configMapGenerator:
+  # The generated name carries a content hash, so editing config.yaml rolls the Deployment.
+  - name: cloudflared
+    files:
+      - config.yaml
+
+generators:
+  - ksops.yaml

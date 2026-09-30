@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: hello
+  labels:
+    # This is the namespace a visitor's request actually lands in, so it gets the strictest profile
+    # the cluster has. nginx-unprivileged is built for it: non-root, no capabilities, port 8080.
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
+    # Permits this namespace's HTTPRoute to attach to the portfolio Gateway (see
+    # cluster/infra/gateway/gateway.yaml allowedRoutes).
+    portfolio.hubertjablon.ski/gateway-routes: "true"

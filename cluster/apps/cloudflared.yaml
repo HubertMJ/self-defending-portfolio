@@ -1,0 +1,29 @@
+# Wave 2: the tunnel. Comes up before the Gateway so that the moment the Gateway has a certificate
+# the site is reachable; until then cloudflared's origin is simply unavailable and Cloudflare
+# returns a 502, which is a clearer failure than a tunnel that does not exist.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: cloudflared
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/REPLACE-ME-GITHUB-OWNER/self-defending-portfolio.git
+    targetRevision: main
+    path: cluster/infra/cloudflared
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: cloudflared
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      # The Namespace is a manifest in git (it carries Pod Security Standards labels that belong
+      # under review), so Argo must not invent one.
+      - CreateNamespace=false

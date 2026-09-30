@@ -1,0 +1,31 @@
+# Wave 1: after the cert-manager CRDs and webhook exist, before anything asks for a certificate.
+#
+# This Application is the one that consumes a SOPS-encrypted file. Until
+# cluster/infra/cert-manager-issuers/cloudflare-api-token.sops.yaml exists and is decryptable, its
+# `kustomize build` fails and this Application goes Degraded with the decryption error in the Argo
+# CD UI. That is the intended behaviour: a missing secret must stop the sync, not produce a
+# ClusterIssuer that points at a Secret that was never created.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: cert-manager-issuers
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/REPLACE-ME-GITHUB-OWNER/self-defending-portfolio.git
+    targetRevision: main
+    path: cluster/infra/cert-manager-issuers
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: cert-manager
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=false

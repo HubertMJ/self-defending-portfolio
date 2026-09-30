@@ -1,0 +1,15 @@
+# No pods ever run here: the Gateway's data plane is Cilium's Envoy DaemonSet in kube-system.
+# The namespace holds the Gateway, the redirect HTTPRoute and the cert-manager-issued Secret.
+# "restricted" is therefore free, and it stays correct if anything is ever added.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: gateway
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
+    # Opt-in marker read by the Gateway's allowedRoutes selector. A namespace without this label
+    # cannot attach an HTTPRoute to the portfolio Gateway, so "from: All" is not needed.
+    portfolio.hubertjablon.ski/gateway-routes: "true"

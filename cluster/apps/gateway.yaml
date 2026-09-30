@@ -1,0 +1,34 @@
+# Wave 3: the Gateway and its redirect route. Needs the Gateway API CRDs (wave -2), the `cilium`
+# GatewayClass that Cilium's operator creates (wave -1) and the ClusterIssuer the annotation names
+# (wave 1).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: gateway
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "3"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/REPLACE-ME-GITHUB-OWNER/self-defending-portfolio.git
+    targetRevision: main
+    path: cluster/infra/gateway
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: gateway
+  ignoreDifferences:
+    # cert-manager adds its own annotations to the Gateway while an issuance is in flight.
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: portfolio
+      jsonPointers:
+        - /metadata/annotations/cert-manager.io~1issue-temporary-certificate
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=false

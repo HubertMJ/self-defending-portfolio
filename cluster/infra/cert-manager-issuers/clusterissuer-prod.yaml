@@ -1,0 +1,25 @@
+# Production Let's Encrypt. Switch the Gateway's cert-manager.io/cluster-issuer annotation to this
+# issuer only after the staging certificate has been issued successfully once — see
+# docs/bootstrap.md. Both issuers are always present so the switch is a one-word diff, not a
+# manifest that has to be written under pressure.
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-prod
+spec:
+  acme:
+    server: https://acme-v02.api.letsencrypt.org/directory
+    # ACME account contact; expiry and policy notices go here. Replace before the first sync.
+    email: REPLACE-ME-ACME-CONTACT-EMAIL
+    privateKeySecretRef:
+      name: letsencrypt-prod-account-key
+    solvers:
+      # DNS-01, not HTTP-01: there is no inbound port to answer an HTTP-01 challenge on (ADR 0003).
+      - dns01:
+          cloudflare:
+            apiTokenSecretRef:
+              name: cloudflare-api-token
+              key: api-token
+        selector:
+          dnsZones:
+            - hubertjablon.ski

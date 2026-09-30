@@ -1,0 +1,76 @@
+# KSOPS integration (ADR 0006). Strategic merge patch, so the lists below are merged into the
+# upstream Deployment by `name` rather than replacing it.
+#
+# The ksops image is distroless and has no shell, so the copy is done by the binary itself:
+# `ksops install --with-kustomize <dir>` drops both `ksops` and a matching `kustomize` into the
+# shared emptyDir. Those then shadow the repo-server's own kustomize via subPath mounts, which is
+# how the plugin ends up on the build's PATH.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: argocd-repo-server
+spec:
+  template:
+    spec:
+      initContainers:
+        - name: install-ksops
+          image: viaductoss/ksops:v4.5.1@sha256:4def9fdd4e2f850265740ebe9592c5455d19b76891e88e602df8b52d74b95334
+          command:
+            - /usr/local/bin/ksops
+            - install
+            - --with-kustomize
+            - /custom-tools
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            # The image's USER is the name "nonroot", which the kubelet cannot resolve to a UID,
+            # so runAsNonRoot alone would fail the container. 65532 is that user.
+            runAsUser: 65532
+            runAsGroup: 65532
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+          volumeMounts:
+            - name: custom-tools
+              mountPath: /custom-tools
+      containers:
+        - name: argocd-repo-server
+          env:
+            # SOPS looks for the age identity relative to XDG_CONFIG_HOME; the repo-server's HOME
+            # is not writable, so both are pointed at an explicit path.
+            - name: XDG_CONFIG_HOME
+              value: /.config
+            - name: SOPS_AGE_KEY_FILE
+              value: /.config/sops/age/keys.txt
+          volumeMounts:
+            - name: custom-tools
+              mountPath: /usr/local/bin/kustomize
+              subPath: kustomize
+            - name: custom-tools
+              mountPath: /usr/local/bin/ksops
+              subPath: ksops
+            - name: sops-age
+              mountPath: /.config/sops/age
+              readOnly: true
+      volumes:
+        - name: custom-tools
+          emptyDir: {}
+        - name: sops-age
+          secret:
+            # Created by cluster/bootstrap/bootstrap.sh from $SOPS_AGE_KEY_FILE on the operator
+            # machine. It is the one secret that cannot come from git, because it is the key that
+            # decrypts everything that does come from git.
+            secretName: sops-age
+            defaultMode: 256  # 0400
+            items:
+              - key: keys.txt
+                path: keys.txt

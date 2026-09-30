@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cloudflared
+  labels:
+    # cloudflared needs no capabilities, no host namespaces and no writable root: it makes outbound
+    # connections and proxies. Restricted costs nothing here.
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted

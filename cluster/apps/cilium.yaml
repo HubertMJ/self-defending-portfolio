@@ -1,0 +1,114 @@
+# Wave -1: Argo CD adopts the Cilium release that Ansible installed.
+#
+# Ansible must install Cilium first (ADR 0004): without a CNI there is no pod network, so Argo CD
+# itself cannot start. From this commit on, Ansible's copy is the seed and this file is the truth.
+#
+# Adoption, not reinstallation. The release name (`cilium`) and namespace (`kube-system`) here are
+# identical to cilium_release_name / cilium_namespace in ansible/roles/cilium/defaults/main.yml, and
+# Argo CD renders the chart and applies the resulting objects rather than driving Helm, so it takes
+# ownership of the existing objects field by field. ServerSideApply=true is what makes that safe:
+# it merges into the live objects and reports the fields Argo now owns, instead of demanding the
+# client-side last-applied annotation that the Helm-created objects do not have. `Replace=true` is
+# deliberately NOT set — replacing the Cilium DaemonSet on a single node means deleting the CNI out
+# from under every running pod, including Argo CD.
+#
+# Consequence: `helm list -n kube-system` still shows the Ansible release. It is stale metadata, not
+# a second installation; nothing reconciles from it any more. Do not run the Ansible cilium role
+# again against a live cluster unless its values still match this file.
+#
+# The values below MUST stay identical to cilium_values in the Ansible role, plus the Gateway API
+# additions marked below. scripts/check-cilium-values.sh enforces this in CI.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: cilium
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://helm.cilium.io
+    chart: cilium
+    # Pinned; matches cilium_version in ansible/inventory/group_vars/k3s_nodes.yml (ADR 0008).
+    targetRevision: 1.19.8
+    helm:
+      releaseName: cilium
+      valuesObject:
+        # --- identical to cilium_values in ansible/roles/cilium/defaults/main.yml ---
+        kubeProxyReplacement: true
+        k8sServiceHost: 10.2.1.20
+        k8sServicePort: 6443
+        routingMode: native
+        ipv4NativeRoutingCIDR: 10.42.0.0/16
+        autoDirectNodeRoutes: true
+        ipam:
+          mode: kubernetes
+        bpf:
+          masquerade: true
+        operator:
+          replicas: 1
+          prometheus:
+            enabled: false
+        hubble:
+          enabled: true
+          relay:
+            enabled: true
+          ui:
+            enabled: false
+        policyEnforcementMode: default
+        # --- phase 2 additions (ADR 0010); not present in the Ansible role ---
+        gatewayAPI:
+          # The chart creates the `cilium` GatewayClass only when the Gateway API CRDs are already
+          # registered (gatewayClass.create defaults to `auto`, which inspects the cluster's API
+          # versions at render time). That is the reason gateway-api-crds sits in wave -2 and this
+          # Application in wave -1, and the reason a first sync of a cluster without the CRDs
+          # produces a Cilium with no GatewayClass rather than an error.
+          enabled: true
+          # Nothing binds a host port: the only path in is the tunnel (ADR 0003). Envoy's listeners
+          # stay inside the cluster and are reached through the Gateway's ClusterIP.
+          hostNetwork:
+            enabled: false
+          # Copies Secrets referenced by a listener's certificateRefs into cilium-secrets so
+          # Envoy's SDS can read them without cluster-wide Secret access.
+          secretsNamespace:
+            create: true
+            name: cilium-secrets
+            sync: true
+        envoy:
+          # Envoy as its own DaemonSet rather than embedded in the agent. The chart already defaults
+          # to this for new installations, but the default is expressed as `null`, so it is stated
+          # here: a chart bump must not be able to move the L7 data plane by changing a default.
+          enabled: true
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: kube-system
+  ignoreDifferences:
+    # Cilium's operator writes the CA and the agent certificates into these Secrets at runtime.
+    # They are generated, not declared, so Argo must not flag them as drift and must not revert them.
+    - group: ""
+      kind: Secret
+      name: cilium-ca
+      jsonPointers:
+        - /data
+    - group: ""
+      kind: Secret
+      name: hubble-server-certs
+      jsonPointers:
+        - /data
+    - group: ""
+      kind: Secret
+      name: hubble-relay-client-certs
+      jsonPointers:
+        - /data
+  syncPolicy:
+    automated:
+      # Pruning would let a values typo delete the CNI. selfHeal still reverts manual drift.
+      prune: false
+      selfHeal: true
+    syncOptions:
+      # Required for adoption of the Ansible-installed objects; see the note at the top.
+      - ServerSideApply=true
+      - CreateNamespace=false

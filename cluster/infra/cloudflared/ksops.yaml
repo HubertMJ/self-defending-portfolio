@@ -1,0 +1,11 @@
+# See cluster/infra/cert-manager-issuers/ksops.yaml for the pattern and the fail-loud rationale.
+apiVersion: viaduct.ai/v1
+kind: ksops
+metadata:
+  name: cloudflared-secret-generator
+  annotations:
+    config.kubernetes.io/function: |
+      exec:
+        path: ksops
+files:
+  - cloudflared-credentials.sops.yaml

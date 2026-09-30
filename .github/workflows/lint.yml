@@ -32,7 +32,26 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - run: shellcheck scripts/*.sh
+      - run: shellcheck scripts/*.sh cluster/bootstrap/bootstrap.sh
+
+  validate:
+    # Argo CD auto-syncs cluster/, so this job is the last cheap place a broken manifest can be
+    # caught. It renders every kustomization and validates the output against the real Kubernetes
+    # and CRD schemas. Tooling runs in containers pinned by digest inside the scripts (ADR 0008).
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.13"
+      - name: python helpers
+        # PyYAML and Jinja2 only; both scripts read YAML, and the Cilium check renders the Ansible
+        # role's Jinja templates to compare resolved values.
+        run: pip install 'PyYAML==6.0.2' 'Jinja2==3.1.6'
+      - name: ansible and argo cd must agree about cilium
+        run: scripts/check-cilium-values.sh
+      - name: kustomize build + kubeconform
+        run: scripts/validate-cluster.sh
 
   secrets:
     runs-on: ubuntu-24.04

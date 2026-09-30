@@ -1,0 +1,49 @@
+# The single entry point for hubertjablon.ski.
+#
+# Cilium materialises this as a LoadBalancer Service named cilium-gateway-portfolio in this
+# namespace. On a single node with no LB IP provider its EXTERNAL-IP stays <pending> forever and
+# that is intentional (ADR 0010): cloudflared reaches it by ClusterIP from inside the cluster, and
+# an externally reachable address would contradict ADR 0003.
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: portfolio
+  namespace: gateway
+  annotations:
+    # cert-manager's gateway-shim watches this annotation, reads the listeners' certificateRefs and
+    # issues a Certificate for each hostname. Start on letsencrypt-staging (see
+    # docs/bootstrap.md), then change this one word to letsencrypt-prod and push.
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+spec:
+  gatewayClassName: cilium
+  listeners:
+    # Port 80 exists only to redirect. Cloudflare already forces HTTPS to the visitor; this covers
+    # anything that reaches the tunnel on plain HTTP.
+    - name: http
+      protocol: HTTP
+      port: 80
+      hostname: hubertjablon.ski
+      allowedRoutes:
+        namespaces:
+          from: Selector
+          selector:
+            matchLabels:
+              portfolio.hubertjablon.ski/gateway-routes: "true"
+    - name: https
+      protocol: HTTPS
+      port: 443
+      hostname: hubertjablon.ski
+      tls:
+        mode: Terminate
+        certificateRefs:
+          # Created by cert-manager in this namespace, then mirrored into cilium-secrets by
+          # gatewayAPI.secretsNamespace.sync so Envoy's SDS can read it.
+          - kind: Secret
+            group: ""
+            name: portfolio-tls
+      allowedRoutes:
+        namespaces:
+          from: Selector
+          selector:
+            matchLabels:
+              portfolio.hubertjablon.ski/gateway-routes: "true"

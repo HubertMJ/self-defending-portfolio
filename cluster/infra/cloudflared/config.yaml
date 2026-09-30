@@ -1,0 +1,36 @@
+# cloudflared tunnel configuration. Rendered into a ConfigMap by kustomize's configMapGenerator,
+# which appends a content hash to the ConfigMap name and rewrites the Deployment's reference to it.
+# A config change therefore produces a new ConfigMap name, which rolls the pods — cloudflared reads
+# this file only at startup.
+#
+# Locally-managed tunnel (ADR 0003 + ADR 0010). Two modes exist: with a *token*
+# (TUNNEL_TOKEN / --token) the tunnel is "remotely managed", the hostname-to-service routing lives
+# in the Cloudflare Zero Trust dashboard and cloudflared ignores any local ingress rules; with a
+# *credentials file* the tunnel is "locally managed" and the rules below are the source of truth.
+# This project uses credentials-file mode, because a routing table that lives in a vendor dashboard
+# is a routing table that is not in git, not reviewed, and not restored by a rebuild-from-zero. The
+# cost is one extra secret (credentials.json instead of a token).
+
+# UUID printed by `cloudflared tunnel create portfolio` (also the "TunnelID" field inside
+# credentials.json). See docs/bootstrap.md phase 2.
+tunnel: REPLACE-ME-TUNNEL-UUID
+credentials-file: /etc/cloudflared/credentials/credentials.json
+metrics: 0.0.0.0:2000
+no-autoupdate: true
+
+# Two replicas each hold their own set of connections to Cloudflare's edge and the edge
+# load-balances across them, so a rolling update does not drop the site.
+ingress:
+  - hostname: hubertjablon.ski
+    # The Service Cilium creates for Gateway `portfolio` in namespace `gateway`
+    # (cilium-gateway-<gateway-name>). Reached by ClusterIP; see ADR 0010.
+    service: https://cilium-gateway-portfolio.gateway.svc.cluster.local:443
+    originRequest:
+      # SNI and certificate verification both use the real hostname, so the Let's Encrypt
+      # certificate on the Gateway is actually validated on this hop instead of being decoration
+      # in front of a blindly-trusted origin.
+      originServerName: hubertjablon.ski
+      noTLSVerify: false
+  # Anything the tunnel receives for a hostname that is not routed here is not this cluster's
+  # business. 404, not a default backend.
+  - service: http_status:404

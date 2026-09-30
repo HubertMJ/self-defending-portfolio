@@ -1,0 +1,50 @@
+# The route a visitor's request actually takes, and the only place security headers are set.
+#
+# Setting them here rather than in nginx.conf means they are enforced for every backend that ever
+# attaches to this Gateway, they are a reviewable field in a typed API instead of a string in a
+# config file, and swapping nginx for something else does not silently drop them.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: hello
+  namespace: hello
+spec:
+  parentRefs:
+    - name: portfolio
+      namespace: gateway
+      sectionName: https
+  hostnames:
+    - hubertjablon.ski
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      filters:
+        - type: ResponseHeaderModifier
+          responseHeaderModifier:
+            set:
+              # Two years, subdomains included. No `preload`: that is a one-way door and the
+              # subdomains are not all serving HTTPS yet.
+              - name: Strict-Transport-Security
+                value: max-age=63072000; includeSubDomains
+              # No MIME sniffing: a text/plain upload must never be executed as script.
+              - name: X-Content-Type-Options
+                value: nosniff
+              - name: Referrer-Policy
+                value: strict-origin-when-cross-origin
+              # This page is a single static document with inline CSS and no scripts, so the policy
+              # can be nearly total. It will loosen when the phase 5 demo app needs SSE and its own
+              # bundle, and that loosening will be a visible diff.
+              - name: Content-Security-Policy
+                value: >-
+                  default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:;
+                  script-src 'none'; object-src 'none'; frame-ancestors 'none'; base-uri 'none';
+                  form-action 'none'
+              - name: Permissions-Policy
+                value: accelerometer=(), camera=(), geolocation=(), gyroscope=(), microphone=(), payment=(), usb=()
+              - name: Cross-Origin-Opener-Policy
+                value: same-origin
+      backendRefs:
+        - name: hello
+          port: 80

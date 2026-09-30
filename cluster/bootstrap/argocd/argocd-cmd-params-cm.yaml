@@ -1,0 +1,11 @@
+# The UI is never published through the Cloudflare Tunnel (ADR 0003): it is reached only by
+# `kubectl port-forward` from the LAN. Terminating TLS in argocd-server would therefore only add a
+# self-signed certificate nobody validates, plus the redirect loop that comes with it. Insecure
+# mode here means "plain HTTP on a ClusterIP that is not routable from outside the node", not
+# "unauthenticated" — login is still required.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: argocd-cmd-params-cm
+data:
+  server.insecure: "true"

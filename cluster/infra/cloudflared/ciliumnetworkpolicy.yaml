@@ -1,0 +1,60 @@
+# cloudflared is the only workload in this cluster that talks to the public internet on purpose, so
+# it is the one that most needs its egress written down. Everything not listed here is denied: a
+# CiliumNetworkPolicy with an egress section is default-deny for egress on the endpoints it selects.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: cloudflared-egress
+  namespace: cloudflared
+spec:
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: cloudflared
+  egress:
+    # DNS, to resolve both the Cloudflare edge and the in-cluster Gateway Service. Restricted to
+    # the cluster's CoreDNS; the L7 DNS rule makes Hubble log every name that is looked up, which
+    # is the visibility half of "self-defending".
+    - toEndpoints:
+        - matchLabels:
+            io.kubernetes.pod.namespace: kube-system
+            k8s-app: kube-dns
+      toPorts:
+        - ports:
+            - port: "53"
+              protocol: UDP
+            - port: "53"
+              protocol: TCP
+          rules:
+            dns:
+              - matchPattern: "*"
+    # Outbound to Cloudflare's edge. 7844 is the QUIC/HTTP2 tunnel transport; 443 covers the
+    # control-plane API calls and the TLS fallback transport. Nothing else leaves this pod.
+    - toEntities:
+        - world
+      toPorts:
+        - ports:
+            - port: "7844"
+              protocol: UDP
+            - port: "7844"
+              protocol: TCP
+            - port: "443"
+              protocol: TCP
+    # The origin. toServices resolves the Gateway's Service to its backends, so this rule keeps
+    # working if Cilium changes how the Gateway is materialised.
+    - toServices:
+        - k8sService:
+            serviceName: cilium-gateway-portfolio
+            namespace: gateway
+      toPorts:
+        - ports:
+            - port: "443"
+              protocol: TCP
+  ingress:
+    # Only the node's kubelet, for the liveness and readiness probes on the metrics port. Cilium
+    # gives kubelet traffic the reserved:host identity.
+    - fromEntities:
+        - host
+      toPorts:
+        - ports:
+            - port: "2000"
+              protocol: TCP

@@ -1,0 +1,21 @@
+# TEMPLATE — not consumed by kustomize. Copy, fill in, encrypt, commit the encrypted result:
+#
+#   cp cloudflare-api-token.sops.yaml.example cloudflare-api-token.sops.yaml
+#   $EDITOR cloudflare-api-token.sops.yaml        # paste the real token
+#   sops -e -i cloudflare-api-token.sops.yaml     # in place; .sops.yaml selects the age recipient
+#   git add cloudflare-api-token.sops.yaml
+#
+# The token is a Cloudflare API token (not the global API key) scoped to:
+#   Zone / DNS / Edit  +  Zone / Zone / Read   on zone hubertjablon.ski only.
+# That is the least cert-manager needs to write and clean up _acme-challenge TXT records.
+#
+# .sops.yaml encrypts only `data` and `stringData`, so the keys stay readable in a diff and the
+# values do not. Reviewing a secret rotation is therefore a real review.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: cloudflare-api-token
+  namespace: cert-manager
+type: Opaque
+stringData:
+  api-token: REPLACE-ME-CLOUDFLARE-DNS-EDIT-TOKEN

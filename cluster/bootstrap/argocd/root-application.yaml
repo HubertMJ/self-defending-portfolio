@@ -1,0 +1,29 @@
+# App-of-apps root. This is the last thing bootstrap applies by hand; everything after it is a
+# git commit (ADR 0005).
+#
+# repoURL contains a placeholder. Replace it before the first bootstrap:
+#   grep -rl REPLACE-ME-GITHUB-OWNER cluster/ | xargs sed -i 's/REPLACE-ME-GITHUB-OWNER/<your-gh-user>/g'
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: root
+  namespace: argocd
+  finalizers:
+    # Deleting the root Application cascades to every child Application it owns.
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/REPLACE-ME-GITHUB-OWNER/self-defending-portfolio.git
+    targetRevision: main
+    path: cluster/apps
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      # The argocd namespace already exists at this point; nothing here should create namespaces.
+      - CreateNamespace=false

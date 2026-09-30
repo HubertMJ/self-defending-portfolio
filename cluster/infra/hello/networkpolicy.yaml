@@ -1,0 +1,13 @@
+# Default-deny for the namespace. Plain Kubernetes NetworkPolicy on purpose: it is the portable,
+# boring baseline, and Cilium enforces it. Selecting no pods' traffic while declaring both
+# policyTypes is the canonical way to say "nothing in, nothing out, unless another policy allows it".
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+  namespace: hello
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress

@@ -1,0 +1,24 @@
+# Staging first, always. Let's Encrypt production has a hard rate limit per registered domain and a
+# misconfigured DNS-01 solver burns it fast; staging has none. The certificate it issues is not
+# trusted by browsers, which is exactly the signal you want while the plumbing is unproven.
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-staging
+spec:
+  acme:
+    server: https://acme-staging-v02.api.letsencrypt.org/directory
+    # ACME account contact; expiry and policy notices go here. Replace before the first sync.
+    email: REPLACE-ME-ACME-CONTACT-EMAIL
+    privateKeySecretRef:
+      name: letsencrypt-staging-account-key
+    solvers:
+      # DNS-01, not HTTP-01: there is no inbound port to answer an HTTP-01 challenge on (ADR 0003).
+      - dns01:
+          cloudflare:
+            apiTokenSecretRef:
+              name: cloudflare-api-token
+              key: api-token
+        selector:
+          dnsZones:
+            - hubertjablon.ski

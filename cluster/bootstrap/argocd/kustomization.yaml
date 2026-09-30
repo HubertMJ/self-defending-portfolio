@@ -1,0 +1,17 @@
+# Argo CD install, patched for KSOPS and for a LAN-only (no public) UI.
+# Pinned by version in the resource URL (ADR 0008). Bumping Argo CD is a one-line diff here.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: argocd
+
+resources:
+  - namespace.yaml
+  # Argo CD v3.5.3 non-HA install. The URL carries the version; there is no "stable" alias here.
+  - https://raw.githubusercontent.com/argoproj/argo-cd/v3.5.3/manifests/install.yaml
+  - root-application.yaml
+
+patches:
+  - path: argocd-cm.yaml
+  - path: argocd-cmd-params-cm.yaml
+  - path: argocd-repo-server-ksops.yaml

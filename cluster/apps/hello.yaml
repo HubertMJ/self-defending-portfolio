@@ -1,0 +1,26 @@
+# Wave 4: the page itself. The Definition of Done for phase 2 is that changing index.html in this
+# repository and pushing is the only action required to change what a visitor sees.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: hello
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "4"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/REPLACE-ME-GITHUB-OWNER/self-defending-portfolio.git
+    targetRevision: main
+    path: cluster/infra/hello
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: hello
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=false

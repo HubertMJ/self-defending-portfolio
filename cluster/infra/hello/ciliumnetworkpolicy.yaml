@@ -1,0 +1,28 @@
+# The one hole in the default-deny above.
+#
+# Cilium's Gateway API data plane is the cilium-envoy DaemonSet, which runs in the *host* network
+# namespace. Traffic from the Gateway to this pod therefore arrives with the reserved:host identity,
+# not with a pod label, so `fromEndpoints` with a namespace selector would never match and neither
+# would a stock NetworkPolicy ingress rule. This is recorded in ADR 0010 because it is the kind of
+# detail that costs an afternoon when it is not written down.
+#
+# The same rule covers the kubelet's liveness and readiness probes, which also carry reserved:host.
+#
+# No egress rule is granted: a static page needs no DNS, no API server and no internet. Anything
+# this pod tries to send outbound is dropped and shows up in Hubble, which is the point.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-gateway-ingress
+  namespace: hello
+spec:
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: hello
+  ingress:
+    - fromEntities:
+        - host
+      toPorts:
+        - ports:
+            - port: "8080"
+              protocol: TCP

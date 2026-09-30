@@ -1,0 +1,9 @@
+# KSOPS is a kustomize KRM exec plugin, so both alpha plugins and exec must be enabled for
+# `kustomize build` inside the repo-server. Without this the ksops generator is silently a no-op
+# and the Secret never appears.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: argocd-cm
+data:
+  kustomize.buildOptions: --enable-alpha-plugins --enable-exec

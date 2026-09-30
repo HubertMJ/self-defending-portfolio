@@ -1,0 +1,24 @@
+# The app-of-apps: the root Application points at this directory, so adding a component to the
+# cluster is adding one file here.
+#
+# Sync waves, low to high:
+#   -2  gateway-api-crds        CRDs the rest is typed against
+#   -1  cilium                  CNI + Gateway API data plane (adopted from the Ansible install)
+#    0  cert-manager            controller, webhook, CRDs
+#    1  cert-manager-issuers    ClusterIssuers + the Cloudflare DNS-01 token (SOPS)
+#    2  cloudflared             the tunnel (SOPS)
+#    3  gateway                 the Gateway and its HTTP-to-HTTPS redirect
+#    4  hello                   the page
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: argocd
+
+resources:
+  - gateway-api-crds.yaml
+  - cilium.yaml
+  - cert-manager.yaml
+  - cert-manager-issuers.yaml
+  - cloudflared.yaml
+  - gateway.yaml
+  - hello.yaml

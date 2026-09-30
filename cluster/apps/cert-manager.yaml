@@ -1,0 +1,116 @@
+# Wave 0: issues the certificate the Gateway's HTTPS listener serves.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: cert-manager
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://charts.jetstack.io
+    chart: cert-manager
+    targetRevision: v1.21.2
+    helm:
+      releaseName: cert-manager
+      valuesObject:
+        # The chart defaults to skipping CRDs, which would mean installing them out of band and
+        # losing the version coupling between CRDs and controller.
+        crds:
+          enabled: true
+          # Argo CD owns the lifecycle; Helm's keep-annotation would only confuse pruning.
+          keep: false
+        # Flags-as-config: the controller reads a ControllerConfiguration instead of a growing list
+        # of command line arguments. apiVersion is pinned so a chart bump cannot silently move this
+        # file to a newer config API with different defaults.
+        config:
+          apiVersion: controller.config.cert-manager.io/v1alpha1
+          kind: ControllerConfiguration
+          gatewayAPI:
+            # Turns on the gateway-shim controller: it watches Gateways annotated with
+            # cert-manager.io/cluster-issuer and issues into the listener's certificateRefs Secret.
+            # In 1.21 this replaced the deprecated top-level `enableGatewayAPI` field; the
+            # ExperimentalGatewayAPISupport feature gate it needs has been on by default since 1.15.
+            enabled: true
+          logging:
+            verbosity: 2
+            format: text
+        # DNS-01 self-check: ask the authoritative resolvers directly instead of trusting a
+        # recursive resolver's cache, which otherwise adds minutes per issuance.
+        dns01RecursiveNameservers: "1.1.1.1:53,9.9.9.9:53"
+        dns01RecursiveNameserversOnly: true
+        # PSS `restricted` compliance is a chart default in recent versions; it is repeated here so
+        # a chart bump that relaxes a default shows up as a failing sync, not as a quiet regression.
+        securityContext:
+          runAsNonRoot: true
+          seccompProfile:
+            type: RuntimeDefault
+        containerSecurityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+        resources:
+          requests:
+            cpu: 10m
+            memory: 64Mi
+          limits:
+            cpu: 500m
+            memory: 256Mi
+        webhook:
+          securityContext:
+            runAsNonRoot: true
+            seccompProfile:
+              type: RuntimeDefault
+          containerSecurityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+        cainjector:
+          securityContext:
+            runAsNonRoot: true
+            seccompProfile:
+              type: RuntimeDefault
+          containerSecurityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 10m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: cert-manager
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      # cert-manager's CRDs are larger than the 262 144-byte client-side apply annotation allows.
+      - ServerSideApply=true
+    # cert-manager's own pods are restricted-compliant, so the namespace Argo CD creates can enforce
+    # it. Written here rather than as a Namespace manifest because Argo CD owns this namespace's
+    # lifecycle: the chart and its namespace are one unit.
+    managedNamespaceMetadata:
+      labels:
+        pod-security.kubernetes.io/enforce: restricted
+        pod-security.kubernetes.io/enforce-version: latest
+        pod-security.kubernetes.io/audit: restricted
+        pod-security.kubernetes.io/warn: restricted
