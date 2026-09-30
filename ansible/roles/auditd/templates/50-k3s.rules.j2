@@ -1,0 +1,5 @@
+## {{ ansible_managed }}
+## Cluster configuration, server state (certificates, etcd/kine, token) and binary.
+-w {{ auditd_k3s_config_dir }} -p wa -k k3s_config
+-w {{ auditd_k3s_state_dir }} -p wa -k k3s_state
+-w {{ auditd_k3s_binary }} -p x -k k3s_bin

@@ -1,0 +1,15 @@
+---
+galaxy_info:
+  role_name: unattended_upgrades
+  author: self-defending-portfolio
+  description: Automatic Debian security and stable updates with a nightly reboot window.
+  license: MIT
+  min_ansible_version: "2.17"
+  platforms:
+    - name: Debian
+      versions:
+        - trixie
+  galaxy_tags:
+    - apt
+    - patching
+dependencies: []

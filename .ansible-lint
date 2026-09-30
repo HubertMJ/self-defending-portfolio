@@ -1,0 +1,9 @@
+profile: production
+exclude_paths:
+  - .venv/
+  - .github/
+  - docs/
+  - scripts/
+kinds:
+  - playbook: "ansible/playbooks/*.yml"
+  - inventory: "ansible/inventory/*"

@@ -1,0 +1,14 @@
+---
+argument_specs:
+  main:
+    short_description: Kernel parameter hardening for a Cilium-backed k3s node
+    description:
+      - Writes every parameter to one sysctl.d drop-in and applies it live.
+    options:
+      sysctl_file:
+        description: Path of the sysctl.d drop-in holding all settings.
+        type: str
+        default: /etc/sysctl.d/90-hardening.conf
+      sysctl_settings:
+        description: Mapping of sysctl keys to values. Replaces the default map entirely when overridden.
+        type: dict

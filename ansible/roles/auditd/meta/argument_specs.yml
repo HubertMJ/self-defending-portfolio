@@ -1,0 +1,52 @@
+---
+argument_specs:
+  main:
+    short_description: Audit framework configuration and rules
+    description:
+      - Installs auditd, its rotation policy and rule files for identity, privilege and k3s paths.
+    options:
+      auditd_buffer_size:
+        description: Kernel audit backlog size (-b).
+        type: int
+        default: 8192
+      auditd_failure_mode:
+        description: Audit failure mode (-f), 0 silent, 1 printk, 2 panic.
+        type: int
+        default: 1
+        choices: [0, 1, 2]
+      auditd_uid_min:
+        description: Lowest uid treated as a login user in audit rules.
+        type: int
+        default: 1000
+      auditd_immutable:
+        description: Set the ruleset immutable (-e 2). Requires a reboot to change rules afterwards.
+        type: bool
+        default: false
+      auditd_max_log_file:
+        description: Maximum size of a single audit log file in MiB.
+        type: int
+        default: 50
+      auditd_max_log_file_action:
+        description: Action taken when max_log_file is reached.
+        type: str
+        default: ROTATE
+      auditd_num_logs:
+        description: Number of rotated audit logs to keep.
+        type: int
+        default: 5
+      auditd_space_left_action:
+        description: Action taken when the space_left threshold is crossed.
+        type: str
+        default: SYSLOG
+      auditd_k3s_config_dir:
+        description: k3s configuration directory watched for writes.
+        type: str
+        default: /etc/rancher/k3s
+      auditd_k3s_state_dir:
+        description: k3s server state directory watched for writes.
+        type: str
+        default: /var/lib/rancher/k3s/server
+      auditd_k3s_binary:
+        description: k3s binary watched for execution.
+        type: str
+        default: /usr/local/bin/k3s

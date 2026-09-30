@@ -1,0 +1,41 @@
+# {{ ansible_managed }}
+# Read by k3s server at startup; no INSTALL_K3S_* environment is used.
+---
+node-ip: "{{ k3s_node_ip }}"
+cluster-cidr: "{{ k3s_cluster_cidr }}"
+service-cidr: "{{ k3s_service_cidr }}"
+write-kubeconfig-mode: "{{ k3s_write_kubeconfig_mode }}"
+secrets-encryption: {{ k3s_secrets_encryption | ternary('true', 'false') }}
+protect-kernel-defaults: {{ k3s_protect_kernel_defaults | ternary('true', 'false') }}
+embedded-registry: false
+
+# Cilium owns the datapath.
+flannel-backend: "{{ k3s_flannel_backend }}"
+disable-network-policy: {{ k3s_disable_network_policy | ternary('true', 'false') }}
+disable-kube-proxy: {{ k3s_disable_kube_proxy | ternary('true', 'false') }}
+
+disable:
+{% for component in k3s_disable_components %}
+  - "{{ component }}"
+{% endfor %}
+
+tls-san:
+{% for san in k3s_tls_sans %}
+  - "{{ san }}"
+{% endfor %}
+
+kube-apiserver-arg:
+  - "audit-log-path={{ k3s_audit_log_path }}"
+  - "audit-policy-file={{ k3s_audit_policy_path }}"
+  - "audit-log-maxage={{ k3s_audit_log_maxage }}"
+  - "audit-log-maxbackup={{ k3s_audit_log_maxbackup }}"
+  - "audit-log-maxsize={{ k3s_audit_log_maxsize }}"
+{% for arg in k3s_kube_apiserver_extra_args %}
+  - "{{ arg }}"
+{% endfor %}
+
+kubelet-arg:
+  - "protect-kernel-defaults={{ k3s_protect_kernel_defaults | ternary('true', 'false') }}"
+{% for arg in k3s_kubelet_extra_args %}
+  - "{{ arg }}"
+{% endfor %}

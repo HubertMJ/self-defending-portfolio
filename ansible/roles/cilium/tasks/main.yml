@@ -1,0 +1,77 @@
+---
+- name: Check the installed helm version
+  ansible.builtin.command:
+    cmd: "{{ cilium_helm_binary }} version --short"
+  register: cilium_helm_installed
+  changed_when: false
+  failed_when: false
+
+- name: Install the pinned helm client
+  when: cilium_helm_installed.stdout | default('') is not search(cilium_helm_version)
+  block:
+    # The tarball name is kept intact because get_url looks the expected digest
+    # up in the published .sha256sum file by file name.
+    - name: Download the helm release with checksum verification
+      ansible.builtin.get_url:
+        url: "{{ cilium_helm_tarball_url }}"
+        dest: "/tmp/{{ cilium_helm_tarball_name }}"
+        checksum: "sha256:{{ cilium_helm_tarball_url }}.sha256sum"
+        owner: root
+        group: root
+        mode: "0600"
+
+    - name: Unpack the helm release
+      ansible.builtin.unarchive:
+        src: "/tmp/{{ cilium_helm_tarball_name }}"
+        dest: /tmp
+        remote_src: true
+        extra_opts:
+          - --no-same-owner
+        creates: "/tmp/linux-{{ cilium_helm_arch }}/helm"
+
+    - name: Place the helm binary
+      ansible.builtin.copy:
+        src: "/tmp/linux-{{ cilium_helm_arch }}/helm"
+        dest: "{{ cilium_helm_binary }}"
+        remote_src: true
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Remove the helm download artefacts
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "/tmp/linux-{{ cilium_helm_arch }}"
+        - "/tmp/{{ cilium_helm_tarball_name }}"
+
+- name: Add the Cilium helm repository
+  kubernetes.core.helm_repository:
+    name: "{{ cilium_chart_repo_name }}"
+    repo_url: "{{ cilium_chart_repo_url }}"
+    binary_path: "{{ cilium_helm_binary }}"
+
+- name: Install Cilium
+  kubernetes.core.helm:
+    name: "{{ cilium_release_name }}"
+    chart_ref: "{{ cilium_chart_ref }}"
+    chart_version: "{{ cilium_version }}"
+    release_namespace: "{{ cilium_namespace }}"
+    kubeconfig: "{{ cilium_kubeconfig }}"
+    binary_path: "{{ cilium_helm_binary }}"
+    values: "{{ cilium_values }}"
+    wait: "{{ cilium_helm_wait }}"
+    timeout: "{{ cilium_helm_timeout }}"
+    atomic: false
+
+# Until Cilium is running the node has no CNI and stays NotReady, so this is
+# the first point where node readiness is a meaningful signal.
+- name: Wait for the node to become Ready
+  ansible.builtin.command:
+    cmd: "{{ cilium_kubectl_binary }} kubectl get node {{ inventory_hostname_short }} --no-headers"
+  register: cilium_node_state
+  changed_when: false
+  retries: "{{ cilium_node_ready_retries }}"
+  delay: "{{ cilium_node_ready_delay }}"
+  until: cilium_node_state.stdout is search(' Ready ')

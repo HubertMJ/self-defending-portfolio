@@ -1,0 +1,6 @@
+## {{ ansible_managed }}
+## Loaded first: reset any rules already in the kernel, then set global knobs.
+-D
+-b {{ auditd_buffer_size }}
+-f {{ auditd_failure_mode }}
+--backlog_wait_time 60000

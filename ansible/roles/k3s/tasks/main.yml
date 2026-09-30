@@ -1,0 +1,108 @@
+---
+- name: Create k3s directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+  loop:
+    - /etc/rancher/k3s
+    - /var/lib/rancher/k3s
+    - "{{ k3s_audit_log_dir }}"
+
+# The published install script has no checksum, so the binary is fetched
+# straight from the release and verified against the release's own
+# sha256sum-<arch>.txt, which get_url matches by file name.
+- name: Install the k3s binary
+  ansible.builtin.get_url:
+    url: "{{ k3s_release_base_url }}/{{ k3s_version | urlencode }}/k3s"
+    dest: "{{ k3s_binary_path }}"
+    checksum: "sha256:{{ k3s_release_base_url }}/{{ k3s_version | urlencode }}/sha256sum-{{ k3s_arch }}.txt"
+    owner: root
+    group: root
+    mode: "0755"
+  notify: Restart k3s
+
+- name: Link the bundled CLIs
+  ansible.builtin.file:
+    src: "{{ k3s_binary_path }}"
+    dest: "/usr/local/bin/{{ item }}"
+    state: link
+    owner: root
+    group: root
+    mode: "0755"
+    follow: false
+  loop: "{{ k3s_symlinks }}"
+
+- name: Render the API server audit policy
+  ansible.builtin.template:
+    src: audit-policy.yaml.j2
+    dest: "{{ k3s_audit_policy_path }}"
+    owner: root
+    group: root
+    mode: "0600"
+  notify: Restart k3s
+
+- name: Render the k3s server configuration
+  ansible.builtin.template:
+    src: config.yaml.j2
+    dest: /etc/rancher/k3s/config.yaml
+    owner: root
+    group: root
+    mode: "0600"
+  notify: Restart k3s
+
+- name: Install the k3s systemd unit
+  ansible.builtin.template:
+    src: k3s.service.j2
+    dest: /etc/systemd/system/k3s.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart k3s
+
+- name: Ensure k3s is enabled and running
+  ansible.builtin.systemd_service:
+    name: k3s
+    state: started
+    enabled: true
+    daemon_reload: true
+
+- name: Apply pending k3s changes before waiting for the API server
+  ansible.builtin.meta: flush_handlers
+
+- name: Wait for the admin kubeconfig to appear
+  ansible.builtin.wait_for:
+    path: /etc/rancher/k3s/k3s.yaml
+    timeout: 300
+
+# Only the API server is checked here. The node stays NotReady until the
+# cilium role installs a CNI, so waiting on node readiness would deadlock.
+- name: Wait for the API server to report ready
+  ansible.builtin.command:
+    cmd: "{{ k3s_binary_path }} kubectl get --raw /readyz"
+  register: k3s_readyz
+  changed_when: false
+  retries: "{{ k3s_readyz_retries }}"
+  delay: "{{ k3s_readyz_delay }}"
+  until: k3s_readyz.rc == 0
+
+- name: Read the admin kubeconfig
+  ansible.builtin.slurp:
+    src: /etc/rancher/k3s/k3s.yaml
+  register: k3s_kubeconfig_raw
+  when: k3s_fetch_kubeconfig | bool
+
+- name: Store the kubeconfig on the control machine
+  ansible.builtin.copy:
+    content: >-
+      {{ k3s_kubeconfig_raw.content | b64decode
+         | replace('https://127.0.0.1:6443', 'https://' ~ k3s_kubeconfig_server ~ ':6443') }}
+    dest: "{{ k3s_kubeconfig_dest }}"
+    mode: "0600"
+  become: false
+  delegate_to: localhost
+  vars:
+    k3s_kubeconfig_server: "{{ ansible_host | default(k3s_node_ip) }}"
+  when: k3s_fetch_kubeconfig | bool

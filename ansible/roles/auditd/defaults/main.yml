@@ -1,0 +1,27 @@
+---
+# Kernel audit backlog. 8192 is the usual floor for a Kubernetes node; a
+# too-small buffer makes the kernel drop events under load.
+auditd_buffer_size: 8192
+
+# Failure mode: 0 silent, 1 printk (chosen), 2 panic.
+auditd_failure_mode: 1
+
+# Lowest uid considered a real login user; audit rules ignore service accounts.
+auditd_uid_min: 1000
+
+# Make the ruleset immutable (-e 2). This is deliberately false by default:
+# with -e 2 the kernel refuses any further rule change until the next reboot,
+# so a subsequent Ansible run that reloads rules fails. Enable it only on a
+# host you are ready to reboot after each policy change.
+auditd_immutable: false
+
+# auditd.conf log rotation.
+auditd_max_log_file: 50
+auditd_max_log_file_action: ROTATE
+auditd_num_logs: 5
+auditd_space_left_action: SYSLOG
+
+# Paths watched by the k3s ruleset.
+auditd_k3s_config_dir: /etc/rancher/k3s
+auditd_k3s_state_dir: /var/lib/rancher/k3s/server
+auditd_k3s_binary: /usr/local/bin/k3s

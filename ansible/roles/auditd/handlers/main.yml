@@ -1,0 +1,18 @@
+---
+# augenrules compiles rules.d into /etc/audit/audit.rules and loads it.
+# Exit code 1 is returned when the current ruleset is immutable (-e 2); in that
+# case the new rules are on disk and take effect after the next reboot, which
+# is why that specific failure is tolerated rather than fatal.
+- name: Load audit rules
+  ansible.builtin.command:
+    cmd: /usr/sbin/augenrules --load
+  register: auditd_augenrules
+  changed_when: auditd_augenrules.rc == 0
+  failed_when:
+    - auditd_augenrules.rc != 0
+    - not auditd_immutable | bool
+
+- name: Restart auditd
+  ansible.builtin.service:
+    name: auditd
+    state: restarted

@@ -1,0 +1,15 @@
+---
+galaxy_info:
+  role_name: firewall
+  author: self-defending-portfolio
+  description: Host firewall for a single-node k3s host using nftables.
+  license: MIT
+  min_ansible_version: "2.17"
+  platforms:
+    - name: Debian
+      versions:
+        - trixie
+  galaxy_tags:
+    - nftables
+    - firewall
+dependencies: []

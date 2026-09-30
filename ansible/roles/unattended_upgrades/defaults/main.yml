@@ -1,0 +1,27 @@
+---
+# Origin patterns eligible for automatic installation. Only the Debian
+# archive is listed: k3s, Cilium and helm are installed from release
+# tarballs by their own roles and are pinned, so apt never touches them.
+unattended_upgrades_origins:
+  - "origin=Debian,codename=${distro_codename},label=Debian"
+  - "origin=Debian,codename=${distro_codename}-security,label=Debian-Security"
+  - "origin=Debian,codename=${distro_codename}-updates,label=Debian"
+
+# Packages never upgraded automatically (regular expressions).
+unattended_upgrades_blacklist: []
+
+# Remove packages that are no longer required after an upgrade.
+unattended_upgrades_remove_unused: true
+
+# Reboot automatically when a package requires it.
+unattended_upgrades_automatic_reboot: true
+unattended_upgrades_automatic_reboot_time: "04:30"
+
+# Send mail on problems; empty disables mail entirely.
+unattended_upgrades_mail: ""
+
+# apt periodic intervals, in days. 1 means "every day".
+unattended_upgrades_update_package_lists: 1
+unattended_upgrades_download_upgradeable: 1
+unattended_upgrades_run_unattended: 1
+unattended_upgrades_autoclean_interval: 7

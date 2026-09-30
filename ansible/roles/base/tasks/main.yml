@@ -1,0 +1,69 @@
+---
+- name: Update apt cache
+  ansible.builtin.apt:
+    update_cache: true
+    cache_valid_time: "{{ base_apt_cache_valid_time }}"
+
+- name: Install baseline packages
+  ansible.builtin.apt:
+    name: "{{ base_packages }}"
+    state: present
+
+- name: Set timezone
+  community.general.timezone:
+    name: "{{ base_timezone }}"
+
+- name: Set hostname
+  ansible.builtin.hostname:
+    name: "{{ base_hostname }}"
+  # Containers own no UTS namespace we can write to; the smoke test skips this tag.
+  tags: [hostname]
+
+- name: Ensure hostname resolves locally
+  ansible.builtin.lineinfile:
+    path: /etc/hosts
+    regexp: '^127\.0\.1\.1\s'
+    line: "127.0.1.1 {{ base_hostname }}"
+    owner: root
+    group: root
+    mode: "0644"
+  tags: [hostname]
+
+- name: Check whether cloud-init is installed
+  ansible.builtin.stat:
+    path: /etc/cloud/cloud.cfg.d
+  register: base_cloud_cfg_dir
+
+- name: Disable cloud-init network reconfiguration
+  ansible.builtin.copy:
+    dest: /etc/cloud/cloud.cfg.d/99-disable-network-config.cfg
+    content: |
+      # Managed by Ansible (role: base)
+      network: {config: disabled}
+    owner: root
+    group: root
+    mode: "0644"
+  when:
+    - base_disable_cloud_init_network | bool
+    - base_cloud_cfg_dir.stat.isdir | default(false)
+
+- name: Ensure journald drop-in directory exists
+  ansible.builtin.file:
+    path: /etc/systemd/journald.conf.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Configure persistent journald storage with a size cap
+  ansible.builtin.copy:
+    dest: /etc/systemd/journald.conf.d/10-persistent.conf
+    content: |
+      # Managed by Ansible (role: base)
+      [Journal]
+      Storage={{ base_journald_storage }}
+      SystemMaxUse={{ base_journald_max_use }}
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart systemd-journald

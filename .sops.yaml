@@ -1,0 +1,6 @@
+# Public age recipients only. Private keys never enter the repo (ADR 0006).
+# Generate: age-keygen -o ~/.config/sops/age/keys.txt ; paste the public key below.
+creation_rules:
+  - path_regex: .*\.sops\.ya?ml$
+    encrypted_regex: ^(data|stringData)$
+    age: "AGE_PUBLIC_KEY_PLACEHOLDER"

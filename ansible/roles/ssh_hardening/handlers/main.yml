@@ -1,0 +1,18 @@
+---
+# Reload, not restart: an active session survives a reload even if the new
+# configuration would reject it. Only used when sshd runs as a classic daemon.
+- name: Reload sshd
+  ansible.builtin.systemd_service:
+    name: ssh.service
+    state: reloaded
+  when: not ssh_hardening_socket_activated
+
+# Under socket activation each connection spawns a fresh sshd that re-reads the
+# configuration, so only a listening-address change needs the socket restarted.
+# Restarting the socket does not touch established ssh@ instances.
+- name: Restart the ssh socket
+  ansible.builtin.systemd_service:
+    name: ssh.socket
+    state: restarted
+    daemon_reload: true
+  when: ssh_hardening_socket_activated

@@ -1,0 +1,19 @@
+---
+- name: Apply kernel parameters
+  ansible.posix.sysctl:
+    name: "{{ item.key }}"
+    value: "{{ item.value }}"
+    sysctl_file: "{{ sysctl_file }}"
+    sysctl_set: true
+    state: present
+    reload: true
+  loop: "{{ sysctl_settings | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}={{ item.value }}"
+
+- name: Ensure the sysctl drop-in is world readable but root owned
+  ansible.builtin.file:
+    path: "{{ sysctl_file }}"
+    owner: root
+    group: root
+    mode: "0644"

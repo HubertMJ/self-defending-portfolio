@@ -1,0 +1,15 @@
+---
+galaxy_info:
+  role_name: cilium
+  author: self-defending-portfolio
+  description: Cilium CNI with kube-proxy replacement, installed with a pinned helm chart.
+  license: MIT
+  min_ansible_version: "2.17"
+  platforms:
+    - name: Debian
+      versions:
+        - trixie
+  galaxy_tags:
+    - cilium
+    - kubernetes
+dependencies: []

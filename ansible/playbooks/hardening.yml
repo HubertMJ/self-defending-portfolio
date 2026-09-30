@@ -1,0 +1,27 @@
+---
+- name: Harden the k3s host
+  hosts: k3s_nodes
+  become: true
+  pre_tasks:
+    - name: Assert the target runs Debian 13
+      ansible.builtin.assert:
+        that:
+          - ansible_distribution == 'Debian'
+          - ansible_distribution_major_version is version('13', '==')
+        fail_msg: >-
+          These roles target Debian 13 (trixie); this host reports
+          {{ ansible_distribution }} {{ ansible_distribution_major_version }}.
+        success_msg: Target is Debian 13.
+  roles:
+    - role: base
+      tags: [base]
+    - role: ssh_hardening
+      tags: [ssh]
+    - role: firewall
+      tags: [firewall]
+    - role: sysctl
+      tags: [sysctl]
+    - role: auditd
+      tags: [auditd]
+    - role: unattended_upgrades
+      tags: [patching]

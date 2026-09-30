@@ -1,0 +1,98 @@
+---
+- name: Verify the hardened k3s host
+  hosts: k3s_nodes
+  become: true
+  gather_facts: true
+  tasks:
+    - name: Read the effective sshd configuration
+      ansible.builtin.command:
+        cmd: /usr/sbin/sshd -T
+      register: verify_sshd
+      changed_when: false
+
+    - name: Assert SSH password and root login are refused
+      ansible.builtin.assert:
+        that:
+          - "'passwordauthentication no' in verify_sshd.stdout_lines"
+          - "'kbdinteractiveauthentication no' in verify_sshd.stdout_lines"
+          - "'permitrootlogin no' in verify_sshd.stdout_lines"
+        fail_msg: sshd is still accepting password or root logins.
+        success_msg: sshd rejects passwords and root logins.
+
+    - name: Read the loaded nftables ruleset
+      ansible.builtin.command:
+        cmd: /usr/sbin/nft list ruleset
+      register: verify_nft
+      changed_when: false
+
+    - name: Assert the input chain defaults to drop
+      ansible.builtin.assert:
+        that:
+          - "'policy drop' in verify_nft.stdout"
+        fail_msg: No nftables chain has a drop policy; the host firewall is open.
+        success_msg: nftables input chain defaults to drop.
+
+    - name: Read the audit subsystem status
+      ansible.builtin.command:
+        cmd: /usr/sbin/auditctl -s
+      register: verify_auditctl
+      changed_when: false
+
+    - name: Assert auditing is enabled
+      ansible.builtin.assert:
+        that:
+          - verify_auditctl.stdout is search('enabled [12]')
+        fail_msg: The kernel audit subsystem is not enabled.
+        success_msg: Kernel auditing is enabled.
+
+    - name: Read the effective sysctl values Cilium depends on
+      ansible.builtin.command:
+        cmd: /sbin/sysctl -n net.ipv4.conf.all.rp_filter net.ipv4.ip_forward
+      register: verify_sysctl
+      changed_when: false
+
+    - name: Assert reverse path filtering is off and forwarding is on
+      ansible.builtin.assert:
+        that:
+          - verify_sysctl.stdout_lines[0] == '0'
+          - verify_sysctl.stdout_lines[1] == '1'
+        fail_msg: rp_filter or ip_forward is wrong; Cilium networking will break.
+        success_msg: Kernel networking matches Cilium's requirements.
+
+    - name: Read node status
+      ansible.builtin.command:
+        cmd: /usr/local/bin/k3s kubectl get nodes --no-headers
+      register: verify_nodes
+      changed_when: false
+
+    - name: Assert every node is Ready
+      ansible.builtin.assert:
+        that:
+          - verify_nodes.stdout_lines | length > 0
+          - verify_nodes.stdout_lines | select('search', ' NotReady ') | list | length == 0
+          - verify_nodes.stdout_lines | select('search', ' Ready ') | list | length == verify_nodes.stdout_lines | length
+        fail_msg: "At least one node is not Ready: {{ verify_nodes.stdout }}"
+        success_msg: All nodes are Ready.
+
+    - name: Read Cilium pod status
+      ansible.builtin.command:
+        cmd: >-
+          /usr/local/bin/k3s kubectl get pods -n kube-system -l k8s-app=cilium
+          -o jsonpath={.items[*].status.conditions[?(@.type=="Ready")].status}
+      register: verify_cilium
+      changed_when: false
+
+    - name: Assert every Cilium agent pod is ready
+      ansible.builtin.assert:
+        that:
+          - verify_cilium.stdout | length > 0
+          - "'False' not in verify_cilium.stdout.split()"
+        fail_msg: "Cilium agent pods are not ready: {{ verify_cilium.stdout }}"
+        success_msg: Cilium agents are ready.
+
+    - name: Assert kube-proxy is absent
+      ansible.builtin.command:
+        cmd: /usr/local/bin/k3s kubectl get daemonset -n kube-system kube-proxy
+      register: verify_kube_proxy
+      changed_when: false
+      failed_when: verify_kube_proxy.rc == 0

@@ -1,0 +1,8 @@
+## {{ ansible_managed }}
+{% if auditd_immutable %}
+## Immutable: no rule change is possible until the host reboots.
+-e 2
+{% else %}
+## Rules stay mutable so later Ansible runs can reload them without a reboot.
+-e 1
+{% endif %}

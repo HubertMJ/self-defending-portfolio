@@ -1,0 +1,32 @@
+# {{ ansible_managed }}
+# Parsed first from sshd_config.d; for single-valued keywords sshd keeps the
+# first definition, so these settings override later includes.
+
+Port {{ ssh_hardening_port }}
+
+PermitRootLogin no
+PubkeyAuthentication yes
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+AuthenticationMethods publickey
+PermitEmptyPasswords no
+UsePAM yes
+
+MaxAuthTries {{ ssh_hardening_max_auth_tries }}
+LoginGraceTime {{ ssh_hardening_login_grace_time }}
+ClientAliveInterval {{ ssh_hardening_client_alive_interval }}
+ClientAliveCountMax {{ ssh_hardening_client_alive_count_max }}
+
+X11Forwarding no
+AllowAgentForwarding no
+AllowTcpForwarding {{ ssh_hardening_allow_tcp_forwarding }}
+PermitTunnel no
+
+AllowUsers {{ ssh_hardening_allow_users | join(' ') }}
+
+KexAlgorithms {{ ssh_hardening_kex_algorithms | join(',') }}
+Ciphers {{ ssh_hardening_ciphers | join(',') }}
+MACs {{ ssh_hardening_macs | join(',') }}
+
+LogLevel VERBOSE
+PrintLastLog yes

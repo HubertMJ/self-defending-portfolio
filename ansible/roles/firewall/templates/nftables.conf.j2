@@ -1,0 +1,53 @@
+#!/usr/sbin/nft -f
+# {{ ansible_managed }}
+
+flush ruleset
+
+table inet filter {
+    chain input {
+        type filter hook input priority filter; policy drop;
+
+        iif lo accept comment "loopback"
+        ct state established,related accept
+        ct state invalid drop
+
+        icmp type echo-request limit rate {{ firewall_icmp_echo_rate }} accept
+        icmp type { destination-unreachable, time-exceeded, parameter-problem } accept
+        icmpv6 type echo-request limit rate {{ firewall_icmp_echo_rate }} accept
+        icmpv6 type { destination-unreachable, packet-too-big, time-exceeded, parameter-problem,
+                      nd-router-advert, nd-neighbor-solicit, nd-neighbor-advert } accept
+
+        ip saddr { {{ firewall_admin_cidrs | join(', ') }} } tcp dport {{ firewall_ssh_port }} accept comment "ssh"
+        ip saddr { {{ firewall_k3s_api_cidrs | join(', ') }} } tcp dport {{ firewall_k3s_api_port }} accept comment "kube-apiserver"
+
+        # Cluster-internal traffic terminating on the host: kubelet, node
+        # metrics, host-network pods reaching node services.
+        ip saddr {{ firewall_pod_cidr }} accept comment "pod cidr"
+        ip saddr {{ firewall_service_cidr }} accept comment "service cidr"
+
+        # cilium_host / cilium_net are the node's own cgroup-attached veth pair.
+        iifname "cilium_*" accept comment "cilium managed interfaces"
+{% if firewall_extra_tcp_ports | length > 0 %}
+        ip saddr { {{ firewall_cluster_cidrs | join(', ') }} } tcp dport { {{ firewall_extra_tcp_ports | join(', ') }} } accept
+{% endif %}
+{% if firewall_extra_udp_ports | length > 0 %}
+        ip saddr { {{ firewall_cluster_cidrs | join(', ') }} } udp dport { {{ firewall_extra_udp_ports | join(', ') }} } accept
+{% endif %}
+{% if firewall_log_dropped %}
+        limit rate {{ firewall_log_rate }} log prefix "{{ firewall_log_prefix }}" level info
+{% endif %}
+    }
+
+    # Cilium runs in eBPF mode with kube-proxy replacement: pod-to-pod and
+    # pod-to-world forwarding is handled by BPF programs and by CiliumNetwork
+    # Policy, not by this chain. A drop policy here breaks containerd/CNI
+    # corner cases (host routing for hostPort, DNS egress) for no real gain,
+    # so the forward chain accepts and enforcement lives in the cluster.
+    chain forward {
+        type filter hook forward priority filter; policy accept;
+    }
+
+    chain output {
+        type filter hook output priority filter; policy accept;
+    }
+}

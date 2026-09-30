@@ -1,0 +1,33 @@
+---
+# Timezone applied to the host (IANA name).
+base_timezone: Europe/Warsaw
+
+# Hostname to set. Defaults to the inventory hostname so the role is usable
+# without inventory variables.
+base_hostname: "{{ inventory_hostname_short }}"
+
+# Minimal package set required by the rest of this playbook set.
+# nftables/auditd/unattended-upgrades are configured by their own roles but
+# installed here so the baseline is complete in a single pass.
+base_packages:
+  - curl
+  - ca-certificates
+  - gnupg
+  - python3-apt
+  - nftables
+  - auditd
+  - unattended-upgrades
+  - apt-listchanges
+  - needrestart
+
+# Accept a cached apt index younger than this many seconds (1 hour).
+base_apt_cache_valid_time: 3600
+
+# Stop cloud-init from rewriting /etc/network/* on every boot. The VM is
+# created by cloud-init, so cloud-init itself is kept; only its network
+# rendering is disabled. Set to false to keep cloud-init network management.
+base_disable_cloud_init_network: true
+
+# Persistent journald storage with an upper bound on disk usage.
+base_journald_storage: persistent
+base_journald_max_use: 500M

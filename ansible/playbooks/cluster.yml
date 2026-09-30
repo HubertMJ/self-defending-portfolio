@@ -1,0 +1,9 @@
+---
+- name: Bootstrap the single-node k3s cluster
+  hosts: k3s_nodes
+  become: true
+  roles:
+    - role: k3s
+      tags: [k3s]
+    - role: cilium
+      tags: [cilium]

@@ -1,0 +1,116 @@
+---
+argument_specs:
+  main:
+    short_description: Single-node k3s server
+    description:
+      - Installs a pinned, checksum-verified k3s server configured for an external CNI.
+    options:
+      k3s_version:
+        description: Pinned k3s release tag, e.g. v1.35.8+k3s1.
+        type: str
+      k3s_arch:
+        description: Release architecture suffix used for the checksum file.
+        type: str
+        default: amd64
+      k3s_release_base_url:
+        description: Base URL of the k3s GitHub release downloads.
+        type: str
+      k3s_binary_path:
+        description: Installation path of the k3s binary.
+        type: str
+        default: /usr/local/bin/k3s
+      k3s_symlinks:
+        description: CLI names symlinked to the k3s binary.
+        type: list
+        elements: str
+      k3s_cluster_cidr:
+        description: Pod network CIDR.
+        type: str
+        default: 10.42.0.0/16
+      k3s_service_cidr:
+        description: Service network CIDR.
+        type: str
+        default: 10.43.0.0/16
+      k3s_node_ip:
+        description: Address the node advertises.
+        type: str
+      k3s_tls_sans:
+        description: Extra SANs added to the API server certificate.
+        type: list
+        elements: str
+      k3s_disable_components:
+        description: Bundled k3s components to disable.
+        type: list
+        elements: str
+      k3s_flannel_backend:
+        description: Value of flannel-backend; none hands the CNI to Cilium.
+        type: str
+        default: none
+      k3s_disable_network_policy:
+        description: Disable the built-in network policy controller.
+        type: bool
+        default: true
+      k3s_disable_kube_proxy:
+        description: Disable kube-proxy in favour of Cilium's replacement.
+        type: bool
+        default: true
+      k3s_secrets_encryption:
+        description: Enable secrets encryption at rest.
+        type: bool
+        default: true
+      k3s_protect_kernel_defaults:
+        description: Require the kernel to already match kubelet's expected defaults.
+        type: bool
+        default: true
+      k3s_write_kubeconfig_mode:
+        description: File mode of the generated admin kubeconfig on the node.
+        type: str
+        default: "0600"
+      k3s_audit_log_dir:
+        description: Directory holding the API server audit log.
+        type: str
+      k3s_audit_log_path:
+        description: Path of the API server audit log.
+        type: str
+      k3s_audit_policy_path:
+        description: Path of the rendered audit policy.
+        type: str
+      k3s_audit_log_maxage:
+        description: Days of audit log history retained.
+        type: int
+        default: 30
+      k3s_audit_log_maxbackup:
+        description: Number of rotated audit logs retained.
+        type: int
+        default: 10
+      k3s_audit_log_maxsize:
+        description: Audit log rotation size in MiB.
+        type: int
+        default: 100
+      k3s_audit_verbose_namespaces:
+        description: Namespaces whose workload changes are audited at RequestResponse level.
+        type: list
+        elements: str
+      k3s_kube_apiserver_extra_args:
+        description: Additional kube-apiserver-arg entries.
+        type: list
+        elements: str
+      k3s_kubelet_extra_args:
+        description: Additional kubelet-arg entries.
+        type: list
+        elements: str
+      k3s_fetch_kubeconfig:
+        description: Copy the admin kubeconfig to the control machine.
+        type: bool
+        default: true
+      k3s_kubeconfig_dest:
+        description: Destination path of the fetched kubeconfig on the control machine.
+        type: str
+      k3s_readyz_retries:
+        description: Attempts while waiting for the API server /readyz endpoint.
+        type: int
+        default: 30
+      k3s_readyz_delay:
+        description: Seconds between /readyz attempts.
+        type: int
+        default: 10

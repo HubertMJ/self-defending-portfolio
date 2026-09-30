@@ -1,0 +1,38 @@
+---
+- name: Ensure auditd is installed
+  ansible.builtin.apt:
+    name:
+      - auditd
+      - audispd-plugins
+    state: present
+
+- name: Configure auditd
+  ansible.builtin.template:
+    src: auditd.conf.j2
+    dest: /etc/audit/auditd.conf
+    owner: root
+    group: root
+    mode: "0640"
+    backup: true
+  notify: Restart auditd
+
+- name: Install audit rule files
+  ansible.builtin.template:
+    src: "{{ item }}.j2"
+    dest: "/etc/audit/rules.d/{{ item }}"
+    owner: root
+    group: root
+    mode: "0600"
+  loop:
+    - 10-base.rules
+    - 30-identity.rules
+    - 40-privileged.rules
+    - 50-k3s.rules
+    - 99-finalize.rules
+  notify: Load audit rules
+
+- name: Ensure auditd is enabled and running
+  ansible.builtin.service:
+    name: auditd
+    state: started
+    enabled: true

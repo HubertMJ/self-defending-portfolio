@@ -1,0 +1,15 @@
+---
+galaxy_info:
+  role_name: auditd
+  author: self-defending-portfolio
+  description: Linux audit framework rules for identity, privilege and k3s state.
+  license: MIT
+  min_ansible_version: "2.17"
+  platforms:
+    - name: Debian
+      versions:
+        - trixie
+  galaxy_tags:
+    - auditd
+    - hardening
+dependencies: []

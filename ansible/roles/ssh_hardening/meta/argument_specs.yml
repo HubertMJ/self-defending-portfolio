@@ -1,0 +1,59 @@
+---
+argument_specs:
+  main:
+    short_description: OpenSSH hardening via sshd_config.d drop-in
+    description:
+      - Writes a validated hardening drop-in and reloads sshd.
+    options:
+      ssh_hardening_dropin_path:
+        description: Absolute path of the hardening drop-in file.
+        type: str
+        default: /etc/ssh/sshd_config.d/00-hardening.conf
+      ssh_hardening_port:
+        description: TCP port sshd listens on.
+        type: int
+        default: 22
+      ssh_hardening_manage_socket_port:
+        description: Write an ssh.socket drop-in pinning the listening port when sshd is socket activated.
+        type: bool
+        default: true
+      ssh_hardening_allow_users:
+        description: Users permitted to log in over SSH.
+        type: list
+        elements: str
+      ssh_hardening_allow_tcp_forwarding:
+        description: Value for AllowTcpForwarding.
+        type: str
+        default: "no"
+      ssh_hardening_max_auth_tries:
+        description: Value for MaxAuthTries.
+        type: int
+        default: 3
+      ssh_hardening_login_grace_time:
+        description: Value for LoginGraceTime in seconds.
+        type: int
+        default: 30
+      ssh_hardening_client_alive_interval:
+        description: Value for ClientAliveInterval in seconds.
+        type: int
+        default: 300
+      ssh_hardening_client_alive_count_max:
+        description: Value for ClientAliveCountMax.
+        type: int
+        default: 2
+      ssh_hardening_kex_algorithms:
+        description: Permitted key exchange algorithms.
+        type: list
+        elements: str
+      ssh_hardening_ciphers:
+        description: Permitted ciphers.
+        type: list
+        elements: str
+      ssh_hardening_macs:
+        description: Permitted MAC algorithms.
+        type: list
+        elements: str
+      ssh_hardening_sshd_binary:
+        description: Path to the sshd binary used for config validation.
+        type: str
+        default: /usr/sbin/sshd

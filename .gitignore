@@ -1,0 +1,18 @@
+# secrets / local state
+*.env
+.env*
+!.env.example
+*.key
+*.pem
+*.agekey
+kubeconfig*
+!kubeconfig.example
+.venv/
+.ansible/
+*.retry
+.omc/
+.claude/
+__pycache__/
+# terraform/tofu (if ever)
+.terraform/
+*.tfstate*

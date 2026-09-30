@@ -1,0 +1,71 @@
+---
+# Pinned helm client. Downloaded from get.helm.sh and verified against the
+# published .sha256sum for the same tarball.
+# The unprefixed inventory variable helm_version is honoured for convenience,
+# but ansible-lint (var-naming[no-role-prefix]) forbids declaring it here, so
+# cilium_helm_version is the canonical name.
+cilium_helm_version: "{{ helm_version | default('v3.22.0') }}"
+cilium_helm_arch: amd64
+cilium_helm_base_url: https://get.helm.sh
+cilium_helm_binary: /usr/local/bin/helm
+cilium_helm_tarball_name: "helm-{{ cilium_helm_version }}-linux-{{ cilium_helm_arch }}.tar.gz"
+cilium_helm_tarball_url: "{{ cilium_helm_base_url }}/{{ cilium_helm_tarball_name }}"
+
+# k3s ships kubectl through an argv[0] symlink on the binary itself.
+cilium_kubectl_binary: /usr/local/bin/k3s
+
+# Pinned Cilium chart version (chart and image versions match upstream).
+cilium_version: 1.19.8
+cilium_chart_repo_name: cilium
+cilium_chart_repo_url: https://helm.cilium.io
+cilium_chart_ref: cilium/cilium
+cilium_release_name: cilium
+cilium_namespace: kube-system
+
+# kubeconfig used by helm. k3s writes it root-only, so the role runs with become.
+cilium_kubeconfig: /etc/rancher/k3s/k3s.yaml
+
+# Cilium must reach the API server directly: kube-proxy is disabled, so the
+# in-cluster 10.43.0.1 service VIP does not exist until Cilium itself is up.
+cilium_k8s_service_host: "{{ k3s_node_ip | default(ansible_default_ipv4.address) }}"
+cilium_k8s_service_port: 6443
+
+# Pod CIDR. Must equal k3s_cluster_cidr, otherwise native routing drops traffic.
+cilium_cluster_cidr: "{{ k3s_cluster_cidr | default('10.42.0.0/16') }}"
+
+# Chart values. Overriding this variable replaces the map wholesale.
+cilium_values:
+  # eBPF replaces kube-proxy entirely; k3s is started with disable-kube-proxy.
+  kubeProxyReplacement: true
+  k8sServiceHost: "{{ cilium_k8s_service_host }}"
+  k8sServicePort: "{{ cilium_k8s_service_port }}"
+  # Single node: no tunnel, pods are routed natively inside the node.
+  routingMode: native
+  ipv4NativeRoutingCIDR: "{{ cilium_cluster_cidr }}"
+  autoDirectNodeRoutes: true
+  ipam:
+    mode: kubernetes
+  bpf:
+    masquerade: true
+  operator:
+    replicas: 1
+    prometheus:
+      enabled: false
+  # Hubble gives flow visibility, which is the point of a self-defending
+  # deployment. The UI stays off until it is fronted by the tunnel.
+  hubble:
+    enabled: true
+    relay:
+      enabled: true
+    ui:
+      enabled: false
+  # Default means policy applies only to endpoints selected by a policy.
+  policyEnforcementMode: default
+
+# helm install/upgrade behaviour.
+cilium_helm_wait: true
+cilium_helm_timeout: 10m0s
+
+# Post-install wait for the node to leave NotReady.
+cilium_node_ready_retries: 30
+cilium_node_ready_delay: 10

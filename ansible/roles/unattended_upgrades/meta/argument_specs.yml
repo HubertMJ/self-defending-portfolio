@@ -1,0 +1,47 @@
+---
+argument_specs:
+  main:
+    short_description: Automatic Debian updates
+    description:
+      - Configures unattended-upgrades origins, cleanup and the automatic reboot window.
+    options:
+      unattended_upgrades_origins:
+        description: Origins-Pattern entries eligible for automatic upgrade.
+        type: list
+        elements: str
+      unattended_upgrades_blacklist:
+        description: Regular expressions of packages never upgraded automatically.
+        type: list
+        elements: str
+      unattended_upgrades_remove_unused:
+        description: Remove unused dependencies and kernels after upgrades.
+        type: bool
+        default: true
+      unattended_upgrades_automatic_reboot:
+        description: Reboot automatically when an upgrade requires it.
+        type: bool
+        default: true
+      unattended_upgrades_automatic_reboot_time:
+        description: Local time of the automatic reboot window (HH:MM).
+        type: str
+        default: "04:30"
+      unattended_upgrades_mail:
+        description: Address receiving upgrade reports. Empty disables mail.
+        type: str
+        default: ""
+      unattended_upgrades_update_package_lists:
+        description: APT::Periodic::Update-Package-Lists interval in days.
+        type: int
+        default: 1
+      unattended_upgrades_download_upgradeable:
+        description: APT::Periodic::Download-Upgradeable-Packages interval in days.
+        type: int
+        default: 1
+      unattended_upgrades_run_unattended:
+        description: APT::Periodic::Unattended-Upgrade interval in days.
+        type: int
+        default: 1
+      unattended_upgrades_autoclean_interval:
+        description: APT::Periodic::AutocleanInterval in days.
+        type: int
+        default: 7

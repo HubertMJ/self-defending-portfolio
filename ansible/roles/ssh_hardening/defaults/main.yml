@@ -1,0 +1,45 @@
+---
+# Drop-in path. The 00- prefix guarantees it is parsed first, and because
+# sshd keeps the FIRST value seen for most keywords, this file wins over
+# anything Debian or cloud-init ships in sshd_config.d.
+ssh_hardening_dropin_path: /etc/ssh/sshd_config.d/00-hardening.conf
+
+# TCP port sshd listens on. On Debian 13 sshd is socket activated, so this is
+# also written to an ssh.socket drop-in; the Port keyword alone would be ignored.
+ssh_hardening_port: 22
+
+# Write the ssh.socket drop-in that pins the listening port. Disable if the
+# socket unit is managed elsewhere.
+ssh_hardening_manage_socket_port: true
+
+# Users allowed to log in over SSH (AllowUsers). Keep the automation account
+# in this list or the next run will lock itself out.
+ssh_hardening_allow_users:
+  - ansible
+
+# TCP forwarding is disabled by default; set to "yes" if you need to tunnel
+# the kube-apiserver or Hubble UI over SSH instead of using kubectl port-forward.
+ssh_hardening_allow_tcp_forwarding: "no"
+
+# Authentication limits.
+ssh_hardening_max_auth_tries: 3
+ssh_hardening_login_grace_time: 30
+ssh_hardening_client_alive_interval: 300
+ssh_hardening_client_alive_count_max: 2
+
+# Modern, AEAD-only crypto. sntrup761x25519 provides post-quantum key exchange
+# and is available in the OpenSSH shipped with Debian 13.
+ssh_hardening_kex_algorithms:
+  - sntrup761x25519-sha512@openssh.com
+  - curve25519-sha256
+  - curve25519-sha256@libssh.org
+ssh_hardening_ciphers:
+  - chacha20-poly1305@openssh.com
+  - aes256-gcm@openssh.com
+  - aes128-gcm@openssh.com
+ssh_hardening_macs:
+  - hmac-sha2-512-etm@openssh.com
+  - hmac-sha2-256-etm@openssh.com
+
+# Absolute path to the sshd binary used for configuration validation.
+ssh_hardening_sshd_binary: /usr/sbin/sshd

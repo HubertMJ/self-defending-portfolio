@@ -1,0 +1,7 @@
+---
+# Full bootstrap: harden the host first, then bring up the cluster on top of it.
+- name: Import host hardening
+  ansible.builtin.import_playbook: hardening.yml
+
+- name: Import cluster bootstrap
+  ansible.builtin.import_playbook: cluster.yml

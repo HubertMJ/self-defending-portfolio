@@ -1,0 +1,67 @@
+---
+# Single file so the whole set can be inspected or removed at once.
+sysctl_file: /etc/sysctl.d/90-hardening.conf
+
+# Complete kernel parameter map. Override individual keys by redefining the
+# whole dict (Ansible does not deep-merge by default) or set
+# hash_behaviour=merge in ansible.cfg.
+sysctl_settings:
+  # --- Kernel information leaks and attack surface ---
+  kernel.kptr_restrict: "2"
+  kernel.dmesg_restrict: "1"
+  # Cilium's agent runs as root, so it is unaffected by this restriction while
+  # unprivileged workloads lose the bpf() syscall entirely.
+  kernel.unprivileged_bpf_disabled: "1"
+  # Deliberately 1, not 2: value 2 adds constant blinding, which measurably
+  # slows Cilium's datapath. 1 keeps the JIT hardening that matters.
+  net.core.bpf_jit_harden: "1"
+  kernel.yama.ptrace_scope: "1"
+  kernel.sysrq: "0"
+
+  # --- Filesystem hardening ---
+  fs.protected_hardlinks: "1"
+  fs.protected_symlinks: "1"
+  fs.protected_fifos: "2"
+  fs.protected_regular: "2"
+
+  # --- Network: required by Cilium ---
+  # Cilium REQUIRES reverse path filtering to be disabled. Its datapath sends
+  # replies from interfaces the kernel does not consider the route source
+  # (veth pairs, cilium_host); with rp_filter enabled those packets are
+  # silently dropped and pod networking breaks. Do not raise these to 1 or 2.
+  net.ipv4.conf.all.rp_filter: "0"
+  net.ipv4.conf.default.rp_filter: "0"
+
+  # --- Network hardening ---
+  net.ipv4.conf.all.accept_redirects: "0"
+  net.ipv4.conf.default.accept_redirects: "0"
+  net.ipv4.conf.all.send_redirects: "0"
+  net.ipv4.conf.default.send_redirects: "0"
+  net.ipv4.conf.all.accept_source_route: "0"
+  net.ipv4.conf.default.accept_source_route: "0"
+  net.ipv4.conf.all.log_martians: "1"
+  net.ipv4.tcp_syncookies: "1"
+  net.ipv6.conf.all.accept_redirects: "0"
+  net.ipv6.conf.default.accept_redirects: "0"
+  # The node has a static address from cloud-init, so router advertisements
+  # are not needed. Set to 1 if the LAN relies on SLAAC.
+  net.ipv6.conf.all.accept_ra: "0"
+
+  # --- Routing required by Kubernetes ---
+  net.ipv4.ip_forward: "1"
+  net.ipv6.conf.all.forwarding: "1"
+
+  # --- Limits: many watches are consumed by kubelet and controllers ---
+  fs.inotify.max_user_instances: "8192"
+  fs.inotify.max_user_watches: "1048576"
+
+  # --- Values kubelet protect-kernel-defaults=true verifies ---
+  # k3s is started with protect-kernel-defaults, which makes kubelet refuse to
+  # start unless these already hold. Changing any of them requires the matching
+  # change in the k3s role.
+  vm.overcommit_memory: "1"
+  vm.panic_on_oom: "0"
+  kernel.panic: "10"
+  kernel.panic_on_oops: "1"
+  kernel.keys.root_maxkeys: "1000000"
+  kernel.keys.root_maxbytes: "25000000"

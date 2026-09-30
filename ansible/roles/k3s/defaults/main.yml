@@ -1,0 +1,81 @@
+---
+# Pinned k3s release. Bump deliberately: the binary and its checksum are
+# fetched from the matching GitHub release, and a change here restarts k3s.
+k3s_version: v1.35.8+k3s1
+
+# Release architecture suffix used for the checksum file name.
+k3s_arch: amd64
+
+# Where the release assets live.
+k3s_release_base_url: https://github.com/k3s-io/k3s/releases/download
+
+# Installed binary and the CLI symlinks k3s provides through argv[0].
+k3s_binary_path: /usr/local/bin/k3s
+k3s_symlinks:
+  - kubectl
+  - crictl
+  - ctr
+
+# Network ranges. Must match firewall_pod_cidr / firewall_service_cidr and
+# cilium_ipv4_native_routing_cidr.
+k3s_cluster_cidr: 10.42.0.0/16
+k3s_service_cidr: 10.43.0.0/16
+
+# Address the node advertises and binds services on. Defaults to the primary
+# IPv4 address from facts.
+k3s_node_ip: "{{ ansible_default_ipv4.address }}"
+
+# Additional names and addresses placed in the apiserver serving certificate.
+k3s_tls_sans:
+  - "{{ inventory_hostname_short }}"
+  - "{{ k3s_node_ip }}"
+
+# Bundled components that are disabled. Traefik and servicelb are replaced by
+# Cloudflare Tunnel plus Cilium; local-storage is kept so PVCs work out of the
+# box for the portfolio workloads.
+k3s_disable_components:
+  - traefik
+  - servicelb
+
+# CNI handover: flannel, the built-in network policy controller and kube-proxy
+# are all disabled because Cilium provides them (kube-proxy replacement in eBPF).
+k3s_flannel_backend: none
+k3s_disable_network_policy: true
+k3s_disable_kube_proxy: true
+
+# Encrypt Secrets at rest in the datastore.
+k3s_secrets_encryption: true
+
+# kubelet refuses to start unless the kernel already matches its expected
+# defaults. The sysctl role sets exactly those values; keep the two in sync.
+k3s_protect_kernel_defaults: true
+
+# Permissions of /etc/rancher/k3s/k3s.yaml. 0600 keeps it root-only.
+k3s_write_kubeconfig_mode: "0600"
+
+# API server audit log. The policy file is rendered from a template.
+k3s_audit_log_dir: /var/lib/rancher/k3s/server/logs
+k3s_audit_log_path: /var/lib/rancher/k3s/server/logs/audit.log
+k3s_audit_policy_path: /etc/rancher/k3s/audit-policy.yaml
+k3s_audit_log_maxage: 30
+k3s_audit_log_maxbackup: 10
+k3s_audit_log_maxsize: 100
+
+# Namespaces whose pod exec/attach/portforward calls are captured with full
+# request and response bodies, not just metadata.
+k3s_audit_verbose_namespaces:
+  - sandbox
+
+# Extra flags appended verbatim to the rendered config.yaml.
+k3s_kube_apiserver_extra_args: []
+k3s_kubelet_extra_args: []
+
+# Copy the admin kubeconfig back to the control machine, rewriting the server
+# address so it is usable from there. The destination is gitignored.
+k3s_fetch_kubeconfig: true
+k3s_kubeconfig_dest: "{{ playbook_dir }}/../../kubeconfig"
+
+# How long to wait for the apiserver to report /readyz. The node itself stays
+# NotReady until the cilium role runs, which is expected.
+k3s_readyz_retries: 30
+k3s_readyz_delay: 10

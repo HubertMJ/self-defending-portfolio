@@ -1,0 +1,66 @@
+---
+argument_specs:
+  main:
+    short_description: nftables host firewall for a k3s node
+    description:
+      - Renders and loads a default-drop input ruleset sized for single-node k3s with Cilium.
+    options:
+      firewall_config_path:
+        description: Path of the rendered nftables ruleset.
+        type: str
+        default: /etc/nftables.conf
+      firewall_admin_cidrs:
+        description: Source CIDRs allowed to reach SSH.
+        type: list
+        elements: str
+      firewall_default_lan_cidr:
+        description: Fallback LAN CIDR derived from host facts when lan_cidr is not set.
+        type: str
+      firewall_k3s_api_cidrs:
+        description: Source CIDRs allowed to reach the kube-apiserver.
+        type: list
+        elements: str
+      firewall_ssh_port:
+        description: SSH port to open.
+        type: int
+        default: 22
+      firewall_k3s_api_port:
+        description: kube-apiserver port to open.
+        type: int
+        default: 6443
+      firewall_pod_cidr:
+        description: Pod CIDR trusted on the input chain.
+        type: str
+        default: 10.42.0.0/16
+      firewall_service_cidr:
+        description: Service CIDR trusted on the input chain.
+        type: str
+        default: 10.43.0.0/16
+      firewall_extra_tcp_ports:
+        description: Additional TCP ports opened to firewall_cluster_cidrs.
+        type: list
+        elements: int
+      firewall_extra_udp_ports:
+        description: Additional UDP ports opened to firewall_cluster_cidrs.
+        type: list
+        elements: int
+      firewall_cluster_cidrs:
+        description: Source CIDRs for the additional cluster ports.
+        type: list
+        elements: str
+      firewall_log_dropped:
+        description: Log dropped input packets.
+        type: bool
+        default: true
+      firewall_log_prefix:
+        description: Log prefix for dropped packets.
+        type: str
+        default: "nft-drop: "
+      firewall_log_rate:
+        description: nftables rate limit expression for drop logging.
+        type: str
+        default: 10/minute
+      firewall_icmp_echo_rate:
+        description: nftables rate limit expression for accepted ICMP echo requests.
+        type: str
+        default: 10/second

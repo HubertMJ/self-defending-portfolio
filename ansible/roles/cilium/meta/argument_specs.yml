@@ -1,0 +1,86 @@
+---
+argument_specs:
+  main:
+    short_description: Cilium CNI installation
+    description:
+      - Installs a pinned helm client and the Cilium chart with kube-proxy replacement.
+    options:
+      cilium_helm_version:
+        description: Pinned helm client version, e.g. v3.22.0. Falls back to the inventory variable helm_version.
+        type: str
+      cilium_helm_arch:
+        description: helm release architecture suffix.
+        type: str
+        default: amd64
+      cilium_helm_base_url:
+        description: Base URL for helm release tarballs.
+        type: str
+      cilium_helm_binary:
+        description: Installation path of the helm binary.
+        type: str
+        default: /usr/local/bin/helm
+      cilium_helm_tarball_name:
+        description: File name of the helm release tarball.
+        type: str
+      cilium_helm_tarball_url:
+        description: Full URL of the helm release tarball.
+        type: str
+      cilium_kubectl_binary:
+        description: Binary used to run kubectl on the node.
+        type: str
+        default: /usr/local/bin/k3s
+      cilium_version:
+        description: Pinned Cilium chart version.
+        type: str
+      cilium_chart_repo_name:
+        description: Local name of the Cilium helm repository.
+        type: str
+        default: cilium
+      cilium_chart_repo_url:
+        description: URL of the Cilium helm repository.
+        type: str
+      cilium_chart_ref:
+        description: Chart reference installed.
+        type: str
+        default: cilium/cilium
+      cilium_release_name:
+        description: helm release name.
+        type: str
+        default: cilium
+      cilium_namespace:
+        description: Namespace the release is installed into.
+        type: str
+        default: kube-system
+      cilium_kubeconfig:
+        description: kubeconfig helm uses to reach the cluster.
+        type: str
+        default: /etc/rancher/k3s/k3s.yaml
+      cilium_k8s_service_host:
+        description: Address Cilium uses to reach the API server directly.
+        type: str
+      cilium_k8s_service_port:
+        description: Port Cilium uses to reach the API server directly.
+        type: int
+        default: 6443
+      cilium_cluster_cidr:
+        description: Pod CIDR used for native routing. Must match k3s_cluster_cidr.
+        type: str
+      cilium_values:
+        description: Chart values. Replaces the default map entirely when overridden.
+        type: dict
+      cilium_helm_wait:
+        description: Wait for all chart resources to become ready.
+        type: bool
+        default: true
+      cilium_helm_timeout:
+        description: helm wait timeout as a Go duration.
+        type: str
+        default: 10m0s
+      cilium_node_ready_retries:
+        description: Attempts while waiting for the node to report Ready.
+        type: int
+        default: 30
+      cilium_node_ready_delay:
+        description: Seconds between node readiness attempts.
+        type: int
+        default: 10

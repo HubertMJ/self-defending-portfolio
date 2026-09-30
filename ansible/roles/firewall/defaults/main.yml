@@ -1,0 +1,48 @@
+---
+# Ruleset file rendered and loaded by the nftables service.
+firewall_config_path: /etc/nftables.conf
+
+# CIDRs allowed to reach SSH. Defaults to the node's own LAN so the role is
+# usable without inventory variables; set lan_cidr (or this var) in group_vars
+# to narrow it down.
+firewall_admin_cidrs:
+  - "{{ lan_cidr | default(firewall_default_lan_cidr) }}"
+
+# CIDRs allowed to reach the kube-apiserver on 6443.
+firewall_k3s_api_cidrs:
+  - "{{ lan_cidr | default(firewall_default_lan_cidr) }}"
+
+# The subnet of the host's primary interface, derived from facts. Used only as
+# a fallback when lan_cidr is not supplied by the inventory.
+firewall_default_lan_cidr: >-
+  {{ ansible_default_ipv4.network }}/{{ ansible_default_ipv4.prefix }}
+
+# SSH port; keep in sync with ssh_hardening_port.
+firewall_ssh_port: 22
+
+# kube-apiserver port.
+firewall_k3s_api_port: 6443
+
+# Cluster networks. Pods and host-network components talk to the node itself
+# (kubelet 10250, metrics, DNS), so the whole pod and service range is trusted
+# on the input chain. Keep in sync with k3s_cluster_cidr / k3s_service_cidr.
+firewall_pod_cidr: "{{ k3s_cluster_cidr | default('10.42.0.0/16') }}"
+firewall_service_cidr: "{{ k3s_service_cidr | default('10.43.0.0/16') }}"
+
+# Extra ports to open, e.g. Cilium health checks (4240/tcp) or VXLAN
+# (8472/udp) once a second node joins. Empty on a single node with native
+# routing because no node-to-node tunnel or health probe exists.
+firewall_extra_tcp_ports: []
+firewall_extra_udp_ports: []
+
+# CIDRs the extra ports above are opened to.
+firewall_cluster_cidrs:
+  - "{{ lan_cidr | default(firewall_default_lan_cidr) }}"
+
+# Log dropped input packets (rate limited) with this prefix.
+firewall_log_dropped: true
+firewall_log_prefix: "nft-drop: "
+firewall_log_rate: 10/minute
+
+# Rate limit for accepted ICMP echo requests.
+firewall_icmp_echo_rate: 10/second
