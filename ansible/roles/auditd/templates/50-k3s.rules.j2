@@ -1,5 +1,9 @@
 ## {{ ansible_managed }}
-## Cluster configuration, server state (certificates, etcd/kine, token) and binary.
+## Cluster configuration, the sensitive parts of the server state and the binary.
+## Only tls/, cred/ and token are watched, not the whole server directory: the
+## kine SQLite datastore lives there and its write churn would flood the log.
 -w {{ auditd_k3s_config_dir }} -p wa -k k3s_config
--w {{ auditd_k3s_state_dir }} -p wa -k k3s_state
+{% for subpath in auditd_k3s_state_watch_subpaths %}
+-w {{ auditd_k3s_state_dir }}/{{ subpath }} -p wa -k k3s_state
+{% endfor %}
 -w {{ auditd_k3s_binary }} -p x -k k3s_bin

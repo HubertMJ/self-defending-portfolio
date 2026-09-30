@@ -1,4 +1,8 @@
 collections:
+  # ansible.utils provides the in_any_network test the firewall role uses to
+  # check that the control connection survives the default-drop policy.
+  - name: ansible.utils
+    version: ">=2.5.0"
   - name: ansible.posix
     version: ">=1.5.0"
   - name: community.general

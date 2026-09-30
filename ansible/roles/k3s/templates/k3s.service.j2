@@ -22,6 +22,10 @@ TasksMax=infinity
 TimeoutStartSec=0
 Restart=always
 RestartSec=5s
-ExecStartPre=-/sbin/modprobe br_netfilter
+# br_netfilter is deliberately NOT loaded: Cilium replaces kube-proxy and does
+# bridge-level filtering in eBPF, and with the module present the kernel also
+# runs bridged pod traffic through the iptables/nftables hooks, which both costs
+# performance and reintroduces the rp_filter drops Cilium works around. overlay
+# is still needed by containerd's snapshotter.
 ExecStartPre=-/sbin/modprobe overlay
 ExecStart={{ k3s_binary_path }} server

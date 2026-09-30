@@ -50,3 +50,7 @@ argument_specs:
         description: k3s binary watched for execution.
         type: str
         default: /usr/local/bin/k3s
+      auditd_k3s_state_watch_subpaths:
+        description: Subpaths of auditd_k3s_state_dir watched for writes; the directory itself is not watched.
+        type: list
+        elements: str

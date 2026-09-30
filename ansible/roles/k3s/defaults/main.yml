@@ -43,6 +43,21 @@ k3s_flannel_backend: none
 k3s_disable_network_policy: true
 k3s_disable_kube_proxy: true
 
+# How the apiserver reaches kubelets and service endpoints. k3s defaults to
+# "agent", which its own documentation says "requires that the servers also run
+# the kubelet, CNI, and kube-proxy, or the apiserver will not be able to access
+# service endpoints" (https://docs.k3s.io/networking/basic-network-options) -
+# a precondition this cluster breaks on purpose, because Cilium replaces
+# kube-proxy. "cluster" routes tunnelled connections by watching Pods and
+# Endpoints instead and is documented as having "the highest portability across
+# different cluster configurations"; symptoms of getting this wrong are 503/502
+# errors from kubectl logs, exec and port-forward. "pod" was rejected because it
+# relies on the CNI respecting the node's PodCIDR allocation, which Cilium's
+# IPAM does not guarantee. Known caveat: cluster and pod modes have reported
+# edge cases reaching endpoints backed by host-network pods (k3s-io/k3s#5637).
+# Changing this value on a live cluster requires restarting every node.
+k3s_egress_selector_mode: cluster
+
 # Encrypt Secrets at rest in the datastore.
 k3s_secrets_encryption: true
 

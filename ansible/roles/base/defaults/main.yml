@@ -19,6 +19,11 @@ base_packages:
   - unattended-upgrades
   - apt-listchanges
   - needrestart
+  # The VM is created with agent=1, so Proxmox expects this to be running. It is
+  # also the documented recovery path in docs/bootstrap.md: `qm guest exec` from
+  # the hypervisor is the only way back in when the firewall or sshd locks SSH
+  # out, and the cloud-init user has no password for the serial console.
+  - qemu-guest-agent
 
 # Accept a cached apt index younger than this many seconds (1 hour).
 base_apt_cache_valid_time: 3600

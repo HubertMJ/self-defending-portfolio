@@ -2,6 +2,32 @@
 - name: Bootstrap the single-node k3s cluster
   hosts: k3s_nodes
   become: true
+  pre_tasks:
+    # k3s is started with protect-kernel-defaults, which makes kubelet refuse to
+    # start unless these values already hold in the kernel. The sysctl role sets
+    # exactly them, but that role lives in hardening.yml: running cluster.yml on
+    # an un-hardened host otherwise fails minutes later with an opaque kubelet
+    # error instead of here, with the reason.
+    - name: Read the kernel values kubelet verifies under protect-kernel-defaults
+      ansible.builtin.command:
+        cmd: >-
+          /sbin/sysctl -n vm.overcommit_memory vm.panic_on_oom kernel.panic
+          kernel.panic_on_oops kernel.keys.root_maxkeys kernel.keys.root_maxbytes
+      register: cluster_protect_kernel
+      changed_when: false
+
+    - name: Assert the kernel matches kubelet's expected defaults
+      ansible.builtin.assert:
+        that:
+          - cluster_protect_kernel.stdout_lines == ['1', '0', '10', '1', '1000000', '25000000']
+        fail_msg: >-
+          kubelet runs with protect-kernel-defaults and would refuse to start:
+          expected vm.overcommit_memory=1 vm.panic_on_oom=0 kernel.panic=10
+          kernel.panic_on_oops=1 kernel.keys.root_maxkeys=1000000
+          kernel.keys.root_maxbytes=25000000, got
+          {{ cluster_protect_kernel.stdout_lines | join(' ') }}.
+          Run playbooks/hardening.yml (role: sysctl) on this host first.
+        success_msg: Kernel matches kubelet's protect-kernel-defaults expectations.
   roles:
     - role: k3s
       tags: [k3s]

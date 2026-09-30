@@ -5,7 +5,7 @@
   ansible.builtin.systemd_service:
     name: ssh.service
     state: reloaded
-  when: not ssh_hardening_socket_activated
+  when: not ssh_hardening_socket_activated | bool
 
 # Under socket activation each connection spawns a fresh sshd that re-reads the
 # configuration, so only a listening-address change needs the socket restarted.
@@ -15,4 +15,4 @@
     name: ssh.socket
     state: restarted
     daemon_reload: true
-  when: ssh_hardening_socket_activated
+  when: ssh_hardening_socket_activated | bool

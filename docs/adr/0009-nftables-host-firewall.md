@@ -17,4 +17,4 @@ to the host (kubelet, host-network components). Dropped packets are logged with 
 - Nothing on the host is reachable from the internet; the only public path is the outbound tunnel.
 - ufw/firewalld are not installed, so there is a single source of truth for host rules.
 - A mistake in the ruleset can lock out SSH: the role validates with `nft -c` before applying and
-  Proxmox console access is the documented escape hatch.
+  the QEMU guest agent (`qm guest exec` from the Proxmox node) is the documented escape hatch, see docs/bootstrap.md.

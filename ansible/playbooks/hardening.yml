@@ -12,6 +12,25 @@
           These roles target Debian 13 (trixie); this host reports
           {{ ansible_distribution }} {{ ansible_distribution_major_version }}.
         success_msg: Target is Debian 13.
+
+    # The VM is created with ciupgrade=0 so cloud-init does not run apt itself,
+    # but cloud-init still installs packages and writes users on first boot. It
+    # holds the dpkg lock while doing so, which makes the first apt task of the
+    # base role fail if Ansible wins the race. `cloud-init status --wait` blocks
+    # until the final stage is done; exit code 2 means "done, with recoverable
+    # errors", which is not a reason to abort hardening.
+    - name: Locate cloud-init
+      ansible.builtin.stat:
+        path: /usr/bin/cloud-init
+      register: hardening_cloud_init
+
+    - name: Wait for cloud-init to finish so the dpkg lock is free
+      ansible.builtin.command:
+        cmd: /usr/bin/cloud-init status --wait
+      register: hardening_cloud_init_status
+      changed_when: false
+      failed_when: hardening_cloud_init_status.rc not in [0, 2]
+      when: hardening_cloud_init.stat.exists
   roles:
     - role: base
       tags: [base]

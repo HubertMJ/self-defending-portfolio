@@ -9,6 +9,9 @@ secrets-encryption: {{ k3s_secrets_encryption | ternary('true', 'false') }}
 protect-kernel-defaults: {{ k3s_protect_kernel_defaults | ternary('true', 'false') }}
 embedded-registry: false
 
+# See the defaults for why this is not left at k3s's default of "agent".
+egress-selector-mode: "{{ k3s_egress_selector_mode }}"
+
 # Cilium owns the datapath.
 flannel-backend: "{{ k3s_flannel_backend }}"
 disable-network-policy: {{ k3s_disable_network_policy | ternary('true', 'false') }}
@@ -34,8 +37,12 @@ kube-apiserver-arg:
   - "{{ arg }}"
 {% endfor %}
 
+{% if k3s_kubelet_extra_args | length > 0 %}
+# protect-kernel-defaults is not repeated here: the server-level key above is
+# already passed through to the embedded kubelet, and setting it twice made the
+# two definitions able to drift.
 kubelet-arg:
-  - "protect-kernel-defaults={{ k3s_protect_kernel_defaults | ternary('true', 'false') }}"
 {% for arg in k3s_kubelet_extra_args %}
   - "{{ arg }}"
 {% endfor %}
+{% endif %}

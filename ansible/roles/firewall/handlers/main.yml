@@ -1,4 +1,11 @@
 ---
+# nftables.service on Debian 13 defines
+#   ExecStart=/usr/sbin/nft -f /etc/nftables.conf
+#   ExecReload=/usr/sbin/nft -f /etc/nftables.conf
+# so a reload re-applies the rendered file and nothing else. Combined with the
+# `delete table inet filter` scoping in the template, this leaves the tables
+# Cilium and containerd own untouched. A restart would not: ExecStop runs
+# `nft flush ruleset`, so the unit is never stopped or restarted by this role.
 - name: Reload nftables
   ansible.builtin.systemd_service:
     name: nftables

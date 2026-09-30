@@ -4,8 +4,10 @@
 # anything Debian or cloud-init ships in sshd_config.d.
 ssh_hardening_dropin_path: /etc/ssh/sshd_config.d/00-hardening.conf
 
-# TCP port sshd listens on. On Debian 13 sshd is socket activated, so this is
-# also written to an ssh.socket drop-in; the Port keyword alone would be ignored.
+# TCP port sshd listens on. The Debian 13 cloud image runs sshd as a classic
+# daemon (ssh.service), where this Port keyword is what counts. If ssh.socket is
+# enabled instead, Port is ignored and the role writes the same value into an
+# ssh.socket drop-in; the role detects which layout is in use at run time.
 ssh_hardening_port: 22
 
 # Write the ssh.socket drop-in that pins the listening port. Disable if the

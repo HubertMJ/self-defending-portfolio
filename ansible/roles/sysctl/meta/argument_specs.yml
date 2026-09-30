@@ -9,6 +9,10 @@ argument_specs:
         description: Path of the sysctl.d drop-in holding all settings.
         type: str
         default: /etc/sysctl.d/90-hardening.conf
+      sysctl_rp_filter_file:
+        description: Path of the sysctl.d drop-in that disables rp_filter on every interface via a glob.
+        type: str
+        default: /etc/sysctl.d/99-cilium-rp-filter.conf
       sysctl_settings:
         description: Mapping of sysctl keys to values. Replaces the default map entirely when overridden.
         type: dict

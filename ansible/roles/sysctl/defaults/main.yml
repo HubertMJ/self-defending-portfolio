@@ -2,6 +2,21 @@
 # Single file so the whole set can be inspected or removed at once.
 sysctl_file: /etc/sysctl.d/90-hardening.conf
 
+# Second drop-in, deliberately separate and ordered last (99-), holding the one
+# setting Cilium cannot tolerate being wrong: net.ipv4.conf.*.rp_filter = 0.
+# conf.all and conf.default in sysctl_file above are not a complete guarantee.
+# rp_filter is a per-interface knob; a device only inherits conf.default at
+# creation time, and systemd-sysctl re-applies matching globs to every interface
+# as udev creates it. Upstream systemd ships `net.ipv4.conf.*.rp_filter = 2` in
+# /usr/lib/sysctl.d/50-default.conf for exactly that reason. Debian 13 does not
+# install that file today (verified: the systemd, procps and cloud-init packages
+# on trixie ship no rp_filter setting at all), so this file is belt and braces
+# rather than a fix for a live default - but it is the only construct that keeps
+# every veth and cilium_* device at 0 no matter what drops a glob into
+# sysctl.d later, and a silent regression here breaks pod networking with no
+# error message anywhere.
+sysctl_rp_filter_file: /etc/sysctl.d/99-cilium-rp-filter.conf
+
 # Complete kernel parameter map. Override individual keys by redefining the
 # whole dict (Ansible does not deep-merge by default) or set
 # hash_behaviour=merge in ansible.cfg.

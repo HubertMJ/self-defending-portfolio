@@ -14,7 +14,7 @@
     group: root
     mode: "0640"
     backup: true
-  notify: Restart auditd
+  notify: Reload the auditd configuration
 
 - name: Install audit rule files
   ansible.builtin.template:

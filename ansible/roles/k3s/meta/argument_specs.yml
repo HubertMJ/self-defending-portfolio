@@ -54,6 +54,11 @@ argument_specs:
         description: Disable kube-proxy in favour of Cilium's replacement.
         type: bool
         default: true
+      k3s_egress_selector_mode:
+        description: apiserver egress selector mode; cluster is required because kube-proxy is disabled.
+        type: str
+        default: cluster
+        choices: [agent, cluster, pod, disabled]
       k3s_secrets_encryption:
         description: Enable secrets encryption at rest.
         type: bool

@@ -88,10 +88,14 @@
   delay: "{{ k3s_readyz_delay }}"
   until: k3s_readyz.rc == 0
 
+# no_log on both tasks below: the kubeconfig embeds the cluster CA plus the
+# admin client certificate and key, and without it Ansible prints the whole
+# base64 blob (and the decoded content) on -v or on failure.
 - name: Read the admin kubeconfig
   ansible.builtin.slurp:
     src: /etc/rancher/k3s/k3s.yaml
   register: k3s_kubeconfig_raw
+  no_log: true
   when: k3s_fetch_kubeconfig | bool
 
 - name: Store the kubeconfig on the control machine
@@ -101,6 +105,7 @@
          | replace('https://127.0.0.1:6443', 'https://' ~ k3s_kubeconfig_server ~ ':6443') }}
     dest: "{{ k3s_kubeconfig_dest }}"
     mode: "0600"
+  no_log: true
   become: false
   delegate_to: localhost
   vars:

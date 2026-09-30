@@ -12,7 +12,18 @@
     - auditd_augenrules.rc != 0
     - not auditd_immutable | bool
 
-- name: Restart auditd
-  ansible.builtin.service:
-    name: auditd
-    state: restarted
+# SIGHUP, not a restart. auditd(8) documents SIGHUP as the way to make the
+# daemon re-read /etc/audit/auditd.conf, and it is used here for two reasons:
+#   * upstream's auditd.service carries RefuseManualStop=yes, so
+#     `systemctl restart auditd` (and therefore the service module) fails on
+#     any distribution that ships the unit unmodified. Debian 13's unit happens
+#     to omit that directive, but the role must not depend on that detail.
+#   * a reload never leaves the kernel without a userspace consumer, so no
+#     audit event is lost while the configuration is applied.
+# /usr/sbin/service auditd restart was considered and rejected: on a systemd
+# host Debian's wrapper simply execs `systemctl restart auditd.service`
+# (/usr/sbin/service lines 163-169), so it is not an escape from RefuseManualStop.
+- name: Reload the auditd configuration
+  ansible.builtin.command:
+    cmd: /usr/bin/systemctl kill --signal=SIGHUP auditd.service
+  changed_when: true

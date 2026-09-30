@@ -1,0 +1,8 @@
+---
+# systemd-sysctl is a oneshot unit; "restarting" it re-runs systemd-sysctl over
+# every sysctl.d file, which is how the per-interface glob written by this role
+# is applied to the interfaces that already exist.
+- name: Restart systemd-sysctl
+  ansible.builtin.systemd_service:
+    name: systemd-sysctl
+    state: restarted

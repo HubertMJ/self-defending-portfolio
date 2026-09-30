@@ -9,6 +9,17 @@
     name: "{{ base_packages }}"
     state: present
 
+# Debian's qemu-guest-agent.service is device activated: it has BindsTo= on the
+# virtio serial port and an empty [Install] section, so there is nothing to
+# enable - udev starts it when the port appears. It is only managed here where a
+# virtio port can exist at all; the smoke-test container is not a KVM guest, and
+# ansible_virtualization_type reports docker there.
+- name: Ensure the QEMU guest agent is running
+  ansible.builtin.systemd_service:
+    name: qemu-guest-agent
+    state: started
+  when: ansible_virtualization_type == 'kvm'
+
 - name: Set timezone
   community.general.timezone:
     name: "{{ base_timezone }}"

@@ -4,6 +4,36 @@
     name: nftables
     state: present
 
+# A default-drop input chain applied from a source address that is not covered
+# by firewall_admin_cidrs cuts the control connection the moment the ruleset is
+# loaded, and nothing on the host would put it back. SSH_CLIENT is set by sshd
+# in the session Ansible is running through, so it is the authoritative answer
+# to "which address is this play arriving from". become: false is required: sudo
+# resets the environment and would drop the variable.
+- name: Read the address this play is connected from
+  ansible.builtin.command:
+    cmd: /usr/bin/printenv SSH_CLIENT
+  register: firewall_ssh_client
+  become: false
+  changed_when: false
+  failed_when: false
+
+- name: Assert the control connection survives the default-drop policy
+  ansible.builtin.assert:
+    that:
+      - firewall_control_ip is ansible.utils.in_any_network(firewall_admin_cidrs)
+    fail_msg: >-
+      This play is connected from {{ firewall_control_ip }}, which is not inside
+      firewall_admin_cidrs ({{ firewall_admin_cidrs | join(', ') }}). Loading the
+      default-drop ruleset would close this connection. Add the address to
+      firewall_admin_cidrs (or lan_cidr) before running the firewall role.
+    success_msg: "Control connection from {{ firewall_control_ip }} is allowed by firewall_admin_cidrs."
+  vars:
+    firewall_control_ip: "{{ firewall_ssh_client.stdout | default('') | trim | split(' ') | first | default('', true) }}"
+  # Skipped when the connection is not SSH (the container used by tests/smoke.sh
+  # connects over the docker API, so sshd never set SSH_CLIENT).
+  when: firewall_ssh_client.stdout | default('') | trim | length > 0
+
 - name: Render the nftables ruleset
   ansible.builtin.template:
     src: nftables.conf.j2

@@ -16,14 +16,17 @@ argument_specs:
       firewall_default_lan_cidr:
         description: Fallback LAN CIDR derived from host facts when lan_cidr is not set.
         type: str
+      firewall_admin_cidrs6:
+        description: Source IPv6 CIDRs allowed to reach SSH and the kube-apiserver. Empty disables all IPv6 admin rules.
+        type: list
+        elements: str
       firewall_k3s_api_cidrs:
         description: Source CIDRs allowed to reach the kube-apiserver.
         type: list
         elements: str
       firewall_ssh_port:
-        description: SSH port to open.
+        description: SSH port to open. Derived from ssh_hardening_port so the two roles cannot drift apart.
         type: int
-        default: 22
       firewall_k3s_api_port:
         description: kube-apiserver port to open.
         type: int
@@ -36,6 +39,14 @@ argument_specs:
         description: Service CIDR trusted on the input chain.
         type: str
         default: 10.43.0.0/16
+      firewall_pod_to_host_tcp_ports:
+        description: TCP ports on the host reachable from the pod and service CIDRs.
+        type: list
+        elements: int
+      firewall_pod_to_host_udp_ports:
+        description: UDP ports on the host reachable from the pod and service CIDRs.
+        type: list
+        elements: int
       firewall_extra_tcp_ports:
         description: Additional TCP ports opened to firewall_cluster_cidrs.
         type: list

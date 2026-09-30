@@ -25,3 +25,15 @@ auditd_space_left_action: SYSLOG
 auditd_k3s_config_dir: /etc/rancher/k3s
 auditd_k3s_state_dir: /var/lib/rancher/k3s/server
 auditd_k3s_binary: /usr/local/bin/k3s
+
+# Subpaths of auditd_k3s_state_dir that are watched for writes. The state
+# directory as a whole is deliberately NOT watched: it contains the kine/SQLite
+# datastore, whose write-ahead churn generates a continuous stream of audit
+# events that drowns every other record and fills /var/log/audit. These three
+# hold the material an attacker would actually need - the cluster CA and
+# serving keys (tls), the encryption and bootstrap secrets (cred) and the node
+# join token (token).
+auditd_k3s_state_watch_subpaths:
+  - tls
+  - cred
+  - token

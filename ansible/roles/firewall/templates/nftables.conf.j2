@@ -1,7 +1,25 @@
 #!/usr/sbin/nft -f
 # {{ ansible_managed }}
+#
+# Scoping: this file replaces the "inet filter" table only. A global
+# `flush ruleset` would also delete every other table in the kernel, and on a
+# k3s node those are not ours: Cilium and containerd install their own chains
+# through iptables-nft (tables ip/ip6 "filter", "nat", "mangle" and
+# CILIUM_* chains). Wiping them mid-flight breaks pod networking, hostPort
+# publishing and masquerading until the agent happens to resync.
+# `table inet filter` immediately followed by `delete table inet filter` is the
+# idempotent way to declare a single table from scratch: the bare declaration
+# creates the table if it does not exist yet, so the delete can never fail on a
+# freshly booted host, and nothing outside this table is touched.
+#
+# nftables.service on Debian 13 runs `/usr/sbin/nft -f /etc/nftables.conf` for
+# both ExecStart and ExecReload, so reloading the unit applies exactly this file
+# and flushes nothing else - which is why the role's handler may use the unit.
+# ExecStop is `nft flush ruleset`, so the role starts and enables nftables but
+# never stops or restarts it.
 
-flush ruleset
+table inet filter
+delete table inet filter
 
 table inet filter {
     chain input {
@@ -19,11 +37,19 @@ table inet filter {
 
         ip saddr { {{ firewall_admin_cidrs | join(', ') }} } tcp dport {{ firewall_ssh_port }} accept comment "ssh"
         ip saddr { {{ firewall_k3s_api_cidrs | join(', ') }} } tcp dport {{ firewall_k3s_api_port }} accept comment "kube-apiserver"
+{% if firewall_admin_cidrs6 | length > 0 %}
+        ip6 saddr { {{ firewall_admin_cidrs6 | join(', ') }} } tcp dport {{ firewall_ssh_port }} accept comment "ssh v6"
+        ip6 saddr { {{ firewall_admin_cidrs6 | join(', ') }} } tcp dport {{ firewall_k3s_api_port }} accept comment "kube-apiserver v6"
+{% endif %}
 
-        # Cluster-internal traffic terminating on the host: kubelet, node
-        # metrics, host-network pods reaching node services.
-        ip saddr {{ firewall_pod_cidr }} accept comment "pod cidr"
-        ip saddr {{ firewall_service_cidr }} accept comment "service cidr"
+        # Cluster-internal traffic terminating on the host, restricted to the
+        # ports the cluster actually needs (see firewall_pod_to_host_*_ports).
+{% if firewall_pod_to_host_tcp_ports | length > 0 %}
+        ip saddr { {{ firewall_pod_cidr }}, {{ firewall_service_cidr }} } tcp dport { {{ firewall_pod_to_host_tcp_ports | join(', ') }} } accept comment "cluster to host tcp"
+{% endif %}
+{% if firewall_pod_to_host_udp_ports | length > 0 %}
+        ip saddr { {{ firewall_pod_cidr }}, {{ firewall_service_cidr }} } udp dport { {{ firewall_pod_to_host_udp_ports | join(', ') }} } accept comment "cluster to host udp"
+{% endif %}
 
         # cilium_host / cilium_net are the node's own cgroup-attached veth pair.
         iifname "cilium_*" accept comment "cilium managed interfaces"

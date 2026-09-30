@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Create the k3s VM on Proxmox from the official Debian 13 generic cloud image via the REST API.
 #
-# Requires: curl, jq. Credentials only from the environment (see docs/bootstrap.md):
+# Requires: curl, jq, python3 (used to URL-encode the SSH public key).
+# Credentials only from the environment (see docs/bootstrap.md):
 #   PVE_HOST      e.g. 10.2.1.2
 #   PVE_TOKEN_ID  e.g. 'ansible@pve!portfolio'
 #   PVE_TOKEN     the token secret
@@ -53,7 +54,9 @@ wait_task() { # upid
 
 [[ -r "$SSH_PUBKEY_FILE" ]] || { echo "SSH public key not found: $SSH_PUBKEY_FILE" >&2; exit 1; }
 
-PVE_NODE="${PVE_NODE:-$(api GET /nodes | jq -r '.data[].node' | head -1)}"
+# .data[0].node, not `.data[].node | head -1`: under `set -o pipefail` head exits
+# as soon as it has its line and jq dies with SIGPIPE, which fails the script.
+PVE_NODE="${PVE_NODE:-$(api GET /nodes | jq -r '.data[0].node')}"
 echo "node=${PVE_NODE} vmid=${VMID} name=${VM_NAME} ip=${VM_IP}"
 
 if api GET "/nodes/${PVE_NODE}/qemu/${VMID}/status/current" >/dev/null 2>&1; then
@@ -63,6 +66,17 @@ fi
 # 1. Download the cloud image into the node's ISO/import storage ("local" by default) with checksum.
 IMG_NAME=$(basename "$DEBIAN_IMAGE_URL")
 IMPORT_STORAGE="${IMPORT_STORAGE:-local}"
+
+# download-url with content=import only works if the storage actually advertises
+# the "import" content type, which Proxmox does not enable by default. Checking
+# first turns an opaque 501/400 from the API into an actionable message.
+STORAGE_CONTENT=$(api GET "/nodes/${PVE_NODE}/storage/${IMPORT_STORAGE}/status" | jq -r '.data.content')
+case ",${STORAGE_CONTENT}," in
+  *,import,*) ;;
+  *) echo "storage ${IMPORT_STORAGE} does not accept 'import' content (has: ${STORAGE_CONTENT})." >&2
+     echo "enable it on the node, e.g.: pvesm set ${IMPORT_STORAGE} --content iso,vztmpl,backup,import" >&2
+     exit 1 ;;
+esac
 SHA512=$(curl -sS --fail "$DEBIAN_SUMS_URL" | awk -v f="$IMG_NAME" '$2==f {print $1}')
 [[ -n "$SHA512" ]] || { echo "checksum for ${IMG_NAME} not found in SHA512SUMS" >&2; exit 1; }
 echo "downloading ${IMG_NAME} to ${IMPORT_STORAGE} (sha512 verified by Proxmox)"
@@ -72,6 +86,10 @@ UPID=$(api POST "/nodes/${PVE_NODE}/storage/${IMPORT_STORAGE}/download-url" \
 wait_task "$UPID"
 
 # 2. Create the VM: q35, UEFI (OVMF), virtio-scsi-single, cloud-init drive, serial console, guest agent.
+# ciupgrade=0 on purpose: with ciupgrade=1 cloud-init runs `apt dist-upgrade` on
+# first boot and holds the dpkg lock for minutes, which collides with the first
+# Ansible run. Patching is the unattended_upgrades role's job, and hardening.yml
+# additionally waits for `cloud-init status --wait` before touching apt.
 NET="virtio,bridge=${VM_BRIDGE}"; [[ -n "$VM_VLAN" ]] && NET+=",tag=${VM_VLAN}"
 SSHKEYS=$(python3 -c 'import sys,urllib.parse;print(urllib.parse.quote(open(sys.argv[1]).read().strip(),safe=""))' "$SSH_PUBKEY_FILE")
 UPID=$(api POST "/nodes/${PVE_NODE}/qemu" \
@@ -83,12 +101,21 @@ UPID=$(api POST "/nodes/${PVE_NODE}/qemu" \
   "scsi0=${VM_STORAGE}:0,import-from=${IMPORT_STORAGE}:import/${IMG_NAME},discard=on,ssd=1,iothread=1" \
   "ide2=${VM_STORAGE}:cloudinit" "boot=order=scsi0" \
   "ciuser=${VM_USER}" "ipconfig0=ip=${VM_IP},gw=${VM_GW}" "nameserver=${VM_DNS}" \
-  "sshkeys=${SSHKEYS}" "ciupgrade=1" "onboot=1" \
+  "sshkeys=${SSHKEYS}" "ciupgrade=0" "onboot=1" \
   "description=self-defending-portfolio k3s node. Managed by Ansible; do not edit by hand." | jq -r '.data')
 wait_task "$UPID"
 
 # 3. Grow the root disk (image is 3 GB); cloud-init growpart expands the filesystem on first boot.
-api PUT "/nodes/${PVE_NODE}/qemu/${VMID}/resize" "disk=scsi0" "size=${VM_DISK_GB}G" >/dev/null
+# The resize endpoint returns a UPID: it is asynchronous. Starting the VM before
+# that task finishes races the disk resize against the first boot, and cloud-init
+# then grows the filesystem to whatever size it happened to see.
+UPID=$(api PUT "/nodes/${PVE_NODE}/qemu/${VMID}/resize" "disk=scsi0" "size=${VM_DISK_GB}G" | jq -r '.data')
+if [[ "$UPID" == UPID:* ]]; then
+  wait_task "$UPID"
+else
+  # Older Proxmox versions performed the resize synchronously and returned null.
+  echo "resize returned no task id (${UPID}); assuming it completed synchronously"
+fi
 
 # 4. Start.
 UPID=$(api POST "/nodes/${PVE_NODE}/qemu/${VMID}/status/start" | jq -r '.data')

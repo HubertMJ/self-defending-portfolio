@@ -19,18 +19,29 @@
         fail_msg: sshd is still accepting password or root logins.
         success_msg: sshd rejects passwords and root logins.
 
-    - name: Read the loaded nftables ruleset
+    # The specific chain, in JSON: searching the whole ruleset for the substring
+    # "policy drop" would pass on any unrelated table Cilium or containerd
+    # installed while the host's own input chain was wide open.
+    - name: Read the input chain of table inet filter
       ansible.builtin.command:
-        cmd: /usr/sbin/nft list ruleset
+        cmd: /usr/sbin/nft -j list chain inet filter input
       register: verify_nft
       changed_when: false
 
-    - name: Assert the input chain defaults to drop
+    - name: Assert the input chain of table inet filter defaults to drop
       ansible.builtin.assert:
         that:
-          - "'policy drop' in verify_nft.stdout"
-        fail_msg: No nftables chain has a drop policy; the host firewall is open.
-        success_msg: nftables input chain defaults to drop.
+          - >-
+            (verify_nft.stdout | from_json).nftables
+            | selectattr('chain', 'defined') | map(attribute='chain')
+            | selectattr('family', 'equalto', 'inet')
+            | selectattr('table', 'equalto', 'filter')
+            | selectattr('name', 'equalto', 'input')
+            | map(attribute='policy') | list == ['drop']
+        fail_msg: >-
+          The input chain of table inet filter does not have policy drop;
+          the host firewall is open.
+        success_msg: The input chain of table inet filter defaults to drop.
 
     - name: Read the audit subsystem status
       ansible.builtin.command:
@@ -45,18 +56,27 @@
         fail_msg: The kernel audit subsystem is not enabled.
         success_msg: Kernel auditing is enabled.
 
+    # conf.all and conf.default are not sufficient evidence: rp_filter is a
+    # per-interface knob and a device only inherits conf.default when it is
+    # created, so the address-carrying interface is checked explicitly.
     - name: Read the effective sysctl values Cilium depends on
       ansible.builtin.command:
-        cmd: /sbin/sysctl -n net.ipv4.conf.all.rp_filter net.ipv4.ip_forward
+        cmd: >-
+          /sbin/sysctl -n net.ipv4.conf.all.rp_filter
+          net.ipv4.conf.default.rp_filter
+          net.ipv4.conf.{{ ansible_default_ipv4.interface }}.rp_filter
+          net.ipv4.ip_forward
       register: verify_sysctl
       changed_when: false
 
     - name: Assert reverse path filtering is off and forwarding is on
       ansible.builtin.assert:
         that:
-          - verify_sysctl.stdout_lines[0] == '0'
-          - verify_sysctl.stdout_lines[1] == '1'
-        fail_msg: rp_filter or ip_forward is wrong; Cilium networking will break.
+          - verify_sysctl.stdout_lines[0:3] == ['0', '0', '0']
+          - verify_sysctl.stdout_lines[3] == '1'
+        fail_msg: >-
+          rp_filter or ip_forward is wrong (all/default/{{ ansible_default_ipv4.interface }}/forward
+          = {{ verify_sysctl.stdout_lines | join('/') }}); Cilium networking will break.
         success_msg: Kernel networking matches Cilium's requirements.
 
     - name: Read node status
