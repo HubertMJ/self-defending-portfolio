@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { defineConfig, devices } from "@playwright/test";
+import { chromium, defineConfig, devices } from "@playwright/test";
 
 // Smoke tests against the built site. By default they start scripts/serve.mjs on dist/ (same
 // headers as the image's nginx). Set BASE_URL to run them against something else instead, e.g. the
@@ -9,7 +9,17 @@ import { defineConfig, devices } from "@playwright/test";
 // Browser: Playwright's own Chromium if installed; otherwise PW_CHROMIUM_PATH, or the preinstalled
 // /opt/pw-browsers/chromium some CI images ship. If none exists the suite cannot run; see README.
 const external = process.env.BASE_URL;
-const fallbackChromium = ["/opt/pw-browsers/chromium"].find((p) => existsSync(p));
+// The fallback is consulted only when Playwright's own browser is missing: a runner that happens to
+// carry /opt/pw-browsers must still test with the Chromium this lockfile pins, which is what
+// `npx playwright install chromium` (the CI step) puts in place.
+const ownChromium = (() => {
+  try {
+    return existsSync(chromium.executablePath());
+  } catch {
+    return false;
+  }
+})();
+const fallbackChromium = ownChromium ? undefined : ["/opt/pw-browsers/chromium"].find((p) => existsSync(p));
 const executablePath = process.env.PW_CHROMIUM_PATH ?? fallbackChromium;
 
 export default defineConfig({
@@ -19,7 +29,12 @@ export default defineConfig({
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
   retries: 0,
-  reporter: process.env.CI ? [["list"], ["html", { open: "never", outputFolder: "playwright-report" }]] : "list",
+  // In CI the "github" reporter turns every failure into a check-run annotation with its message
+  // and location. Annotations are readable through the public API without signing in; job logs
+  // and the uploaded report are not, so without it a red build says only "exit code 1".
+  reporter: process.env.CI
+    ? [["list"], ...(process.env.GITHUB_ACTIONS ? [["github"] as ["github"]] : []), ["html", { open: "never", outputFolder: "playwright-report" }]]
+    : "list",
   use: {
     baseURL: external ?? "http://127.0.0.1:4173",
     trace: "retain-on-failure",
