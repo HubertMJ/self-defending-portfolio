@@ -25,6 +25,8 @@ import (
 	"github.com/hubertmj/self-defending-portfolio/app/api/internal/events"
 	"github.com/hubertmj/self-defending-portfolio/app/api/internal/limits"
 	"github.com/hubertmj/self-defending-portfolio/app/api/internal/posture"
+	"github.com/hubertmj/self-defending-portfolio/app/api/internal/ruleindex"
+	"github.com/hubertmj/self-defending-portfolio/app/api/internal/runlog"
 	"github.com/hubertmj/self-defending-portfolio/app/api/internal/runner"
 	"github.com/hubertmj/self-defending-portfolio/app/api/internal/scenarios"
 	"github.com/hubertmj/self-defending-portfolio/app/api/internal/webhook"
@@ -40,8 +42,18 @@ const catalogue = `
   detection: Terminal shell in container
   response: terminate
   timeout_seconds: 20
+  victim: true
   pod:
-    containers: [{name: victim, image: "` + img + `"}]
+    securityContext: {runAsNonRoot: true, runAsUser: 10001, seccompProfile: {type: RuntimeDefault}}
+    containers:
+      - name: victim
+        image: "` + img + `"
+        securityContext:
+          runAsUser: 10002
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities: {drop: [ALL]}
+        resources: {requests: {cpu: 10m, memory: 16Mi}, limits: {cpu: 100m, memory: 32Mi}}
   exec: {command: [sh, -c, id], tty: true}
 - id: network-tool
   title: Network tool
@@ -89,6 +101,12 @@ func newEnv(t *testing.T, cfg limits.AttackConfig) *env {
 		return false, nil, nil
 	})
 	hub := events.NewHub(50)
+	runs := runlog.New(50, 500)
+	hub.Tap(runs.Record)
+	rules, err := ruleindex.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
 	run := runner.New(kube, noopExec{}, hub, nil, runner.Config{PollInterval: 5 * time.Millisecond, QuarantineLinger: -1})
 	attacks := limits.NewAttacks(cfg, nil)
 	srv := New(Config{
@@ -103,6 +121,9 @@ func newEnv(t *testing.T, cfg limits.AttackConfig) *env {
 		TalonActions:  webhook.NewDayWindow(nil),
 		AllowedOrigin: "https://hubertjablon.ski",
 		Heartbeat:     50 * time.Millisecond,
+		Runs:          runs,
+		Rules:         rules,
+		Commit:        "0123456789abcdef0123456789abcdef01234567",
 	})
 	e := &env{public: httptest.NewServer(srv.Public()), internal: httptest.NewServer(srv.Internal()),
 		attacks: attacks, runner: run, kube: kube}
@@ -345,6 +366,23 @@ func TestEventStream(t *testing.T) {
 	stream.until(t, "run", `"state":"responded"`)
 	last := stream.until(t, "run", `"state":"finished"`)
 
+	// The whole run, alerts included, is in the run store.
+	resp, err := http.Get(e.public.URL + "/api/runs/" + runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := decode[runlog.Run](t, resp.Body)
+	seen := map[string]bool{}
+	for _, ev := range run.Events {
+		seen[ev.Type] = true
+		if ev.ID == 0 || len(ev.Data) < 2 || ev.Data[0] != '{' {
+			t.Fatalf("event %+v", ev)
+		}
+	}
+	if run.RunID != runID || run.Scenario != "network-tool" || !seen["run"] || !seen["falco"] || !seen["talon"] || !seen["pod"] {
+		t.Fatalf("run record: %+v", run)
+	}
+
 	// A late visitor gets the run replayed; one resuming after the last id gets nothing old.
 	late := openStream(t, ctx, e, "192.0.2.11", "")
 	late.until(t, "run", `"state":"queued"`)
@@ -362,7 +400,7 @@ func TestEventStream(t *testing.T) {
 	_ = openStream(t, ctx, e, "192.0.2.10", "")
 	req, _ := http.NewRequestWithContext(ctx, "GET", e.public.URL+"/api/events", nil)
 	req.Header.Set("CF-Connecting-IP", "192.0.2.10")
-	resp, err := http.DefaultClient.Do(req)
+	resp, err = http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -516,5 +554,98 @@ func (s *sse) until(t *testing.T, typ, contains string) string {
 		if strings.Contains(f, "\nevent: "+typ+"\n") && strings.Contains(f, contains) {
 			return f
 		}
+	}
+}
+
+func TestDetails(t *testing.T) {
+	e := newEnv(t, limits.DefaultAttackConfig())
+	resp, err := http.Get(e.public.URL + "/api/scenarios/shell-in-container/details")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw map[string]json.RawMessage
+	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range []string{"exec_command", "pod_security", "resources", "image", "falco_rule", "talon_rule", "policies", "commit", "victim"} {
+		if _, ok := raw[k]; !ok {
+			t.Errorf("details lacks %q", k)
+		}
+	}
+	var d Details
+	b, _ := json.Marshal(raw)
+	_ = json.Unmarshal(b, &d)
+	ps := d.PodSecurity
+	if strings.Join(d.ExecCommand, " ") != "sh -c id" || !d.ExecTTY || !d.Victim ||
+		*ps.RunAsUser != 10002 || !*ps.RunAsNonRoot || !*ps.ReadOnlyRootFilesystem || *ps.AllowPrivilegeEscalation ||
+		strings.Join(ps.CapabilitiesDrop, ",") != "ALL" || ps.Seccomp != "RuntimeDefault" || ps.AutomountServiceAccountToken {
+		t.Fatalf("details: %+v %+v", d, ps)
+	}
+	if d.Resources.Limits["memory"] != "32Mi" || d.Resources.Requests["cpu"] != "10m" ||
+		d.Image.Ref != img || d.Image.Digest != "sha256:"+strings.Repeat("0", 64) {
+		t.Fatalf("resources/image: %+v %+v", d.Resources, d.Image)
+	}
+	if d.FalcoRule.Name != "Terminal shell in container" || d.FalcoRule.File != "" ||
+		d.TalonRule.Name != "Kill terminal shell in sandbox" || d.TalonRule.File == "" || d.TalonRule.Line == 0 ||
+		len(d.Policies) == 0 || d.Commit != "0123456789abcdef0123456789abcdef01234567" {
+		t.Fatalf("rules: %+v %+v %v %q", d.FalcoRule, d.TalonRule, d.Policies, d.Commit)
+	}
+
+	resp, _ = http.Get(e.public.URL + "/api/scenarios/network-tool/details")
+	d = decode[Details](t, resp.Body)
+	if d.Victim || d.PodSecurity.RunAsUser != nil || len(d.PodSecurity.CapabilitiesDrop) != 0 ||
+		d.FalcoRule.File == "" || d.FalcoRule.Line == 0 || d.TalonRule.Name != "Quarantine network tool in sandbox" {
+		t.Fatalf("network-tool: %+v", d)
+	}
+	resp, _ = http.Get(e.public.URL + "/api/scenarios/nope/details")
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("unknown scenario: %d", resp.StatusCode)
+	}
+	if New(Config{Commit: "unknown"}).cfg.Commit != "" {
+		t.Fatal("a non-hex commit is published")
+	}
+}
+
+func TestRunsUnknown(t *testing.T) {
+	e := newEnv(t, limits.DefaultAttackConfig())
+	for _, id := range []string{"0123456789abcdef", "../../etc", "ZZ"} {
+		resp, err := http.Get(e.public.URL + "/api/runs/" + id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusNotFound || resp.Header.Get("Content-Type") != "application/json" {
+			t.Errorf("%s: %d", id, resp.StatusCode)
+		}
+	}
+}
+
+func TestLimits(t *testing.T) {
+	e := newEnv(t, limits.DefaultAttackConfig())
+	get := func(ip string) Limits {
+		t.Helper()
+		req, _ := http.NewRequest("GET", e.public.URL+"/api/limits", nil)
+		req.Header.Set("CF-Connecting-IP", ip)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = resp.Body.Close() }()
+		return decode[Limits](t, resp.Body)
+	}
+	l := get("198.51.100.9")
+	if l.PerVisitor != (VisitorLimit{Limit: 3, WindowS: 600, Remaining: 3}) || l.Global != (GlobalLimit{Limit: 30, WindowS: 3600, Remaining: 30}) ||
+		l.ActiveRun || l.StreamSlotsRemaining != 2 {
+		t.Fatalf("fresh: %+v", l)
+	}
+	if r := e.post(t, "/api/attack/shell-in-container", "198.51.100.9", nil); r.StatusCode != http.StatusAccepted {
+		t.Fatalf("attack: %d", r.StatusCode)
+	}
+	l = get("198.51.100.9")
+	if l.PerVisitor.Remaining != 2 || l.PerVisitor.ResetInS < 599 || l.PerVisitor.ResetInS > 600 || l.Global.Remaining != 29 || !l.ActiveRun {
+		t.Fatalf("after one attack: %+v", l)
+	}
+	if other := get("198.51.100.10"); other.PerVisitor.Remaining != 3 || !other.ActiveRun {
+		t.Fatalf("other visitor: %+v", other)
 	}
 }

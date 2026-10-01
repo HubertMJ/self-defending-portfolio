@@ -27,6 +27,8 @@ import (
 	"github.com/hubertmj/self-defending-portfolio/app/api/internal/events"
 	"github.com/hubertmj/self-defending-portfolio/app/api/internal/limits"
 	"github.com/hubertmj/self-defending-portfolio/app/api/internal/posture"
+	"github.com/hubertmj/self-defending-portfolio/app/api/internal/ruleindex"
+	"github.com/hubertmj/self-defending-portfolio/app/api/internal/runlog"
 	"github.com/hubertmj/self-defending-portfolio/app/api/internal/runner"
 	"github.com/hubertmj/self-defending-portfolio/app/api/internal/scenarios"
 	"github.com/hubertmj/self-defending-portfolio/app/api/internal/server"
@@ -81,7 +83,16 @@ func run(log *slog.Logger) error {
 	}
 
 	sandbox := env("SANDBOX_NAMESPACE", "sandbox")
-	hub := events.NewHub(50)
+	// The replay buffer covers the run in progress for a visitor who arrives mid-run: a run with its
+	// pod and victim evidence publishes a few dozen events (ADR 0021). Complete runs are in the run
+	// store, fed by a tap so it never misses one.
+	hub := events.NewHub(100)
+	runs := runlog.New(runlog.DefaultRuns, runlog.DefaultRunEvents)
+	hub.Tap(runs.Record)
+	rules, err := ruleindex.Load()
+	if err != nil {
+		return fmt.Errorf("rule index: %w", err)
+	}
 	falcoAlerts := webhook.NewDayWindow(nil)
 	talonActions := webhook.NewDayWindow(nil)
 	run := runner.New(kube, &runner.KubeExecer{Config: restCfg, Client: kube}, hub, log, runner.Config{Namespace: sandbox})
@@ -108,6 +119,11 @@ func run(log *slog.Logger) error {
 		Log:           log,
 		AllowedOrigin: env("ALLOWED_ORIGIN", "https://hubertjablon.ski"),
 		Namespace:     sandbox,
+		Runs:          runs,
+		Rules:         rules,
+		// Set by the Dockerfile from the build's --build-arg GIT_SHA (build-images.yml passes
+		// github.sha), so the rule links point at the exact source of this image.
+		Commit: os.Getenv("GIT_SHA"),
 	})
 
 	errc := make(chan error, 2)
@@ -118,7 +134,7 @@ func run(log *slog.Logger) error {
 		errc <- server.ListenAndServe(ctx, env("INTERNAL_LISTEN_ADDR", ":8081"), srv.Internal(), log)
 	}()
 	log.Info("listening", "public", env("LISTEN_ADDR", ":8080"), "internal", env("INTERNAL_LISTEN_ADDR", ":8081"),
-		"sandbox", sandbox, "attacks_per_ip", attackCfg.PerKey, "attacks_global", attackCfg.Global)
+		"sandbox", sandbox, "attacks_per_ip", attackCfg.PerKey, "attacks_global", attackCfg.Global, "commit", os.Getenv("GIT_SHA"))
 
 	var first error
 	select {

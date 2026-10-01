@@ -26,6 +26,8 @@ import (
 	"github.com/hubertmj/self-defending-portfolio/app/api/internal/events"
 	"github.com/hubertmj/self-defending-portfolio/app/api/internal/limits"
 	"github.com/hubertmj/self-defending-portfolio/app/api/internal/posture"
+	"github.com/hubertmj/self-defending-portfolio/app/api/internal/ruleindex"
+	"github.com/hubertmj/self-defending-portfolio/app/api/internal/runlog"
 	"github.com/hubertmj/self-defending-portfolio/app/api/internal/runner"
 	"github.com/hubertmj/self-defending-portfolio/app/api/internal/scenarios"
 	"github.com/hubertmj/self-defending-portfolio/app/api/internal/webhook"
@@ -59,6 +61,11 @@ type Config struct {
 	TalonActions Counter
 	Log          *slog.Logger
 	Now          func() time.Time
+	// Runs is the store behind GET /api/runs/{id}; Rules the embedded rule index and Commit the
+	// commit the image was built from, both for GET /api/scenarios/{id}/details.
+	Runs   *runlog.Store
+	Rules  *ruleindex.Index
+	Commit string
 
 	// AllowedOrigin is the only Origin a browser may POST from (the site itself).
 	AllowedOrigin string
@@ -95,6 +102,9 @@ func New(cfg Config) *Server {
 	if cfg.WriteTimeout <= 0 {
 		cfg.WriteTimeout = 10 * time.Second
 	}
+	if !commitPattern.MatchString(cfg.Commit) {
+		cfg.Commit = ""
+	}
 	return &Server{cfg: cfg}
 }
 
@@ -106,9 +116,13 @@ func (s *Server) Public() http.Handler {
 	mux.HandleFunc("POST /api/attack/{id}", s.attack)
 	mux.HandleFunc("GET /api/events", s.events)
 	mux.HandleFunc("GET /api/posture", s.posture)
+	mux.HandleFunc("GET /api/scenarios/{id}/details", s.details)
+	mux.HandleFunc("GET /api/runs/{id}", s.run)
+	mux.HandleFunc("GET /api/limits", s.limits)
 	// The same paths without a method: a wrong method gets a JSON 405 instead of net/http's plain
 	// text one, so every /api answer is JSON (the page parses errors too).
-	for _, p := range []string{"/api/healthz", "/api/scenarios", "/api/attack/{id}", "/api/events", "/api/posture"} {
+	for _, p := range []string{"/api/healthz", "/api/scenarios", "/api/attack/{id}", "/api/events", "/api/posture",
+		"/api/scenarios/{id}/details", "/api/runs/{id}", "/api/limits"} {
 		mux.HandleFunc(p, methodNotAllowed)
 	}
 	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
