@@ -672,6 +672,89 @@ transition), the `portfolio-api` Application and its namespace are pruned, and T
 Falcosidekick lose their webhook. Stage 1 can stay: it changes nothing Argo CD deploys apart from the
 two image policies' identity and namespace list.
 
+## 8. Fewer third-party vulnerabilities (ADR 0020)
+
+Same two-stage shape as section 7: the sources merge first and CI builds the images; the pins follow.
+Three steps are not done by Argo CD and are marked **[operator]**.
+
+### 8.1 Stage 1: merge the sources
+
+Merge everything up to (not including) the commit "images: pin talon and ksops, rebuilt api and web".
+Argo CD then syncs, on its own:
+
+- `falco-response`: Falcosidekick 2.35.0;
+- `trivy-operator`: Trivy 0.75.0 for the server and scan Jobs;
+- `kyverno-policies`: `verify-portfolio-images` also matches `falco-response` (nothing of ours runs
+  there yet, so nothing changes).
+
+`build-images` builds the changed apps: `talon` and `ksops` (new), `api` and `web` (posture split).
+Check the two new packages are public and verify all four digests from a logged-out machine:
+
+```sh
+docker logout ghcr.io
+for n in talon ksops api web; do scripts/verify-image.sh ghcr.io/hubertmj/self-defending-portfolio/$n@sha256:<digest>; done
+```
+
+### 8.2 Stage 2: pin the digests
+
+```sh
+scripts/bump-image-digest.sh talon sha256:<talon digest>   # cluster/infra/falco-response
+scripts/bump-image-digest.sh ksops sha256:<ksops digest>   # cluster/bootstrap/argocd
+scripts/bump-image-digest.sh api   sha256:<api digest>     # cluster/infra/portfolio-api
+scripts/bump-image-digest.sh web   sha256:<web digest>     # cluster/infra/hello
+make lint validate
+```
+
+Commit, merge, push. Argo CD rolls Talon (now our build, verified by Kyverno), the API and the site.
+Then `make runtime-test` and `make scenario-test`: Talon is the component that acts on both.
+
+### 8.3 [operator] Re-apply the Argo CD bootstrap
+
+Dex, the ApplicationSet and notifications controllers, the Redis bump and the KSOPS image live in
+`cluster/bootstrap/argocd`, which nothing syncs (ADR 0005). After stage 2 (the KSOPS pin is part of it):
+
+```sh
+kubectl diff -k cluster/bootstrap/argocd          # expect: redis image, repo-server init image
+kubectl apply -k cluster/bootstrap/argocd --server-side --force-conflicts
+# apply -k does not prune: delete the removed components by name
+kubectl -n argocd delete deploy,svc,sa,role,rolebinding argocd-dex-server
+kubectl -n argocd delete deploy,svc,sa,role,rolebinding argocd-applicationset-controller
+kubectl -n argocd delete deploy,sa,role,rolebinding argocd-notifications-controller
+kubectl -n argocd delete svc argocd-notifications-controller-metrics
+kubectl -n argocd delete cm argocd-notifications-cm
+kubectl -n argocd delete networkpolicy argocd-dex-server-network-policy \
+  argocd-applicationset-controller-network-policy argocd-notifications-controller-network-policy
+kubectl delete clusterrole,clusterrolebinding argocd-applicationset-controller
+kubectl -n argocd rollout status deploy/argocd-repo-server
+kubectl -n argocd rollout status deploy/argocd-redis
+argocd app list                                     # every Application still Synced/Healthy
+```
+
+The repo-server's init container now installs our KSOPS. `argocd app get cloudflared --refresh` (a
+KSOPS-decrypted Secret) Synced is the proof that decryption still works.
+
+### 8.4 [operator] Upgrade k3s to v1.35.9+k3s1
+
+The pin is in `ansible/inventory/group_vars/k3s_nodes.yml`. It brings CoreDNS 1.14.7; metrics-server
+stays v0.9.0. A single node, so the API server is down for the restart (workloads keep running):
+
+```sh
+make verify                  # read-only: the node is as Ansible expects before changing it
+make cluster                 # fetches k3s v1.35.9+k3s1, checks its sha256, restarts k3s
+kubectl get nodes -o wide    # VERSION v1.35.9+k3s1
+kubectl -n kube-system get deploy coredns -o jsonpath='{.spec.template.spec.containers[0].image}'
+```
+
+Cilium is not touched (1.19.8 is still the newest 1.19 patch). Rollback is the previous pin and
+`make cluster` again.
+
+### 8.5 Expect
+
+After a Trivy rescan (the operator rescans when a workload's image changes; give it an hour), the
+posture tile leads with **0** critical + high in our images. Underneath, the third-party count is
+without Dex and Redis, with KSOPS, Talon and Falcosidekick at their few remaining module findings,
+Trivy at 0, and CoreDNS lower after 8.4. ADR 0020 has the per-image table.
+
 ## Rebuild from zero
 
 ```sh
