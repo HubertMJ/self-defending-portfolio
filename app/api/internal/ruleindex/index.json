@@ -55,6 +55,11 @@
     },
     {
       "kind": "CiliumNetworkPolicy",
+      "name": "sandbox-victim-from-api",
+      "file": "cluster/infra/sandbox/ciliumnetworkpolicy-victim.yaml"
+    },
+    {
+      "kind": "CiliumNetworkPolicy",
       "name": "sandbox-dns-only",
       "file": "cluster/infra/sandbox/ciliumnetworkpolicy.yaml"
     },
