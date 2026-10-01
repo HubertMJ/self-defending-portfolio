@@ -1,0 +1,2 @@
+# The build fetches its source by commit id; nothing from this directory is copied in.
+*
