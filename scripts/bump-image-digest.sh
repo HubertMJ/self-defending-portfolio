@@ -16,14 +16,22 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-[ $# -eq 2 ] || { echo "usage: $0 <name> <sha256:digest>" >&2; exit 2; }
+die() { echo "bump-image-digest: $*" >&2; exit 2; }
+
+if [ $# -ne 2 ]; then
+  echo "usage: $0 <name> <sha256:digest>" >&2
+  exit 2
+fi
 name=$1 digest=$2
-[[ $name =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]] && [ -f "app/$name/Dockerfile" ] \
-  || { echo "bump-image-digest: no image '$name' (expected app/$name/Dockerfile)" >&2; exit 2; }
-[[ $digest =~ ^sha256:[0-9a-f]{64}$ ]] \
-  || { echo "bump-image-digest: '$digest' is not a sha256:<64 hex> digest" >&2; exit 2; }
-[ "$digest" != "sha256:$(printf '0%.0s' {1..64})" ] \
-  || { echo "bump-image-digest: that is the placeholder digest" >&2; exit 2; }
+if ! [[ $name =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]] || [ ! -f "app/$name/Dockerfile" ]; then
+  die "no image '$name' (expected app/$name/Dockerfile)"
+fi
+if ! [[ $digest =~ ^sha256:[0-9a-f]{64}$ ]]; then
+  die "'$digest' is not a sha256:<64 hex> digest"
+fi
+if [ "$digest" = "sha256:$(printf '0%.0s' {1..64})" ]; then
+  die "that is the placeholder digest"
+fi
 
 image=ghcr.io/hubertmj/self-defending-portfolio/$name
 mapfile -t files < <(git grep -l -F "$image" -- cluster/ | sort)
