@@ -1,0 +1,195 @@
+# Phase 3: the static site stops being a ConfigMap and becomes an image we build, scan, describe
+# and sign. Kyverno then refuses to admit it unless this workflow signed it (ADR 0011).
+#
+# The signature is keyless: the identity is *this file on main*, minted by GitHub's OIDC provider
+# and certified by Sigstore Fulcio. There is no private key anywhere, so there is no key to leak,
+# and the thing Kyverno trusts is a workflow path in a public repo that anyone can read.
+#
+# Every action is pinned to a full commit SHA with the tag it corresponded to in a comment
+# (ADR 0008); a tag is mutable, a commit is not.
+name: build-web
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - app/web/**
+      - .github/workflows/build-web.yml
+  workflow_dispatch:
+
+# Two pushes to main must not race to publish the `main` tag and leave it pointing at the older
+# digest. Not cancel-in-progress: a build that already signed should finish and be recorded.
+concurrency:
+  group: build-web
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: write        # push to GHCR
+  id-token: write        # OIDC token for cosign keyless signing
+  attestations: write    # the SBOM attestation
+  security-events: write # Trivy SARIF -> code scanning
+
+env:
+  IMAGE: ghcr.io/hubertmj/self-defending-portfolio/web
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: set up buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: log in to ghcr.io
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # No `latest`. A Kyverno policy forbids it in the cluster (ADR 0008) and the manifests pin a
+      # digest anyway; `main` exists only so a human can see what the branch currently points at.
+      - name: tags and labels
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=sha,format=short,prefix=sha-
+            type=raw,value=main,enable={{is_default_branch}}
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+
+      # provenance/sbom off: buildx would attach its own attestation manifests to the image index,
+      # which changes the digest shape and makes `cosign sign <image>@<digest>` ambiguous about what
+      # it covered. We produce the SBOM explicitly below and sign the image manifest we pushed.
+      - name: build and push
+        id: build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: app/web
+          file: app/web/Dockerfile
+          platforms: linux/amd64
+          push: true
+          provenance: false
+          sbom: false
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # The gate, on the digest that was actually pushed rather than on a tag that could have moved
+      # between the push and now. ignore-unfixed: a CVE with no upstream patch is not something this
+      # pipeline can act on, so failing on it would only teach us to ignore red builds.
+      - name: trivy gate (CRITICAL,HIGH)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: image
+          image-ref: ${{ env.IMAGE }}@${{ steps.build.outputs.digest }}
+          format: table
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "1"
+
+      # The same image for the Security tab, but *without* ignore-unfixed: the gate above deliberately
+      # lets unpatchable CVEs through, and the Security tab is where they should still be visible
+      # rather than silently dropped. exit-code 0 keeps the gate as the only verdict, and `always()`
+      # means a failed gate still reports what it found instead of just that it failed.
+      - name: trivy sarif
+        if: always()
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        env:
+          # The gate already installed trivy and populated the DB cache in this job.
+          TRIVY_SKIP_DB_UPDATE: "true"
+          TRIVY_SKIP_JAVA_DB_UPDATE: "true"
+        with:
+          scan-type: image
+          image-ref: ${{ env.IMAGE }}@${{ steps.build.outputs.digest }}
+          format: sarif
+          output: trivy.sarif
+          severity: CRITICAL,HIGH
+          # Without this the SARIF ignores `severity` and reports every level; keep the two runs
+          # scoped to the same severities so the Security tab matches what the gate judges.
+          limit-severities-for-sarif: true
+          exit-code: "0"
+          skip-setup-trivy: true
+
+      # Code scanning is not available on every plan and is not what this pipeline is for, so an
+      # upload problem must not turn a good, signed build red.
+      - name: upload sarif
+        if: always()
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
+        with:
+          sarif_file: trivy.sarif
+          category: trivy-image-web
+
+      - name: sbom (spdx json)
+        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
+        with:
+          image: ${{ env.IMAGE }}@${{ steps.build.outputs.digest }}
+          format: spdx-json
+          output-file: sbom.spdx.json
+          # Uploaded explicitly below so the artifact action is pinned here and not transitively.
+          upload-artifact: false
+
+      - name: upload sbom
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sbom-spdx-${{ github.sha }}
+          path: sbom.spdx.json
+          if-no-files-found: error
+
+      - name: install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v3.1.3
+
+      # Keyless: cosign swaps the job's OIDC token for a short-lived Fulcio certificate whose SAN is
+      # this workflow at this ref, signs, and logs the entry in Rekor. The private key exists for
+      # seconds, in memory, on the runner. scripts/verify-image.sh is the other half of this.
+      - name: cosign sign
+        run: cosign sign --yes "${IMAGE}@${DIGEST}"
+        env:
+          IMAGE: ${{ env.IMAGE }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+
+      # The SBOM as a signed statement about this digest, not just a build artifact that expires in
+      # 90 days: "what is in this image" becomes verifiable by anyone, forever, with the same trust
+      # root as the signature.
+      - name: cosign attest sbom
+        run: cosign attest --yes --predicate sbom.spdx.json --type spdxjson "${IMAGE}@${DIGEST}"
+        env:
+          IMAGE: ${{ env.IMAGE }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+
+      # Digest bumps in cluster/ are still a manual commit (ADR 0011, known gap), so hand the human
+      # the exact lines instead of making them reconstruct them from the log.
+      - name: summary
+        env:
+          IMAGE: ${{ env.IMAGE }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          cat >> "$GITHUB_STEP_SUMMARY" <<EOF
+          ## web image published
+
+          \`\`\`
+          ${IMAGE}@${DIGEST}
+          \`\`\`
+
+          Paste into \`cluster/infra/hello/kustomization.yaml\`:
+
+          \`\`\`yaml
+          images:
+            - name: ${IMAGE}
+              digest: ${DIGEST}
+          \`\`\`
+
+          Verify locally:
+
+          \`\`\`sh
+          scripts/verify-image.sh ${IMAGE}@${DIGEST}
+          \`\`\`
+          EOF

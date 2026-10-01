@@ -1,0 +1,6 @@
+# The build context is app/web and the image needs exactly two things: nginx.conf and public/.
+# Everything else is excluded explicitly so an accidental file next to them cannot be baked in.
+*
+!nginx.conf
+!public/
+public/**/.*
