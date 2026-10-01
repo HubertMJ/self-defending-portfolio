@@ -1,0 +1,16 @@
+# golangci-lint v2. The default set (errcheck, govet, ineffassign, staticcheck, unused) plus the
+# linters that catch what matters most in this service: request bodies that are never closed,
+# requests without a context, wrapped errors compared with ==, and gosec's security checks.
+version: "2"
+linters:
+  enable:
+    - bodyclose
+    - errorlint
+    - gosec
+    - misspell
+    - noctx
+  exclusions:
+    rules:
+      # Tests talk to httptest servers they own; a context per request adds nothing there.
+      - path: _test\.go
+        linters: [noctx, bodyclose, gosec]

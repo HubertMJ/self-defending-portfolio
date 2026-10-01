@@ -1,0 +1,6 @@
+# The build needs the Go sources and the module files, nothing else.
+*
+!go.mod
+!go.sum
+!*.go
+!internal/
