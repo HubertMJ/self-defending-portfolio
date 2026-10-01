@@ -53,6 +53,12 @@ table inet filter {
 
         # cilium_host / cilium_net are the node's own cgroup-attached veth pair.
         iifname "cilium_*" accept comment "cilium managed interfaces"
+    # Cilium's L7 proxies (Envoy for Gateway API/L7 policy, the DNS proxy for toFQDNs/dns rules)
+    # run in the host network namespace on dynamic ports and receive pod traffic via TPROXY.
+    # Cilium marks that traffic (MagicMarkIsProxy = 0x0200, masked 0x0f00; 0x0a00 for the reply
+    # direction) and accepts it in its own iptables INPUT chain; this chain must agree.
+    meta mark & 0x00000f00 == 0x00000200 accept comment "cilium proxy traffic"
+    meta mark & 0x00000f00 == 0x00000a00 accept comment "cilium proxy reply traffic"
 {% if firewall_extra_tcp_ports | length > 0 %}
         ip saddr { {{ firewall_cluster_cidrs | join(', ') }} } tcp dport { {{ firewall_extra_tcp_ports | join(', ') }} } accept
 {% endif %}
