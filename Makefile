@@ -1,4 +1,4 @@
-.PHONY: lint gitleaks validate smoke vm hardening cluster verify bootstrap
+.PHONY: lint gitleaks validate smoke runtime-test vm hardening cluster verify bootstrap
 DOCKER ?= docker
 
 lint:            ## run yamllint, ansible-lint, shellcheck, syntax-check (in container)
@@ -14,6 +14,9 @@ validate:        ## render every kustomization under cluster/ and validate it ag
 
 smoke:           ## idempotency smoke test in a container
 	@DOCKER="$(DOCKER)" tests/smoke.sh
+
+runtime-test:    ## phase 4 DoD against the live cluster: shell -> Falco -> Talon kill, quarantine, RBAC (needs KUBECONFIG)
+	@tests/runtime/run.sh
 
 vm:              ## create the VM on Proxmox (needs PVE_HOST/PVE_TOKEN_ID/PVE_TOKEN)
 	@scripts/pve-create-vm.sh

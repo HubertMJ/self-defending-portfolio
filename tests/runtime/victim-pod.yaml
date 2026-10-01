@@ -1,0 +1,43 @@
+# A victim for tests/runtime/run.sh: an ordinary, fully hardened pod in `sandbox`, running this
+# project's own signed web image (busybox `sh`, `wget`, `nslookup` from its Alpine base) with `sleep`
+# instead of nginx. run.sh substitutes __NAME__ and __IMAGE__ (the signed digest from
+# cluster/infra/hello/kustomization.yaml) and applies one copy per test case.
+#
+# The attack in the DoD is a shell in a hardened pod, not in a privileged one: everything below is PSS
+# `restricted` and passes every Kyverno policy, so the only thing that stops it is Falco + Talon.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: __NAME__
+  namespace: sandbox
+  labels:
+    app.kubernetes.io/name: runtime-test
+    # Pre-set to "false": Falco Talon's label actionner sends a JSON Patch `replace`, which fails on a
+    # label key that does not exist yet (ADR 0013). "true" puts the pod under the quarantine policy.
+    sdp.hubertjablon.ski/quarantine: "false"
+spec:
+  restartPolicy: Never
+  automountServiceAccountToken: false
+  # A killed victim should be gone at once, not after 30 s of SIGTERM handling by `sleep`.
+  terminationGracePeriodSeconds: 0
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 101
+    runAsGroup: 101
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: victim
+      image: __IMAGE__
+      command: ["sleep", "300"]
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: ["ALL"]
+      resources:
+        requests:
+          cpu: 10m
+          memory: 16Mi
+        limits:
+          memory: 32Mi

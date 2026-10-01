@@ -467,6 +467,90 @@ afterwards; an unrecoverable cluster is not.
 | webhook timeouts on Pod creation, cluster-wide | Kyverno cannot reach Rekor/Fulcio/GHCR; check egress before suspecting the policy (5.6) |
 | Pods cannot be created at all and Kyverno is down | `kubectl delete validatingwebhookconfiguration -l webhook.kyverno.io/managed-by=kyverno` breaks the deadlock; Kyverno recreates them on startup |
 
+## 6. Runtime security and posture (phase 4)
+
+Everything in this phase arrives through Argo CD like the rest; there is nothing to install by hand.
+The new Applications, all wave 5 (`cluster/apps/kustomization.yaml`):
+
+| Application | Namespace (PSA enforce) | What | ADR |
+|-------------|-------------------------|------|-----|
+| `policy-reporter` | `policy-reporter` (restricted) | reports UI, cluster-internal; Trivy CVE details plugin | 0014 |
+| `trivy-operator` | `trivy-system` (restricted) | image / config / RBAC scans, Trivy server, PolicyReport adapter | 0014 |
+| `kube-bench` | `kube-bench` (privileged) | daily CIS benchmark CronJob, JSON in the Job log | 0014 |
+| `falco` | `falco` (privileged) | modern eBPF sensor, 4 capabilities, no API token | 0013 |
+| `falco-response` | `falco-response` (restricted) | Falcosidekick -> Falco Talon | 0013 |
+| `sandbox` | `sandbox` (restricted) | victims for the runtime test, quarantine policy, Talon's Role | 0013 |
+
+The two privileged namespaces hold one workload each and are judged control by control by Kyverno's
+`pod-security-restricted` policy (ADR 0012), which is still **Audit** until the flip in 6.4.
+
+After each Application syncs, check the node's memory (plan budget: under 80 %, about 6.2 GiB):
+
+```sh
+kubectl top nodes
+```
+
+### 6.1 Look at the reports
+
+```sh
+kubectl -n policy-reporter port-forward svc/policy-reporter-ui 8082:8080    # http://localhost:8082
+kubectl get vulnerabilityreports -A                                         # first pass: ~30 min
+kubectl -n kube-bench create job --from=cronjob/kube-bench kube-bench-manual
+kubectl -n kube-bench logs job/kube-bench-manual | jq '.Totals'
+```
+
+kube-bench's flags come from `/etc/rancher/k3s/config.yaml`, not from the journal; a FAIL on a flag
+k3s sets internally means "not visible in the configuration" (ADR 0014,
+`cluster/infra/kube-bench/k3s-cis-1.9/k3s-config-args.sh`).
+
+### 6.2 Falco is running with the least-privileged probe
+
+```sh
+kubectl -n falco logs ds/falco | grep -m1 'Opening .syscall. source with modern BPF probe'
+kubectl -n falco-response get lease falco-talon -o jsonpath='{.spec.holderIdentity}{"\n"}'
+kubectl get polr -n falco -o wide        # pod-security-restricted: 0 fail for the Falco pod
+```
+
+If the probe does not open, check the AppArmor and BPF messages in the Falco log first; the
+`restricted-falco` exclusions and the four capabilities are the contract, not a starting point to widen.
+
+### 6.3 Prove it: the Definition of Done
+
+```sh
+export KUBECONFIG=$PWD/kubeconfig
+make runtime-test          # = tests/runtime/run.sh; run it twice in a row
+```
+
+It creates short-lived victim pods in `sandbox` (our signed web image, `restricted`, labelled
+`sdp.hubertjablon.ski/quarantine: "false"`) and deletes them on exit:
+
+1. `kubectl exec -it` a shell into a victim (through `script`, so there is a real TTY) and asserts
+   that the pod is deleted within 30 s, with a Falco "Terminal shell in container" alert, a
+   Falcosidekick POST to Talon, a Talon `kubernetes:terminate` log line and a Talon Event on the pod.
+2. Runs `wget` in a second victim and asserts that Talon labels it `quarantine=true`, that it keeps
+   running, and that a DNS lookup that worked before now fails (the quarantine policy).
+3. Asserts with `kubectl auth can-i` that Talon's ServiceAccount can delete and patch pods in
+   `sandbox` and read that one Namespace, and nothing in `hello` or `kube-system`, no secrets, no exec.
+
+Needs `script` (util-linux) on the operator machine.
+
+### 6.4 Flip Audit → Enforce (plan commit 9, not yet)
+
+`pod-security-restricted` and `require-pod-resources` move to Enforce only when both
+`kubectl get polr,cpolr -A` (after the Trivy scan Jobs have run at least once) and `make validate`
+show zero failures for both policies.
+
+### Troubleshooting
+
+| Symptom | Cause |
+|---------|-------|
+| Falco CrashLoop, BPF / permission errors | AppArmor not `Unconfined`, or a capability missing from `containerSecurityContext` (all four must be listed next to `drop: [ALL]`) |
+| Falco alerts but Talon does nothing | Talon holds no Lease (RBAC for `leases` in `falco-response`), or Falcosidekick's POSTs are dropped (`hubble observe --namespace falco-response`) |
+| Talon logs a 403 | it acted on a pod outside `sandbox`, which is the RBAC working; or its `sandbox` Role is missing |
+| victim not labelled, Talon logs a JSON Patch error | the victim lacks the pre-set `sdp.hubertjablon.ski/quarantine: "false"` label |
+| Trivy scan Jobs fail pulling layers | a registry or blob host missing from `cluster/infra/trivy-operator/ciliumnetworkpolicy.yaml` |
+| dropped flows anywhere | `kubectl -n kube-system exec ds/cilium -c cilium-agent -- hubble observe --verdict DROPPED --namespace <ns> --last 50` |
+
 ## Rebuild from zero
 
 ```sh
