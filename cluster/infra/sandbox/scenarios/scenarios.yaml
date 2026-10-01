@@ -1,0 +1,246 @@
+# The four controlled attack scenarios a visitor can trigger (phase 5; ADR 0017 for the safety model,
+# ADR 0018 for the detection -> response mapping). This file is data for the portfolio API: kustomize
+# turns it into ConfigMap `scenarios` in `portfolio-api`, key `scenarios.yaml` (./kustomization.yaml),
+# and the API executes it. The format is the phase 5/6 contract:
+#
+#   id               stable identifier, the {id} of POST /api/attack/{id}; the API must not hardcode ids
+#   title, summary   what the visitor reads before clicking
+#   technique        MITRE ATT&CK technique id
+#   detection        the Falco rule that fires (stock rules are in the Falco 0.45.0 image's
+#                    /etc/falco/falco_rules.yaml, custom ones in cluster/apps/falco.yaml customRules)
+#   response         what Falco Talon does: terminate (pod deleted) | quarantine (pod labelled, cut off)
+#   timeout_seconds  <= 120; the API sets activeDeadlineSeconds from it and gives up after it
+#   pod              a PodSpec. The API adds metadata (generateName, namespace `sandbox`, labels
+#                    sdp.hubertjablon.ski/run-id and sdp.hubertjablon.ski/quarantine: "false") and
+#                    activeDeadlineSeconds, and changes nothing else
+#   exec             {command, tty} run in container `target` once the pod is Ready, or null
+#
+# What every pod spec has in common, and why (each one passes pod-security-restricted,
+# require-pod-resources, restrict-image-registries and verify-portfolio-images - checked for every
+# scenario by `make validate`, which renders them as Pods; scripts/lib/scenario_pods.py):
+#   * the scenario image only, pinned by digest (one anchor, &scenario-image, so a bump is one line);
+#   * PSS restricted: non-root uid 10001, no privilege escalation, every capability dropped, seccomp
+#     RuntimeDefault; read-only root filesystem except where a scenario is *about* writing to it;
+#   * no ServiceAccount token, no service links: nothing in the pod can talk to the API server, and the
+#     environment lists no cluster services;
+#   * `sleep` as the container's process, so the pod is Ready at once and nothing listens on a port;
+#   * terminationGracePeriodSeconds 0: a terminated scenario pod is gone at once;
+#   * small requests and a hard memory and CPU limit, inside the sandbox LimitRange and ResourceQuota
+#     (../limitrange.yaml, ../resourcequota.yaml).
+#
+# Exec exit codes are not a success signal: `wget` fails by design (nothing listens on the target) and
+# a terminated pod ends the exec with an error. The API judges a run by the Falco and Talon events.
+
+# ---------------------------------------------------------------------------------------------------
+# 1. An interactive shell in a running container: Falco's stock "Terminal shell in container" (NOTICE)
+#    requires a shell started directly by the container runtime (container_entrypoint) with a TTY, which
+#    is exactly `kubectl exec -it <pod> -- sh`. Talon rule "Kill terminal shell in sandbox" deletes the
+#    pod. tty: true is load-bearing: without a TTY this rule does not fire.
+- id: shell-in-container
+  title: Shell in a container
+  summary: >-
+    Opens an interactive shell inside a running, fully hardened pod - the first thing an attacker does
+    after landing remote code execution. Falco sees a shell with a terminal attached; Talon deletes the
+    pod within seconds.
+  technique: T1059.004
+  detection: Terminal shell in container
+  response: terminate
+  timeout_seconds: 90
+  pod:
+    restartPolicy: Never
+    automountServiceAccountToken: false
+    enableServiceLinks: false
+    terminationGracePeriodSeconds: 0
+    securityContext:
+      runAsNonRoot: true
+      runAsUser: 10001
+      runAsGroup: 10001
+      seccompProfile:
+        type: RuntimeDefault
+    containers:
+      - name: target
+        # PLACEHOLDER digest (all zeros) until the first build of app/scenario on main; replace with the
+        # digest from that run's summary. `make validate` says so while it is still the placeholder.
+        # One unbroken line, so a bump is a one-line diff that a grep for the digest finds.
+        # yamllint disable-line rule:line-length
+        image: &scenario-image ghcr.io/hubertmj/self-defending-portfolio/scenario@sha256:0000000000000000000000000000000000000000000000000000000000000000
+        command: ["sleep", "120"]
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+        resources:
+          requests:
+            cpu: 10m
+            memory: 16Mi
+          limits:
+            cpu: 100m
+            memory: 32Mi
+  # `id` and `hostname` give the visitor something to see; `sleep` keeps the shell alive so the kill is
+  # what ends it, not the command running out.
+  exec:
+    command: ["sh", "-c", "id; hostname; sleep 60"]
+    tty: true
+
+# ---------------------------------------------------------------------------------------------------
+# 2. A network tool: the custom rule "SDP network tool in sandbox" (WARNING, cluster/apps/falco.yaml)
+#    fires on the *start* of wget/nc/curl in a sandbox container; Talon rule "Quarantine network tool
+#    in sandbox" labels the pod sdp.hubertjablon.ski/quarantine=true and the standing quarantine
+#    CiliumClusterwideNetworkPolicy cuts all of its traffic. The pod keeps running, isolated.
+#
+#    The target is the pod's own loopback, discard port: nothing listens there, so wget fails with
+#    "connection refused" without a packet leaving the pod. No external host, no cluster service, and
+#    no DNS query is involved. No TTY and no shell, so rule 1 does not fire as well.
+- id: network-tool
+  title: Download tool in a container
+  summary: >-
+    Runs wget inside a pod, the way an attacker fetches a second stage or talks to a command-and-control
+    server. Falco flags the network tool; Talon quarantines the pod - it keeps running, but loses all
+    network access, both ways.
+  technique: T1071.001
+  detection: SDP network tool in sandbox
+  response: quarantine
+  timeout_seconds: 90
+  pod:
+    restartPolicy: Never
+    automountServiceAccountToken: false
+    enableServiceLinks: false
+    terminationGracePeriodSeconds: 0
+    securityContext:
+      runAsNonRoot: true
+      runAsUser: 10001
+      runAsGroup: 10001
+      seccompProfile:
+        type: RuntimeDefault
+    containers:
+      - name: target
+        image: *scenario-image
+        command: ["sleep", "120"]
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+        resources:
+          requests:
+            cpu: 10m
+            memory: 16Mi
+          limits:
+            cpu: 100m
+            memory: 32Mi
+  exec:
+    command: ["wget", "-q", "-T", "2", "-O", "/dev/null", "http://127.0.0.1:9/"]
+    tty: false
+
+# ---------------------------------------------------------------------------------------------------
+# 3. A credential file read: Falco's stock "Read sensitive file untrusted" (WARNING) fires on a
+#    *successful* open for reading (open_read requires fd.num >= 0) of /etc/shadow and friends by any
+#    program not on its trusted list (`cat` is not on it). Talon rule "Kill sensitive file read in
+#    sandbox" deletes the pod.
+#
+#    The non-root problem, and the answer: uid 10001 cannot open Alpine's /etc/shadow (root:shadow
+#    0640); the open fails with EACCES and the rule, by design, does not fire on a failed open. So the
+#    pod is given the `shadow` group (gid 42 in Alpine) as a supplemental group - PSS restricted allows
+#    supplementalGroups - and the read succeeds without root and without loosening the file's mode in
+#    the image. What the visitor sees is real but worthless: every account in the image is locked
+#    (`*` / `!`), there is no password hash in the file.
+- id: sensitive-file-read
+  title: Read /etc/shadow
+  summary: >-
+    Reads the system password database from inside a pod, as an attacker hunting for credentials would.
+    Falco flags an untrusted program opening a sensitive file; Talon deletes the pod.
+  technique: T1003.008
+  detection: Read sensitive file untrusted
+  response: terminate
+  timeout_seconds: 90
+  pod:
+    restartPolicy: Never
+    automountServiceAccountToken: false
+    enableServiceLinks: false
+    terminationGracePeriodSeconds: 0
+    securityContext:
+      runAsNonRoot: true
+      runAsUser: 10001
+      runAsGroup: 10001
+      # The `shadow` group of the Alpine base image; see the scenario comment above.
+      supplementalGroups: [42]
+      seccompProfile:
+        type: RuntimeDefault
+    containers:
+      - name: target
+        image: *scenario-image
+        command: ["sleep", "120"]
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+        resources:
+          requests:
+            cpu: 10m
+            memory: 16Mi
+          limits:
+            cpu: 100m
+            memory: 32Mi
+  exec:
+    command: ["cat", "/etc/shadow"]
+    tty: false
+
+# ---------------------------------------------------------------------------------------------------
+# 4. Container drift, drop and execute: Falco's stock "Drop and execute new binary in container"
+#    (CRITICAL) fires when a process starts from an executable that is in the container's overlayfs
+#    *upper* layer (proc.is_exe_upper_layer), i.e. one that was written after the container started
+#    rather than shipped in the image. Talon rule "Kill drifted binary in sandbox" deletes the pod.
+#
+#    The "dropped binary" is a copy of the image's own busybox: no download (the sandbox has no egress,
+#    and the image has no package manager), no foreign code. Named `busybox` so it actually runs (busybox
+#    picks its applet from argv[0]) and sleeps, so the kill is what ends it.
+#
+#    The one deliberate relaxation in this file: readOnlyRootFilesystem is false here. The rule only
+#    sees files in the overlay upper layer; an emptyDir at /tmp is a separate mount, not overlayfs, and
+#    a binary run from it would not match. The writable layer is bounded by an ephemeral-storage limit,
+#    and the pod is non-root, so it can write /tmp (1777) and nothing that belongs to the image.
+- id: drop-and-execute
+  title: Drop and run a new binary
+  summary: >-
+    Writes a new executable into a running container and starts it - the classic "download a payload
+    and run it" step. Falco sees a process whose binary was not part of the image; Talon deletes the pod.
+  technique: T1105
+  detection: Drop and execute new binary in container
+  response: terminate
+  timeout_seconds: 90
+  pod:
+    restartPolicy: Never
+    automountServiceAccountToken: false
+    enableServiceLinks: false
+    terminationGracePeriodSeconds: 0
+    securityContext:
+      runAsNonRoot: true
+      runAsUser: 10001
+      runAsGroup: 10001
+      seccompProfile:
+        type: RuntimeDefault
+    containers:
+      - name: target
+        image: *scenario-image
+        command: ["sleep", "120"]
+        securityContext:
+          allowPrivilegeEscalation: false
+          # Must be writable: see the scenario comment above.
+          readOnlyRootFilesystem: false
+          capabilities:
+            drop: ["ALL"]
+        resources:
+          requests:
+            cpu: 10m
+            memory: 16Mi
+            ephemeral-storage: 4Mi
+          limits:
+            cpu: 100m
+            memory: 32Mi
+            # busybox is under 1 MiB; anything that writes more than this gets the pod evicted.
+            ephemeral-storage: 8Mi
+  exec:
+    command: ["sh", "-c", "cp /bin/busybox /tmp/busybox && exec /tmp/busybox sleep 60"]
+    tty: false

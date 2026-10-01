@@ -1,0 +1,28 @@
+# The scenario catalogue (ADR 0017) as ConfigMap `scenarios` in `portfolio-api`, key `scenarios.yaml`:
+# the data half of the attack-scenario feature. The portfolio API reads it; nothing in `sandbox` does.
+#
+# Lives next to the sandbox manifests because what may run in `sandbox` is reviewed in one place - the
+# namespace, its quota and network policy, Talon's reach there, and the pods the API will create there -
+# but is its own kustomization because it lands in a different namespace. It is deployed as an extra
+# source of the portfolio-api Application (cluster/apps/portfolio-api.yaml), which owns that namespace;
+# the sandbox Application does not render this directory.
+#
+# `make validate` renders every scenario's pod spec as a Pod in `sandbox` and runs the Kyverno gate over
+# it (scripts/lib/scenario_pods.py), so a scenario the cluster would refuse fails in CI.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: portfolio-api
+
+configMapGenerator:
+  - name: scenarios
+    files:
+      - scenarios.yaml
+    options:
+      # A fixed name: the API mounts it by name from another Application's manifests, where kustomize
+      # cannot rewrite a hash-suffixed reference. Mounted as a directory (not subPath), the kubelet
+      # updates the file in place on a change; the API re-reads it per request or on change.
+      disableNameSuffixHash: true
+      labels:
+        app.kubernetes.io/name: portfolio-api
+        app.kubernetes.io/component: scenarios
