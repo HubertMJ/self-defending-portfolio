@@ -1,4 +1,4 @@
-# ADR 0014: Posture scanning with Trivy Operator (client/server, offline scan jobs) and Policy Reporter
+# ADR 0014: Posture scanning: Trivy Operator (client/server, offline scan jobs), kube-bench, Policy Reporter
 
 Date: 2026-10-01 · Status: accepted
 
@@ -16,8 +16,13 @@ to copy pull secrets, and turns on node-collector (a root pod with host paths) f
 assessment and compliance. Trivy results are CRDs of Trivy's own (`aquasecurity.github.io`), which
 Policy Reporter cannot read.
 
+kube-bench's k3s benchmark reads most component flags from `journalctl -u k3s` (the line k3s logs at
+start-up with every flag), but the kube-bench image is Alpine without journalctl, and the host's
+journalctl is linked against the host's glibc.
+
 Options considered: Trivy Operator in Standalone vs. client/server mode; the Trivy Operator's
-node-collector vs. kube-bench for the node benchmark (kube-bench: plan commit 5); Policy Reporter vs.
+node-collector vs. kube-bench for the node benchmark; for kube-bench, an image of our own with
+journalctl vs. a configuration override reading the k3s config file; Policy Reporter vs.
 reading the CRDs directly from the phase 6 page; exposing the Policy Reporter UI through the Gateway
 vs. port-forward only.
 
@@ -67,6 +72,29 @@ online lookups (`api.github.com`, `cveawg.mitre.org`) off, so it answers from th
 init container downloads at start. The Kyverno plugin is off: the policies are in git and
 PolicyExceptions are not used (ADR 0012).
 
+**kube-bench, daily, with a k3s config override** (`cluster/infra/kube-bench/`, image v0.16.0,
+user decision 2026-10-01). A CronJob (`17 3 * * *` UTC, `concurrencyPolicy: Forbid`, history 3/3,
+one attempt) runs `kube-bench run --benchmark k3s-cis-1.9 --targets master,controlplane,node --json`;
+the result is the Job's log. `etcd` is not run (SQLite datastore), `policies` is not run (it needs API
+credentials the pod deliberately lacks; Kyverno and Trivy cover that ground). The image's
+`cfg/k3s-cis-1.9` is replaced by a ConfigMap holding a copy that differs from upstream only in the
+54 audit lines that called `journalctl`: they call `k3s-config-args.sh` instead, which prints the
+same `Running <component> --flags` lines built from `/etc/rancher/k3s/config.yaml` (the `*-arg`
+lists, plus the flags k3s v1.35 derives from `secrets-encryption`). It prints only what is
+configured: flags k3s sets internally (`--profiling=false`, `--anonymous-auth=false`, TLS paths) are
+not in the file, so checks on them report FAIL meaning "not visible in the configuration". Encoding
+k3s's built-in defaults in the script was rejected: a table that drifted from k3s would produce false
+PASS results.
+
+The pod: `hostPID: true` and no other host namespace; read-only hostPath mounts of
+`/var/lib/rancher/k3s/server`, `/var/lib/rancher/k3s/agent` and `/etc/rancher/k3s` only (the plan's
+`/var/lib/kubelet` and `/etc/systemd` are dropped: no k3s check reads them, and `/var/lib/kubelet`
+holds every pod's Secret volumes); root without any capability, seccomp `RuntimeDefault`, no privilege
+escalation, read-only root filesystem; no service account token; default-deny network with no
+exception. Namespace `kube-bench`: PSA enforce `privileged`, audit `restricted`; Kyverno's
+`restricted-kube-bench` rule relaxes exactly Host Namespaces (hostPID), HostPath Volumes, Volume Types
+and Running as Non-root (ADR 0012), and the namespace holds this CronJob only.
+
 **Egress is an allow-list per workload** (default-deny NetworkPolicy per namespace plus one
 CiliumNetworkPolicy per workload, DNS through Cilium's DNS proxy so `toFQDNs` works):
 
@@ -77,6 +105,7 @@ CiliumNetworkPolicy per workload, DNS through Cilium's DNS proxy so `toFQDNs` wo
 | Operator, adapter | kube-dns; kube-apiserver; (operator) Trivy server 4954 |
 | Policy Reporter core / UI | kube-dns; kube-apiserver; (UI) core and plugin 8080 |
 | Trivy plugin | kube-dns; core 8080; `mirror.gcr.io:443` (DB) |
+| kube-bench | none |
 
 The scan Job list is derived from the images actually rendered from git, not from a generic list:
 `registry.k8s.io`, `*.pkg.dev` and `*.storage.googleapis.com` from the plan are left out because no
@@ -87,9 +116,11 @@ quay.io's and reg.kyverno.io's are from their documentation and must be confirme
 
 **Sizing** (requests / limits): operator 50m/128Mi / 500m/384Mi; Trivy server 200m/512Mi / 1/1Gi;
 scan Job 50m/64Mi / 500m/512Mi; adapter 10m/64Mi / 200m/192Mi; Policy Reporter core 10m/48Mi /
-200m/128Mi, UI 10m/32Mi / 100m/96Mi, Trivy plugin 10m/64Mi / 200m/256Mi.
+200m/128Mi, UI 10m/32Mi / 100m/96Mi, Trivy plugin 10m/64Mi / 200m/256Mi; kube-bench (transient,
+daily) 50m/64Mi / 500m/256Mi.
 
-Rejected: Standalone mode (every scan Job downloads ~1 GiB of DB, and every scan Job needs the
+Rejected: an own kube-bench image with journalctl (one more image to build, sign and patch for one
+check source; user decision); Standalone mode (every scan Job downloads ~1 GiB of DB, and every scan Job needs the
 internet); node-collector (root plus host paths in a namespace that otherwise enforces `restricted`);
 the chart's own NetworkPolicies (plain NetworkPolicy cannot express FQDNs; one place for policy);
 exposing the UI through the Gateway.
@@ -112,5 +143,12 @@ exposing the UI through the Gateway.
 - Memory (this ADR's six workloads): about +0.85 GiB of requests and +2.0 GiB of limits steady
   state, plus one transient scan Job (512 MiB limit); plan section 3's per-commit gate
   (`kubectl top nodes` under 80 %) applies.
+- kube-bench reports read as "configured state", not "running state": a FAIL on a flag k3s sets
+  internally is resolved by looking at `journalctl -m -u k3s | grep 'Running kube-apiserver'` on the
+  node, and a kube-bench bump is reviewed by re-diffing the copied benchmark against the new image
+  (command in `cluster/infra/kube-bench/kustomization.yaml`).
+- The kube-bench pod can read k3s's keys, credentials and datastore (that is what the file checks
+  inspect). It has no network, no API token and runs once a day from a digest-pinned image; what it
+  reads can only leave as its own log output.
 - The plugin's DB is as old as the plugin pod; restarting the Deployment refreshes it. The server's
   DB refreshes itself.

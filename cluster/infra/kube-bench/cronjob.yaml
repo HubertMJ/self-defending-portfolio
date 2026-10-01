@@ -1,0 +1,136 @@
+# The daily CIS benchmark run (ADR 0014). Output: one JSON document on stdout, i.e. the Job's log,
+# which is what the phase 6 posture page reads (user decision 2026-10-01: no report CRD, no sidecar).
+#
+#   kubectl -n kube-bench logs job/<latest kube-bench-...> | jq '.Totals'
+#   kubectl -n kube-bench create job --from=cronjob/kube-bench kube-bench-manual   # run it now
+#
+# Targets master, controlplane and node (59 / 5 / 24 results with kube-bench v0.16.0's k3s-cis-1.9).
+# Not run:
+#   * etcd - this k3s uses its default SQLite datastore (no `cluster-init`), so the etcd section has
+#     nothing to look at and would only report missing etcd files;
+#   * policies - those checks query the API server with kubectl, and this pod deliberately has no
+#     credentials. RBAC, Pod Security and network policy posture come from Kyverno's PolicyReports and
+#     the Trivy Operator's RBAC and config audits instead.
+# FAIL and WARN results are findings to read, not a gate (plan section 4.5). Expect FAIL for every flag
+# k3s sets internally rather than through /etc/rancher/k3s/config.yaml: see
+# k3s-cis-1.9/k3s-config-args.sh for why those are not visible here.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: kube-bench
+  namespace: kube-bench
+  labels:
+    app.kubernetes.io/name: kube-bench
+spec:
+  # 03:17 UTC, off the hour. The zone is stated: without it the schedule is in whatever zone the
+  # controller-manager runs in, and the host's unattended-upgrades reboot window (04:30 local,
+  # ansible/roles/unattended_upgrades) must not be guessed at from a UTC-or-not assumption.
+  schedule: "17 3 * * *"
+  timeZone: Etc/UTC
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      # A day's run is either there or it failed visibly; a retry would only add a second, possibly
+      # different log for the same day.
+      backoffLimit: 0
+      activeDeadlineSeconds: 600
+      # Finished Jobs (and their logs) are kept for a day after completion, on top of the history
+      # limits above; the next run replaces them.
+      ttlSecondsAfterFinished: 86400
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: kube-bench
+        spec:
+          restartPolicy: Never
+          # No Kubernetes API access: every check here is a local file or process check, and the
+          # policies section that would need one is not run (see the header).
+          automountServiceAccountToken: false
+          # The process table of the node, so the checks can find k3s's components (`ps`). This is
+          # the only host namespace: no hostNetwork, no hostIPC (Kyverno's restricted-kube-bench
+          # rule relaxes Host Namespaces for spec.hostPID only, ADR 0012).
+          hostPID: true
+          securityContext:
+            seccompProfile:
+              type: RuntimeDefault
+            # runAsUser / runAsNonRoot deliberately unset: the image's default user is root, which is
+            # what reading root-owned 0600 files under /var/lib/rancher needs (as the file's owner,
+            # without any capability). "Running as Non-root" is relaxed for this namespace; "Running
+            # as Non-root user" (an explicit runAsUser: 0) is not, so setting it would fail the policy.
+          containers:
+            - name: kube-bench
+              image: docker.io/aquasec/kube-bench:v0.16.0@sha256:75506f222d1eb6ce2a751a5533bdc0a3b54c898e2e49e7751d0ee22cfb862679
+              # The image's entrypoint is a shell wrapper whose only other mode copies the binary to
+              # the host (`install`); calling the binary directly removes that branch.
+              command:
+                - kube-bench
+              args:
+                - run
+                - --benchmark
+                - k3s-cis-1.9
+                - --targets
+                - master,controlplane,node
+                - --json
+              securityContext:
+                # Root, but with no capabilities at all: no DAC override, no ptrace, nothing to
+                # escalate to. A root process without CAP_DAC_OVERRIDE / CAP_DAC_READ_SEARCH can still
+                # read files it owns (k3s's are root-owned) and stat anything whose directories it
+                # can traverse, which is all the file-permission checks do.
+                allowPrivilegeEscalation: false
+                privileged: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
+                limits:
+                  cpu: 500m
+                  memory: 256Mi
+              volumeMounts:
+                # Over the image's own copy of the benchmark (see kustomization.yaml).
+                - name: k3s-cis-1-9
+                  mountPath: /opt/kube-bench/cfg/k3s-cis-1.9
+                  readOnly: true
+                # Host paths, all read-only, and only what the k3s-cis-1.9 checks reference
+                # (narrower than plan section 4.5, which also listed /var/lib/kubelet and
+                # /etc/systemd): /var/lib/kubelet holds every pod's Secret and token volumes and no
+                # k3s check reads it, and no check reads a systemd unit. server/ holds the TLS keys,
+                # credentials and datastore whose permissions the master checks inspect; agent/ the
+                # kubelet's kubeconfigs and certificates; /etc/rancher/k3s the config file and
+                # audit policy.
+                - name: k3s-server
+                  mountPath: /var/lib/rancher/k3s/server
+                  readOnly: true
+                - name: k3s-agent
+                  mountPath: /var/lib/rancher/k3s/agent
+                  readOnly: true
+                - name: k3s-etc
+                  mountPath: /etc/rancher/k3s
+                  readOnly: true
+                - name: tmp
+                  mountPath: /tmp
+          volumes:
+            - name: k3s-cis-1-9
+              configMap:
+                name: kube-bench-k3s-cis-1.9
+            # type: Directory makes a missing path a failed pod instead of an empty directory that
+            # the kubelet creates on the host.
+            - name: k3s-server
+              hostPath:
+                path: /var/lib/rancher/k3s/server
+                type: Directory
+            - name: k3s-agent
+              hostPath:
+                path: /var/lib/rancher/k3s/agent
+                type: Directory
+            - name: k3s-etc
+              hostPath:
+                path: /etc/rancher/k3s
+                type: Directory
+            - name: tmp
+              emptyDir:
+                sizeLimit: 64Mi

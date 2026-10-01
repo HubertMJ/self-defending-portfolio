@@ -13,6 +13,7 @@
 #    4  hello                   the page
 #    5  policy-reporter         reports UI (cluster-internal) + Trivy CVE details plugin
 #    5  trivy-operator          image vulnerability / config / RBAC scanning + PolicyReport adapter
+#    5  kube-bench              daily CIS benchmark CronJob (k3s), results in the Job log
 #
 # Waves only order the first sync of a fresh cluster loosely: the root Application has no health
 # check for its children, so it does not wait for one wave to be healthy before the next. Every
@@ -34,3 +35,4 @@ resources:
   - hello.yaml
   - policy-reporter.yaml
   - trivy-operator.yaml
+  - kube-bench.yaml

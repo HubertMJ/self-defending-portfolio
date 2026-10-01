@@ -13,7 +13,7 @@
 #     (useEmbeddedRegoPolicies), so nothing downloads the trivy-checks bundle either.
 #
 # Off: node-collector (infra assessment and cluster compliance need a root pod with host paths - that
-# is kube-bench's job here, plan commit 5), SBOM generation (not consumed by anything).
+# is kube-bench's job here, cluster/apps/kube-bench.yaml), SBOM generation (not consumed by anything).
 #
 # Waves between child Applications are cosmetic (cluster/apps/kustomization.yaml). This Application
 # needs nothing from another one to converge: its CRDs come with the chart, and the PolicyReport CRDs

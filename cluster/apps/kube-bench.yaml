@@ -1,0 +1,44 @@
+# Wave 5: posture scanning, part 2 (ADR 0014). A daily CronJob that runs kube-bench's CIS benchmark
+# for k3s against this node and leaves the result as JSON in the Job's log.
+#
+# No chart: upstream ships plain Job manifests, and what this needs on top of them - a CronJob, a
+# benchmark configuration that does not depend on journalctl, read-only host mounts narrowed to what
+# the k3s checks read - is easier to review as a kustomization than as values. Everything, including
+# the Namespace with its Pod Security labels and the default-deny NetworkPolicy, is in
+# cluster/infra/kube-bench/.
+#
+# The one place in the cluster besides Falco (plan commit 6) where a Pod runs as root with host
+# access: hostPID and read-only hostPath mounts of k3s's state, no capabilities, no network, no
+# service account token. Kyverno's restricted-kube-bench rule (ADR 0012) is what judges it, control
+# by control.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: kube-bench
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "5"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/HubertMJ/self-defending-portfolio.git
+    targetRevision: main
+    path: cluster/infra/kube-bench
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: kube-bench
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    retry:
+      limit: 5
+      backoff:
+        duration: 10s
+        factor: 2
+        maxDuration: 3m
+    syncOptions:
+      # The Namespace (privileged enforce, restricted audit) is a manifest in cluster/infra/kube-bench.
+      - CreateNamespace=false

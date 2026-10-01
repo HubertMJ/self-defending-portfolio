@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: kube-bench
+  labels:
+    # The CIS checks read the host's process table and k3s's files: hostPID and read-only hostPath
+    # mounts, as root. PSA cannot express "restricted minus these", so `enforce` is privileged here
+    # and the precise judgement is Kyverno's restricted-kube-bench rule, which relaxes exactly Host
+    # Namespaces (hostPID only), HostPath Volumes, Volume Types and Running as Non-root (ADR 0012).
+    # The namespace holds the one CronJob and nothing else; that is what keeps the pod-level
+    # relaxations from applying to anything else.
+    pod-security.kubernetes.io/enforce: privileged
+    pod-security.kubernetes.io/enforce-version: latest
+    # `audit` stays restricted so the API server's audit log records what this pod is short of
+    # restricted. No `warn`: it would print the same known list on every sync.
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/audit-version: latest

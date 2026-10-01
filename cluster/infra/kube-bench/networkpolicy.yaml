@@ -1,0 +1,14 @@
+# Default-deny, and no CiliumNetworkPolicy opening anything: the benchmark reads local files and the
+# host's process table, needs no DNS, no API server (no service account token is mounted) and no
+# internet. It is also the pod with read access to k3s's keys (cronjob.yaml), so "nothing in, nothing
+# out" is the property that matters most here: what it reads can only leave as its own log output.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+  namespace: kube-bench
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
