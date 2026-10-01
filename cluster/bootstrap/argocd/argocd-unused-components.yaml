@@ -1,0 +1,153 @@
+# Argo CD components this installation does not use, removed from upstream's install.yaml (ADR 0020).
+#
+#   Dex (argocd-dex-server)        SSO broker. No `dex.config` and no `oidc.config` in argocd-cm: the
+#                                  only login is the local admin, through a port-forward (ADR 0003,
+#                                  argocd-cmd-params-cm.yaml). Its image was the largest single source
+#                                  of CRITICAL/HIGH findings in the cluster, for a process that never
+#                                  served a request.
+#   ApplicationSet controller      Nothing in this repository is an ApplicationSet; the app-of-apps is
+#                                  plain Applications (cluster/apps).
+#   Notifications controller       No triggers, templates or services configured.
+#
+# Each Deployment goes with its ServiceAccount, RBAC, Service, NetworkPolicy and (notifications) its
+# ConfigMap, so no orphaned permission stays behind. The empty argocd-notifications-secret stays: no
+# controller reads it, and a `kind: Secret` here, even a deletion, would need an exception in
+# scripts/check-secrets-encrypted.sh (ADR 0006), which is not worth weakening for an empty object. The CRDs stay: ApplicationSet is
+# still a known kind, it just has no controller. Bringing a component back is deleting its block
+# here and re-applying the bootstrap.
+#
+# `kubectl apply -k` does not delete objects that disappear from a kustomization, so on an existing
+# cluster the re-apply is followed by an explicit delete, by name (ADR 0020, docs/bootstrap.md):
+#   kubectl -n argocd delete deploy,svc,sa,role,rolebinding argocd-dex-server
+#   kubectl -n argocd delete deploy,svc,sa,role,rolebinding argocd-applicationset-controller
+#   kubectl -n argocd delete deploy,sa,role,rolebinding argocd-notifications-controller
+#   kubectl -n argocd delete svc argocd-notifications-controller-metrics
+#   kubectl -n argocd delete cm argocd-notifications-cm
+#   kubectl -n argocd delete networkpolicy argocd-dex-server-network-policy \
+#     argocd-applicationset-controller-network-policy argocd-notifications-controller-network-policy
+#   kubectl delete clusterrole,clusterrolebinding argocd-applicationset-controller
+$patch: delete
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: argocd-dex-server
+---
+$patch: delete
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: argocd-applicationset-controller
+---
+$patch: delete
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: argocd-notifications-controller
+---
+$patch: delete
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: argocd-dex-server
+---
+$patch: delete
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: argocd-applicationset-controller
+---
+$patch: delete
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: argocd-notifications-controller
+---
+$patch: delete
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: argocd-dex-server
+---
+$patch: delete
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: argocd-applicationset-controller
+---
+$patch: delete
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: argocd-notifications-controller
+---
+$patch: delete
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: argocd-applicationset-controller
+---
+$patch: delete
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: argocd-applicationset-controller
+---
+$patch: delete
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: argocd-notifications-cm
+---
+$patch: delete
+apiVersion: v1
+kind: Service
+metadata:
+  name: argocd-dex-server
+---
+$patch: delete
+apiVersion: v1
+kind: Service
+metadata:
+  name: argocd-applicationset-controller
+---
+$patch: delete
+apiVersion: v1
+kind: Service
+metadata:
+  name: argocd-notifications-controller-metrics
+---
+$patch: delete
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: argocd-dex-server
+---
+$patch: delete
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: argocd-applicationset-controller
+---
+$patch: delete
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: argocd-notifications-controller
+---
+$patch: delete
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: argocd-dex-server-network-policy
+---
+$patch: delete
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: argocd-applicationset-controller-network-policy
+---
+$patch: delete
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: argocd-notifications-controller-network-policy

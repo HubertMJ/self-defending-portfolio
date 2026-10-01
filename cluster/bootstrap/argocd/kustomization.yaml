@@ -15,3 +15,17 @@ patches:
   - path: argocd-cm.yaml
   - path: argocd-cmd-params-cm.yaml
   - path: argocd-repo-server-ksops.yaml
+  # Dex, the ApplicationSet controller and the notifications controller: unused, removed (ADR 0020).
+  - path: argocd-unused-components.yaml
+
+images:
+  # install.yaml v3.5.3 ships redis 8.2.3-alpine (23 CRITICAL/HIGH with a fix, all openssl, setpriv and
+  # musl in the Alpine base). Same minor, newest patch, pinned by digest (ADR 0008, 0020): Argo CD
+  # uses Redis as a cache only, and a patch release changes no protocol. From Docker Hub, the source
+  # the public.ecr.aws mirror copies, because that is where the digest could be resolved and checked;
+  # for an anonymous single node the Hub pull limit is not a concern. An Argo CD bump re-checks this
+  # line against the new install.yaml's redis tag and removes it once upstream has caught up.
+  - name: public.ecr.aws/docker/library/redis
+    newName: docker.io/library/redis
+    newTag: 8.2.10-alpine
+    digest: sha256:b51665e66f00759be7c3152ad5ac3c66fb2f619c13ef62dea7cc1f9914524635
