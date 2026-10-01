@@ -19,6 +19,29 @@ spec:
   destination:
     server: https://kubernetes.default.svc
     namespace: argocd
+  ignoreDifferences:
+    # Argo CD 3.x adds `pre-delete-finalizer.argocd.argoproj.io` and
+    # `pre-delete-finalizer.argocd.argoproj.io/cleanup` to a child Application at runtime when its
+    # chart has a pre-delete hook (kyverno's webhooksCleanup Job). Git only declares
+    # resources-finalizer, so without this the root app is permanently OutOfSync on the `kyverno`
+    # Application, and every sync of it would write git's shorter list back (an Application is a
+    # CRD, so the apply patch replaces lists whole) only for the controller to re-add the entries.
+    #
+    # The whole list is ignored rather than a `select(startswith("pre-delete-finalizer"))` on the two
+    # names: finalizers are lifecycle hooks the controller manages, not configuration, and the next
+    # Argo CD release adding another one should not reopen this drift. resources-finalizer is still
+    # set on create (ignoreDifferences only affects the diff of an existing object), and
+    # RespectIgnoreDifferences below stops a sync triggered by another field from writing git's
+    # shorter list back over the live one. Server-side diff was the alternative; an explicit ignore
+    # says what is being tolerated and does not depend on how SSA merges a list of strings
+    # (ADR 0005, amendment 2026-10-01).
+    #
+    # This file is bootstrap-owned (nothing in cluster/apps manages `root`), so a change here reaches
+    # the cluster only through a one-off `kubectl apply -k cluster/bootstrap/argocd`.
+    - group: argoproj.io
+      kind: Application
+      jqPathExpressions:
+        - .metadata.finalizers
   syncPolicy:
     automated:
       prune: true
@@ -26,3 +49,5 @@ spec:
     syncOptions:
       # The argocd namespace already exists at this point; nothing here should create namespaces.
       - CreateNamespace=false
+      # Apply ignoreDifferences to the sync too, not only to the diff (see above).
+      - RespectIgnoreDifferences=true

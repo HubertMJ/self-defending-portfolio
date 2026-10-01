@@ -18,3 +18,52 @@ UI is LAN-only, SSO not needed: a single local admin with the initial password r
   once the `cilium` Application exists, the Ansible role skips the Helm release (Argo CD creates
   objects without Helm ownership metadata, which `helm upgrade` would refuse to adopt) and only
   keeps the prerequisites in place. A rebuild from zero has no Application and installs normally.
+
+## Amendment 2026-10-01: drift-free diffs and the bootstrap re-apply exception
+
+**Context.** After phase 3 two Applications never reached Synced although nothing had drifted.
+`kyverno`: chart 3.9.1 renders its 11 `policies.kyverno.io` CRDs with `metadata.labels: {}` and
+`annotations: {}`; the API server stores no empty map, so Argo CD's client-side diff reported a
+missing field on every refresh. `root`: Argo CD 3.x adds `pre-delete-finalizer.argocd.argoproj.io`
+and `pre-delete-finalizer.argocd.argoproj.io/cleanup` to the `kyverno` Application at runtime
+(its chart has a pre-delete hook), while git only declares `resources-finalizer`. Phase 4 also brings
+Trivy Operator, which writes one report object per workload and scan type and rewrites them on every
+rescan.
+
+**Decision.**
+- **ServerSideDiff for charts co-owned through SSA.** `cluster/apps/kyverno.yaml` carries
+  `argocd.argoproj.io/compare-options: ServerSideDiff=true`: the diff is taken against a dry-run
+  server-side apply, which normalises empty maps and defaulted fields and matches the
+  `ServerSideApply=true` the app already syncs with. Applied per Application, not globally in
+  `argocd-cm`, so every app that relies on it says so. Fallback if it ever stops absorbing a chart's
+  output: an `ignoreDifferences` on those CRDs' `.metadata.labels` / `.metadata.annotations`.
+- **Ignore child Application finalizers on `root`.** `root-application.yaml` ignores
+  `.metadata.finalizers` on `argoproj.io/Application` and syncs with `RespectIgnoreDifferences=true`,
+  so a sync of a child Application never writes git's shorter list over the runtime one. The ignore is
+  explicit rather than a ServerSideDiff on `root`, because it names the tolerated difference and does
+  not depend on how SSA merges a list of strings. The whole list is ignored, not the two names:
+  finalizers are lifecycle state the controller manages, and the next one Argo CD adds should not
+  reopen the drift.
+- **Trivy reports are not tracked.** `argocd-cm` `resource.exclusions` lists the eleven
+  `aquasecurity.github.io` report kinds (vulnerability, config audit, exposed secret, RBAC, infra
+  assessment, SBOM; namespaced and cluster variants). They are generated, never in git, and would cost
+  controller memory and UI clutter on an 8 GB node. `ClusterComplianceReport` stays tracked: the
+  trivy-operator chart renders those objects itself. Because `resource.exclusions` is one string and a
+  kustomize patch replaces it whole, the Argo CD v3.5.3 defaults from `install.yaml` are copied into
+  the patch verbatim; an Argo CD bump has to re-diff that block.
+- **Bootstrap re-apply is the documented exception to "every change is a git commit to `main`".**
+  `root-application.yaml` and `argocd-cm.yaml` belong to the bootstrap kustomization; no Application
+  manages them. A change to either is committed first and then reaches the cluster through one manual
+  `kubectl apply -k cluster/bootstrap/argocd --server-side --force-conflicts` (the same flags as
+`cluster/bootstrap/bootstrap.sh`), run only after `kubectl diff -k` shows changes to those
+  objects and nothing else (in particular no Argo CD version change riding along).
+
+**Consequences.**
+- `kyverno` and `root` can report Synced, so OutOfSync is a signal again rather than a constant.
+- A finalizer removed from a child Application by hand is not reported on `root`; finalizers are not
+  the configuration this repository reviews.
+- The reverse holds too: a git edit to `finalizers` on an *existing* child Application never reaches
+  the cluster (a new Application is still created with what git declares). Such a change needs a
+  one-off `kubectl patch` alongside the commit.
+- The bootstrap files can drift from git without Argo CD noticing; the `kubectl diff -k` step above is
+  the check, and a rebuild from zero applies them as committed.
