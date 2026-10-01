@@ -16,6 +16,20 @@
     backup: true
   notify: Reload the auditd configuration
 
+# The kernel binds a watch (-w) to the parent directory, so a rule on a path whose parent does
+# not exist yet fails with ENOENT and augenrules aborts the whole load. The k3s paths only appear
+# in the cluster play, so their parents are created here with the modes k3s itself uses.
+- name: Ensure the directories watched by the k3s rules exist
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+  loop: "{{ [auditd_k3s_config_dir, auditd_k3s_state_dir]
+            + auditd_k3s_state_watch_subpaths | map('regex_replace', '^', auditd_k3s_state_dir ~ '/') | list }}"
+  when: item | basename != 'token'
+
 - name: Install audit rule files
   ansible.builtin.template:
     src: "{{ item }}.j2"
