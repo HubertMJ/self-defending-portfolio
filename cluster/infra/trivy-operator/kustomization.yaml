@@ -1,0 +1,12 @@
+# The non-chart part of cluster/apps/trivy-operator.yaml: the Namespace with its Pod Security labels
+# and the network policy for the operator, the Trivy server, the scan Jobs and the PolicyReport
+# adapter. The two charts are the Application's other sources.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: trivy-system
+
+resources:
+  - namespace.yaml
+  - networkpolicy.yaml
+  - ciliumnetworkpolicy.yaml

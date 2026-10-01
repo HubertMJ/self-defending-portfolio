@@ -12,6 +12,7 @@
 #    3  gateway                 the Gateway and its HTTP-to-HTTPS redirect
 #    4  hello                   the page
 #    5  policy-reporter         reports UI (cluster-internal) + Trivy CVE details plugin
+#    5  trivy-operator          image vulnerability / config / RBAC scanning + PolicyReport adapter
 #
 # Waves only order the first sync of a fresh cluster loosely: the root Application has no health
 # check for its children, so it does not wait for one wave to be healthy before the next. Every
@@ -32,3 +33,4 @@ resources:
   - gateway.yaml
   - hello.yaml
   - policy-reporter.yaml
+  - trivy-operator.yaml

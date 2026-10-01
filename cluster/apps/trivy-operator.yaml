@@ -1,0 +1,276 @@
+# Wave 5: posture scanning, part 1 (ADR 0014). The Trivy Operator scans every workload's images for
+# known vulnerabilities and exposed secrets, and audits workload and RBAC configuration; the
+# trivy-operator-polr-adapter turns those reports into PolicyReports, which is the only format Policy
+# Reporter reads (cluster/apps/policy-reporter.yaml). Nothing here is in an admission or data path.
+#
+# Client/server (ADR 0014):
+#   * one built-in Trivy server (StatefulSet `trivy-server`, 5 GiB local-path volume) holds the
+#     vulnerability DB and is the only component that downloads it - from mirror.gcr.io only;
+#   * scan Jobs run the Trivy client: they pull the scanned image's layers from its registry, analyse
+#     them locally and ask the server for the vulnerability match. `trivy.offlineScan` keeps them from
+#     fetching anything else (no Java DB, no online lookups);
+#   * configuration and RBAC audits run inside the operator with the checks embedded in its binary
+#     (useEmbeddedRegoPolicies), so nothing downloads the trivy-checks bundle either.
+#
+# Off: node-collector (infra assessment and cluster compliance need a root pod with host paths - that
+# is kube-bench's job here, plan commit 5), SBOM generation (not consumed by anything).
+#
+# Waves between child Applications are cosmetic (cluster/apps/kustomization.yaml). This Application
+# needs nothing from another one to converge: its CRDs come with the chart, and the PolicyReport CRDs
+# the adapter writes come with Kyverno; until they exist the adapter retries.
+#
+# Three sources: the operator chart, the adapter chart, and cluster/infra/trivy-operator/ for the
+# Namespace (Pod Security labels), the default-deny NetworkPolicy and the CiliumNetworkPolicies.
+#
+# Pinned (ADR 0008), resolved from the repositories' indexes:
+#   curl -sfL https://aquasecurity.github.io/helm-charts/index.yaml \
+#     | yq '.entries["trivy-operator"][0] | .version, .appVersion'                 # 0.36.0 / 0.34.0
+#   curl -sfL https://fjogeleit.github.io/trivy-operator-polr-adapter/index.yaml \
+#     | yq '.entries["trivy-operator-polr-adapter"][0] | .version, .appVersion'    # 0.11.5 / 0.11.5
+# Images are tag@digest; the charts concatenate `registry/repository:tag`, and the operator builds
+# the scan Job image the same way from trivy.repository + trivy.tag.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: trivy-operator
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "5"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  sources:
+    - repoURL: https://aquasecurity.github.io/helm-charts/
+      chart: trivy-operator
+      targetRevision: 0.36.0
+      helm:
+        releaseName: trivy-operator
+        valuesObject:
+          image:
+            registry: mirror.gcr.io
+            repository: aquasec/trivy-operator
+            tag: "0.34.0@sha256:0e4f11e9632f34097f259f3a59d34bab4eea8cee9aef510d15cdfc7481d5e49c"
+
+          operator:
+            # Empty = the release namespace. A non-empty value makes the chart render its own
+            # Namespace object, which would compete with the labelled one in cluster/infra.
+            namespace: ""
+            replicas: 1
+            builtInTrivyServer: true
+            # One scan Job at a time: each pulls and unpacks a whole image, which on one 8 GB node is
+            # the expensive part. A full pass over the cluster takes longer; nobody is waiting for it.
+            scanJobsConcurrentLimit: 1
+            # Large images (Cilium, Argo CD) take minutes to pull and unpack through one Job.
+            scanJobTimeout: 10m
+            vulnerabilityScannerEnabled: true
+            vulnerabilityScannerScanOnlyCurrentRevisions: true
+            configAuditScannerEnabled: true
+            configAuditScannerScanOnlyCurrentRevisions: true
+            rbacAssessmentScannerEnabled: true
+            exposedSecretScannerEnabled: true
+            infraAssessmentScannerEnabled: false
+            clusterComplianceEnabled: false
+            sbomGenerationEnabled: false
+            # The chart default (true) adds cluster-wide `secrets: create/get/update`,
+            # `serviceaccounts: get` and `nodes/proxy: get` to the operator's ClusterRole, so that it
+            # can copy each workload's imagePullSecrets into the scan Job. Every image in this cluster
+            # is public, so that is cluster-wide Secret access for nothing; with false the operator
+            # only uses pull secrets in its own namespace (pkg/vulnerabilityreport/controller/
+            # workload.go). A private registry later means a Secret here plus
+            # privateRegistryScanSecretsNames, not this flag.
+            accessGlobalSecretsAndServiceAccount: false
+            # Prometheus metrics stay on the pod's :8080 but nothing scrapes them and the network
+            # policy admits no one there; the per-finding series would only cost memory.
+            metricsFindingsEnabled: false
+
+          trivyOperator:
+            # Explicit non-root contexts for the scan Jobs (ADR 0014). The aquasec/trivy image runs as
+            # root by default and the chart sets no pod-level context at all. These Pods are created
+            # by the operator at run time, so the offline `kyverno apply` in `make validate` never
+            # sees them (ADR 0012): this block is the only thing that makes them pass the namespace's
+            # `restricted` enforcement and the pod-security-restricted policy.
+            scanJobPodTemplatePodSecurityContext:
+              runAsNonRoot: true
+              runAsUser: 65534
+              runAsGroup: 65534
+              seccompProfile:
+                type: RuntimeDefault
+            scanJobPodTemplateContainerSecurityContext:
+              runAsNonRoot: true
+              runAsUser: 65534
+              runAsGroup: 65534
+              allowPrivilegeEscalation: false
+              privileged: false
+              readOnlyRootFilesystem: true
+              capabilities:
+                drop: ["ALL"]
+              seccompProfile:
+                type: RuntimeDefault
+            # Chart default, restated: the scan Jobs need no Kubernetes API access.
+            scanJobAutomountServiceAccountToken: false
+          trivy:
+            image:
+              registry: mirror.gcr.io
+              repository: aquasec/trivy
+              tag: "0.74.0@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969"
+            # Embedded checks only: no download of the trivy-checks OCI bundle (pkg/policy/policy.go
+            # loads the bundle only when useBuiltinRegoPolicies is true). Both are chart defaults.
+            useBuiltinRegoPolicies: "false"
+            useEmbeddedRegoPolicies: "true"
+            # Scan Jobs ask the server and nothing else (plan section 4.3).
+            offlineScan: true
+            # The Trivy client's own deadline, kept under operator.scanJobTimeout (10m) so a slow scan
+            # ends with Trivy's error message in the Job log rather than a Job killed mid-write.
+            timeout: "9m0s"
+            # Stated so the server's single egress FQDN is known; it is also the chart default.
+            dbRegistry: mirror.gcr.io
+            dbRepository: aquasec/trivy-db
+            storageClassEnabled: true
+            # k3s's bundled local-path provisioner, the cluster's only StorageClass. Named rather than
+            # left to "the default" so the 5 GiB volume cannot silently move if a second class appears.
+            storageClassName: local-path
+            storageSize: 5Gi
+            # Per scan Job container. The client unpacks image layers into its /tmp emptyDir; the
+            # vulnerability DB stays on the server, which is why this is far below the Standalone
+            # mode's needs.
+            resources:
+              requests:
+                cpu: 50m
+                memory: 64Mi
+              limits:
+                cpu: 500m
+                memory: 512Mi
+            server:
+              replicas: 1
+              resources:
+                requests:
+                  cpu: 200m
+                  memory: 512Mi
+                limits:
+                  cpu: "1"
+                  memory: 1Gi
+              # The chart default sets runAsUser/runAsNonRoot/fsGroup but no seccomp profile and leaves
+              # privilege escalation and capabilities at the runtime's defaults - not `restricted`.
+              podSecurityContext:
+                runAsNonRoot: true
+                runAsUser: 65534
+                runAsGroup: 65534
+                # Makes the local-path volume (mounted at /home/scanner/.cache) writable for 65534.
+                fsGroup: 65534
+                seccompProfile:
+                  type: RuntimeDefault
+              securityContext:
+                runAsNonRoot: true
+                runAsUser: 65534
+                allowPrivilegeEscalation: false
+                privileged: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+                seccompProfile:
+                  type: RuntimeDefault
+
+          # The chart renders these ClusterComplianceReport specs even with clusterComplianceEnabled
+          # false; nothing would ever evaluate them.
+          compliance:
+            specs: []
+
+          # The operator Deployment. The chart default container context lacks runAsNonRoot and
+          # seccomp; the pod context is empty.
+          podSecurityContext:
+            runAsNonRoot: true
+            runAsUser: 65534
+            runAsGroup: 65534
+            seccompProfile:
+              type: RuntimeDefault
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65534
+            allowPrivilegeEscalation: false
+            privileged: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 384Mi
+
+    - repoURL: https://fjogeleit.github.io/trivy-operator-polr-adapter
+      chart: trivy-operator-polr-adapter
+      targetRevision: 0.11.5
+      helm:
+        releaseName: trivy-operator-polr-adapter
+        valuesObject:
+          image:
+            registry: ghcr.io
+            repository: fjogeleit/trivy-operator-polr-adapter
+            tag: "0.11.5@sha256:37029b4d464f2b6a0076129a34b06a39385237f679abe4daf25c4b93d7f01218"
+          # The PolicyReport CRDs (wgpolicyk8s.io) are Kyverno's; installing them a second time from
+          # here would give two Applications a claim on the same objects.
+          crds:
+            install: false
+          openreports:
+            enabled: false
+            install: false
+          # One PolicyReport source per scanner that is on above. RBAC assessments are namespaced
+          # reports only (the adapter has no cluster-scoped RBAC mapper).
+          adapters:
+            vulnerabilityReports:
+              enabled: true
+            configAuditReports:
+              enabled: true
+            exposedSecretReports:
+              enabled: true
+            rbacAssessmentReports:
+              enabled: true
+          # Chart defaults (restricted), restated so a bump that relaxed one fails review.
+          podSecurityContext:
+            fsGroup: 1234
+          securityContext:
+            runAsUser: 1234
+            runAsNonRoot: true
+            privileged: false
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+          # Not in plan section 3 (the adapter was found to be required at this commit, see the
+          # header). Holds a watch cache of the Trivy reports it maps.
+          resources:
+            requests:
+              cpu: 10m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 192Mi
+
+    - repoURL: https://github.com/HubertMJ/self-defending-portfolio.git
+      targetRevision: main
+      path: cluster/infra/trivy-operator
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: trivy-system
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    retry:
+      limit: 5
+      backoff:
+        duration: 10s
+        factor: 2
+        maxDuration: 3m
+    syncOptions:
+      - CreateNamespace=false
+      # The aquasecurity.github.io CRDs are far past the 262 144-byte client-side last-applied
+      # annotation.
+      - ServerSideApply=true

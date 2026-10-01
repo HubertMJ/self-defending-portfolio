@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: trivy-system
+  labels:
+    # Everything in this namespace runs non-root with no capabilities - including the scan Jobs the
+    # operator creates at run time, which is only true because cluster/apps/trivy-operator.yaml sets
+    # their security contexts explicitly (the aquasec/trivy image defaults to root). `enforce` makes
+    # a regression there visible at once: a scan Job that is not `restricted` is rejected and shows
+    # up as a failed Job with the PSA message, instead of quietly running as root.
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted

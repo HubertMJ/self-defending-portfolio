@@ -1,8 +1,12 @@
 #!/usr/bin/env bash
 # Renders every Helm chart that an Argo CD Application under cluster/apps/ deploys, with the values
-# that Application passes, into one file per Application:
+# that Application passes, into one file per chart source:
 #
-#   scripts/render-charts.sh <output-dir>      ->  <output-dir>/chart_<app>.yaml
+#   scripts/render-charts.sh <output-dir>      ->  <output-dir>/chart_<app>-<source index>.yaml
+#
+# Per source, not per Application: cluster/apps/trivy-operator.yaml deploys two charts, and one file
+# per Application let the second render overwrite the first, so the operator's own Pods silently
+# never reached the `kyverno apply` gate.
 #
 # Why this exists. scripts/validate-cluster.sh renders every kustomization in the repository, but
 # the charts (Cilium, cert-manager, Kyverno, and the phase 4 security tooling) are rendered by Argo CD
@@ -57,7 +61,10 @@ CHARTS=$(python3 scripts/lib/chart_sources.py cluster/apps "$VALUES_DIR")
 [ -n "$CHARTS" ] || { echo "render-charts: no chart Applications found under cluster/apps" >&2; exit 1; }
 
 # Splits the stream on `---` lines and drops every document annotated as a Helm test hook (see the
-# header). Text-level on purpose: parsing the ~6 MB of rendered CRD schema just to read one
+# header), and every document that holds nothing but comments: a chart whose CRD files start with
+# their own `---` (trivy-operator's crds/) renders a `# Source:` line as a document of its own, which
+# kubectl and Argo CD skip but the kyverno CLI refuses to load ("Object 'Kind' is missing").
+# Text-level on purpose: parsing the ~6 MB of rendered CRD schema just to read one
 # annotation would multiply the run time, and helm's output is regular enough for a line match.
 # shellcheck disable=SC2016  # Python source; the $ is a regex anchor, not a shell expansion
 DROP_HELM_TESTS='
@@ -66,14 +73,17 @@ docs = re.split(r"^---$", sys.stdin.read(), flags=re.M)
 # The annotation value is a comma-separated list ("post-install,test" is legal), so `test` may sit
 # anywhere in it; test-success / test-failure are the Helm 2 spellings.
 test_hook = re.compile(r"^\s+[\"\x27]?helm\.sh/hook[\"\x27]?:\s*[\"\x27]?([\w-]+\s*,\s*)*test(-success|-failure)?\s*(,|[\"\x27]?\s*$)", re.M)
-sys.stdout.write("---".join(d for d in docs if not test_hook.search(d)))
+# A line that is neither blank nor a comment; without one the document is empty YAML.
+content = re.compile(r"^[ \t]*[^#\s]", re.M)
+sys.stdout.write("---".join(d for d in docs if content.search(d) and not test_hook.search(d)))
 '
 
 api_flags=()
 for api in "${API_VERSIONS[@]}"; do api_flags+=(--api-versions "$api"); done
 
 while IFS=$'\t' read -r app repo chart version release namespace values_file; do
-  out="$OUT_DIR/chart_$app.yaml"
+  # values_file is `<app>-<source index>.yaml` (chart_sources.py), unique per chart source.
+  out="$OUT_DIR/chart_$values_file"
   $DOCKER run --rm -v "$VALUES_DIR":/values:ro "$HELM_IMAGE" template "$release" "$chart" \
     --repo "$repo" \
     --version "$version" \

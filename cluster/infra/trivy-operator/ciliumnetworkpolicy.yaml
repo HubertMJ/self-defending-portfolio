@@ -1,0 +1,234 @@
+# One CiliumNetworkPolicy per Trivy workload, on top of the namespace's default-deny (ADR 0014).
+#
+#   operator  -> kube-apiserver   watches workloads, writes reports, creates scan Jobs
+#   operator  -> trivy-server     health check of the built-in server before it schedules a scan
+#   scan Job  -> trivy-server     vulnerability match for the packages the client found
+#   scan Job  -> image registries pulls the layers of the image it scans (allow-list below)
+#   server    -> mirror.gcr.io    the vulnerability DB, at start and on its periodic refresh
+#   adapter   -> kube-apiserver   reads Trivy reports, writes PolicyReports
+#
+# Sync wave -1 for the same reason as in cluster/infra/policy-reporter: CiliumNetworkPolicy is a custom
+# resource, which Argo CD applies after the Deployments unless told otherwise, and with default-deny
+# already in place the pods would start into a blackout.
+#
+# Every DNS rule uses the L7 form from cluster/infra/cloudflared; the toFQDNs rules depend on it (Cilium
+# allows exactly the IPs it saw in the DNS answers it proxied for that pod).
+#
+# Dropped flows, without a hubble CLI on the operator's machine (plan section 4.3):
+#   kubectl -n kube-system exec ds/cilium -c cilium-agent -- \
+#     hubble observe --verdict DROPPED --namespace trivy-system --last 50
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: trivy-operator
+  namespace: trivy-system
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+spec:
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: trivy-operator
+  ingress:
+    # The kubelet's probes on :9090. The metrics port (:8080) is not opened: nothing scrapes it.
+    - fromEntities:
+        - host
+      toPorts:
+        - ports:
+            - port: "9090"
+              protocol: TCP
+  egress:
+    - toEndpoints:
+        - matchLabels:
+            io.kubernetes.pod.namespace: kube-system
+            k8s-app: kube-dns
+      toPorts:
+        - ports:
+            - port: "53"
+              protocol: UDP
+            - port: "53"
+              protocol: TCP
+          rules:
+            dns:
+              - matchPattern: "*"
+    # The `kubernetes` Service is DNAT-ed to the API server's real port before policy is evaluated.
+    - toEntities:
+        - kube-apiserver
+      toPorts:
+        - ports:
+            - port: "6443"
+              protocol: TCP
+    - toEndpoints:
+        - matchLabels:
+            app.kubernetes.io/name: trivy-server
+      toPorts:
+        - ports:
+            - port: "4954"
+              protocol: TCP
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: trivy-server
+  namespace: trivy-system
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+spec:
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: trivy-server
+  ingress:
+    # The operator's health check and the scan Jobs' queries. The server has no token configured
+    # (trivy.serverToken is empty), so this rule is what keeps the rest of the cluster from using it.
+    - fromEndpoints:
+        - matchLabels:
+            app.kubernetes.io/name: trivy-operator
+        - matchLabels:
+            vulnerabilityReport.scanner: Trivy
+      toPorts:
+        - ports:
+            - port: "4954"
+              protocol: TCP
+    - fromEntities:
+        - host
+      toPorts:
+        - ports:
+            - port: "4954"
+              protocol: TCP
+  egress:
+    - toEndpoints:
+        - matchLabels:
+            io.kubernetes.pod.namespace: kube-system
+            k8s-app: kube-dns
+      toPorts:
+        - ports:
+            - port: "53"
+              protocol: UDP
+            - port: "53"
+              protocol: TCP
+          rules:
+            dns:
+              - matchPattern: "*"
+    # The DB repository is pinned to mirror.gcr.io in the chart values (TRIVY_DB_REPOSITORY), and
+    # mirror.gcr.io serves the blob itself (checked: its blob URL redirects to another path on
+    # mirror.gcr.io, not to a storage bucket). Plan section 4.3 also listed ghcr.io and its blob host
+    # as a fallback; with the repository stated there is no fallback to allow for.
+    - toFQDNs:
+        - matchName: mirror.gcr.io
+      toPorts:
+        - ports:
+            - port: "443"
+              protocol: TCP
+---
+# The scan Jobs, selected by the label the operator puts on every vulnerability scan Job's pod
+# (pkg/vulnerabilityreport/builder.go: vulnerabilityReport.scanner=<plugin name>). With node-collector
+# and SBOM generation off and config audits running in-process, these are the only Jobs it creates.
+#
+# The registry list is every registry an image in this cluster comes from (rendered from git on
+# 2026-10-01, plus k3s's own docker.io/rancher images and the phase 4 Falco and kube-bench images),
+# together with the host each one redirects blob downloads to. A new registry in git means a new
+# entry here - until then its images show up as failed scan Jobs and as Hubble drops, not as a gap
+# that passes silently.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: trivy-scan-jobs
+  namespace: trivy-system
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+spec:
+  endpointSelector:
+    matchLabels:
+      vulnerabilityReport.scanner: Trivy
+  # No ingress section: nothing connects to a scan Job, and the namespace's default-deny covers it.
+  egress:
+    - toEndpoints:
+        - matchLabels:
+            io.kubernetes.pod.namespace: kube-system
+            k8s-app: kube-dns
+      toPorts:
+        - ports:
+            - port: "53"
+              protocol: UDP
+            - port: "53"
+              protocol: TCP
+          rules:
+            dns:
+              - matchPattern: "*"
+    - toEndpoints:
+        - matchLabels:
+            app.kubernetes.io/name: trivy-server
+      toPorts:
+        - ports:
+            - port: "4954"
+              protocol: TCP
+    - toFQDNs:
+        # docker.io: cloudflared, ksops, kube-bench, Falco, k3s's rancher/* images. The client talks
+        # to index.docker.io / registry-1.docker.io, authenticates at auth.docker.io and is
+        # redirected to a CDN for blobs: production.cloudfront.docker.com was observed on
+        # 2026-10-01, production.cloudflare.docker.com is the other documented one.
+        - matchName: index.docker.io
+        - matchName: registry-1.docker.io
+        - matchName: auth.docker.io
+        - matchName: production.cloudflare.docker.com
+        - matchName: production.cloudfront.docker.com
+        # ghcr.io: the portfolio image, Policy Reporter, the adapter, Dex. Blobs come from
+        # pkg-containers.githubusercontent.com (observed).
+        - matchName: ghcr.io
+        - matchName: pkg-containers.githubusercontent.com
+        # reg.kyverno.io: Kyverno's images. A vanity name that redirects to ghcr.io (covered above);
+        # not reachable from the sandbox this list was written in, so check it in Hubble.
+        - matchName: reg.kyverno.io
+        # quay.io: Cilium, cert-manager, Argo CD. Blobs come from quay's CDN hosts (cdnNN.quay.io,
+        # per quay's documentation; quay.io was not reachable from the sandbox to observe it).
+        - matchName: quay.io
+        - matchPattern: "*.quay.io"
+        # mirror.gcr.io: the Trivy and Trivy Operator images; serves its own blobs (observed).
+        - matchName: mirror.gcr.io
+        # public.ecr.aws: Argo CD's redis. ECR Public redirects blobs to one CloudFront
+        # distribution (observed on 2026-10-01). A whole `*.cloudfront.net` would be every CloudFront
+        # customer on the internet, so the one name is listed, accepting that it can change.
+        - matchName: public.ecr.aws
+        - matchName: d2glxqk2uabbnd.cloudfront.net
+      toPorts:
+        - ports:
+            - port: "443"
+              protocol: TCP
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: trivy-operator-polr-adapter
+  namespace: trivy-system
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+spec:
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: trivy-operator-polr-adapter
+  ingress:
+    - fromEntities:
+        - host
+      toPorts:
+        - ports:
+            - port: "8080"
+              protocol: TCP
+  egress:
+    - toEndpoints:
+        - matchLabels:
+            io.kubernetes.pod.namespace: kube-system
+            k8s-app: kube-dns
+      toPorts:
+        - ports:
+            - port: "53"
+              protocol: UDP
+            - port: "53"
+              protocol: TCP
+          rules:
+            dns:
+              - matchPattern: "*"
+    - toEntities:
+        - kube-apiserver
+      toPorts:
+        - ports:
+            - port: "6443"
+              protocol: TCP
