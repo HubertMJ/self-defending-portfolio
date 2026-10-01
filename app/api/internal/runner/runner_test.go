@@ -21,22 +21,70 @@ import (
 
 const img = "ghcr.io/hubertmj/self-defending-portfolio/scenario:main@sha256:0000000000000000000000000000000000000000000000000000000000000000"
 
-// recorder is a Publisher that keeps run events and lets a test wait for a state.
+// recorder is a Publisher that keeps run events and lets a test wait for a state. Every other event
+// (pod, victim) is kept in order in all, JSON-encoded as the hub would publish it.
 type recorder struct {
 	mu     sync.Mutex
 	events []RunEvent
+	all    []published
 	ch     chan RunEvent
+}
+
+type published struct {
+	typ  string
+	v    any
+	json string
 }
 
 func newRecorder() *recorder { return &recorder{ch: make(chan RunEvent, 100)} }
 
 func (r *recorder) Publish(typ string, v any) error {
-	ev := v.(RunEvent)
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
 	r.mu.Lock()
-	r.events = append(r.events, ev)
+	r.all = append(r.all, published{typ, v, string(b)})
+	ev, isRun := v.(RunEvent)
+	if isRun {
+		r.events = append(r.events, ev)
+	}
 	r.mu.Unlock()
-	r.ch <- ev
+	if isRun {
+		r.ch <- ev
+	}
 	return nil
+}
+
+// of returns the published events of one type, in order.
+func (r *recorder) of(typ string) []published {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var out []published
+	for _, p := range r.all {
+		if p.typ == typ {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// order is the sequence of event types and run states, e.g. "run:queued pod:Running victim:up".
+func (r *recorder) order() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var out []string
+	for _, p := range r.all {
+		switch v := p.v.(type) {
+		case RunEvent:
+			out = append(out, "run:"+v.State)
+		case PodEvent:
+			out = append(out, "pod:"+v.Phase)
+		case VictimEvent:
+			out = append(out, "victim:"+v.Status)
+		}
+	}
+	return strings.Join(out, " ")
 }
 
 func (r *recorder) waitFor(t *testing.T, state string) RunEvent {
@@ -90,8 +138,16 @@ func (f *fakeExec) count() int { f.mu.Lock(); defer f.mu.Unlock(); return len(f.
 func readyOnCreate(c *fake.Clientset) {
 	c.PrependReactor("create", "pods", func(a k8stesting.Action) (bool, runtime.Object, error) {
 		p := a.(k8stesting.CreateAction).GetObject().(*corev1.Pod)
+		p.UID = "0b6c1d6e-0000-4000-8000-000000000001"
+		p.Spec.NodeName = "node-secret"
 		p.Status.Phase = corev1.PodRunning
+		p.Status.HostIP = "192.0.2.77"
+		p.Status.PodIP = "127.0.0.1"
 		p.Status.Conditions = []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}}
+		p.Status.ContainerStatuses = []corev1.ContainerStatus{{Name: p.Spec.Containers[0].Name, Ready: true,
+			ContainerID: "containerd://4f1c2b3a5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708",
+			ImageID:     "ghcr.io/hubertmj/self-defending-portfolio/scenario@sha256:" + strings.Repeat("ab", 32),
+			State:       corev1.ContainerState{Running: &corev1.ContainerStateRunning{}}}}
 		return false, nil, nil
 	})
 }
@@ -141,8 +197,11 @@ func TestTerminateRunLifecycle(t *testing.T) {
 
 	rec.waitFor(t, StateQueued)
 	started := rec.waitFor(t, StateStarted)
-	if started.RunID != id || started.Scenario != "shell-in-container" {
+	if started.RunID != id || started.Scenario != "shell-in-container" || started.Pod != pod {
 		t.Fatalf("started event: %+v", started)
+	}
+	if ready := rec.waitFor(t, StatePodReady); ready.Detail != "4f1c2b3a5d6e" || ready.Pod != pod {
+		t.Fatalf("pod_ready event: %+v", ready)
 	}
 
 	p, err := c.CoreV1().Pods("sandbox").Get(context.Background(), pod, metav1.GetOptions{})
@@ -173,7 +232,7 @@ func TestTerminateRunLifecycle(t *testing.T) {
 	rec.waitFor(t, StateFinished)
 	<-done
 
-	if got := strings.Join(rec.states(), ","); got != "queued,started,detected,responded,finished" {
+	if got := strings.Join(rec.states(), ","); got != "queued,started,pod_ready,detected,responded,finished" {
 		t.Fatalf("states = %s", got)
 	}
 	if ex.count() != 1 || !ex.tty {
@@ -198,7 +257,7 @@ func TestQuarantineRunDeletesPod(t *testing.T) {
 	// The response arrives before the alert: detected is still reported, first.
 	r.ObserveTalon(pod, "success")
 	<-done
-	if got := strings.Join(rec.states(), ","); got != "queued,started,detected,responded,finished" {
+	if got := strings.Join(rec.states(), ","); got != "queued,started,pod_ready,detected,responded,finished" {
 		t.Fatalf("states = %s", got)
 	}
 	if podExists(t, c, pod) {

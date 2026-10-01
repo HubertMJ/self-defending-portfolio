@@ -1,15 +1,18 @@
 # The API's identity and every permission it has (ADR 0015). Three grants, each where the objects
 # live, and cluster-scoped only where the objects are spread across every namespace:
 #
-#   Role in sandbox         pods create/get/list/delete, pods/exec create - run a scenario, wait for
-#                           it, exec its command, delete it, find orphans after a crash
+#   Role in sandbox         pods create/get/list/watch/delete, pods/exec create - run a scenario,
+#                           wait for it, follow it, exec its command, delete it, find orphans after a
+#                           crash
 #   Role in kube-bench      pods list, pods/log get - read the newest benchmark Job's output
 #   ClusterRole (read)      list PolicyReports, ClusterPolicyReports, VulnerabilityReports - they are
 #                           written into every namespace that has workloads
 #
-# Narrower than the contract's maximum on purpose: no pods `watch` (the runner polls one pod by
-# name), no `get` on the reports (only listed), no Jobs (the pods carry the result), no secrets,
-# no ConfigMaps (the scenarios are a mounted volume), nothing in any other namespace.
+# Narrower than the contract's maximum on purpose: no `get` on the reports (only listed), no Jobs
+# (the pods carry the result), no secrets, no ConfigMaps (the scenarios are a mounted volume),
+# nothing in any other namespace. `watch` on pods is sandbox-only and used on one pod at a time: the
+# runner opens it with a field selector on the run's pod name and publishes what it sees as `event:
+# pod` (ADR 0021) - the same pods it can already get and list, so it reveals nothing new.
 #
 # What the sandbox grant still means: this ServiceAccount can create a pod of its choosing in
 # `sandbox`. What such a pod can be is bounded elsewhere, not here - Pod Security `restricted`
@@ -33,7 +36,7 @@ metadata:
 rules:
   - apiGroups: [""]
     resources: ["pods"]
-    verbs: ["create", "get", "list", "delete"]
+    verbs: ["create", "get", "list", "watch", "delete"]
   # A WebSocket exec is authorised as `create` since Kubernetes 1.31 (it used to be `get`); SPDY
   # was always `create`. No `get` needed on 1.35.
   - apiGroups: [""]

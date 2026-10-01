@@ -1,7 +1,8 @@
 // Package runner executes one attack scenario end to end (ADR 0015):
 //
 //	queued     POST /api/attack/{id} accepted; the concurrency slot is held from here
-//	started    the scenario pod in `sandbox` is Ready (and the exec, if any, has been sent)
+//	started    the API server accepted the scenario pod in `sandbox` (admission passed)
+//	pod_ready  the pod is Running and Ready; the exec, if any, is sent right after this
 //	detected   Falcosidekick delivered a Falco alert for that pod
 //	responded  Talon reported a successful action on that pod
 //	finished   the pod is gone and the slot is free
@@ -14,7 +15,12 @@
 //
 // Correlation is by pod name, which is unique per run (scenario id + run id): Falco reports
 // k8s.pod.name, Talon reports the pod it acted on. Nothing else ties an alert to a run, and nothing
-// else needs to.
+// else needs to. Every `run` event from `started` on names the pod, so the page can show it before
+// anything has been detected.
+//
+// Alongside the states, a run publishes evidence (ADR 0021): `pod` events from a watch on its one
+// pod (podwatch.go), and for a victim scenario `victim` events from probing the app in it
+// (victim.go).
 package runner
 
 import (
@@ -24,7 +30,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -49,6 +57,7 @@ const (
 const (
 	StateQueued    = "queued"
 	StateStarted   = "started"
+	StatePodReady  = "pod_ready"
 	StateDetected  = "detected"
 	StateResponded = "responded"
 	StateFinished  = "finished"
@@ -56,13 +65,15 @@ const (
 	StateTimeout   = "timeout"
 )
 
-// RunEvent is the public `event: run` payload.
+// RunEvent is the public `event: run` payload. Pod is set from `started` on (the pod exists from
+// then); for pod_ready, Detail is the container id (12 characters).
 type RunEvent struct {
 	RunID    string    `json:"run_id"`
 	Scenario string    `json:"scenario"`
 	State    string    `json:"state"`
 	At       time.Time `json:"at"`
 	Detail   string    `json:"detail"`
+	Pod      string    `json:"pod,omitempty"`
 }
 
 // Publisher is the event hub as the runner sees it.
@@ -86,6 +97,14 @@ type Config struct {
 	QuarantineLinger time.Duration
 	// CleanupTimeout bounds the final pod deletion.
 	CleanupTimeout time.Duration
+	// DeleteWait is how long the end of a run waits for the pod watch to report the deletion, so
+	// the `pod` event saying Deleted comes before the run's final state.
+	DeleteWait time.Duration
+	// VictimPort, VictimInterval and VictimTimeout drive the victim poller: the app's port, how
+	// often it is read, and the limit for one read (ADR 0021: 8080, 500 ms, 300 ms).
+	VictimPort     int
+	VictimInterval time.Duration
+	VictimTimeout  time.Duration
 }
 
 // Runner runs scenarios. Safe for concurrent use.
@@ -96,6 +115,8 @@ type Runner struct {
 	log    *slog.Logger
 	cfg    Config
 	now    func() time.Time
+
+	prober *victimProber
 
 	base   context.Context
 	cancel context.CancelFunc
@@ -111,6 +132,33 @@ type run struct {
 	responded         chan struct{}
 	detectOnce        sync.Once
 	respondOnce       sync.Once
+
+	// podVisible: the pod exists, so run events name it. Written and read by the run's own
+	// goroutine only.
+	podVisible bool
+	// gone is closed when the pod is being deleted by someone other than the runner (Talon's
+	// terminate); deleted when the watch has seen it disappear from the API server.
+	gone, deleted         chan struct{}
+	goneOnce, deletedOnce sync.Once
+	// selfDelete is set when the runner's own cleanup deletes the pod: from then on a deletion is
+	// not Talon's doing and is not reported as the victim being killed.
+	selfDelete     atomic.Bool
+	victimGoneOnce sync.Once
+}
+
+func (rn *run) markGone() {
+	if !rn.selfDelete.Load() {
+		rn.goneOnce.Do(func() { close(rn.gone) })
+	}
+}
+
+func (rn *run) isGone() bool {
+	select {
+	case <-rn.gone:
+		return true
+	default:
+		return false
+	}
 }
 
 // New returns a runner. Call Shutdown to stop in-flight runs (their pods are still cleaned up).
@@ -129,12 +177,25 @@ func New(client kubernetes.Interface, exec Execer, pub Publisher, log *slog.Logg
 	if cfg.CleanupTimeout <= 0 {
 		cfg.CleanupTimeout = 15 * time.Second
 	}
+	if cfg.DeleteWait <= 0 {
+		cfg.DeleteWait = 3 * time.Second
+	}
+	if cfg.VictimPort <= 0 {
+		cfg.VictimPort = 8080
+	}
+	if cfg.VictimInterval <= 0 {
+		cfg.VictimInterval = 500 * time.Millisecond
+	}
+	if cfg.VictimTimeout <= 0 {
+		cfg.VictimTimeout = 300 * time.Millisecond
+	}
 	if log == nil {
 		log = slog.Default()
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Runner{client: client, exec: exec, pub: pub, log: log, cfg: cfg, now: time.Now,
-		base: ctx, cancel: cancel, byPod: map[string]*run{}}
+		prober: newVictimProber(cfg.VictimPort, cfg.VictimTimeout),
+		base:   ctx, cancel: cancel, byPod: map[string]*run{}}
 }
 
 // Start publishes `queued` and runs sc in the background. release is called exactly once, after the
@@ -142,7 +203,8 @@ func New(client kubernetes.Interface, exec Execer, pub Publisher, log *slog.Logg
 func (r *Runner) Start(sc scenarios.Scenario, release func()) string {
 	id := newRunID()
 	rn := &run{id: id, scenario: sc.ID, pod: podName(sc.ID, id),
-		detected: make(chan struct{}), responded: make(chan struct{})}
+		detected: make(chan struct{}), responded: make(chan struct{}),
+		gone: make(chan struct{}), deleted: make(chan struct{})}
 	r.mu.Lock()
 	r.byPod[rn.pod] = rn
 	r.mu.Unlock()
@@ -227,18 +289,59 @@ func (r *Runner) execute(rn *run, sc scenarios.Scenario) {
 	defer cancel()
 	log := r.log.With("run_id", rn.id, "scenario", rn.scenario, "pod", rn.pod)
 
+	// The watch outlives the run's timeout (it has to see the cleanup's deletion) but not the API.
+	// Opened before the pod is created, so the creation is its first event.
+	wctx, stopWatch := context.WithCancel(r.base)
+	defer stopWatch()
+	w, err := r.openPodWatch(wctx, rn.pod)
+	if err != nil {
+		log.Warn("pod watch failed; retrying in the background", "err", err)
+		w = nil
+	}
+	watchDone := make(chan struct{})
+	go func() {
+		defer close(watchDone)
+		r.watchPod(wctx, rn, sc.Container(), w)
+	}()
+
+	// The victim poller, once there is a pod to poll; stopVictim ends it and waits.
+	stopVictim, victimStarted := func() {}, false
+
 	created := false
 	final, detail := StateFinished, ""
 	defer func() {
+		// The poller stops first: whatever the cleanup does to the pod from here on is the API's
+		// doing, not the attack's or Talon's, and must not show up as the victim's state.
+		stopVictim()
 		if created {
+			rn.selfDelete.Store(true)
 			cctx, ccancel := context.WithTimeout(context.Background(), r.cfg.CleanupTimeout)
-			if err := r.deletePod(cctx, rn.pod); err != nil {
+			alreadyGone, err := r.deletePodFound(cctx, rn.pod)
+			if err != nil {
 				log.Error("scenario pod cleanup failed; activeDeadlineSeconds will end it", "err", err)
 				if final == StateFinished {
 					detail = "pod cleanup failed"
 				}
 			}
 			ccancel()
+			if alreadyGone {
+				// Talon deleted it before the cleanup got there.
+				rn.goneOnce.Do(func() { close(rn.gone) })
+			}
+			if err == nil {
+				t := time.NewTimer(r.cfg.DeleteWait)
+				select {
+				case <-rn.deleted:
+				case <-watchDone:
+				case <-t.C:
+				}
+				t.Stop()
+			}
+		}
+		stopWatch()
+		<-watchDone
+		if victimStarted && rn.isGone() {
+			r.publishVictimGone(rn)
 		}
 		r.publish(rn, final, detail)
 		log.Info("run ended", "state", final, "detail", detail)
@@ -255,8 +358,11 @@ func (r *Runner) execute(rn *run, sc scenarios.Scenario) {
 		return
 	}
 	created = true
+	rn.podVisible = true
+	r.publish(rn, StateStarted, "pod created")
 
-	if err := r.waitReady(ctx, rn.pod); err != nil {
+	ready, err := r.waitReady(ctx, rn.pod)
+	if err != nil {
 		final, detail = StateFailed, err.Error()
 		if errors.Is(err, context.DeadlineExceeded) {
 			final, detail = StateTimeout, "pod did not become ready in time"
@@ -266,8 +372,26 @@ func (r *Runner) execute(rn *run, sc scenarios.Scenario) {
 		}
 		return
 	}
+	r.publish(rn, StatePodReady, viewOf(ready, sc.Container(), false).containerID)
 
-	startDetail := ""
+	if sc.Victim && !ready.Spec.HostNetwork && net.ParseIP(ready.Status.PodIP) != nil {
+		// One probe before the attack, synchronously, so "up" is on record before the command can
+		// change anything; then the loop.
+		vctx, vcancel := context.WithCancel(ctx)
+		vdone := make(chan struct{})
+		ip := ready.Status.PodIP
+		first := r.prober.probe(vctx, ip)
+		first.RunID, first.Pod, first.At = rn.id, rn.pod, r.now().UTC()
+		r.emit(rn, "victim", first)
+		go func() {
+			defer close(vdone)
+			r.sleep(vctx, r.cfg.VictimInterval)
+			r.pollVictim(vctx, rn, ip)
+		}()
+		victimStarted = true
+		stopVictim = func() { vcancel(); <-vdone }
+	}
+
 	if sc.Exec != nil {
 		// In the background: a terminated pod ends the exec stream with an error, which is the
 		// expected outcome of a successful response, not a failure of the run.
@@ -276,9 +400,7 @@ func (r *Runner) execute(rn *run, sc scenarios.Scenario) {
 				log.Info("exec ended", "err", err)
 			}
 		}()
-		startDetail = "command sent"
 	}
-	r.publish(rn, StateStarted, startDetail)
 
 	detected := false
 	detectedCh := rn.detected
@@ -313,26 +435,26 @@ func (r *Runner) execute(rn *run, sc scenarios.Scenario) {
 // waitReady polls until the pod is Running and Ready. A pod that ends (or disappears) first is an
 // error: for a terminate scenario that would mean the response beat the readiness probe, which the
 // scenario design must avoid.
-func (r *Runner) waitReady(ctx context.Context, name string) error {
+func (r *Runner) waitReady(ctx context.Context, name string) (*corev1.Pod, error) {
 	t := time.NewTicker(r.cfg.PollInterval)
 	defer t.Stop()
 	for {
 		p, err := r.client.CoreV1().Pods(r.cfg.Namespace).Get(ctx, name, metav1.GetOptions{})
 		switch {
 		case apierrors.IsNotFound(err):
-			return errors.New("pod disappeared before it became ready")
+			return nil, errors.New("pod disappeared before it became ready")
 		case err != nil && ctx.Err() != nil:
-			return ctx.Err()
+			return nil, ctx.Err()
 		case err != nil:
 			r.log.Warn("pod status poll failed", "pod", name, "err", err)
 		case p.Status.Phase == corev1.PodSucceeded || p.Status.Phase == corev1.PodFailed:
-			return fmt.Errorf("pod ended (%s) before it became ready", p.Status.Phase)
+			return nil, fmt.Errorf("pod ended (%s) before it became ready", p.Status.Phase)
 		case p.Status.Phase == corev1.PodRunning && podReady(p):
-			return nil
+			return p, nil
 		}
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return nil, ctx.Err()
 		case <-t.C:
 		}
 	}
@@ -348,12 +470,18 @@ func podReady(p *corev1.Pod) bool {
 }
 
 func (r *Runner) deletePod(ctx context.Context, name string) error {
+	_, err := r.deletePodFound(ctx, name)
+	return err
+}
+
+// deletePodFound deletes the pod and reports whether it was already gone.
+func (r *Runner) deletePodFound(ctx context.Context, name string) (bool, error) {
 	zero := int64(0)
 	err := r.client.CoreV1().Pods(r.cfg.Namespace).Delete(ctx, name, metav1.DeleteOptions{GracePeriodSeconds: &zero})
 	if apierrors.IsNotFound(err) {
-		return nil // Talon's terminate got there first
+		return true, nil // Talon's terminate got there first
 	}
-	return err
+	return false, err
 }
 
 func (r *Runner) sleep(ctx context.Context, d time.Duration) {
@@ -366,8 +494,16 @@ func (r *Runner) sleep(ctx context.Context, d time.Duration) {
 }
 
 func (r *Runner) publish(rn *run, state, detail string) {
-	if err := r.pub.Publish("run", RunEvent{RunID: rn.id, Scenario: rn.scenario, State: state, At: r.now().UTC(), Detail: detail}); err != nil {
-		r.log.Error("publish failed", "err", err)
+	ev := RunEvent{RunID: rn.id, Scenario: rn.scenario, State: state, At: r.now().UTC(), Detail: detail}
+	if rn.podVisible {
+		ev.Pod = rn.pod
+	}
+	r.emit(rn, "run", ev)
+}
+
+func (r *Runner) emit(rn *run, typ string, v any) {
+	if err := r.pub.Publish(typ, v); err != nil {
+		r.log.Error("publish failed", "type", typ, "run_id", rn.id, "err", err)
 	}
 }
 
