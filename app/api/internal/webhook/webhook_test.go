@@ -1,6 +1,7 @@
 package webhook
 
 import (
+	"encoding/json"
 	"strings"
 	"sync"
 	"testing"
@@ -10,9 +11,11 @@ import (
 var now = time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
 
 func TestParseFalco(t *testing.T) {
-	body := `{"uuid":"x","output":"` + strings.Repeat("a", 400) + `","priority":"Notice","rule":"Terminal shell in container",
+	body := `{"uuid":"x","output":"` + strings.Repeat("a", 1100) + `","priority":"Notice","rule":"Terminal shell in container",
 	"time":"2026-10-01T11:59:58.123456789Z","source":"syscall","hostname":"node",
-	"output_fields":{"k8s.ns.name":"sandbox","k8s.pod.name":"shell-in-container-abc","proc.name":"sh","evt.time":1}}`
+	"output_fields":{"k8s.ns.name":"sandbox","k8s.pod.name":"shell-in-container-abc","proc.name":"sh","evt.time":1,
+	"user.uid":10001,"container.id":"0123456789abcdef0123","proc.cmdline":"sh -c id","k8s.pod.uid":"u","hostname":"node1",
+	"proc.pname":null,"fd.name":"` + strings.Repeat("f", 300) + `"}}`
 	ev, err := ParseFalco([]byte(body), now)
 	if err != nil {
 		t.Fatal(err)
@@ -23,8 +26,47 @@ func TestParseFalco(t *testing.T) {
 	if n := len([]rune(ev.Output)); n != MaxOutput {
 		t.Fatalf("output is %d runes, want %d", n, MaxOutput)
 	}
-	if ev.At != time.Date(2026, 10, 1, 11, 59, 58, 123456789, time.UTC) {
-		t.Fatalf("at = %v", ev.At)
+	if ev.At != time.Date(2026, 10, 1, 11, 59, 58, 123456789, time.UTC) || ev.APIReceivedAt != now {
+		t.Fatalf("at = %v, api_received_at = %v", ev.At, ev.APIReceivedAt)
+	}
+	// Allow-listed fields only; container.id cut to 12; null dropped; long values capped.
+	want := map[string]any{"k8s.ns.name": "sandbox", "k8s.pod.name": "shell-in-container-abc", "proc.name": "sh",
+		"user.uid": float64(10001), "container.id": "0123456789ab", "proc.cmdline": "sh -c id"}
+	for k, v := range want {
+		if ev.Fields[k] != v {
+			t.Errorf("fields[%s] = %v, want %v", k, ev.Fields[k], v)
+		}
+	}
+	if n := len([]rune(ev.Fields["fd.name"].(string))); n != MaxFieldValue {
+		t.Errorf("fd.name is %d runes", n)
+	}
+	for _, k := range []string{"evt.time", "k8s.pod.uid", "hostname", "proc.pname"} {
+		if _, ok := ev.Fields[k]; ok {
+			t.Errorf("field %s published", k)
+		}
+	}
+}
+
+func TestFalcoEventJSONHasEmptyFields(t *testing.T) {
+	ev, _ := ParseFalco([]byte(`{"rule":"r"}`), now)
+	b, _ := json.Marshal(ev)
+	if !strings.Contains(string(b), `"fields":{}`) || !strings.Contains(string(b), `"api_received_at":"2026-10-01T12:00:00Z"`) {
+		t.Fatalf("%s", b)
+	}
+}
+
+func TestScrub(t *testing.T) {
+	cases := map[string]string{
+		"wget http://127.0.0.1:9/ failed":                         "wget http://127.0.0.1:9/ failed",
+		"Delete https://10.43.0.1:443/api/v1/pods/x: dial tcp":    "Delete [url] dial tcp",
+		"connect 10.42.0.17:8080 refused":                         "connect [ip]:8080 refused",
+		"lookup portfolio-api.portfolio-api.svc.cluster.local ok": "lookup [service] ok",
+		"plain text stays":                                        "plain text stays",
+	}
+	for in, want := range cases {
+		if got := Scrub(in); got != want {
+			t.Errorf("Scrub(%q) = %q, want %q", in, got, want)
+		}
 	}
 }
 
@@ -39,19 +81,21 @@ func TestParseFalcoNullFields(t *testing.T) {
 }
 
 func TestParseTalon(t *testing.T) {
-	cases := []struct{ body, action, pod, ns, status string }{
-		{`{"objects":{"Pod":"p1","Namespace":"sandbox"},"action":"Terminate Pod","actionner":"kubernetes:terminate","status":"success","rule":"Kill terminal shell in sandbox"}`,
-			"Terminate Pod", "p1", "sandbox", "success"},
-		{`{"objects":{"pod":"p2","namespace":"sandbox"},"actionner":"kubernetes:label","status":"failure","error":"x"}`,
-			"kubernetes:label", "p2", "sandbox", "failure"},
-		{`{"Status":"success"}`, "", "", "", "success"},
+	cases := []struct{ body, action, actionner, pod, ns, status, output string }{
+		{`{"objects":{"Pod":"p1","Namespace":"sandbox"},"action":"Terminate Pod","actionner":"kubernetes:terminate","status":"success","rule":"Kill terminal shell in sandbox",
+		  "event":"the whole falco alert","result":"the pod 'p1' in the namespace 'sandbox' has been terminated"}`,
+			"Terminate Pod", "kubernetes:terminate", "p1", "sandbox", "success", "the pod 'p1' in the namespace 'sandbox' has been terminated"},
+		{`{"objects":{"pod":"p2","namespace":"sandbox"},"actionner":"kubernetes:label","status":"failure","error":"Patch https://10.43.0.1:443/x: timeout"}`,
+			"kubernetes:label", "kubernetes:label", "p2", "sandbox", "failure", "Patch [url] timeout"},
+		{`{"Status":"success","Output":"` + strings.Repeat("o", 400) + `"}`, "", "", "", "", "success", strings.Repeat("o", 299) + "…"},
 	}
 	for _, c := range cases {
 		ev, err := ParseTalon([]byte(c.body), now)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if ev.Action != c.action || ev.Pod != c.pod || ev.Namespace != c.ns || ev.Status != c.status || ev.At != now {
+		if ev.Action != c.action || ev.Actionner != c.actionner || ev.Pod != c.pod || ev.Namespace != c.ns ||
+			ev.Status != c.status || ev.Output != c.output || ev.At != now || ev.APIReceivedAt != now {
 			t.Errorf("%s -> %+v", c.body, ev)
 		}
 	}
