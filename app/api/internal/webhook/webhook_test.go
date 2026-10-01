@@ -57,11 +57,17 @@ func TestFalcoEventJSONHasEmptyFields(t *testing.T) {
 
 func TestScrub(t *testing.T) {
 	cases := map[string]string{
-		"wget http://127.0.0.1:9/ failed":                         "wget http://127.0.0.1:9/ failed",
-		"Delete https://10.43.0.1:443/api/v1/pods/x: dial tcp":    "Delete [url] dial tcp",
-		"connect 10.42.0.17:8080 refused":                         "connect [ip]:8080 refused",
-		"lookup portfolio-api.portfolio-api.svc.cluster.local ok": "lookup [service] ok",
-		"plain text stays":                                        "plain text stays",
+		"wget http://127.0.0.1:9/ failed":                                "wget http://127.0.0.1:9/ failed",
+		"Delete https://10.43.0.1:443/api/v1/pods/x: dial tcp":           "Delete [url] dial tcp",
+		"connect 10.42.0.17:8080 refused":                                "connect [ip]:8080 refused",
+		"lookup portfolio-api.portfolio-api.svc.cluster.local ok":        "lookup [service] ok",
+		"plain text stays":                                               "plain text stays",
+		"ip=10.42.0.7x pod10.42.0.8":                                     "ip=[ip]x pod[ip]",
+		"via fd00:10:42::17 and 2001:db8::1, not ::1":                    "via [ip] and [ip], not ::1",
+		"at 12:00:00.123 std::string":                                    "at 12:00:00.123 std::string",
+		"HTTPS://Kube-API.Example/x and api.kube-system.svc":             "[url] and [service]",
+		"dns kube-dns.kube-system.SVC.cluster.local and x.cluster.local": "dns [service] and [service]",
+		"rm\u202e\u200bfdp.exe <h1>pwned</h1>":                           "rmfdp.exe <h1>pwned</h1>",
 	}
 	for in, want := range cases {
 		if got := Scrub(in); got != want {
