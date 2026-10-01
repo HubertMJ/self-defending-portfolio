@@ -61,6 +61,12 @@ type Scenario struct {
 	TimeoutSeconds int             `json:"timeout_seconds"`
 	Pod            json.RawMessage `json:"pod"`
 	Exec           *Exec           `json:"exec"`
+	// PreExec, if set, runs to completion before Exec, in the same container and never with a
+	// TTY. It is the visible half of an attack whose detected half fires the moment it starts
+	// (shell-in-container: the interactive shell *is* the detection, so the victim must be defaced
+	// by an earlier, undetected step for the visitor to see it before the kill; ADR 0022). Without
+	// a TTY a shell does not match "Terminal shell in container"; validate refuses tty: true.
+	PreExec *Exec `json:"pre_exec,omitempty"`
 	// Victim marks a scenario whose image serves the victim app (state.json on :8080). Optional,
 	// false when absent: only then does the runner probe the pod (runner/victim.go, ADR 0021), so a
 	// scenario image without the app never shows a spurious "unreachable".
@@ -181,6 +187,18 @@ func (s *Scenario) validate() error {
 	for _, c := range append(append([]corev1.Container{}, spec.InitContainers...), spec.Containers...) {
 		if !strings.HasPrefix(c.Image, ImagePrefix) || !strings.Contains(c.Image, "@sha256:") {
 			return fmt.Errorf("container %q: image must be %s<name>[:tag]@sha256:<digest>", c.Name, ImagePrefix)
+		}
+	}
+	if s.PreExec != nil {
+		switch {
+		case s.Exec == nil:
+			return errors.New("pre_exec needs an exec to precede")
+		case len(s.PreExec.Command) == 0:
+			return errors.New("pre_exec.command is empty")
+		case s.PreExec.TTY:
+			return errors.New("pre_exec must not have a TTY (it would be detected as a terminal shell itself)")
+		case s.PreExec.Container != "" && s.PreExec.Container != s.Container():
+			return errors.New("pre_exec runs in exec's container")
 		}
 	}
 	if s.Exec != nil {

@@ -116,6 +116,7 @@ type fakeExec struct {
 	mu    sync.Mutex
 	calls []string
 	tty   bool
+	ttys  []bool
 	block bool
 }
 
@@ -123,6 +124,7 @@ func (f *fakeExec) Exec(ctx context.Context, ns, pod, container string, cmd []st
 	f.mu.Lock()
 	f.calls = append(f.calls, ns+"/"+pod+"/"+container+":"+strings.Join(cmd, " "))
 	f.tty = tty
+	f.ttys = append(f.ttys, tty)
 	f.mu.Unlock()
 	if f.block {
 		<-ctx.Done()
@@ -369,5 +371,37 @@ func TestRunEventJSON(t *testing.T) {
 func TestPodName(t *testing.T) {
 	if n := podName(strings.Repeat("a", 40), newRunID()); len(n) > 63 {
 		t.Fatalf("pod name %q is %d characters", n, len(n))
+	}
+}
+
+// A pre-exec runs first, without a TTY, and then the exec, with its own TTY setting.
+func TestPreExecRunsFirstWithoutTTY(t *testing.T) {
+	c := fake.NewClientset()
+	readyOnCreate(c)
+	rec := newRecorder()
+	ex := &fakeExec{}
+	r := newTestRunner(c, ex, rec)
+	release, done := released()
+
+	sc := scenario("terminate", true)
+	sc.TimeoutSeconds = 30
+	sc.PreExec = &scenarios.Exec{Command: []string{"sh", "-c", "deface"}}
+	id := r.Start(sc, release)
+	pod := podName(sc.ID, id)
+	rec.waitFor(t, StatePodReady)
+	deadline := time.Now().Add(5 * time.Second)
+	for ex.count() < 2 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	_ = c.CoreV1().Pods("sandbox").Delete(context.Background(), pod, metav1.DeleteOptions{})
+	r.ObserveTalon(pod, "success")
+	rec.waitFor(t, StateFinished)
+	<-done
+
+	ex.mu.Lock()
+	defer ex.mu.Unlock()
+	if len(ex.calls) != 2 || !strings.HasSuffix(ex.calls[0], ":sh -c deface") || !strings.HasSuffix(ex.calls[1], ":sh -c id") ||
+		ex.ttys[0] || !ex.ttys[1] {
+		t.Fatalf("exec calls = %v ttys = %v", ex.calls, ex.ttys)
 	}
 }

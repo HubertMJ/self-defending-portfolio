@@ -22,6 +22,8 @@ const sample = `
     containers:
       - name: victim
         image: ` + img + `
+  pre_exec:
+    command: ["sh", "-c", "deface"]
   exec:
     command: ["sh", "-c", "id"]
     tty: true
@@ -56,6 +58,10 @@ func TestParseBothPodForms(t *testing.T) {
 	}
 	if !list[0].Exec.TTY || list[0].Container() != "victim" {
 		t.Fatalf("exec: %+v", list[0].Exec)
+	}
+	if list[0].PreExec == nil || strings.Join(list[0].PreExec.Command, " ") != "sh -c deface" || list[0].PreExec.TTY ||
+		list[1].PreExec != nil {
+		t.Fatalf("pre_exec: %+v %+v", list[0].PreExec, list[1].PreExec)
 	}
 	if list[0].Victim || list[0].Public().Victim || !list[1].Victim || !list[1].Public().Victim {
 		t.Fatalf("victim flag: %v %v", list[0].Victim, list[1].Victim)
@@ -102,6 +108,9 @@ func TestInvalidEntriesAreSkipped(t *testing.T) {
 		{"no containers", `- {id: a, title: A, response: terminate, pod: {containers: []}}`},
 		{"unknown field", `- {id: a, title: A, response: terminate, pod: {containers: [{name: c, image: "` + img + `"}], hostPID2: true}}`},
 		{"exec bad container", `- {id: a, title: A, response: terminate, pod: {containers: [{name: c, image: "` + img + `"}]}, exec: {command: [sh], container: nope}}`},
+		{"pre_exec with tty", `- {id: a, title: A, response: terminate, pod: {containers: [{name: c, image: "` + img + `"}]}, pre_exec: {command: [sh], tty: true}, exec: {command: [sh]}}`},
+		{"pre_exec without exec", `- {id: a, title: A, response: terminate, pod: {containers: [{name: c, image: "` + img + `"}]}, pre_exec: {command: [sh]}}`},
+		{"pre_exec empty", `- {id: a, title: A, response: terminate, pod: {containers: [{name: c, image: "` + img + `"}]}, pre_exec: {command: []}, exec: {command: [sh]}}`},
 		{"exec empty", `- {id: a, title: A, response: terminate, pod: {containers: [{name: c, image: "` + img + `"}]}, exec: {command: []}}`},
 		{"ephemeral", `- {id: a, title: A, response: terminate, pod: {containers: [{name: c, image: "` + img + `"}], ephemeralContainers: [{name: e, image: "` + img + `"}]}}`},
 	}

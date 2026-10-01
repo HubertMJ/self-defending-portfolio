@@ -398,8 +398,18 @@ func (r *Runner) execute(rn *run, sc scenarios.Scenario) {
 
 	if sc.Exec != nil {
 		// In the background: a terminated pod ends the exec stream with an error, which is the
-		// expected outcome of a successful response, not a failure of the run.
+		// expected outcome of a successful response, not a failure of the run. The pre-exec (no
+		// TTY, validated) runs to its end first; its failure does not stop the exec, which is the
+		// step the scenario is judged by.
 		go func() {
+			if sc.PreExec != nil {
+				if err := r.exec.Exec(ctx, r.cfg.Namespace, rn.pod, sc.Container(), sc.PreExec.Command, false); err != nil {
+					log.Info("pre-exec ended", "err", err)
+				}
+				if ctx.Err() != nil {
+					return
+				}
+			}
 			if err := r.exec.Exec(ctx, r.cfg.Namespace, rn.pod, sc.Container(), sc.Exec.Command, sc.Exec.TTY); err != nil {
 				log.Info("exec ended", "err", err)
 			}

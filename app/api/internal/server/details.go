@@ -29,17 +29,19 @@ var runIDPattern = regexp.MustCompile(`^[0-9a-f]{16}$`)
 
 // Details is the GET /api/scenarios/{id}/details payload.
 type Details struct {
-	ID          string             `json:"id"`
-	ExecCommand []string           `json:"exec_command"`
-	ExecTTY     bool               `json:"exec_tty"`
-	PodSecurity PodSecurity        `json:"pod_security"`
-	Resources   Resources          `json:"resources"`
-	Image       Image              `json:"image"`
-	FalcoRule   ruleindex.Rule     `json:"falco_rule"`
-	TalonRule   ruleindex.Rule     `json:"talon_rule"`
-	Policies    []ruleindex.Policy `json:"policies"`
-	Commit      string             `json:"commit"`
-	Victim      bool               `json:"victim"`
+	ID          string   `json:"id"`
+	ExecCommand []string `json:"exec_command"`
+	ExecTTY     bool     `json:"exec_tty"`
+	// PreExecCommand runs before ExecCommand, without a TTY; [] when the scenario has none.
+	PreExecCommand []string           `json:"pre_exec_command"`
+	PodSecurity    PodSecurity        `json:"pod_security"`
+	Resources      Resources          `json:"resources"`
+	Image          Image              `json:"image"`
+	FalcoRule      ruleindex.Rule     `json:"falco_rule"`
+	TalonRule      ruleindex.Rule     `json:"talon_rule"`
+	Policies       []ruleindex.Policy `json:"policies"`
+	Commit         string             `json:"commit"`
+	Victim         bool               `json:"victim"`
 }
 
 // PodSecurity is the effective security context of the container the command runs in: a container
@@ -80,11 +82,14 @@ func (s *Server) details(w http.ResponseWriter, r *http.Request) {
 }
 
 func buildDetails(sc scenarios.Scenario, rules *ruleindex.Index, commit string) Details {
-	d := Details{ID: sc.ID, ExecCommand: []string{}, Commit: commit, Victim: sc.Victim,
+	d := Details{ID: sc.ID, ExecCommand: []string{}, PreExecCommand: []string{}, Commit: commit, Victim: sc.Victim,
 		Policies: []ruleindex.Policy{}, FalcoRule: ruleindex.Rule{Name: sc.Detection}}
 	if sc.Exec != nil {
 		d.ExecCommand = append(d.ExecCommand, sc.Exec.Command...)
 		d.ExecTTY = sc.Exec.TTY
+	}
+	if sc.PreExec != nil {
+		d.PreExecCommand = append(d.PreExecCommand, sc.PreExec.Command...)
 	}
 	if rules != nil {
 		d.FalcoRule = rules.FalcoRule(sc.Detection)

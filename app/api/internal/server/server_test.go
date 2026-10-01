@@ -567,7 +567,7 @@ func TestDetails(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
 		t.Fatal(err)
 	}
-	for _, k := range []string{"exec_command", "pod_security", "resources", "image", "falco_rule", "talon_rule", "policies", "commit", "victim"} {
+	for _, k := range []string{"exec_command", "pre_exec_command", "pod_security", "resources", "image", "falco_rule", "talon_rule", "policies", "commit", "victim"} {
 		if _, ok := raw[k]; !ok {
 			t.Errorf("details lacks %q", k)
 		}
