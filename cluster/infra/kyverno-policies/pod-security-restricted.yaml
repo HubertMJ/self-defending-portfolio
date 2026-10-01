@@ -14,6 +14,10 @@
 #   # phase 4 switch: Audit -> Enforce after `kubectl get polr,cpolr -A` and `make validate`
 #   # (kyverno apply over every rendered chart, hooks included) both show 0 fail - plan commit 9
 #
+# Flipped (all three rules Enforce) once that gate was met: the live PolicyReports, taken after the
+# Trivy scan Jobs had run, showed 0 fail / 0 warn / 0 error in every namespace, and the offline
+# `kyverno apply` showed 0 fail (ADR 0012, amendment). failurePolicy stays Ignore - see below.
+#
 # One grep shows every policy's current action:
 #
 #   grep -n 'failureAction' cluster/infra/kyverno-policies/*.yaml
@@ -40,7 +44,7 @@ spec:
   # the Kyverno and Argo CD pods needed to end the outage. PSA labels on each namespace still hold
   # while the webhook is down, so failing open here loses the per-control reporting, not the floor.
   failurePolicy: Ignore
-  # Background scanning on: the PolicyReport for pods that already exist is half of the Audit ->
+  # Background scanning on: the PolicyReport for pods that already exist was half of the Audit ->
   # Enforce gate (the other half is `kyverno apply` in `make validate`).
   background: true
   rules:
@@ -65,7 +69,7 @@ spec:
                 - falco
                 - kube-bench
       validate:
-        failureAction: Audit
+        failureAction: Enforce
         podSecurity:
           level: restricted
           # `latest` tracks the PSS version of the Kyverno build, which tracks the Kubernetes minor
@@ -94,7 +98,7 @@ spec:
               namespaces:
                 - falco
       validate:
-        failureAction: Audit
+        failureAction: Enforce
         podSecurity:
           level: restricted
           version: latest
@@ -156,7 +160,7 @@ spec:
               namespaces:
                 - kube-bench
       validate:
-        failureAction: Audit
+        failureAction: Enforce
         podSecurity:
           level: restricted
           version: latest

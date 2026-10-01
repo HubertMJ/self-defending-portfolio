@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Phase 3's Definition of Done, as an executable assertion: an image this project's workflow did not
-# sign does not get into the cluster.
+# sign does not get into the cluster. Since phase 4 (plan commit 9, ADR 0012) also: a privileged Pod
+# and a Pod without requests and limits do not get in either (workload-policy-pods.yaml, in `default`).
 #
 # Everything here is `kubectl apply --dry-run=server`, which runs the full admission chain -- the
 # built-in Pod Security admission plugin and then Kyverno's webhook -- and discards the object. No Pod
@@ -22,7 +23,7 @@ cd "$(dirname "$0")"
 
 KUBECTL=${KUBECTL:-kubectl}
 NAMESPACE=${NAMESPACE:-hello}
-MANIFESTS=(unsigned-pod.yaml latest-pod.yaml)
+MANIFESTS=(unsigned-pod.yaml latest-pod.yaml workload-policy-pods.yaml)
 
 WORK_DIR=$(mktemp -d)
 trap 'rm -rf "$WORK_DIR"' EXIT
@@ -62,14 +63,14 @@ for policy in "${EXPECTED_POLICIES[@]}"; do
   fi
   # A rule in Audit records the violation in a PolicyReport and admits the Pod, so it can never make
   # the assertions below pass. Say that plainly rather than letting it look like a policy that does
-  # not match. See the "phase 3 switch" comment at the top of each policy file.
+  # not match. See the "phase N switch" comment at the top of each policy file.
   actions=$(
     $KUBECTL get clusterpolicy "$policy" \
       -o jsonpath='{range .spec.rules[*]}{.validate.failureAction}{" "}{.verifyImages[*].failureAction}{" "}{end}'
   )
   if grep -qw Audit <<<"$actions"; then
     echo "run.sh: ClusterPolicy $policy still has a rule in Audit (actions: $actions)." >&2
-    echo "        Flip it to Enforce first -- docs/bootstrap.md, \"Phase 3\"." >&2
+    echo "        Flip it to Enforce first -- docs/bootstrap.md, \"Phase 3\" / \"6.4\"." >&2
     exit 1
   fi
   pass "ClusterPolicy $policy is installed and enforcing"
@@ -110,7 +111,7 @@ for doc in "$WORK_DIR"/*.yaml; do
   fi
 done
 
-[ "$doc_count" -ge 3 ] || fail "expected at least 3 test Pods, found $doc_count (did a manifest lose its annotation?)"
+[ "$doc_count" -ge 5 ] || fail "expected at least 5 test Pods, found $doc_count (did a manifest lose its annotation?)"
 
 # ---------------------------------------------------------------------------- the admission
 #

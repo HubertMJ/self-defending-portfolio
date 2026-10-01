@@ -482,7 +482,7 @@ The new Applications, all wave 5 (`cluster/apps/kustomization.yaml`):
 | `sandbox` | `sandbox` (restricted) | victims for the runtime test, quarantine policy, Talon's Role | 0013 |
 
 The two privileged namespaces hold one workload each and are judged control by control by Kyverno's
-`pod-security-restricted` policy (ADR 0012), which is still **Audit** until the flip in 6.4.
+`pod-security-restricted` policy (ADR 0012), which is **Enforce** since the flip in 6.4.
 
 One bootstrap change comes with this phase. `argocd-cm` gains `--enable-helm` in
 `kustomize.buildOptions`, so that `cluster/infra/falco` can render the Falco chart and patch its host
@@ -552,11 +552,23 @@ It creates short-lived victim pods in `sandbox` (our signed web image, `restrict
 
 Needs `script` (util-linux) on the operator machine.
 
-### 6.4 Flip Audit → Enforce (plan commit 9, not yet)
+### 6.4 Flip Audit → Enforce (plan commit 9)
 
 `pod-security-restricted` and `require-pod-resources` move to Enforce only when both
 `kubectl get polr,cpolr -A` (after the Trivy scan Jobs have run at least once) and `make validate`
-show zero failures for both policies.
+show zero failures for both policies. Both held on 2026-10-01 (ADR 0012, amendment), and the commit
+flips every rule of both policies to `failureAction: Enforce`; `failurePolicy` stays `Ignore`.
+
+After Argo CD has synced it:
+
+```sh
+kubectl get clusterpolicy pod-security-restricted require-pod-resources   # both Ready
+tests/admission/run.sh       # now also: privileged Pod and Pod without resources in `default` rejected
+tests/runtime/run.sh         # victims still admitted
+kubectl get applications -n argocd   # all Synced / Healthy
+```
+
+Rollback is the revert of that commit (back to Audit); the policies fail open either way.
 
 ### Troubleshooting
 

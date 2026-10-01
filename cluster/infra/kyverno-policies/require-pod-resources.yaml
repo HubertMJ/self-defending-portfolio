@@ -19,6 +19,8 @@
 #   # phase 4 switch: Audit -> Enforce after `kubectl get polr,cpolr -A` and `make validate`
 #   # (kyverno apply over every rendered chart, hooks included) both show 0 fail - plan commit 9
 #
+# Flipped to Enforce once that gate was met (ADR 0012, amendment); failurePolicy stays Ignore.
+#
 #   grep -n 'failureAction' cluster/infra/kyverno-policies/*.yaml
 apiVersion: kyverno.io/v1
 kind: ClusterPolicy
@@ -58,7 +60,7 @@ spec:
                 # blocking Argo CD's own rollouts.
                 - argocd
       validate:
-        failureAction: Audit
+        failureAction: Enforce
         message: >-
           Every container and init container in "{{ request.object.metadata.name }}" must set
           resources.requests.cpu, resources.requests.memory and resources.limits.memory (ADR 0012).

@@ -13,6 +13,6 @@ resources:
   - verify-portfolio-images.yaml
   - restrict-image-registries.yaml
   - disallow-latest-tag.yaml
-  # Phase 4, Audit until plan commit 9 (see the switch marker in each file).
+  # Phase 4, Enforce since plan commit 9 (see the switch marker in each file).
   - pod-security-restricted.yaml
   - require-pod-resources.yaml

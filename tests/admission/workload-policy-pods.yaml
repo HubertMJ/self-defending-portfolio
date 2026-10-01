@@ -1,0 +1,77 @@
+# Phase 4's workload policies (ADR 0012), one violation per Pod: a privileged container, judged by
+# pod-security-restricted, and a container with no requests or limits, judged by require-pod-resources.
+# tests/admission/run.sh reads the expected policy off each Pod's annotation, as for the image cases.
+#
+# Namespace `default`, explicitly: it carries no Pod Security admission labels, so the built-in PSA
+# plugin admits anything there and Kyverno is the only thing that can reject these Pods. In `hello` or
+# `sandbox` the privileged Pod would be refused by PSA `restricted` before Kyverno was asked, and the
+# test would pass for the wrong reason. `default` is also outside the image policies' scope
+# (restrict-image-registries, verify-portfolio-images), so a pinned public image is no violation there.
+#
+# Everything except the one violation is deliberately valid, so the rejection is attributable.
+# `kubectl apply --dry-run=server` runs the full admission chain and discards the object; nothing is
+# scheduled and no image is pulled.
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: admission-test-privileged
+  namespace: default
+  labels:
+    app.kubernetes.io/name: admission-test
+  annotations:
+    tests.hubertjablon.ski/expect-policy: pod-security-restricted
+spec:
+  restartPolicy: Never
+  automountServiceAccountToken: false
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 65534
+    runAsGroup: 65534
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: probe
+      image: docker.io/library/busybox:1.37
+      command: ["/bin/false"]
+      securityContext:
+        # The one violation: PSS "Privileged Containers" (and with it "Privilege Escalation").
+        privileged: true
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: ["ALL"]
+      resources:
+        requests:
+          cpu: 10m
+          memory: 16Mi
+        limits:
+          memory: 32Mi
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: admission-test-no-resources
+  namespace: default
+  labels:
+    app.kubernetes.io/name: admission-test
+  annotations:
+    tests.hubertjablon.ski/expect-policy: require-pod-resources
+spec:
+  restartPolicy: Never
+  automountServiceAccountToken: false
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 65534
+    runAsGroup: 65534
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    # The one violation: no `resources` at all, so no CPU/memory request and no memory limit.
+    - name: probe
+      image: docker.io/library/busybox:1.37
+      command: ["/bin/false"]
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: ["ALL"]
