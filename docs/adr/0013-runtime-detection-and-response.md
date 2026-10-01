@@ -133,8 +133,13 @@ a socket of an unloaded protocol family) is a path to host root for a compromise
   chart bump that changed the loader logic cannot quietly make it writable, and sets it for the
   containerd socket directory: connecting to a unix socket does not need a writable mount, and that
   directory also holds the runtime state of every container.
-- `argocd-cm` gains `--enable-helm` in `kustomize.buildOptions`. The option is global, but it only does
-  something for a kustomization in this repository that declares `helmCharts`.
+- `argocd-cm` gains `--enable-helm` in `kustomize.buildOptions`, and nothing else. The line is now
+  `--enable-alpha-plugins --enable-exec --enable-helm`. The first two flags are not new: they have been
+  there since phase 2 (ADR 0006) because the KSOPS generators in `cluster/infra/cert-manager-issuers`
+  and `cluster/infra/cloudflared` are kustomize exec plugins. They do let a kustomization in this
+  repository run a binary inside argocd-repo-server, which is a standing trade-off of KSOPS rather than
+  part of this change. `--enable-helm` is global too, but it only does something for a kustomization
+  in this repository that declares `helmCharts`.
 - Checked offline with the exact pair Argo CD v3.5.3 bundles (`hack/tool-versions.sh`: kustomize 5.8.1,
   helm 4.2.1): `kustomize build --enable-helm` pulls the chart (also tested against a local chart
   repository), renders it with the values and applies the patch.

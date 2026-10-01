@@ -2,6 +2,7 @@
 # `kustomize build` inside the repo-server. Without this the ksops generator is silently a no-op
 # and the Secret never appears.
 #
+# Those two flags date from phase 2 (ADR 0006); phase 4 adds only the third.
 # --enable-helm lets a kustomization render a Helm chart (`helmCharts`) with the helm binary Argo CD
 # bundles, so a chart can be patched after rendering - Argo CD has no post-render step for Helm
 # sources. Used by cluster/infra/falco to make the chart's host mounts read-only (ADR 0013, amendment
