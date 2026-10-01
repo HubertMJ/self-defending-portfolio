@@ -30,7 +30,7 @@ export interface MockOptions {
   visitorAfterMs?: number;
 }
 
-const REPLAY = 50;
+const REPLAY = 100;
 
 function json(status: number, body: unknown, headers: Record<string, string> = {}): Response {
   return new Response(JSON.stringify(body), {
@@ -137,7 +137,10 @@ export class MockBackend {
       const events = this.buffer.filter((e) => "run_id" in e.data && e.data.run_id === id);
       const pods = new Set(events.map((e) => e.data.pod).filter(Boolean));
       const all = this.buffer.filter((e) => events.includes(e) || (!("run_id" in e.data) && pods.has(e.data.pod)));
-      return all.length ? json(200, { run_id: id, events: all }) : json(404, { error: "unknown run" });
+      const scenario = events.find((e) => e.type === "run")?.data;
+      return all.length
+        ? json(200, { run_id: id, scenario: scenario && "scenario" in scenario ? scenario.scenario : "", events: all.map((e, i) => ({ id: i + 1, ...e })), truncated: false })
+        : json(404, { error: "unknown run" });
     }
 
     const m = /^\/api\/attack\/([^/]+)$/.exec(path);
@@ -245,16 +248,18 @@ export class MockBackend {
       data: { run_id: runId, pod, at: at(ms), probe_ms: probe, ...v },
     });
     const cid = "4f1c2a9e8b7d";
-    const end = quarantine ? 6400 : 3000;
+    const end = quarantine ? 6400 : 3400;
     const events: [number, StreamEvent][] = [
       [0, run("queued", 0)],
-      [80, run("started", 80)],
-      [120, podEv(120, "Pending", { labels_delta: { "sdp.hubertjablon.ski/quarantine": "false" } })],
+      [80, run("started", 80, "pod created")],
+      // The first observation carries every label; later ones only what changed.
+      [120, podEv(120, "Pending", { labels_delta: { "sdp.hubertjablon.ski/quarantine": "false", "sdp.hubertjablon.ski/run-id": runId } })],
       [620, podEv(620, "ContainerCreating", { reason: "ContainerCreating" })],
       [1880, podEv(1880, "Running", { container_id: cid })],
       [1920, run("pod_ready", 1920, cid)],
       [2010, victim(2010, { ...up }, 4)],
-      // The exec is sent at 1925; the victim app is hit and Falco sees the syscall almost at once.
+      // The exec is sent at 1925; Falco sees the syscall almost at once, the victim app changes a
+      // moment later (a defacement lands just after the alert).
       [2180, victim(2180, { ...hit }, 3)],
       [2240, {
         type: "falco",
@@ -270,37 +275,36 @@ export class MockBackend {
         },
       }],
       [2250, run("detected", 2250, scenario.detection)],
-      [2290, {
+      [2720, {
         type: "talon",
         data: {
-          at: at(2186),
+          at: at(2690),
           action: quarantine ? "Quarantine Pod" : "Terminate Pod",
           actionner: quarantine ? "kubernetes:label" : "kubernetes:terminate",
           namespace: "sandbox",
           pod,
           status: "success",
           output: quarantine ? `the pod '${pod}' in the namespace 'sandbox' has been labeled` : `the pod '${pod}' in the namespace 'sandbox' has been terminated`,
-          api_received_at: at(2201),
+          api_received_at: at(2703),
         },
       }],
     ];
     if (quarantine) {
       events.push(
-        [2300, podEv(2214, "Running", { container_id: cid, labels_delta: { "sdp.hubertjablon.ski/quarantine": "true" } })],
-        [2310, run("responded", 2310, "quarantine")],
-        [2520, { type: "flow", data: { run_id: runId, pod, at: at(2512), direction: "ingress", l4: "TCP/8080", verdict: "DROPPED", drop_reason: "Policy denied" } }],
-        [2820, victim(2820, { status: "unreachable", title: "", banner: "", checksum: "" }, 300)],
-        [3320, victim(3320, { status: "unreachable", title: "", banner: "", checksum: "" }, 300)],
+        [2730, podEv(2714, "Running", { container_id: cid, labels_delta: { "sdp.hubertjablon.ski/quarantine": "true" } })],
+        [2740, run("responded", 2740, "quarantine")],
+        [2960, { type: "flow", data: { run_id: runId, pod, at: at(2952), direction: "ingress", l4: "TCP/8080", verdict: "DROPPED", drop_reason: "Policy denied" } }],
+        [3180, victim(3180, { status: "unreachable", title: "", banner: "", checksum: "" }, 300)],
         [3540, { type: "flow", data: { run_id: runId, pod, at: at(3533), direction: "egress", l4: "UDP/53", verdict: "DROPPED", drop_reason: "Policy denied" } }],
         [6300, podEv(6300, "Terminating", { container_id: cid })],
         [6380, podEv(6380, "Deleted", { container_id: cid, deleted: true })],
       );
     } else {
       events.push(
-        [2300, podEv(2203, "Terminating", { container_id: cid })],
-        [2310, run("responded", 2310, "terminate")],
-        [2380, podEv(2251, "Deleted", { container_id: cid, deleted: true })],
-        [2700, victim(2700, { status: "gone", title: "", banner: "", checksum: "" }, 0)],
+        [2730, podEv(2707, "Terminating", { container_id: cid })],
+        [2740, run("responded", 2740, "terminate")],
+        [2800, podEv(2758, "Deleted", { container_id: cid, deleted: true })],
+        [3180, victim(3180, { status: "gone", title: "", banner: "", checksum: "" }, 0)],
       );
     }
     events.push([end, run("finished", end)]);

@@ -3,7 +3,7 @@
 // so an HTML sink would be both a vulnerability and a runtime error. scripts/check-dom-sinks.mjs
 // fails the lint if one appears anywhere in src/.
 
-type Child = Node | string | number | null | undefined | false;
+export type Child = Node | string | number | null | undefined | false;
 type Attrs = Record<string, string | number | boolean | null | undefined>;
 
 export function h<K extends keyof HTMLElementTagNameMap>(

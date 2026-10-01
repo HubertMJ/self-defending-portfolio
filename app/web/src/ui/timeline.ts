@@ -3,14 +3,18 @@
 
 import type { StreamEvent } from "../lib/contract";
 import { clockTime, h, replace } from "../lib/dom";
+import { humanAction } from "../lib/pipeline";
 import type { ConnectionState } from "../lib/sse";
 import { type RunView, type TimelineView, buildTimeline, formatDuration, ts } from "../lib/timeline";
+import { CONNECTION_LONG } from "./common";
 
-const MAX_LOG = 400;
+// A run with victim probes every 500 ms produces a few hundred events; keep a handful of runs' worth.
+const MAX_LOG = 1500;
 
 const STATE_LABEL: Record<string, string> = {
   queued: "Queued",
-  started: "Attacking",
+  started: "Attack running",
+  pod_ready: "Pod ready",
   detected: "Detected",
   responded: "Contained",
   finished: "Finished",
@@ -18,18 +22,13 @@ const STATE_LABEL: Record<string, string> = {
   timeout: "Timed out",
 };
 
-const CONNECTION_LABEL: Record<ConnectionState, string> = {
-  connecting: "Connecting to the event stream…",
-  open: "Live",
-  reconnecting: "Connection lost, reconnecting…",
-  offline: "Event stream offline, retrying",
-};
-
 export interface TimelineHandle {
   push(ev: StreamEvent): void;
   /** retryInMs: delay of the one scheduled retry (counted down here); gaveUp: retries have stopped. */
   setConnection(state: ConnectionState, retryInMs?: number, gaveUp?: boolean): void;
   setTitles(titles: Map<string, string>): void;
+  /** The run the live run panel shows, marked on its "Show" button (undefined: following live). */
+  setShown(runId: string | undefined): void;
 }
 
 function stage(opts: {
@@ -51,7 +50,7 @@ function stage(opts: {
   );
 }
 
-export function renderRun(run: RunView, title: string, openDetails: Set<string>): HTMLElement {
+export function renderRun(run: RunView, title: string, openDetails: Set<string>, onShow?: (runId: string) => void, shown?: string): HTMLElement {
   const falco = run.falco[0];
   const talon = run.talon[0];
   const startedAt = run.states.started ?? run.states.queued;
@@ -70,7 +69,7 @@ export function renderRun(run: RunView, title: string, openDetails: Set<string>)
         h("li", {}, h("span", { class: "tag tag--detect" }, "falco"), ` ${clockTime(ts(f.at))} `, h("strong", {}, f.priority), ` ${f.rule}`, h("code", { class: "run__output" }, f.output)),
       ),
       run.talon.map((t) =>
-        h("li", {}, h("span", { class: "tag tag--respond" }, "talon"), ` ${clockTime(ts(t.at))} `, h("code", {}, t.action), ` on ${t.namespace}/${t.pod}: `, h("strong", {}, t.status)),
+        h("li", {}, h("span", { class: "tag tag--respond" }, "talon"), ` ${clockTime(ts(t.at))} ${humanAction(t.action, t.actionner)} `, h("code", {}, t.actionner ?? t.action), ` on ${t.namespace}/${t.pod}: `, h("strong", {}, t.status)),
       ),
       run.falco.length + run.talon.length === 0 ? h("li", {}, "No Falco or Talon events for this run yet.") : null,
     ),
@@ -92,7 +91,7 @@ export function renderRun(run: RunView, title: string, openDetails: Set<string>)
     h(
       "ol",
       { class: "stages", "aria-label": "Run stages" },
-      stage({ key: "attack", title: "Attack", reached: startedAt !== undefined, at: startedAt, what: run.pod ? h("code", {}, run.pod) : run.scenario }),
+      stage({ key: "attack", title: "Attack", reached: startedAt !== undefined, at: startedAt, what: run.pod ? h("code", {}, run.pod) : "starting the pod…" }),
       stage({
         key: "detect",
         title: "Falco detected",
@@ -107,17 +106,33 @@ export function renderRun(run: RunView, title: string, openDetails: Set<string>)
         reached: respondedAt !== undefined,
         at: respondedAt,
         delta: run.timings.respondMs !== undefined ? `+${formatDuration(run.timings.respondMs)}` : undefined,
-        what: talon ? `${talon.action} → ${talon.status}` : undefined,
+        what: talon ? `${humanAction(talon.action, talon.actionner)}${talon.status === "success" ? "" : ` (${talon.status})`}` : undefined,
       }),
     ),
     h(
       "p",
       { class: "run__foot" },
       h("span", {}, "Run ", h("code", {}, run.runId)),
-      run.timings.totalMs !== undefined ? h("span", {}, `Total ${formatDuration(run.timings.totalMs)}`) : null,
+      run.timings.totalMs !== undefined
+        ? h(
+            "span",
+            {},
+            `Whole run ${formatDuration(run.timings.totalMs)}`,
+            // A quarantined pod is kept, isolated, for a while before the run ends; without saying so
+            // the long total reads as a slow response.
+            run.quarantinedAt !== undefined || run.talon.some((t) => /label/i.test(t.actionner ?? t.action)) ? " (pod start to clean-up, including the time held in quarantine)" : " (pod start to clean-up)",
+          )
+        : null,
       failed && run.detail ? h("span", { class: "run__fail" }, run.detail) : null,
     ),
     details,
+    onShow
+      ? (() => {
+          const b = h("button", { type: "button", class: "btn btn--ghost btn--small run__show", "data-focus-key": `show:${run.runId}`, "aria-pressed": String(shown === run.runId) }, "Show in the live run panel");
+          b.addEventListener("click", () => onShow(run.runId));
+          return b;
+        })()
+      : null,
   );
 }
 
@@ -127,7 +142,9 @@ export function announce(run: RunView, title: string): string {
     case "queued":
       return `${title}: queued.`;
     case "started":
-      return `${title}: attack running.`;
+      return `${title}: scenario pod starting.`;
+    case "pod_ready":
+      return `${title}: pod ready, attack command running.`;
     case "detected":
       return `${title}: detected by Falco after ${formatDuration(run.timings.detectMs)}.`;
     case "responded":
@@ -147,12 +164,14 @@ export function mountTimeline(
   liveEl: HTMLElement,
   onView: (view: TimelineView) => void,
   onRetry: () => void,
+  onShow?: (runId: string) => void,
 ): TimelineHandle {
   const log: StreamEvent[] = [];
   const openDetails = new Set<string>();
   let titles = new Map<string, string>();
   let lastAnnounced = "";
   let renderQueued = false;
+  let shown: string | undefined;
   // The one countdown of the connection line. Replaced, never stacked: every setConnection clears it.
   let countdownTimer: ReturnType<typeof setInterval> | undefined;
 
@@ -162,11 +181,15 @@ export function mountTimeline(
     renderQueued = false;
     const view = buildTimeline(log);
     onView(view);
+    // The list is rebuilt; a focused button inside it is found again by its data-focus-key.
+    const active = document.activeElement;
+    const focusKey = active instanceof HTMLElement && root.contains(active) ? active.dataset.focusKey : undefined;
     if (view.runs.length === 0) {
       replace(root, h("p", { class: "empty" }, "No runs yet. Launch an attack and it appears here as it happens."));
     } else {
-      replace(root, h("ol", { class: "runs", role: "list" }, view.runs.map((r) => renderRun(r, titleOf(r.scenario), openDetails))));
+      replace(root, h("ol", { class: "runs", role: "list" }, view.runs.map((r) => renderRun(r, titleOf(r.scenario), openDetails, onShow, shown))));
     }
+    if (focusKey) [...root.querySelectorAll<HTMLElement>("[data-focus-key]")].find((el) => el.dataset.focusKey === focusKey)?.focus();
     // Announce transitions of the newest run while it is active, plus the terminal state of a run
     // we were already announcing; replayed history from before the page loaded stays silent.
     const newest = view.runs[0];
@@ -200,7 +223,7 @@ export function mountTimeline(
         countdownTimer = undefined;
       }
       connEl.dataset.state = state;
-      const label = gaveUp ? "Live feed unavailable." : CONNECTION_LABEL[state];
+      const label = gaveUp ? "Offline: the live feed gave up retrying" : CONNECTION_LONG[state];
       const children: (Node | string)[] = [h("span", { class: "conn__dot", "aria-hidden": "true" }), label];
       if (state === "offline" || state === "reconnecting") {
         if (retryInMs !== undefined) {
@@ -229,6 +252,10 @@ export function mountTimeline(
     },
     setTitles(t) {
       titles = t;
+      schedule();
+    },
+    setShown(runId) {
+      shown = runId;
       schedule();
     },
   };

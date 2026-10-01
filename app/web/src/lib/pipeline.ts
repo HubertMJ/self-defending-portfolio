@@ -74,7 +74,7 @@ export function runHops(run: RunView): Hop[] {
   return [
     hop({ key: "create", stage: "attack", who: "kube-apiserver", what: "pod created", source: created ? "pod watch" : "run: started" }, created?.at ?? stateRaw("started")),
     hop({ key: "running", stage: "attack", who: "containerd", what: "container running", source: running ? "pod watch" : "run: pod_ready" }, running?.at ?? stateRaw("pod_ready")),
-    hop({ key: "exec", stage: "attack", who: "exec", what: "attack command runs", source: "run: pod_ready / started" }, execRaw),
+    hop({ key: "exec", stage: "attack", who: "exec", what: "attack command starts", source: "run: pod_ready / started" }, execRaw),
     hop({ key: "falco", stage: "detect", who: "Falco · eBPF", what: falco ? falco.rule : "syscall matched a rule", source: "falco event time" }, falco?.at),
     hop({ key: "sidekick", stage: "detect", who: "Falcosidekick", what: "alert forwarded", source: "falco: api_received_at" }, falco?.api_received_at),
     hop({ key: "talon", stage: "respond", who: "Falco Talon", what: talon ? humanAction(talon.action, talon.actionner) : "response decided", source: "talon event time" }, talon?.at),

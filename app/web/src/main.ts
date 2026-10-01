@@ -5,8 +5,11 @@ import { ApiClient } from "./lib/api";
 import { byId, h, prefersReducedMotion, replace } from "./lib/dom";
 import { MockBackend, mockOptionsFromUrl } from "./lib/mock";
 import { type ConnectionState, type EventSourceFactory, EventStream } from "./lib/sse";
+import { CONNECTION_WORD } from "./ui/common";
+import { mountConsole } from "./ui/console";
 import { mountPosture } from "./ui/posture";
 import { mountScenarios } from "./ui/scenarios";
+import { mountLimits, setupTechMode } from "./ui/tech";
 import { mountTimeline } from "./ui/timeline";
 
 const HIDDEN_DISCONNECT_MS = 60_000;
@@ -55,27 +58,55 @@ function main(): void {
 
   mountPosture(byId("posture-panel"), api);
 
-  const launcher = mountScenarios(byId("scenario-panel"), byId("launch-status"), api, (scenarios) => {
-    timeline.setTitles(new Map(scenarios.map((s) => [s.id, s.title])));
-  });
+  const limits = mountLimits(byId("limits-panel"), api);
+  setupTechMode(byId("tech-toggle"), (on) => limits.setEnabled(on));
 
+  const runConsole = mountConsole(byId("console"), api);
+
+  const launcher = mountScenarios(
+    byId("scenario-panel"),
+    byId("launch-status"),
+    api,
+    (scenarios) => {
+      timeline.setTitles(new Map(scenarios.map((s) => [s.id, s.title])));
+      runConsole.setScenarios(scenarios);
+    },
+    (runId) => {
+      runConsole.markOwn(runId);
+      timeline.setShown(undefined);
+      // On a phone the console is far below the button that was just pressed: take the visitor there.
+      runConsole.reveal();
+    },
+  );
+
+  // Same words as the timeline's connection line (ui/common.ts), so the two never disagree.
   const headerConn = byId("header-conn");
   const setHeaderConn = (state: ConnectionState) => {
     headerConn.dataset.state = state;
-    replace(headerConn, h("span", { class: "conn__dot", "aria-hidden": "true" }), state === "open" ? "cluster live" : state === "offline" ? "cluster offline" : "connecting");
+    replace(headerConn, h("span", { class: "conn__dot", "aria-hidden": "true" }), `cluster ${CONNECTION_WORD[state]}`);
   };
 
   // Assigned right below; the retry callback can only fire after the stream exists.
   let stream: EventStream | undefined;
+  let activeId: string | undefined;
   const timeline = mountTimeline(
     byId("timeline-panel"),
     byId("timeline-conn"),
     byId("timeline-live"),
     (view) => {
       const r = view.activeRun;
+      const wasActive = activeId;
+      activeId = r?.runId;
       launcher.setActiveRun(r ? { runId: r.runId, scenario: r.scenario, since: r.states.started ?? r.states.queued ?? Date.now() } : undefined);
+      runConsole.update(view);
+      if (wasActive && !activeId) limits.refresh();
     },
     () => stream?.retryNow(),
+    (runId) => {
+      runConsole.select(runId);
+      timeline.setShown(runId);
+      runConsole.reveal();
+    },
   );
 
   const events = new EventStream({

@@ -134,3 +134,10 @@ describe("buildTimeline with the extension events", () => {
     expect(v.runs[0].current).toBe("pod_ready");
   });
 });
+
+describe("detection latency with pod_ready", () => {
+  it("is measured from the attack command, not from the pod's creation", () => {
+    const v = buildTimeline([run("r1", "started", 0), run("r1", "pod_ready", 1800), falco("p1", 1900)], T0 + 2000);
+    expect(v.runs[0].timings.detectMs).toBe(100);
+  });
+});

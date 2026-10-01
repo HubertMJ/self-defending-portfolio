@@ -58,10 +58,10 @@ const EXEC: Record<string, string[]> = {
 };
 
 const FALCO_RULE: Record<string, SourceRef> = {
-  "shell-in-container": { name: "Terminal shell in container", file: "cluster/infra/falco/kustomization.yaml", line: 144 },
+  "shell-in-container": { name: "Terminal shell in container", file: "", line: 0 },
   "network-tool": { name: "SDP network tool in sandbox", file: "cluster/infra/falco/kustomization.yaml", line: 151 },
-  "sensitive-file-read": { name: "Read sensitive file untrusted", file: "cluster/infra/falco/kustomization.yaml", line: 144 },
-  "drop-and-execute": { name: "Drop and execute new binary in container", file: "cluster/infra/falco/kustomization.yaml", line: 144 },
+  "sensitive-file-read": { name: "Read sensitive file untrusted", file: "", line: 0 },
+  "drop-and-execute": { name: "Drop and execute new binary in container", file: "", line: 0 },
 };
 
 const TALON_RULE: Record<string, SourceRef> = {
@@ -80,11 +80,13 @@ export function scenarioDetails(id: string): ScenarioDetails | null {
       runAsUser: 10001,
       runAsNonRoot: true,
       readOnlyRootFilesystem: id !== "drop-and-execute",
+      allowPrivilegeEscalation: false,
       capabilities_drop: ["ALL"],
       seccomp: "RuntimeDefault",
       automountServiceAccountToken: false,
     },
     resources: { "requests.cpu": "10m", "requests.memory": "16Mi", "limits.cpu": "100m", "limits.memory": "32Mi" },
+    // (the API sends {requests: {...}, limits: {...}}; parseScenarioDetails flattens it to these keys)
     image: { ref: SCENARIO_IMAGE, digest: SCENARIO_IMAGE.slice(SCENARIO_IMAGE.indexOf("@") + 1) },
     falco_rule: FALCO_RULE[id],
     talon_rule: TALON_RULE[id],
@@ -96,22 +98,23 @@ export function scenarioDetails(id: string): ScenarioDetails | null {
       { kind: "CiliumClusterwideNetworkPolicy", name: "quarantine", file: "cluster/infra/sandbox/quarantine-ccnp.yaml" },
     ],
     commit: MOCK_COMMIT,
+    exec_tty: id === "shell-in-container",
     victim: true,
   };
 }
 
-/** What the victim app reports in each phase of a scenario, as the scenario image is expected to. */
+/** What the victim app reports in each phase of a scenario (the scenario image's /state.json). */
 export function victimScript(id: string): { status: VictimStatus; title: string; banner: string; checksum: string }[] {
-  const shop = { status: "up" as const, title: "SDP Shop", banner: "Autumn sale: hardened containers, 20% off", checksum: "5e0c1a77d3b2f190" };
+  const shop = { status: "up" as const, title: "SDP Shop", banner: "Open for business", checksum: "5e0c1a77d3b2f190" };
   switch (id) {
     case "shell-in-container":
-      return [shop, { status: "defaced", title: "pwned", banner: "This shop was defaced from a shell inside its own container", checksum: "d3fac3d0badc0de1" }];
+      return [shop, { status: "defaced", title: "H4CK3D - SDP Shop", banner: "Page defaced from an interactive shell", checksum: "d3fac3d0badc0de1" }];
     case "network-tool":
-      return [shop, { status: "compromised", title: "SDP Shop", banner: "Beaconing to a command-and-control server…", checksum: "c2c2b3ac00000001" }];
+      return [shop, { status: "compromised", title: "SDP Shop", banner: "Beaconing to a command-and-control server", checksum: "5e0c1a77d3b2f190" }];
     case "sensitive-file-read":
-      return [shop, { status: "compromised", title: "SDP Shop", banner: "Credential file /etc/shadow was read", checksum: "5ad0e5c4ed000002" }];
+      return [shop, { status: "compromised", title: "SDP Shop", banner: "Customer data exfiltrated", checksum: "5e0c1a77d3b2f190" }];
     default:
-      return [shop, { status: "compromised", title: "SDP Shop", banner: "Unknown binary /tmp/busybox is running", checksum: "d40bb1a4e5000003" }];
+      return [shop, { status: "compromised", title: "SDP Shop", banner: "Compromised: unknown binary running", checksum: "5e0c1a77d3b2f190" }];
   }
 }
 

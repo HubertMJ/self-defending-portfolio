@@ -23,6 +23,8 @@ export interface Scenario {
   /** Falco rule name that is expected to fire */
   detection: string;
   response: ResponseAction | string;
+  /** Extension: whether the scenario pod runs the victim app (absent from older APIs). */
+  victim?: boolean;
 }
 
 export const RUN_STATES = [
@@ -170,6 +172,7 @@ export interface ScenarioDetails {
     runAsUser?: number;
     runAsNonRoot?: boolean;
     readOnlyRootFilesystem?: boolean;
+    allowPrivilegeEscalation?: boolean;
     capabilities_drop: string[];
     seccomp?: string;
     automountServiceAccountToken?: boolean;
@@ -179,6 +182,7 @@ export interface ScenarioDetails {
   falco_rule?: SourceRef;
   talon_rule?: SourceRef;
   policies: { kind: string; name: string; file: string }[];
+  exec_tty?: boolean;
   /** The API build's git commit: file links point at exactly the code that ran. */
   commit: string;
   victim: boolean;
@@ -401,9 +405,11 @@ export const isRepoPath = (v: unknown): v is string =>
   isStr(v) && v.length <= 200 && /^[A-Za-z0-9_][A-Za-z0-9_./-]*$/.test(v) && !v.includes("..");
 export const isCommit = (v: unknown): v is string => isStr(v) && /^[0-9a-f]{7,40}$/.test(v);
 
+/** A rule reference. A stock rule (shipped in the Falco image, not in this repository) has file "". */
 function sourceRef(v: unknown): SourceRef | undefined {
-  if (!isObj(v) || !isStr(v.name) || !isRepoPath(v.file)) return undefined;
-  return { name: cap(v.name, 200), file: v.file, line: isLine(v.line) ? v.line : 1 };
+  if (!isObj(v) || !isStr(v.name) || !v.name) return undefined;
+  const file = isRepoPath(v.file) ? v.file : "";
+  return { name: cap(v.name, 200), file, line: file && isLine(v.line) ? v.line : 0 };
 }
 
 /**
@@ -428,6 +434,7 @@ export function parseScenarioDetails(v: unknown): ScenarioDetails {
       runAsUser: typeof ps.runAsUser === "number" ? ps.runAsUser : undefined,
       runAsNonRoot: isBool(ps.runAsNonRoot) ? ps.runAsNonRoot : undefined,
       readOnlyRootFilesystem: isBool(ps.readOnlyRootFilesystem) ? ps.readOnlyRootFilesystem : undefined,
+      allowPrivilegeEscalation: isBool(ps.allowPrivilegeEscalation) ? ps.allowPrivilegeEscalation : undefined,
       capabilities_drop: Array.isArray(ps.capabilities_drop) ? ps.capabilities_drop.filter(isStr).slice(0, 40).map((c) => cap(c, 40)) : [],
       seccomp: optStr(ps.seccomp, 60),
       automountServiceAccountToken: isBool(ps.automountServiceAccountToken) ? ps.automountServiceAccountToken : undefined,
@@ -443,6 +450,7 @@ export function parseScenarioDetails(v: unknown): ScenarioDetails {
           .map((p) => ({ kind: cap(p.kind, 60), name: cap(p.name, 120), file: isRepoPath(p.file) ? p.file : "" }))
       : [],
     commit: isCommit(v.commit) ? v.commit : "",
+    exec_tty: isBool(v.exec_tty) ? v.exec_tty : undefined,
     victim: v.victim === true,
   };
 }

@@ -56,7 +56,7 @@ export interface RunView {
   /** When the quarantine label turned "true" (ms), if it did. */
   quarantinedAt?: number;
   timings: {
-    /** started -> first detection (run "detected" or first Falco alert, whichever is earlier) */
+    /** attack command (pod_ready, else started) -> first detection (run "detected" or first Falco alert, whichever is earlier) */
     detectMs?: number;
     /** detection -> first response (run "responded" or first Talon action, whichever is earlier) */
     respondMs?: number;
@@ -199,7 +199,10 @@ export function buildTimeline(events: readonly StreamEvent[], now: number = Date
     const detected = minDefined(r.states.detected, r.falco[0] && ts(r.falco[0].at));
     const responded = minDefined(r.states.responded, r.talon[0] && ts(r.talon[0].at));
     const finished = minDefined(r.states.finished, r.states.failed, r.states.timeout);
-    if (started !== undefined && detected !== undefined) r.timings.detectMs = Math.max(0, detected - started);
+    // Detection is measured from the attack command: "pod_ready" when the API reports it (then
+    // "started" is the pod's creation, seconds earlier), else "started", which used to be the exec.
+    const attacked = r.states.pod_ready ?? started;
+    if (attacked !== undefined && detected !== undefined) r.timings.detectMs = Math.max(0, detected - attacked);
     if (detected !== undefined && responded !== undefined) r.timings.respondMs = Math.max(0, responded - detected);
     if (started !== undefined && finished !== undefined) r.timings.totalMs = Math.max(0, finished - started);
   }

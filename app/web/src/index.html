@@ -33,6 +33,9 @@
     </nav>
     <div class="site-header__tools">
       <p class="conn conn--header" id="header-conn" data-state="connecting"><span class="conn__dot" aria-hidden="true"></span>static</p>
+      <button type="button" class="tech-toggle" id="tech-toggle" hidden aria-pressed="false" title="Show raw events, Falco fields, Talon parameters, policies and limits">
+        <span class="tech-toggle__icon" aria-hidden="true">{ }</span><span class="tech-toggle__label">Technical<span class="tech-toggle__more"> mode</span></span>
+      </button>
       <button type="button" class="theme-toggle" id="theme-toggle" hidden aria-label="Switch theme">
         <span class="theme-toggle__icon" aria-hidden="true"></span>
       </button>
@@ -103,22 +106,26 @@
           a few per visitor.
         </p>
       </header>
-      <div class="attack-grid">
-        <div class="launcher">
-          <h3 class="panel-title">Scenarios</h3>
-          <p class="launch-status" id="launch-status" role="status" aria-live="polite"></p>
-          <div class="panel panel--flush" id="scenario-panel" aria-busy="true" data-state="loading">
-            <p class="loading">Loading scenarios…</p>
-          </div>
+      <div class="launcher">
+        <h3 class="panel-title">Scenarios</h3>
+        <p class="launch-status" id="launch-status" role="status" aria-live="polite"></p>
+        <div class="panel panel--flush" id="scenario-panel" aria-busy="true" data-state="loading">
+          <p class="loading">Loading scenarios…</p>
         </div>
-        <div class="timeline" id="timeline" aria-labelledby="timeline-title">
-          <div class="timeline__head">
-            <h3 class="panel-title" id="timeline-title">Live timeline</h3>
-            <p class="conn" id="timeline-conn" data-state="connecting"><span class="conn__dot" aria-hidden="true"></span>Waiting for JavaScript…</p>
-          </div>
-          <p class="visually-hidden" id="timeline-live" aria-live="polite" aria-atomic="true"></p>
-          <div class="panel panel--flush" id="timeline-panel"></div>
+        <div class="limits-panel tech-only" id="limits-panel" aria-live="polite"></div>
+      </div>
+
+      <section class="console" id="console" aria-labelledby="console-title" data-state="empty">
+        <noscript><p class="offline__body">The live run panel needs JavaScript.</p></noscript>
+      </section>
+
+      <div class="timeline" id="timeline" aria-labelledby="timeline-title">
+        <div class="timeline__head">
+          <h3 class="panel-title" id="timeline-title">Run history</h3>
+          <p class="conn" id="timeline-conn" data-state="connecting"><span class="conn__dot" aria-hidden="true"></span>Waiting for JavaScript…</p>
         </div>
+        <p class="visually-hidden" id="timeline-live" aria-live="polite" aria-atomic="true"></p>
+        <div class="panel panel--flush" id="timeline-panel"></div>
       </div>
     </div>
   </section>

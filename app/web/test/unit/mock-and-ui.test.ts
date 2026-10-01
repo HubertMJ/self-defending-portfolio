@@ -41,7 +41,7 @@ describe("MockBackend", () => {
     await settle(200);
     expect((await busy).kind).toBe("busy");
 
-    await settle(3000);
+    await settle(4000);
     const states = seen.filter((e) => e.type === "run").map((e) => (e.data as { state: string }).state);
     expect(states).toEqual(["queued", "started", "pod_ready", "detected", "responded", "finished"]);
     for (const e of seen) {
@@ -184,7 +184,8 @@ describe("extension payloads", () => {
     expect(d.exec_command).toEqual(["sh", "-c", "id"]);
     expect(d.resources).toEqual({ "limits.cpu": "100m", memory: "32Mi" });
     expect(d.falco_rule?.line).toBe(12);
-    expect(d.talon_rule).toBeUndefined();
+    // A forged path loses its link, not the rule: shown by name only, like a stock Falco rule.
+    expect(d.talon_rule).toEqual({ name: "t", file: "", line: 0 });
     expect(d.policies[0].file).toBe("");
     expect(parseScenarioDetails({ commit: "javascript:x" }).commit).toBe("");
   });
@@ -215,7 +216,7 @@ describe("MockBackend extension endpoints and events", () => {
     const types = new Set(seen.map((e) => e.type));
     expect([...types].sort()).toEqual(["falco", "flow", "pod", "run", "talon", "victim"]);
     const victims = seen.filter((e) => e.type === "victim").map((e) => JSON.parse(e.raw).status);
-    expect(victims).toEqual(["up", "compromised", "unreachable", "unreachable"]);
+    expect(victims).toEqual(["up", "compromised", "unreachable"]);
   });
 
   it("serves details (or a 404 when told to), limits and a run's events", async () => {

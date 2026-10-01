@@ -38,18 +38,18 @@ function replayedRun() {
   const cid = "9b2e7c4d1a0f";
   return [
     ["run", { run_id, scenario, state: "queued", at: at(0), detail: "" }],
-    ["run", { run_id, scenario, state: "started", at: at(60), detail: "", pod }],
-    podEv(90, "Pending"),
+    ["run", { run_id, scenario, state: "started", at: at(60), detail: "pod created", pod }],
+    podEv(90, "Pending", { labels_delta: { "sdp.hubertjablon.ski/quarantine": "false", "sdp.hubertjablon.ski/run-id": run_id } }),
     podEv(1750, "Running", { container_id: cid }),
     ["run", { run_id, scenario, state: "pod_ready", at: at(1790), detail: cid, pod }],
-    ["victim", { run_id, pod, at: at(1850), status: "up", title: "SDP Shop", banner: "Autumn sale: hardened containers, 20% off", probe_ms: 4, checksum: "5e0c1a77d3b2f190" }],
-    ["victim", { run_id, pod, at: at(1990), status: "defaced", title: "pwned", banner: "This shop was defaced from a shell inside its own container", probe_ms: 3, checksum: "d3fac3d0badc0de1" }],
+    ["victim", { run_id, pod, at: at(1850), status: "up", title: "SDP Shop", banner: "Open for business", probe_ms: 4, checksum: "5e0c1a77d3b2f190" }],
+    ["victim", { run_id, pod, at: at(1990), status: "defaced", title: "H4CK3D - SDP Shop", banner: "Page defaced from an interactive shell", probe_ms: 3, checksum: "d3fac3d0badc0de1" }],
     ["falco", { at: at(1931), rule: "Terminal shell in container", priority: "Notice", namespace: "sandbox", pod, output: `Notice A shell was spawned in a container with an attached terminal | user=<NA> user_uid=10001 process=sh command=sh -c id; hostname; sleep 60 container_id=${cid} k8s_ns=sandbox k8s_pod_name=${pod}`, fields: { "evt.type": "execve", "proc.name": "sh", "proc.cmdline": "sh -c id; hostname; sleep 60", "proc.pname": "runc", "user.name": "<NA>", "user.uid": 10001, "container.id": cid, "container.image.repository": "ghcr.io/hubertmj/self-defending-portfolio/scenario", "k8s.pod.name": pod, "k8s.ns.name": "sandbox" }, api_received_at: at(1957) }],
     ["run", { run_id, scenario, state: "detected", at: at(1960), detail: "Terminal shell in container", pod }],
     ["talon", { at: at(1986), action: "Terminate Pod", actionner: "kubernetes:terminate", namespace: "sandbox", pod, status: "success", output: `the pod '${pod}' in the namespace 'sandbox' has been terminated`, api_received_at: at(1999) }],
     podEv(2004, "Terminating", { container_id: cid }),
     ["run", { run_id, scenario, state: "responded", at: at(2010), detail: "terminate", pod }],
-    podEv(2051, "Deleted", { container_id: cid, deleted: true }),
+    podEv(2051, "Deleted", { container_id: cid, deleted: true, labels_delta: {} }),
     ["victim", { run_id, pod, at: at(2350), status: "gone", title: "", banner: "", probe_ms: 0, checksum: "" }],
     ["run", { run_id, scenario, state: "finished", at: at(2600), detail: "", pod }],
   ];

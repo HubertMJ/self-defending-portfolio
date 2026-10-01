@@ -46,11 +46,12 @@ export function blockedReason(state: LauncherState, now: number): string | null 
 export function describeAttackResult(r: AttackResult, scenarioTitle: string): { tone: "ok" | "warn" | "error"; text: string } {
   switch (r.kind) {
     case "accepted":
-      return { tone: "ok", text: `“${scenarioTitle}” queued as run ${r.run.run_id}. Follow it in the live timeline.` };
+      return { tone: "ok", text: `“${scenarioTitle}” queued as run ${r.run.run_id}. Watch it play out in the live run below.` };
     case "busy":
       return { tone: "warn", text: "Another visitor’s run is in progress. Only one attack runs at a time; the buttons unlock when it finishes." };
     case "rate-limited":
-      return { tone: "warn", text: `Rate limit reached. You can launch again in ${formatCountdown(r.retryAfterSeconds)}.` };
+      // The countdown itself is rendered live at the end of this line (see mountScenarios).
+      return { tone: "warn", text: `Rate limit reached: a few attacks per 10 minutes per network address, shared by everyone behind the same NAT. You can launch again in ${formatCountdown(r.retryAfterSeconds)}.` };
     case "unknown-scenario":
       return { tone: "error", text: "That scenario no longer exists on the server. The list has been reloaded." };
     case "offline":
@@ -65,16 +66,19 @@ export function mountScenarios(
   statusEl: HTMLElement,
   api: ApiClient,
   onLoaded?: (scenarios: Scenario[]) => void,
+  onAccepted?: (runId: string) => void,
 ): Launcher {
   const state: LauncherState = {};
   let scenarios: Scenario[] = [];
   const buttons = new Map<string, HTMLButtonElement>();
-  const countdown = h("span", { class: "launcher__countdown", "aria-hidden": "true" });
+  // The live countdown sits inside the status line, after the sentence that explains it. It is
+  // aria-hidden: the sentence already says how long, and a screen reader must not hear every second.
+  const countdown = h("span", { class: "launch-status__countdown", "aria-hidden": "true" });
   let ticker: ReturnType<typeof setInterval> | undefined;
 
   const say = (tone: "ok" | "warn" | "error" | "info", text: string) => {
     statusEl.dataset.tone = tone;
-    replace(statusEl, text);
+    replace(statusEl, h("span", {}, text), state.cooldownUntil ? countdown : null);
   };
 
   const sync = () => {
@@ -89,6 +93,7 @@ export function mountScenarios(
     }
     if (state.cooldownUntil && state.cooldownUntil > now) {
       replace(countdown, `Unlocks in ${formatCountdown((state.cooldownUntil - now) / 1000)}`);
+      if (!countdown.isConnected) statusEl.append(countdown);
       if (!ticker) ticker = setInterval(sync, 1000);
     } else {
       replace(countdown);
@@ -113,6 +118,7 @@ export function mountScenarios(
     if (result.kind === "accepted") {
       // Lock immediately; the stream's "queued" event confirms it a moment later.
       state.activeRun ??= { runId: result.run.run_id, scenario: s.id, since: Date.now() };
+      onAccepted?.(result.run.run_id);
     } else if (result.kind === "rate-limited") {
       state.cooldownUntil = Date.now() + result.retryAfterSeconds * 1000;
     } else if (result.kind === "unknown-scenario") {
@@ -181,7 +187,6 @@ export function mountScenarios(
       scenarios.length
         ? h("ul", { class: "scenarios", role: "list" }, scenarios.map(card))
         : h("p", { class: "empty" }, "No scenarios are configured on the server."),
-      countdown,
     );
     sync();
   };
