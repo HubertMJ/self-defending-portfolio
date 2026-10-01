@@ -1757,6 +1757,13 @@ html:not([data-tech="on"]) .tech-only {
   }
 }
 
+@media (min-width: 900px) {
+  /* The window is the visual anchor of the row; give it the height of the cards beside it. */
+  .browser__view {
+    min-height: 21rem;
+  }
+}
+
 .console__side {
   display: grid;
   gap: 1.25rem;

@@ -275,11 +275,15 @@ test.describe("event stream reconnects", () => {
     const samples = new Map<string, number[]>();
     const deadline = Date.now() + 45_000;
     while (Date.now() < deadline && (await conn.getAttribute("data-state")) !== "open") {
-      const retry = conn.locator(".conn__retry");
-      if (await retry.count()) {
-        const key = (await retry.getAttribute("data-deadline")) ?? "";
-        const m = /next attempt in (\d+) s/.exec((await retry.textContent()) ?? "");
-        if (key && m) samples.set(key, [...(samples.get(key) ?? []), Number(m[1])]);
+      // Key and text read in one evaluation: two separate reads could straddle a new attempt and
+      // pair the old attempt's key with the new countdown.
+      const sample = await conn.evaluate((el) => {
+        const r = el.querySelector(".conn__retry");
+        return r ? { key: r.getAttribute("data-deadline") ?? "", text: r.textContent ?? "" } : null;
+      });
+      if (sample) {
+        const m = /next attempt in (\d+) s/.exec(sample.text);
+        if (sample.key && m) samples.set(sample.key, [...(samples.get(sample.key) ?? []), Number(m[1])]);
       }
       await page.waitForTimeout(100);
     }

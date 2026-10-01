@@ -13,8 +13,12 @@ src/theme.ts           tiny blocking script: applies a stored theme before first
 src/lib/contract.ts    API types and runtime guards (phase 5/6 contract)
 src/lib/api.ts         HTTP client: timeouts, 202/404/409/429 + Retry-After
 src/lib/sse.ts         reconnecting EventSource: backoff + jitter, replay dedup
-src/lib/timeline.ts    event log -> runs with detection/response latencies
+src/lib/timeline.ts    event log -> runs with detection/response latencies, pod/victim/flow events per run
+src/lib/pipeline.ts    a run's eight pipeline hops, the replay schedule (600 ms dwell) and the kill-timer
 src/lib/mock.ts        in-page fake API for ?mock=1, dev and tests
+src/ui/console.ts      the live run console: pipeline, kill-timer, pod, what was executed, proof, verify
+src/ui/victim.ts       the victim app as a browser window, drawn from the probe's fields (text only)
+src/ui/tech.ts         Technical Mode (html[data-tech], .tech-only) and the rate-limit panel
 src/lib/dom.ts         the only DOM builder: text nodes, never HTML strings
 static/                copied verbatim (favicon, robots.txt)
 nginx.conf             server config; security-headers.conf is included in every location
@@ -33,8 +37,11 @@ npm run dev                       # rebuild on change (index.html changes need a
 
 Mock mode is also available on the live site with `?mock=1` and is announced by a banner; it never
 calls the API. Extra knobs: `&mock-speed=0.2` (faster runs), `&mock-limit=1` (hit the 429 sooner),
-`&mock-stream-refuse=3&mock-stream-retry-after=2` (the event stream is refused with 429 first) and
-`&mock-stream-stall=1` (the first accepted stream delivers nothing and dies).
+`&mock-stream-refuse=3&mock-stream-retry-after=2` (the event stream is refused with 429 first),
+`&mock-stream-stall=1` (the first accepted stream delivers nothing and dies), `&mock-visitor=500`
+(another visitor starts a quarantine run after 500 ms, watched read-only) and `&mock-details=0`
+(no /api/scenarios/{id}/details, as an API without the extension). `serve.mjs --stub-events` replays
+one full run with every event type over a real event stream.
 
 ## Check
 
