@@ -83,6 +83,72 @@ export function shellJoin(argv: readonly string[]): string {
   return argv.map((a) => (/^[\w@%+=:,./-]+$/.test(a) ? a : `'${a.replace(/'/g, `'\\''`)}'`)).join(" ");
 }
 
+/**
+ * Splits a shell script into lines at its top-level `&&` and `;` -- outside quotes only -- keeping
+ * `&&` at the end of its line and dropping the `;`. A line break is what both already mean to sh
+ * (a command list may continue after `&&` on the next line, and a newline ends a command like `;`),
+ * so the lines are the same script, laid out to be read. Nothing inside quotes is touched.
+ */
+export function scriptLines(script: string): string[] {
+  const lines: string[] = [];
+  let cur = "";
+  let quote: string | null = null;
+  for (let i = 0; i < script.length; i++) {
+    const c = script[i];
+    if (quote) {
+      if (c === quote) quote = null;
+      else if (c === "\\" && quote === '"') {
+        cur += c + (script[i + 1] ?? "");
+        i += 1;
+        continue;
+      }
+      cur += c;
+      continue;
+    }
+    if (c === "'" || c === '"') quote = c;
+    if (c === "&" && script[i + 1] === "&") {
+      lines.push(`${cur.trim()} &&`);
+      cur = "";
+      i += 1;
+      continue;
+    }
+    if (c === ";") {
+      lines.push(cur.trim());
+      cur = "";
+      continue;
+    }
+    cur += c;
+  }
+  if (cur.trim()) lines.push(cur.trim());
+  return lines.filter((l) => l !== "");
+}
+
+/**
+ * How the exec reads best: for `sh -c <script>` the script argument as indented lines (scriptLines)
+ * rather than one shell-quoted line full of '\'' escapes; anything else is the quoted argv.
+ */
+export function commandText(argv: readonly string[]): string {
+  if (argv.length === 3 && /^(\/bin\/)?(ba)?sh$/.test(argv[0]) && argv[1] === "-c") {
+    return `${argv[0]} -c\n${scriptLines(argv[2]).map((l) => `  ${l}`).join("\n")}`;
+  }
+  return shellJoin(argv);
+}
+
+/** A command as a terminal block, one script line per row (commandText). */
+function term(argv: readonly string[]): HTMLElement {
+  return h(
+    "pre",
+    { class: "term term--script" },
+    h(
+      "code",
+      {},
+      commandText(argv)
+        .split("\n")
+        .map((line, i) => h("span", { class: "term__line" }, i === 0 ? h("span", { class: "term__prompt", "aria-hidden": "true" }, "$ ") : null, line.trimStart())),
+    ),
+  );
+}
+
 export function cosignCommand(image: string): string {
   return [`cosign verify ${image}`, `  --certificate-identity ${COSIGN_IDENTITY}`, `  --certificate-oidc-issuer ${COSIGN_ISSUER}`].join(" \\\n");
 }
@@ -192,22 +258,27 @@ export function mountConsole(root: HTMLElement, api: ApiClient): ConsoleHandle {
     panels.timerValue.textContent = reading === undefined ? (failed ? "—" : "0.000") : (reading / 1000).toFixed(3);
     panels.timerLabel.textContent = contained
       ? hops[TIMER_END].what === "quarantine label set"
-        ? "from the attack command to the pod quarantined"
-        : "from the attack command to the pod deleted"
+        ? "from the syscall Falco caught to the pod quarantined"
+        : "from the syscall Falco caught to the pod deleted"
       : failed
         ? "the response never arrived"
         : reading !== undefined
-          ? "attack running, waiting for the response…"
-          : "starts when the attack command runs";
+          ? "detected, waiting for the response…"
+          : run.active
+            ? "starts when Falco catches the attack"
+            : "Falco reported no detection";
 
     // Replay badge.
     const replaying = moving && (replays.has(run.runId) || !instant.has(run.runId));
     let badge = "";
     if (s.realSpanMs !== undefined && frontier >= TIMER_START + 1) {
       const real = formatDuration(s.realSpanMs);
-      if (reduced) badge = `Shown in real time · the whole chain took ${real}`;
-      else if (s.slowdown > 1 && (replaying || replays.has(run.runId) || !instant.has(run.runId))) badge = `${replaying ? "Replaying" : "Replayed"} at 1/${s.slowdown} speed · in reality the whole chain took ${real}`;
-      else badge = `The whole chain took ${real}`;
+      // The same stretch as the kill-timer (detected syscall to the response in the API server), so
+      // the badge and the big number can never disagree.
+      const span = `real: ${real} from the detected syscall to ${hops[TIMER_END].what}`;
+      if (reduced) badge = `Shown in real time · ${span}`;
+      else if (s.slowdown > 1 && (replaying || replays.has(run.runId) || !instant.has(run.runId))) badge = `${replaying ? "Replaying" : "Replayed"} at 1/${s.slowdown} speed · ${span}`;
+      else badge = span.charAt(0).toUpperCase() + span.slice(1);
     }
     if (panels.badge.textContent !== badge) panels.badge.textContent = badge;
     panels.badge.hidden = badge === "";
@@ -219,18 +290,21 @@ export function mountConsole(root: HTMLElement, api: ApiClient): ConsoleHandle {
     }
   };
 
+  // Times on the wire: the first hop as a clock time, the run-up to the detection relative to the
+  // pod's creation, the detected syscall as t = 0 and the response chain relative to it.
   const hopTime = (hops: Hop[], i: number): string => {
     const hp = hops[i];
     if (hp.at === undefined) return "";
     if (i === 0) return clockTime(hp.at);
-    const exec = hops[TIMER_START].at;
-    if (i < TIMER_START || exec === undefined) {
+    const zero = hops[TIMER_START].at;
+    if (i < TIMER_START || zero === undefined) {
       const create = hops[0].at;
       return create !== undefined ? `+${formatDuration(hp.at - create)}` : clockTime(hp.at);
     }
     if (i === TIMER_START) return "t = 0";
-    const d = hp.at - exec;
-    return d < 0 ? `−${formatDuration(-d)}` : `+${formatDuration(d)}`;
+    const d = hp.at - zero;
+    const le = hp.bound ? "≤ " : "";
+    return d < 0 ? `${le}−${formatDuration(-d)}` : `${le}+${formatDuration(d)}`;
   };
 
   const scheduleTick = () => {
@@ -413,7 +487,14 @@ export function mountConsole(root: HTMLElement, api: ApiClient): ConsoleHandle {
     };
     return [
       title,
-      h("pre", { class: "term" }, h("code", {}, h("span", { class: "term__prompt", "aria-hidden": "true" }, "$ "), shellJoin(v.exec_command))),
+      v.pre_exec_command.length
+        ? h(
+            "ol",
+            { class: "steps" },
+            h("li", {}, h("p", { class: "steps__k" }, "Prepare, no terminal"), term(v.pre_exec_command)),
+            h("li", {}, h("p", { class: "steps__k" }, v.exec_tty ? "Attack, in an interactive terminal" : "Attack"), term(v.exec_command)),
+          )
+        : term(v.exec_command),
       h(
         "ul",
         { class: "guards", "aria-label": "Restrictions the pod ran under" },
@@ -602,7 +683,7 @@ export function mountConsole(root: HTMLElement, api: ApiClient): ConsoleHandle {
     const dKey = d === undefined || d === "loading" ? "l" : d.ok ? "ok" : "no";
     patch(p, "head", `${run.current}|${run.active}|${own.has(run.runId)}|${run.pod}|${selected}|${scenarios.size}|${view.activeRun?.runId}`, () => headPanel(run));
     const vKey = run.victim.map((v) => `${v.status}${v.checksum}${v.until}`).join(",");
-    patch(p, "victim", `${vKey}|${run.active}|${run.pod}`, () => renderVictim(run, run.active && !own.has(run.runId)));
+    patch(p, "victim", `${vKey}|${run.active}|${run.pod}|${run.pods[run.pods.length - 1]?.phase}`, () => renderVictim(run, run.active && !own.has(run.runId)));
     patch(p, "pod", `${run.pods.length}|${run.pod}`, () => podPanel(run));
     patch(p, "executed", `${dKey}|${scenarios.size}`, () => executedPanel(run));
     patch(p, "proof", `${run.pods.length}|${vKey}|${run.flows.length}|${run.talon.length}|${scenarios.size}`, () => proofPanel(run));

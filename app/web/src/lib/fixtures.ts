@@ -50,11 +50,16 @@ export const MOCK_COMMIT = "a7cc041";
 export const SCENARIO_IMAGE =
   "ghcr.io/hubertmj/self-defending-portfolio/scenario@sha256:abe9585fe91fec1881895ae79418f6b756a4ca094c9e5e7f0b3dd8a1a76cdea0";
 
+// The exec commands of the live catalogue: each first changes the victim shop, then attacks.
+// shell-in-container defaces the shop in a pre_exec (no TTY), then opens the shell Falco detects.
+const PRE_EXEC: Record<string, string[]> = {
+  "shell-in-container": ["sh", "-c", "cd /srv/shop && echo '<h1>SDP Shop has been defaced</h1><p>Owned through remote code execution.</p>' > .index && mv .index index.html && echo '{\"status\":\"defaced\",\"title\":\"H4CK3D - SDP Shop\",\"banner\":\"Page defaced, attacker opening a shell\"}' > .state && mv .state state.json && sleep 1.5"],
+};
 const EXEC: Record<string, string[]> = {
   "shell-in-container": ["sh", "-c", "id; hostname; sleep 60"],
-  "network-tool": ["wget", "-q", "-T", "2", "-O", "/dev/null", "http://127.0.0.1:9/"],
-  "sensitive-file-read": ["cat", "/etc/shadow"],
-  "drop-and-execute": ["sh", "-c", "cp /bin/busybox /tmp/busybox && exec /tmp/busybox sleep 60"],
+  "network-tool": ["sh", "-c", "cd /srv/shop && echo '{\"status\":\"compromised\",\"title\":\"SDP Shop\",\"banner\":\"Beaconing to a command-and-control server\"}' > .state && mv .state state.json && sleep 1 && exec wget -q -T 2 -O /dev/null http://127.0.0.1:9/"],
+  "sensitive-file-read": ["sh", "-c", "cd /srv/shop && echo '{\"status\":\"compromised\",\"title\":\"SDP Shop\",\"banner\":\"Customer data exfiltrated\"}' > .state && mv .state state.json && sleep 1 && exec cat /etc/shadow"],
+  "drop-and-execute": ["sh", "-c", "cd /srv/shop && echo '{\"status\":\"compromised\",\"title\":\"SDP Shop\",\"banner\":\"Compromised: unknown binary running\"}' > .state && mv .state state.json && sleep 1 && cp /bin/busybox /tmp/busybox && exec /tmp/busybox sleep 60"],
 };
 
 const FALCO_RULE: Record<string, SourceRef> = {
@@ -75,6 +80,7 @@ const TALON_RULE: Record<string, SourceRef> = {
 export function scenarioDetails(id: string): ScenarioDetails | null {
   if (!EXEC[id]) return null;
   return {
+    pre_exec_command: PRE_EXEC[id] ?? [],
     exec_command: EXEC[id],
     pod_security: {
       runAsUser: 10001,
@@ -108,7 +114,7 @@ export function victimScript(id: string): { status: VictimStatus; title: string;
   const shop = { status: "up" as const, title: "SDP Shop", banner: "Open for business", checksum: "5e0c1a77d3b2f190" };
   switch (id) {
     case "shell-in-container":
-      return [shop, { status: "defaced", title: "H4CK3D - SDP Shop", banner: "Page defaced from an interactive shell", checksum: "d3fac3d0badc0de1" }];
+      return [shop, { status: "defaced", title: "H4CK3D - SDP Shop", banner: "Page defaced, attacker opening a shell", checksum: "d3fac3d0badc0de1" }];
     case "network-tool":
       return [shop, { status: "compromised", title: "SDP Shop", banner: "Beaconing to a command-and-control server", checksum: "5e0c1a77d3b2f190" }];
     case "sensitive-file-read":

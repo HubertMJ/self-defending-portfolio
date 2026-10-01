@@ -275,17 +275,18 @@ export class MockBackend {
         },
       }],
       [2250, run("detected", 2250, scenario.detection)],
-      [2720, {
+      [2790, {
         type: "talon",
         data: {
-          at: at(2690),
+          // Talon stamps its event when it logs the result, after the API server has acted.
+          at: at(2766),
           action: quarantine ? "Quarantine Pod" : "Terminate Pod",
           actionner: quarantine ? "kubernetes:label" : "kubernetes:terminate",
           namespace: "sandbox",
           pod,
           status: "success",
           output: quarantine ? `the pod '${pod}' in the namespace 'sandbox' has been labeled` : `the pod '${pod}' in the namespace 'sandbox' has been terminated`,
-          api_received_at: at(2703),
+          api_received_at: at(2779),
         },
       }],
     ];
@@ -308,6 +309,18 @@ export class MockBackend {
       );
     }
     events.push([end, run("finished", end)]);
+    // shell-in-container defaces the shop in a pre_exec and only then opens the shell Falco
+    // detects: everything from the detection on happens ~1.5 s later, after the defacement.
+    if (scenarioId === "shell-in-container") {
+      const d = 1500;
+      const later = (iso: string) => new Date(Date.parse(iso) + d * speed).toISOString();
+      return events.map(([offset, ev]) => {
+        if (offset < 2240) return [offset, ev];
+        const data = { ...ev.data, at: later(ev.data.at) } as typeof ev.data & { api_received_at?: string };
+        if (data.api_received_at) data.api_received_at = later(data.api_received_at);
+        return [offset + d, { ...ev, data } as StreamEvent];
+      });
+    }
     return events;
   }
 

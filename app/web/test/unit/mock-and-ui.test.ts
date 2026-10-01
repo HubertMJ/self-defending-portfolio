@@ -41,7 +41,8 @@ describe("MockBackend", () => {
     await settle(200);
     expect((await busy).kind).toBe("busy");
 
-    await settle(4000);
+    // shell-in-container's detection comes 1.5 s after its pre_exec; the run ends at ~4.9 s.
+    await settle(5500);
     const states = seen.filter((e) => e.type === "run").map((e) => (e.data as { state: string }).state);
     expect(states).toEqual(["queued", "started", "pod_ready", "detected", "responded", "finished"]);
     for (const e of seen) {
@@ -182,6 +183,8 @@ describe("extension payloads", () => {
       victim: true,
     });
     expect(d.exec_command).toEqual(["sh", "-c", "id"]);
+    expect(d.pre_exec_command).toEqual([]);
+    expect(parseScenarioDetails({ pre_exec_command: ["sh", "-c", "x", 1] }).pre_exec_command).toEqual(["sh", "-c", "x"]);
     expect(d.resources).toEqual({ "limits.cpu": "100m", memory: "32Mi" });
     expect(d.falco_rule?.line).toBe(12);
     // A forged path loses its link, not the rule: shown by name only, like a stock Falco rule.
@@ -236,5 +239,15 @@ describe("MockBackend extension endpoints and events", () => {
     await vi.advanceTimersByTimeAsync(10);
     const body = await (await runs).json();
     expect(parseRunEvents(body).length).toBeGreaterThan(10);
+  });
+});
+
+describe("commandText", () => {
+  it("shows an sh -c script verbatim and quotes anything else", async () => {
+    const { commandText } = await import("../../src/ui/console");
+    expect(commandText(["sh", "-c", "echo 'x; y && z' > /tmp/a && id; hostname"])).toBe("sh -c\n  echo 'x; y && z' > /tmp/a &&\n  id\n  hostname");
+    expect(commandText(["sh", "-c", 'echo "a \\" ; b" && c'])).toBe('sh -c\n  echo "a \\" ; b" &&\n  c');
+    expect(commandText(["cat", "/etc/shadow"])).toBe("cat /etc/shadow");
+    expect(commandText(["wget", "-O", "a b"])).toBe("wget -O 'a b'");
   });
 });

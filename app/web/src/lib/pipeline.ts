@@ -21,8 +21,13 @@ export const MIN_DWELL_MS = 600;
 /** In a replay, a long real gap (pod scheduling, image pull) is shortened to this. */
 export const MAX_GAP_MS = 2500;
 
-/** The kill-timer runs from the exec to the response taking effect in the API server. */
-export const TIMER_START = 2;
+/**
+ * The kill-timer runs from the syscall Falco detected (its kernel timestamp) to the response taking
+ * effect in the API server. Not from the exec: a scenario may prepare first (shell-in-container's
+ * pre_exec defaces the shop, then waits before the shell Falco is there to catch), and some execs
+ * sleep before the offending call, so exec-to-kill would time the scenario's own pauses.
+ */
+export const TIMER_START = 3;
 export const TIMER_END = 6;
 
 export type HopKey = "create" | "running" | "exec" | "falco" | "sidekick" | "talon" | "act" | "effect";
@@ -41,6 +46,8 @@ export interface Hop {
   raw?: string;
   /** Where the timestamp comes from, for the same panel. */
   source?: string;
+  /** `at` is an upper bound, not the moment itself (see the Talon note in runHops). */
+  bound?: boolean;
 }
 
 const first = <T>(xs: readonly T[], p: (x: T) => boolean): T | undefined => xs.find(p);
@@ -71,9 +78,11 @@ export function runHops(run: RunView): Hop[] {
   // Exec: the API sends it right after the pod is Ready ("pod_ready"); an API without that state
   // reports "started" at the same moment instead.
   const execRaw = stateRaw("pod_ready") ?? stateRaw("started");
-  return [
+  const hops: Hop[] = [
     hop({ key: "create", stage: "attack", who: "kube-apiserver", what: "pod created", source: created ? "pod watch" : "run: started" }, created?.at ?? stateRaw("started")),
-    hop({ key: "running", stage: "attack", who: "containerd", what: "container running", source: running ? "pod watch" : "run: pod_ready" }, running?.at ?? stateRaw("pod_ready")),
+    // The pod watch and the API's own readiness poll both see the container start; whichever
+    // reported it first is the better bound (the watch event can arrive after pod_ready).
+    hop({ key: "running", stage: "attack", who: "containerd", what: "container running", source: earliest(running?.at, stateRaw("pod_ready")) === running?.at ? "pod watch" : "run: pod_ready" }, earliest(running?.at, stateRaw("pod_ready"))),
     hop({ key: "exec", stage: "attack", who: "exec", what: "attack command starts", source: "run: pod_ready / started" }, execRaw),
     hop({ key: "falco", stage: "detect", who: "Falco · eBPF", what: falco ? falco.rule : "syscall matched a rule", source: "falco event time" }, falco?.at),
     hop({ key: "sidekick", stage: "detect", who: "Falcosidekick", what: "alert forwarded", source: "falco: api_received_at" }, falco?.api_received_at),
@@ -85,6 +94,26 @@ export function runHops(run: RunView): Hop[] {
       ? hop({ key: "effect", stage: "respond", who: "Cilium", what: "traffic dropped", source: dropped ? "hubble flow" : "victim probe" }, dropped?.at ?? unreachable?.at)
       : hop({ key: "effect", stage: "respond", who: "kubelet", what: "pod gone", source: deleted ? "pod watch" : "victim probe" }, deleted?.at ?? gone?.at),
   ];
+  // Talon's event is stamped when Talon logs the action's result, i.e. after the API server has
+  // already carried it out. What the hop stands for -- Talon sending the delete or the label -- can
+  // only have happened before the API server recorded it, so the API server's time is an upper
+  // bound: the hop shows that bound ("≤") instead of a time that would put the cause after its
+  // effect. Its own log time stays in the raw events and the verify table's source column.
+  const talonHop = hops[5];
+  const actHop = hops[6];
+  if (talonHop.at !== undefined && actHop.at !== undefined && actHop.at < talonHop.at) {
+    talonHop.at = actHop.at;
+    talonHop.raw = actHop.raw;
+    talonHop.bound = true;
+    talonHop.source = "upper bound: the API server's record of the action (Talon logged it later)";
+  }
+  return hops;
+}
+
+function earliest(a: string | undefined, b: string | undefined): string | undefined {
+  if (!a) return b;
+  if (!b) return a;
+  return ts(a) <= ts(b) ? a : b;
 }
 
 /** Talon's action in words a visitor understands; the raw names stay available in Technical Mode. */
@@ -106,7 +135,11 @@ export interface HopTiming {
 export interface Schedule {
   /** Local time at which each hop lights; undefined for a hop that has no data (yet). */
   lightAt: (number | undefined)[];
-  /** Real time from the first to the last hop with data in the response chain (exec..effect). */
+  /**
+   * Real time from the first to the last hop with data in the response chain, exec to the response
+   * taking effect in the API server: the same stretch the kill-timer measures, so the two numbers on
+   * screen are one number.
+   */
   realSpanMs?: number;
   /** How long the same stretch takes on screen. */
   shownSpanMs?: number;
@@ -122,7 +155,7 @@ export interface Schedule {
  */
 export function scheduleHops(
   hops: readonly HopTiming[],
-  opts: { instant?: boolean; minDwellMs?: number; maxGapMs?: number; chainFrom?: number } = {},
+  opts: { instant?: boolean; minDwellMs?: number; maxGapMs?: number; chainFrom?: number; chainTo?: number } = {},
 ): Schedule {
   const minDwell = opts.minDwellMs ?? MIN_DWELL_MS;
   const maxGap = Math.max(minDwell, opts.maxGapMs ?? MAX_GAP_MS);
@@ -143,8 +176,9 @@ export function scheduleHops(
     prevLight = t;
     prevReal = h.real;
   }
-  const from = opts.chainFrom ?? 2;
-  const idx = hops.map((_, i) => i).filter((i) => i >= from && lightAt[i] !== undefined);
+  const from = opts.chainFrom ?? TIMER_START;
+  const to = opts.chainTo ?? TIMER_END;
+  const idx = hops.map((_, i) => i).filter((i) => i >= from && i <= to && lightAt[i] !== undefined);
   let realSpanMs: number | undefined;
   let shownSpanMs: number | undefined;
   let slowdown = 1;

@@ -139,19 +139,32 @@ test.describe("live run console (mock)", () => {
     await page.locator('.scenario[data-scenario="shell-in-container"] button').click();
     await expect(consoleEl).toHaveAttribute("data-state", "live");
     await expect(consoleEl.locator(".console__who")).toHaveText("Your run");
+    // Before its first answer the shop is "booting", with the pod's phase from the pod watch.
+    await expect(consoleEl.locator(".browser")).toContainText(/Shop booting · pod (Pending|ContainerCreating|Running)/);
     // The victim shop is up first, then defaced by the attack, then gone with its pod.
     await expect(consoleEl.locator(".browser")).toHaveAttribute("data-status", /fresh|defaced/);
+    // The pre_exec defaces the shop before the shell Falco catches: defaced while nothing is detected.
+    await expect(consoleEl.locator(".browser")).toHaveAttribute("data-status", "defaced");
+    await expect(consoleEl.locator('.hop[data-hop="falco"]')).not.toHaveAttribute("data-state", "lit");
     await expect(consoleEl.locator(".killtimer")).toHaveAttribute("data-state", "running");
     await expect(consoleEl.locator(".browser")).toHaveAttribute("data-status", "gone", { timeout: 15_000 });
     await expect(consoleEl.locator(".hop[data-state=lit]")).toHaveCount(8, { timeout: 15_000 });
     await expect(consoleEl.locator(".killtimer")).toHaveAttribute("data-state", "stopped");
     await expect(consoleEl.locator(".killtimer__value")).toHaveText(/^0\.\d{3}$/);
     // The real latency is stated next to the slowed-down replay.
-    await expect(consoleEl.locator(".replay-badge")).toContainText(/Replayed at 1\/\d+ speed · in reality the whole chain took \d+ ms/);
+    await expect(consoleEl.locator(".replay-badge")).toContainText(/Replayed at 1\/\d+ speed · real: \d+ ms from the detected syscall to pod deleted/);
+    // One number, two places: the badge's real duration is the kill-timer's reading.
+    const badgeMs = Number(/real: (\d+) ms/.exec((await consoleEl.locator(".replay-badge").textContent()) ?? "")?.[1]);
+    expect(Number(await consoleEl.locator(".killtimer__value").textContent()) * 1000).toBeCloseTo(badgeMs, 0);
+    // Talon logs after the API server acted; its hop shows the API server's time as a bound.
+    await expect(consoleEl.locator('.hop[data-hop="talon"] .hop__t')).toHaveText(/^≤ \+\d+ ms$/);
     await expect(consoleEl.locator('.hop[data-hop="talon"] .hop__what')).toHaveText("Talon deleted the pod");
     await expect(consoleEl.locator(".phase")).toHaveCount(5);
     await expect(consoleEl.locator(".card--pod")).toContainText(/sha256:[0-9a-f]{12}/);
-    await expect(consoleEl.locator(".card--exec .term")).toContainText("sh -c 'id; hostname; sleep 60'");
+    // Two steps: the pre_exec that defaced the shop without a terminal, then the detected shell.
+    await expect(consoleEl.locator(".card--exec .steps > li")).toHaveCount(2);
+    await expect(consoleEl.locator(".card--exec .steps > li").first()).toContainText("mv .index index.html &&");
+    await expect(consoleEl.locator(".card--exec .steps > li").nth(1)).toContainText("Attack, in an interactive terminal");
     await expect(consoleEl.locator(".card--exec a").first()).toHaveAttribute("href", /^https:\/\/github\.com\/HubertMJ\/self-defending-portfolio\/blob\/[0-9a-f]{7,40}\//);
     await consoleEl.getByText("Verify it yourself").click();
     await expect(consoleEl.locator(".verify")).toContainText("cosign verify ghcr.io/hubertmj/self-defending-portfolio/scenario@sha256:");

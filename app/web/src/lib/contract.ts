@@ -167,6 +167,8 @@ export interface SourceRef {
 }
 
 export interface ScenarioDetails {
+  /** Run to completion without a TTY before exec_command; [] when the scenario has none. */
+  pre_exec_command: string[];
   exec_command: string[];
   pod_security: {
     runAsUser?: number;
@@ -429,7 +431,8 @@ export function parseScenarioDetails(v: unknown): ScenarioDetails {
     }
   }
   return {
-    exec_command: Array.isArray(v.exec_command) ? v.exec_command.filter(isStr).slice(0, 20).map((a) => cap(a, 200)) : [],
+    pre_exec_command: Array.isArray(v.pre_exec_command) ? v.pre_exec_command.filter(isStr).slice(0, 20).map((a) => cap(a, 2000)) : [],
+    exec_command: Array.isArray(v.exec_command) ? v.exec_command.filter(isStr).slice(0, 20).map((a) => cap(a, 2000)) : [],
     pod_security: definedOnly({
       runAsUser: typeof ps.runAsUser === "number" ? ps.runAsUser : undefined,
       runAsNonRoot: isBool(ps.runAsNonRoot) ? ps.runAsNonRoot : undefined,

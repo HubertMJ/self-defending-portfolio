@@ -36,6 +36,7 @@ function replayedRun() {
   const image = "ghcr.io/hubertmj/self-defending-portfolio/scenario@sha256:abe9585fe91fec1881895ae79418f6b756a4ca094c9e5e7f0b3dd8a1a76cdea0";
   const podEv = (ms, phase, extra = {}) => ["pod", { run_id, pod, uid: "0f6b2d1c-6a8e-4c39-b1f2-6c0d2e9a7b11", phase, reason: "", container_id: "", image, labels_delta: {}, deleted: false, at: at(ms), ...extra }];
   const cid = "9b2e7c4d1a0f";
+  // The defacement is the pre_exec; the shell Falco detects comes ~1.5 s after it.
   return [
     ["run", { run_id, scenario, state: "queued", at: at(0), detail: "" }],
     ["run", { run_id, scenario, state: "started", at: at(60), detail: "pod created", pod }],
@@ -43,15 +44,15 @@ function replayedRun() {
     podEv(1750, "Running", { container_id: cid }),
     ["run", { run_id, scenario, state: "pod_ready", at: at(1790), detail: cid, pod }],
     ["victim", { run_id, pod, at: at(1850), status: "up", title: "SDP Shop", banner: "Open for business", probe_ms: 4, checksum: "5e0c1a77d3b2f190" }],
-    ["victim", { run_id, pod, at: at(1990), status: "defaced", title: "H4CK3D - SDP Shop", banner: "Page defaced from an interactive shell", probe_ms: 3, checksum: "d3fac3d0badc0de1" }],
-    ["falco", { at: at(1931), rule: "Terminal shell in container", priority: "Notice", namespace: "sandbox", pod, output: `Notice A shell was spawned in a container with an attached terminal | user=<NA> user_uid=10001 process=sh command=sh -c id; hostname; sleep 60 container_id=${cid} k8s_ns=sandbox k8s_pod_name=${pod}`, fields: { "evt.type": "execve", "proc.name": "sh", "proc.cmdline": "sh -c id; hostname; sleep 60", "proc.pname": "runc", "user.name": "<NA>", "user.uid": 10001, "container.id": cid, "container.image.repository": "ghcr.io/hubertmj/self-defending-portfolio/scenario", "k8s.pod.name": pod, "k8s.ns.name": "sandbox" }, api_received_at: at(1957) }],
-    ["run", { run_id, scenario, state: "detected", at: at(1960), detail: "Terminal shell in container", pod }],
-    ["talon", { at: at(1986), action: "Terminate Pod", actionner: "kubernetes:terminate", namespace: "sandbox", pod, status: "success", output: `the pod '${pod}' in the namespace 'sandbox' has been terminated`, api_received_at: at(1999) }],
+    ["victim", { run_id, pod, at: at(1990), status: "defaced", title: "H4CK3D - SDP Shop", banner: "Page defaced, attacker opening a shell", probe_ms: 3, checksum: "d3fac3d0badc0de1" }],
+    ["falco", { at: at(3431), rule: "Terminal shell in container", priority: "Notice", namespace: "sandbox", pod, output: `Notice A shell was spawned in a container with an attached terminal | user=<NA> user_uid=10001 process=sh command=sh -c id; hostname; sleep 60 container_id=${cid} k8s_ns=sandbox k8s_pod_name=${pod}`, fields: { "evt.type": "execve", "proc.name": "sh", "proc.cmdline": "sh -c id; hostname; sleep 60", "proc.pname": "runc", "user.name": "<NA>", "user.uid": 10001, "container.id": cid, "container.image.repository": "ghcr.io/hubertmj/self-defending-portfolio/scenario", "k8s.pod.name": pod, "k8s.ns.name": "sandbox" }, api_received_at: at(3457) }],
+    ["run", { run_id, scenario, state: "detected", at: at(3460), detail: "Terminal shell in container", pod }],
+    ["talon", { at: at(3560), action: "Terminate Pod", actionner: "kubernetes:terminate", namespace: "sandbox", pod, status: "success", output: `the pod '${pod}' in the namespace 'sandbox' has been terminated`, api_received_at: at(3571) }],
     podEv(2004, "Terminating", { container_id: cid }),
-    ["run", { run_id, scenario, state: "responded", at: at(2010), detail: "terminate", pod }],
+    ["run", { run_id, scenario, state: "responded", at: at(3510), detail: "terminate", pod }],
     podEv(2051, "Deleted", { container_id: cid, deleted: true, labels_delta: {} }),
-    ["victim", { run_id, pod, at: at(2350), status: "gone", title: "", banner: "", probe_ms: 0, checksum: "" }],
-    ["run", { run_id, scenario, state: "finished", at: at(2600), detail: "", pod }],
+    ["victim", { run_id, pod, at: at(3850), status: "gone", title: "", banner: "", probe_ms: 0, checksum: "" }],
+    ["run", { run_id, scenario, state: "finished", at: at(4100), detail: "", pod }],
   ];
 }
 

@@ -109,7 +109,8 @@ describe("timerReading", () => {
       expect(v).toBeGreaterThanOrEqual(last);
       last = v;
     }
-    expect(last).toBe(300);
+    // From the detected syscall (150) to the response in the API server (400).
+    expect(last).toBe(250);
   });
 });
 
@@ -118,5 +119,29 @@ describe("humanAction", () => {
     expect(humanAction("Terminate Pod", "kubernetes:terminate")).toBe("Talon deleted the pod");
     expect(humanAction("kubernetes:label")).toBe("Talon quarantined the pod");
     expect(humanAction("Something new")).toBe("Talon ran “Something new”");
+  });
+});
+
+describe("Talon's hop is never after the action it caused", () => {
+  it("shows the API server's record as an upper bound and keeps the timer equal to the badge span", () => {
+    const ev = terminateRun().map((e) =>
+      e.type === "talon" ? { ...e, data: { ...e.data, at: at(2300) } } : e,
+    ) as StreamEvent[];
+    const run = buildTimeline(ev, T0 + 5000).runs[0];
+    const hops = runHops(run);
+    const rel = hops.map((h) => (h.at === undefined ? undefined : h.at - T0));
+    expect(rel[5]).toBe(2262);
+    expect(hops[5].bound).toBe(true);
+    for (let i = 3; i < 8; i++) expect(rel[i] as number).toBeGreaterThanOrEqual(rel[i - 1] as number);
+    const t = hops.map((h) => ({ real: h.at, known: 0 }));
+    const s = scheduleHops(t);
+    expect(s.realSpanMs).toBe(2262 - 2210);
+    expect(timerReading(t, s, TIMER_START, TIMER_END, 1e9)).toBe(s.realSpanMs);
+  });
+
+  it("takes the container start from pod_ready when the watch event comes later", () => {
+    const ev = terminateRun().map((e) => (e.type === "pod" && e.data.phase === "Running" ? { ...e, data: { ...e.data, at: at(2160) } } : e)) as StreamEvent[];
+    const hops = runHops(buildTimeline(ev, T0 + 5000).runs[0]);
+    expect((hops[1].at as number) - T0).toBe(2150);
   });
 });

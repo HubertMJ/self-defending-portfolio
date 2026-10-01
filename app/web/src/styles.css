@@ -1932,6 +1932,40 @@ html:not([data-tech="on"]) .tech-only {
   font-size: inherit;
 }
 
+/* Two-step scenarios: what prepared the attack, then the attack Falco is there to catch. */
+.steps {
+  display: grid;
+  gap: 0.6rem;
+  margin: 0 0 0.9rem;
+  padding: 0 0 0 1.4rem;
+  font-size: 0.85rem;
+}
+
+.steps li::marker {
+  font: 700 0.8rem var(--font-mono);
+  color: var(--text-faint);
+}
+
+.steps__k {
+  margin: 0 0 0.35rem;
+  color: var(--text-muted);
+}
+
+.steps .term {
+  margin: 0;
+}
+
+/* One block per script line; a long line wraps with a hanging indent so it still reads as one. */
+.term--script .term__line {
+  display: block;
+  padding-left: 4ch;
+  text-indent: -2ch;
+}
+
+.term--script .term__line:first-child {
+  padding-left: 2ch;
+}
+
 .term__prompt {
   color: #5ee0a4;
 }
