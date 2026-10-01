@@ -105,6 +105,11 @@ func (s *Server) Public() http.Handler {
 	mux.HandleFunc("POST /api/attack/{id}", s.attack)
 	mux.HandleFunc("GET /api/events", s.events)
 	mux.HandleFunc("GET /api/posture", s.posture)
+	// The same paths without a method: a wrong method gets a JSON 405 instead of net/http's plain
+	// text one, so every /api answer is JSON (the page parses errors too).
+	for _, p := range []string{"/api/healthz", "/api/scenarios", "/api/attack/{id}", "/api/events", "/api/posture"} {
+		mux.HandleFunc(p, methodNotAllowed)
+	}
 	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
 		writeError(w, http.StatusNotFound, "not found")
 	})
@@ -158,6 +163,10 @@ func (s *Server) publicMiddleware(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+func methodNotAllowed(w http.ResponseWriter, _ *http.Request) {
+	writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 }
 
 func (s *Server) healthz(w http.ResponseWriter, _ *http.Request) {
