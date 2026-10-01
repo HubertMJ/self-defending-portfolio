@@ -205,10 +205,42 @@ export interface KyvernoPolicy {
   warn: number;
 }
 
+/** Extension: one side of the own/third-party split of the Trivy totals. */
+export interface TrivyGroup {
+  images: number;
+  critical: number;
+  high: number;
+  /** CRITICAL+HIGH findings that name a fixed version upstream. */
+  fixable: number;
+}
+
+/** Extension: one row of the per-image breakdown, worst first. */
+export interface ImageVulns {
+  /** registry/repository:tag as the scanner recorded it - text from the cluster, rendered as text. */
+  image: string;
+  /** Built and signed by this repository (ghcr.io/hubertmj/self-defending-portfolio/*). */
+  own: boolean;
+  critical: number;
+  high: number;
+  fixable: number;
+}
+
+export interface PostureTrivy {
+  images: number;
+  critical: number;
+  high: number;
+  medium: number;
+  low: number;
+  /** Extension (absent from older APIs): the same totals, split. own + third_party == the totals. */
+  own?: TrivyGroup;
+  third_party?: TrivyGroup;
+  by_image?: ImageVulns[];
+}
+
 export interface Posture {
   generated_at: string;
   kyverno: { policies: KyvernoPolicy[] };
-  trivy: { images: number; critical: number; high: number; medium: number; low: number };
+  trivy: PostureTrivy;
   kube_bench: { last_run: string | null; pass: number; fail: number; warn: number; info: number };
   falco: { alerts_24h: number };
   talon: { actions_24h: number };
@@ -491,4 +523,36 @@ export function isPosture(v: unknown): v is Posture {
   if (!hasCounts(kb, ["pass", "fail", "warn", "info"])) return false;
   if (!(kb.last_run === null || isStr(kb.last_run))) return false;
   return hasCounts(v.falco, ["alerts_24h"]) && hasCounts(v.talon, ["actions_24h"]);
+}
+
+/** The most rows of the per-image breakdown the page keeps; it shows fewer. */
+export const MAX_IMAGE_ROWS = 100;
+
+const isGroup = (v: unknown): v is TrivyGroup => hasCounts(v, ["images", "critical", "high", "fixable"]);
+
+function isImageVulns(v: unknown): v is ImageVulns {
+  return hasCounts(v, ["critical", "high", "fixable"]) && isStr(v.image) && typeof v.own === "boolean";
+}
+
+/**
+ * GET /api/posture: the guard, then the extension fields normalised the way stream events are - a
+ * malformed split or breakdown is dropped (the page then renders exactly what it did before the
+ * extension), a malformed row is dropped, image names are capped. The five Trivy totals are never
+ * touched: they are the true counts and the page shows them as given.
+ */
+export function parsePosture(v: unknown): Posture {
+  if (!isPosture(v)) throw new TypeError("posture: response does not match the contract");
+  const t = v.trivy as PostureTrivy & Obj;
+  const trivy: PostureTrivy = { images: t.images, critical: t.critical, high: t.high, medium: t.medium, low: t.low };
+  if (isGroup(t.own) && isGroup(t.third_party)) {
+    trivy.own = { images: t.own.images, critical: t.own.critical, high: t.own.high, fixable: t.own.fixable };
+    trivy.third_party = { images: t.third_party.images, critical: t.third_party.critical, high: t.third_party.high, fixable: t.third_party.fixable };
+  }
+  if (Array.isArray(t.by_image)) {
+    trivy.by_image = t.by_image
+      .filter(isImageVulns)
+      .slice(0, MAX_IMAGE_ROWS)
+      .map((r) => ({ image: cap(r.image, 200), own: r.own, critical: r.critical, high: r.high, fixable: r.fixable }));
+  }
+  return { ...v, trivy };
 }

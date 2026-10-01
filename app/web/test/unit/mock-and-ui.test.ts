@@ -134,6 +134,38 @@ describe("launcher helpers", () => {
   });
 });
 
+describe("posture image breakdown", () => {
+  it("shows the own/third-party split and the worst images, keeping the true total", () => {
+    const el = renderPostureData(posture());
+    const tile = el.querySelectorAll(".tile")[1];
+    expect(tile.querySelector(".tile__value")?.textContent).toBe("3 critical + high");
+    expect(tile.textContent).toContain("own 0 · third-party 3");
+    expect(el.querySelector(".posture-split")?.textContent).toContain("Of 3 critical + high findings, 0 are in this project's own 3 images and 3 in 24 third-party images");
+    const table = [...el.querySelectorAll("table")].find((t) => t.caption?.textContent?.startsWith("Critical + high findings per image"));
+    expect(table).toBeDefined();
+    const rows = [...(table?.querySelectorAll("tbody tr") ?? [])].map((r) => r.textContent);
+    // Only affected images are listed, worst first; clean own images are counted in the split.
+    expect(rows).toEqual(["quay.io/cilium/cilium:v1.19.8 (third-party)022", "docker.io/rancher/mirrored-coredns-coredns:1.14.6 (third-party)011"]);
+  });
+
+  it("renders what it always rendered for an API without the breakdown", () => {
+    const p = posture();
+    p.trivy = { images: 27, critical: 0, high: 3, medium: 41, low: 88 };
+    const el = renderPostureData(p);
+    expect(el.querySelector(".posture-split")).toBeNull();
+    expect(el.querySelectorAll("table")).toHaveLength(1);
+    expect(el.textContent).toContain("Trivy, 27 running images");
+  });
+
+  it("renders image names as text", () => {
+    const p = posture();
+    p.trivy.by_image = [{ image: '<img src=x onerror="alert(1)">', own: false, critical: 1, high: 0, fixable: 1 }];
+    const el = renderPostureData(p);
+    expect(el.querySelector("img")).toBeNull();
+    expect(el.textContent).toContain('<img src=x onerror="alert(1)">');
+  });
+});
+
 describe("rendering untrusted text", () => {
   it("renders Falco output and policy names as text, never markup", () => {
     const p = posture();

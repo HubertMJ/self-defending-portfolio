@@ -4,7 +4,8 @@
 //	kyverno    PolicyReports + ClusterPolicyReports (wgpolicyk8s.io/v1alpha2), results whose
 //	           source is "kyverno", counted per policy
 //	trivy      VulnerabilityReports (aquasecurity.github.io/v1alpha1), severity totals per distinct
-//	           image (one image in three workloads is one image, not three)
+//	           image (one image in three workloads is one image, not three), the same totals split
+//	           into this project's own images and third-party ones, and a per-image breakdown
 //	kube_bench the newest successful kube-bench Job's log, which is the benchmark's JSON (ADR 0014)
 //	falco      alerts Falcosidekick delivered in the last 24 h  } counted by this API as the webhooks
 //	talon      actions Talon reported in the last 24 h         } arrive (internal/webhook.Window)
@@ -28,6 +29,7 @@ import (
 	"io"
 	"log/slog"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -66,13 +68,49 @@ type PolicyCount struct {
 	Warn int    `json:"warn"`
 }
 
+// Trivy is the image-scanning section. The five top-level counts are the original contract and stay
+// the true totals over every distinct running image: nothing is filtered, ignored or suppressed here,
+// ever (ADR 0023). Own, ThirdParty and ByImage were added later to say *whose* findings those are;
+// they partition the same set of reports, so Own + ThirdParty always add up to the totals and the
+// ByImage rows always add up to Own + ThirdParty. An older page that reads only the five counts
+// renders exactly what it rendered before.
 type Trivy struct {
 	Images   int `json:"images"`
 	Critical int `json:"critical"`
 	High     int `json:"high"`
 	Medium   int `json:"medium"`
 	Low      int `json:"low"`
+
+	Own        TrivyGroup   `json:"own"`
+	ThirdParty TrivyGroup   `json:"third_party"`
+	ByImage    []ImageVulns `json:"by_image"`
 }
+
+// TrivyGroup is one side of the own/third-party split. Images counts distinct images (digests) like
+// Trivy.Images does; Fixable is the CRITICAL+HIGH findings that name a fixed version upstream.
+type TrivyGroup struct {
+	Images   int `json:"images"`
+	Critical int `json:"critical"`
+	High     int `json:"high"`
+	Fixable  int `json:"fixable"`
+}
+
+// ImageVulns is one row of the per-image breakdown. Image is registry/repository:tag as the scanner
+// recorded it (several digests of one tag - an old ReplicaSet still scanned next to the new one -
+// are one row, their counts added, exactly as the totals add them). Own is true for the images this
+// repository builds and signs (OwnImagePrefix). Fixable counts the row's CRITICAL+HIGH findings that
+// have a fixedVersion, i.e. the ones a version bump of that image would remove.
+type ImageVulns struct {
+	Image    string `json:"image"`
+	Own      bool   `json:"own"`
+	Critical int    `json:"critical"`
+	High     int    `json:"high"`
+	Fixable  int    `json:"fixable"`
+}
+
+// OwnImagePrefix is where .github/workflows/build-images.yml publishes every image this repository
+// builds (ADR 0016). Everything else in the cluster is third-party.
+const OwnImagePrefix = "ghcr.io/hubertmj/self-defending-portfolio/"
 
 type KubeBench struct {
 	// LastRun is null until a kube-bench Job has completed.
@@ -134,7 +172,10 @@ func New(cfg Config) *Aggregator {
 	if cfg.Now == nil {
 		cfg.Now = time.Now
 	}
-	return &Aggregator{cfg: cfg, cached: Snapshot{Kyverno: Kyverno{Policies: []PolicyCount{}}}}
+	return &Aggregator{cfg: cfg, cached: Snapshot{
+		Kyverno: Kyverno{Policies: []PolicyCount{}},
+		Trivy:   Trivy{ByImage: []ImageVulns{}},
+	}}
 }
 
 // Get returns the cached snapshot, refreshing it first when it is older than the TTL.
@@ -241,7 +282,12 @@ func (a *Aggregator) kyverno(ctx context.Context) (Kyverno, error) {
 }
 
 func (a *Aggregator) trivy(ctx context.Context) (Trivy, error) {
-	type sev struct{ c, h, m, l int64 }
+	type sev struct {
+		image             string
+		own               bool
+		c, h, m, l, fixed int
+	}
+	// Keyed by digest, so one image in three workloads (three reports) is counted once.
 	images := map[string]sev{}
 	err := a.list(ctx, VulnerabilityReports, func(u *unstructured.Unstructured) {
 		server, _, _ := unstructured.NestedString(u.Object, "report", "registry", "server")
@@ -254,27 +300,115 @@ func (a *Aggregator) trivy(ctx context.Context) (Trivy, error) {
 		} else {
 			key += ":" + tag
 		}
+		var s sev
+		s.image, s.own = imageName(server, repo, tag, digest)
 		if repo == "" {
 			key = u.GetNamespace() + "/" + u.GetName()
+			s.image, s.own = key, false
 		}
-		var s sev
-		s.c, _, _ = unstructured.NestedInt64(u.Object, "report", "summary", "criticalCount")
-		s.h, _, _ = unstructured.NestedInt64(u.Object, "report", "summary", "highCount")
-		s.m, _, _ = unstructured.NestedInt64(u.Object, "report", "summary", "mediumCount")
-		s.l, _, _ = unstructured.NestedInt64(u.Object, "report", "summary", "lowCount")
+		s.c = summaryCount(u, "criticalCount")
+		s.h = summaryCount(u, "highCount")
+		s.m = summaryCount(u, "mediumCount")
+		s.l = summaryCount(u, "lowCount")
+		s.fixed = fixableCount(u)
 		images[key] = s
 	})
 	if err != nil {
 		return Trivy{}, err
 	}
-	out := Trivy{Images: len(images)}
+	out := Trivy{Images: len(images), ByImage: []ImageVulns{}}
+	rows := map[string]*ImageVulns{}
 	for _, s := range images {
-		out.Critical += int(s.c)
-		out.High += int(s.h)
-		out.Medium += int(s.m)
-		out.Low += int(s.l)
+		out.Critical += s.c
+		out.High += s.h
+		out.Medium += s.m
+		out.Low += s.l
+		g := &out.ThirdParty
+		if s.own {
+			g = &out.Own
+		}
+		g.Images++
+		g.Critical += s.c
+		g.High += s.h
+		g.Fixable += s.fixed
+		r := rows[s.image]
+		if r == nil {
+			r = &ImageVulns{Image: s.image, Own: s.own}
+			rows[s.image] = r
+		}
+		r.Critical += s.c
+		r.High += s.h
+		r.Fixable += s.fixed
 	}
+	for _, r := range rows {
+		out.ByImage = append(out.ByImage, *r)
+	}
+	// Worst first: most CRITICAL+HIGH, then most CRITICAL, then by name so the order is stable
+	// between refreshes.
+	sort.Slice(out.ByImage, func(i, j int) bool {
+		a, b := out.ByImage[i], out.ByImage[j]
+		if a.Critical+a.High != b.Critical+b.High {
+			return a.Critical+a.High > b.Critical+b.High
+		}
+		if a.Critical != b.Critical {
+			return a.Critical > b.Critical
+		}
+		return a.Image < b.Image
+	})
 	return out, nil
+}
+
+func summaryCount(u *unstructured.Unstructured, field string) int {
+	n, _, _ := unstructured.NestedInt64(u.Object, "report", "summary", field)
+	return int(n)
+}
+
+// fixableCount counts the report's CRITICAL and HIGH findings that name a fixed version. The list is
+// read as Trivy wrote it; a finding without a fixedVersion is still in the totals, it just is not
+// something a version bump can remove today.
+func fixableCount(u *unstructured.Unstructured) int {
+	vulns, _, _ := unstructured.NestedSlice(u.Object, "report", "vulnerabilities")
+	n := 0
+	for _, v := range vulns {
+		m, ok := v.(map[string]any)
+		if !ok {
+			continue
+		}
+		if sev, _ := m["severity"].(string); sev != "CRITICAL" && sev != "HIGH" {
+			continue
+		}
+		if fixed, _ := m["fixedVersion"].(string); fixed != "" {
+			n++
+		}
+	}
+	return n
+}
+
+// imageName turns a report's registry/artifact fields into the reference a reader recognises, and
+// says whether it is one of this repository's images.
+//
+// Trivy Operator records the tag of a reference it was given as `repo:tag@digest` oddly for some
+// registries: for docker.io images the artifact tag comes back as the whole reference
+// ("docker.io/falcosecurity/falco:0.45.0"), so only what follows the last colon is the tag. It also
+// writes Docker Hub as index.docker.io, which is shortened to the docker.io everyone types.
+func imageName(server, repo, tag, digest string) (string, bool) {
+	if i := strings.LastIndex(tag, ":"); i >= 0 {
+		tag = tag[i+1:]
+	}
+	if server == "index.docker.io" {
+		server = "docker.io"
+	}
+	name := server + "/" + repo
+	own := strings.HasPrefix(name, OwnImagePrefix)
+	switch {
+	case tag != "":
+		name += ":" + tag
+	case len(digest) > len("sha256:")+12:
+		name += "@" + digest[:len("sha256:")+12]
+	case digest != "":
+		name += "@" + digest
+	}
+	return name, own
 }
 
 // maxBenchLog bounds what is read from the Job log; the k3s benchmark's JSON is ~150 KiB.

@@ -2,11 +2,13 @@
 // say about the cluster right now, from GET /api/posture (cached server-side for 60 s).
 
 import type { ApiClient, Result } from "../lib/api";
-import type { KyvernoPolicy, Posture } from "../lib/contract";
+import type { ImageVulns, KyvernoPolicy, Posture, PostureTrivy } from "../lib/contract";
 import { h, relativeTime, replace } from "../lib/dom";
 import { offlinePanel } from "./common";
 
 const REFRESH_MS = 60_000;
+/** Rows of the per-image breakdown shown; the rest are summarised in the caption. */
+const TOP_OFFENDERS = 5;
 
 type Tone = "good" | "warning" | "critical" | "neutral";
 
@@ -83,6 +85,63 @@ function kyvernoTable(policies: KyvernoPolicy[]): HTMLElement {
   );
 }
 
+/**
+ * Whose findings the image total is: this project's images against third-party ones, and the worst
+ * images by name (ADR 0023). Text and the existing table style only. The total in the tile is never
+ * reduced by this - the split is the same findings counted again by owner, and it is only rendered
+ * when the API sends it (an older API gets the page it always got).
+ */
+function imageBreakdown(tr: PostureTrivy): HTMLElement | null {
+  const own = tr.own;
+  const third = tr.third_party;
+  const rows = (tr.by_image ?? []).filter((r) => r.critical + r.high > 0);
+  if (!own || !third) return null;
+  const ownTotal = own.critical + own.high;
+  const thirdTotal = third.critical + third.high;
+  const fixable = own.fixable + third.fixable;
+  const top = rows.slice(0, TOP_OFFENDERS);
+  const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+
+  const summary = h(
+    "p",
+    { class: "posture-split" },
+    `Of ${tr.critical + tr.high} critical + high findings, `,
+    h("strong", {}, String(ownTotal)),
+    ` are in this project's own ${plural(own.images, "image", "images")} and `,
+    h("strong", {}, String(thirdTotal)),
+    ` in ${plural(third.images, "third-party image", "third-party images")} (cluster components). `,
+    `${fixable} of them already have a fix released upstream; none is hidden or filtered from the total.`,
+  );
+  if (top.length === 0) return h("div", { class: "posture-offenders" }, summary);
+
+  const label = (r: ImageVulns) => (r.own ? "own" : "third-party");
+  const table = h(
+    "table",
+    { class: "data-table" },
+    h("caption", {}, `Critical + high findings per image, worst first (top ${top.length} of ${rows.length} affected)`),
+    h(
+      "thead",
+      {},
+      h("tr", {}, h("th", { scope: "col" }, "Image"), h("th", { scope: "col" }, "Critical"), h("th", { scope: "col" }, "High"), h("th", { scope: "col" }, "Fixable")),
+    ),
+    h(
+      "tbody",
+      {},
+      top.map((r) =>
+        h(
+          "tr",
+          {},
+          h("th", { scope: "row" }, h("code", {}, r.image), ` (${label(r)})`),
+          h("td", {}, String(r.critical)),
+          h("td", {}, String(r.high)),
+          h("td", {}, String(r.fixable)),
+        ),
+      ),
+    ),
+  );
+  return h("div", { class: "posture-offenders" }, summary, table);
+}
+
 export function renderPostureData(p: Posture, now: number = Date.now()): HTMLElement {
   const ky = p.kyverno.policies.reduce((a, x) => ({ pass: a.pass + x.pass, fail: a.fail + x.fail, warn: a.warn + x.warn }), { pass: 0, fail: 0, warn: 0 });
   const kb = p.kube_bench;
@@ -107,7 +166,11 @@ export function renderPostureData(p: Posture, now: number = Date.now()): HTMLEle
       unit: "critical + high",
       tone: tr.critical > 0 ? "critical" : tr.high > 0 ? "warning" : "good",
       status: tr.critical > 0 ? "Critical present" : tr.high > 0 ? "High present" : "None critical/high",
-      foot: [`Trivy, ${tr.images} running images`],
+      foot: [
+        tr.own && tr.third_party
+          ? `Trivy, ${tr.images} running images · own ${tr.own.critical + tr.own.high} · third-party ${tr.third_party.critical + tr.third_party.high}`
+          : `Trivy, ${tr.images} running images`,
+      ],
     }),
     tile({
       label: "CIS benchmark",
@@ -142,6 +205,7 @@ export function renderPostureData(p: Posture, now: number = Date.now()): HTMLEle
       { key: "warn", label: "Manual / warn", value: kb.warn },
       { key: "info", label: "Info", value: kb.info },
     ]),
+    imageBreakdown(tr),
     kyvernoTable(p.kyverno.policies),
   );
 

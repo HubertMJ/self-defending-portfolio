@@ -112,7 +112,8 @@ ConfigMaps, no Jobs, no other namespace's pods. `portfolio-api` joins `hello` an
 
 **Posture.** Kyverno results (source `kyverno`) per policy from PolicyReports and
 ClusterPolicyReports; Trivy severity totals per distinct image (by digest, so three replicas of one
-image count once); kube-bench totals from the newest Succeeded pod's log (robust to glog lines and
+image count once), and since ADR 0023 the same totals split into own and third-party images with a
+per-image CRITICAL/HIGH/fixable breakdown that adds up to them; kube-bench totals from the newest Succeeded pod's log (robust to glog lines and
 to one document per target); Falco alerts and Talon actions over 24 h from the webhooks (1440
 one-minute buckets, constant memory; alerts from every namespace count, only `sandbox` ones are
 shown). Cached 60 s, one refresh at a time, detached from the request that triggered it; a source

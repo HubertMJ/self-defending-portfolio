@@ -820,7 +820,8 @@ main:focus {
     grid-template-columns: 1fr 1fr;
   }
 
-  .posture-details .data-table {
+  .posture-details .data-table,
+  .posture-details .posture-offenders {
     grid-column: 1 / -1;
   }
 }

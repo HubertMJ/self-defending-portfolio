@@ -93,14 +93,108 @@ func TestAggregate(t *testing.T) {
 			t.Errorf("policy %d = %+v, want %+v", i, s.Kyverno.Policies[i], want[i])
 		}
 	}
-	if s.Trivy != (Trivy{Images: 2, Critical: 1, High: 1, Medium: 2, Low: 3}) {
-		t.Errorf("trivy = %+v", s.Trivy)
+	tr := s.Trivy
+	if tr.Images != 2 || tr.Critical != 1 || tr.High != 1 || tr.Medium != 2 || tr.Low != 3 {
+		t.Errorf("trivy = %+v", tr)
+	}
+	if tr.Own != (TrivyGroup{Images: 1, High: 1}) || tr.ThirdParty != (TrivyGroup{Images: 1, Critical: 1}) {
+		t.Errorf("own/third-party = %+v / %+v", tr.Own, tr.ThirdParty)
 	}
 	if s.KubeBench.LastRun != nil {
 		t.Errorf("kube-bench without a run: %+v", s.KubeBench)
 	}
 	if s.Falco.Alerts24h != 7 || s.Talon.Actions24h != 2 || !s.GeneratedAt.Equal(clk) {
 		t.Errorf("counters/time: %+v", s)
+	}
+}
+
+// vulnReport is a VulnerabilityReport the way Trivy Operator writes one, with a findings list.
+func vulnReport(ns, name, server, repo, tag, digest string, findings ...map[string]any) *unstructured.Unstructured {
+	var c, h int64
+	list := []any{}
+	for _, f := range findings {
+		switch f["severity"] {
+		case "CRITICAL":
+			c++
+		case "HIGH":
+			h++
+		}
+		list = append(list, f)
+	}
+	return obj(VulnerabilityReports, "VulnerabilityReport", ns, name, map[string]any{
+		"report": map[string]any{
+			"registry":        map[string]any{"server": server},
+			"artifact":        map[string]any{"repository": repo, "digest": digest, "tag": tag},
+			"summary":         map[string]any{"criticalCount": c, "highCount": h, "mediumCount": int64(0), "lowCount": int64(0)},
+			"vulnerabilities": list,
+		},
+	})
+}
+
+func finding(sev, fixed string) map[string]any {
+	return map[string]any{"severity": sev, "fixedVersion": fixed}
+}
+
+// The split and the breakdown partition the totals; nothing is dropped, and the totals are what they
+// were before the split existed.
+func TestTrivyBreakdown(t *testing.T) {
+	dyn := newDyn(
+		// Third-party, docker.io: the operator records the whole reference as the tag.
+		vulnReport("argocd", "rs-ksops", "index.docker.io", "viaductoss/ksops", "viaductoss/ksops:v4.5.1", "sha256:1111111111111111aaaa",
+			finding("CRITICAL", "1.2.3"), finding("HIGH", "1.2.3"), finding("HIGH", ""), finding("MEDIUM", "9")),
+		// The same image in a second workload: counted once.
+		vulnReport("argocd", "rs-ksops-2", "index.docker.io", "viaductoss/ksops", "viaductoss/ksops:v4.5.1", "sha256:1111111111111111aaaa",
+			finding("CRITICAL", "1.2.3"), finding("HIGH", "1.2.3"), finding("HIGH", ""), finding("MEDIUM", "9")),
+		vulnReport("argocd", "rs-redis", "public.ecr.aws", "docker/library/redis", "8.2.3-alpine", "sha256:2222222222222222bbbb",
+			finding("HIGH", "8.2.4")),
+		// Own images: two digests of api:main (an old ReplicaSet still scanned) are one row, summed.
+		vulnReport("portfolio-api", "rs-api-1", "ghcr.io", "hubertmj/self-defending-portfolio/api", "main", "sha256:3333333333333333cccc",
+			finding("HIGH", "")),
+		vulnReport("portfolio-api", "rs-api-2", "ghcr.io", "hubertmj/self-defending-portfolio/api", "main", "sha256:4444444444444444dddd",
+			finding("HIGH", "2")),
+		vulnReport("hello", "rs-web", "ghcr.io", "hubertmj/self-defending-portfolio/web", "main", "sha256:5555555555555555eeee"),
+		// Not ours, despite the owner: only the build-images.yml path counts as own.
+		vulnReport("x", "rs-other", "ghcr.io", "hubertmj/other", "", "sha256:6666666666666666ffff", finding("CRITICAL", "")),
+	)
+	a := New(Config{Dynamic: dyn, Kube: fake.NewClientset()})
+	tr, err := a.trivy(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tr.Images != 6 || tr.Critical != 2 || tr.High != 5 {
+		t.Fatalf("totals = %+v", tr)
+	}
+	if tr.Own != (TrivyGroup{Images: 3, High: 2, Fixable: 1}) {
+		t.Errorf("own = %+v", tr.Own)
+	}
+	if tr.ThirdParty != (TrivyGroup{Images: 3, Critical: 2, High: 3, Fixable: 3}) {
+		t.Errorf("third party = %+v", tr.ThirdParty)
+	}
+	if tr.Own.Images+tr.ThirdParty.Images != tr.Images ||
+		tr.Own.Critical+tr.ThirdParty.Critical != tr.Critical || tr.Own.High+tr.ThirdParty.High != tr.High {
+		t.Errorf("split does not add up to the totals: %+v", tr)
+	}
+	want := []ImageVulns{
+		{Image: "docker.io/viaductoss/ksops:v4.5.1", Critical: 1, High: 2, Fixable: 2},
+		{Image: "ghcr.io/hubertmj/self-defending-portfolio/api:main", Own: true, High: 2, Fixable: 1},
+		{Image: "ghcr.io/hubertmj/other@sha256:666666666666", Critical: 1},
+		{Image: "public.ecr.aws/docker/library/redis:8.2.3-alpine", High: 1, Fixable: 1},
+		{Image: "ghcr.io/hubertmj/self-defending-portfolio/web:main", Own: true},
+	}
+	if len(tr.ByImage) != len(want) {
+		t.Fatalf("by_image = %+v", tr.ByImage)
+	}
+	for i := range want {
+		if tr.ByImage[i] != want[i] {
+			t.Errorf("by_image[%d] = %+v, want %+v", i, tr.ByImage[i], want[i])
+		}
+	}
+}
+
+func TestEmptySnapshotHasAnEmptyBreakdown(t *testing.T) {
+	s := New(Config{Dynamic: newDyn(), Kube: fake.NewClientset()}).Get(context.Background())
+	if s.Trivy.ByImage == nil || len(s.Trivy.ByImage) != 0 {
+		t.Fatalf("by_image = %#v, want [] (never null in the JSON)", s.Trivy.ByImage)
 	}
 }
 

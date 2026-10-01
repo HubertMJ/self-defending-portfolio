@@ -12,7 +12,7 @@ import {
   type ScenarioDetails,
   isAttackAccepted,
   isLimits,
-  isPosture,
+  parsePosture,
   parseScenarioDetails,
   parseScenarios,
 } from "./contract";
@@ -144,10 +144,7 @@ export class ApiClient {
   }
 
   posture(): Promise<Result<Posture>> {
-    return this.getJson("/posture", (v) => {
-      if (!isPosture(v)) throw new TypeError("posture: response does not match the contract");
-      return v;
-    });
+    return this.getJson("/posture", parsePosture);
   }
 
   /** Extension endpoint; an API without it answers 404, which the caller treats as "no details". */

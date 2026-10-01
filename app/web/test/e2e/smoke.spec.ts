@@ -80,6 +80,8 @@ test.describe("mock mode", () => {
     await expect(page.locator("#mock-banner")).toBeVisible();
     await expect(page.locator("#posture-panel .tile")).toHaveCount(4);
     await expect(page.getByRole("table", { name: /Kyverno policy reports/ })).toBeVisible();
+    await expect(page.getByRole("table", { name: /Critical \+ high findings per image/ })).toBeVisible();
+    await expect(page.locator(".posture-split")).toContainText("third-party images");
     await expect(page.locator(".scenario")).toHaveCount(4);
     await expect(page.locator("#timeline-conn")).toHaveAttribute("data-state", "open");
     await expect(page.locator(".run")).toHaveCount(1);

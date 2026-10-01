@@ -51,6 +51,34 @@ describe("ApiClient GETs", () => {
     expect(res).toEqual({ ok: true, value: p });
   });
 
+  it("accepts a posture from an API without the image breakdown, unchanged", async () => {
+    const p = posture(0);
+    const old = { ...p, trivy: { images: 27, critical: 0, high: 3, medium: 41, low: 88 } };
+    const res = await client(async () => json(200, old)).posture();
+    expect(res).toEqual({ ok: true, value: old });
+  });
+
+  it("drops a malformed breakdown or row but never touches the totals", async () => {
+    const p = posture(0);
+    const bad = {
+      ...p,
+      trivy: {
+        ...p.trivy,
+        own: { images: 3, critical: 0, high: "0", fixable: 0 },
+        by_image: [{ image: "x".repeat(500), own: false, critical: 1, high: 2, fixable: 3 }, { image: 5, own: false, critical: 0, high: 0, fixable: 0 }, null],
+      },
+    };
+    const res = await client(async () => json(200, bad)).posture();
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    const tr = res.value.trivy;
+    expect([tr.images, tr.critical, tr.high, tr.medium, tr.low]).toEqual([27, 0, 3, 41, 88]);
+    expect(tr.own).toBeUndefined();
+    expect(tr.third_party).toBeUndefined();
+    expect(tr.by_image).toHaveLength(1);
+    expect(tr.by_image?.[0].image.length).toBe(200);
+  });
+
   it("rejects a posture with a missing section as bad-response", async () => {
     const p: Record<string, unknown> = { ...posture(0) };
     delete p.trivy;
