@@ -98,6 +98,34 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      # An image with a browser test suite (app/<name>/playwright.config.ts - today only web) must
+      # pass it before anything is built or pushed. Lint, unit tests and the bundle run inside the
+      # image's own builder stage; end-to-end tests need a browser, which does not belong in it.
+      # Still generic: the condition is a file, not an image name.
+      - name: set up node (e2e)
+        if: hashFiles(format('app/{0}/playwright.config.ts', matrix.name)) != ''
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: ${{ env.CONTEXT }}/package-lock.json
+
+      - name: e2e tests (playwright, chromium)
+        if: hashFiles(format('app/{0}/playwright.config.ts', matrix.name)) != ''
+        working-directory: ${{ env.CONTEXT }}
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+          npm run test:e2e
+
+      - name: upload playwright report
+        if: failure() && hashFiles(format('app/{0}/playwright.config.ts', matrix.name)) != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: playwright-report-${{ matrix.name }}-${{ github.sha }}
+          path: ${{ env.CONTEXT }}/playwright-report
+          if-no-files-found: ignore
+
       - name: set up buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
