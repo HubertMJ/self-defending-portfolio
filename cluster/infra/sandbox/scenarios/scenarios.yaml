@@ -80,7 +80,7 @@
         # `scripts/bump-image-digest.sh scenario sha256:<digest from the run's summary>`.
         # One unbroken line, so a bump is a one-line diff that a grep for the digest finds.
         # yamllint disable-line rule:line-length
-        image: &scenario-image ghcr.io/hubertmj/self-defending-portfolio/scenario@sha256:abe9585fe91fec1881895ae79418f6b756a4ca094c9e5e7f0b3dd8a1a76cdea0
+        image: &scenario-image ghcr.io/hubertmj/self-defending-portfolio/scenario@sha256:c65e2e6f5f1d4305372bc9e3d61dd20af07cdf6696822f7b18df89ac84a5a541
         # The victim (ADR 0022). Anchored here, aliased in the other three scenarios.
         command: &victim-command ["/usr/local/bin/victim", "-docroot", "/srv/shop"]
         ports: &victim-ports
