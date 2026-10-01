@@ -1,0 +1,112 @@
+# The API's identity and every permission it has (ADR 0015). Three grants, each where the objects
+# live, and cluster-scoped only where the objects are spread across every namespace:
+#
+#   Role in sandbox         pods create/get/list/delete, pods/exec create - run a scenario, wait for
+#                           it, exec its command, delete it, find orphans after a crash
+#   Role in kube-bench      pods list, pods/log get - read the newest benchmark Job's output
+#   ClusterRole (read)      list PolicyReports, ClusterPolicyReports, VulnerabilityReports - they are
+#                           written into every namespace that has workloads
+#
+# Narrower than the contract's maximum on purpose: no pods `watch` (the runner polls one pod by
+# name), no `get` on the reports (only listed), no Jobs (the pods carry the result), no secrets,
+# no ConfigMaps (the scenarios are a mounted volume), nothing in any other namespace.
+#
+# What the sandbox grant still means: this ServiceAccount can create a pod of its choosing in
+# `sandbox`. What such a pod can be is bounded elsewhere, not here - Pod Security `restricted`
+# (namespace label), our signed images only (verify-portfolio-images, restrict-image-registries),
+# the sandbox ResourceQuota, default-deny with DNS only, and Falco/Talon watching it.
+#
+#   kubectl auth can-i create pods -n hello   --as=system:serviceaccount:portfolio-api:portfolio-api  # no
+#   kubectl auth can-i create pods/exec -n sandbox --as=system:serviceaccount:portfolio-api:portfolio-api  # yes
+#   kubectl auth can-i get secrets -A         --as=system:serviceaccount:portfolio-api:portfolio-api  # no
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: portfolio-api
+  namespace: portfolio-api
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: portfolio-api-runner
+  namespace: sandbox
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["create", "get", "list", "delete"]
+  # A WebSocket exec is authorised as `create` since Kubernetes 1.31 (it used to be `get`); SPDY
+  # was always `create`. No `get` needed on 1.35.
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: portfolio-api-runner
+  namespace: sandbox
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: portfolio-api-runner
+subjects:
+  - kind: ServiceAccount
+    name: portfolio-api
+    namespace: portfolio-api
+---
+# kube-bench writes its results to the Job's log only (ADR 0014: no report CRD, no sidecar), so the
+# log is what the posture page reads. Pods, not Jobs: the newest Succeeded pod is the newest result.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: portfolio-api-kube-bench-read
+  namespace: kube-bench
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["list"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: portfolio-api-kube-bench-read
+  namespace: kube-bench
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: portfolio-api-kube-bench-read
+subjects:
+  - kind: ServiceAccount
+    name: portfolio-api
+    namespace: portfolio-api
+---
+# The one cluster-scoped grant: list on three report kinds. Reports are summaries (policy, result,
+# CVE counts), not secrets; the Trivy reports' details are already public in the Security tab and
+# the images are public.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: portfolio-api-posture-read
+rules:
+  - apiGroups: ["wgpolicyk8s.io"]
+    resources: ["policyreports", "clusterpolicyreports"]
+    verbs: ["list"]
+  - apiGroups: ["aquasecurity.github.io"]
+    resources: ["vulnerabilityreports"]
+    verbs: ["list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: portfolio-api-posture-read
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: portfolio-api-posture-read
+subjects:
+  - kind: ServiceAccount
+    name: portfolio-api
+    namespace: portfolio-api

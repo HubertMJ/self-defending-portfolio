@@ -1,0 +1,70 @@
+# Every flow the API has, and nothing else (ADR 0015):
+#
+#   in   :8080  the Gateway (Cilium's Envoy: reserved "ingress" identity) and the kubelet's probes
+#               ("host"), exactly as for hello - the public half of the API
+#   in   :8081  Falcosidekick and Falco Talon in falco-response, and nobody else - the internal half.
+#               Neither webhook is authenticated (as Falcosidekick -> Talon is not, ADR 0013), so this
+#               rule is the authentication: any other pod able to post here could forge a "detected"
+#               or "responded" on the live feed.
+#   out  :6443  the API server, for the runner (pods in sandbox), the posture reads and pods/exec
+#   out  :53    cluster DNS, *.cluster.local names only. The in-cluster client itself needs none (it
+#               dials the `kubernetes` Service IP from its environment); the rule exists so that a
+#               future lookup fails visibly in Hubble at the name, not as a silent timeout.
+#
+# Nothing to the internet, nothing to `sandbox` pods directly: the API reaches them only through the
+# API server (exec), never over the pod network, so the quarantine policy cannot be bypassed from
+# here.
+#
+# Sync wave -1: in place before the Deployment, so the pod never runs unconfined.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: portfolio-api
+  namespace: portfolio-api
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+spec:
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: portfolio-api
+  ingress:
+    - fromEntities:
+        # Envoy evaluates this policy for the original client too and answers 403 when it does not
+        # match; "ingress" is the identity Gateway traffic arrives with (cluster/infra/hello).
+        - ingress
+        - host
+      toPorts:
+        - ports:
+            - port: "8080"
+              protocol: TCP
+    - fromEndpoints:
+        - matchLabels:
+            io.kubernetes.pod.namespace: falco-response
+            app.kubernetes.io/name: falcosidekick
+        - matchLabels:
+            io.kubernetes.pod.namespace: falco-response
+            app.kubernetes.io/name: falco-talon
+      toPorts:
+        - ports:
+            - port: "8081"
+              protocol: TCP
+  egress:
+    - toEntities:
+        - kube-apiserver
+      toPorts:
+        - ports:
+            - port: "6443"
+              protocol: TCP
+    - toEndpoints:
+        - matchLabels:
+            io.kubernetes.pod.namespace: kube-system
+            k8s-app: kube-dns
+      toPorts:
+        - ports:
+            - port: "53"
+              protocol: UDP
+            - port: "53"
+              protocol: TCP
+          rules:
+            dns:
+              - matchPattern: "*.cluster.local"

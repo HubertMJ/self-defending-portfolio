@@ -1,0 +1,25 @@
+# Two ports on one Service, two very different audiences:
+#   http (80 -> 8080)      the HTTPRoute's backend, i.e. visitors via Cloudflare and the Gateway
+#   internal (8081 -> 8081) Falcosidekick's webhook output and Talon's webhook notifier
+# The Gateway only ever routes to port 80 (httproute.yaml), and the CiliumNetworkPolicy admits
+# 8081 from falco-response alone, so sharing the Service does not share the audience.
+apiVersion: v1
+kind: Service
+metadata:
+  name: portfolio-api
+  namespace: portfolio-api
+  labels:
+    app.kubernetes.io/name: portfolio-api
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: portfolio-api
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+      protocol: TCP
+    - name: internal
+      port: 8081
+      targetPort: internal
+      protocol: TCP

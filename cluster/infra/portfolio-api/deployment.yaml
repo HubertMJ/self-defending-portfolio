@@ -1,0 +1,95 @@
+# The API (ADR 0015). One replica, Recreate, on purpose rather than for lack of a second node:
+# the attack limits, the single-run slot, the replay buffer and the run <-> alert correlation are
+# in-process state, and Falcosidekick and Talon each post to the Service, i.e. to one pod. Two
+# replicas would mean two independent "one run at a time" limits and webhooks landing on the pod
+# that does not own the run. Recreate keeps a rollout from briefly running two. The price is a few
+# seconds of 503 per rollout, which the page rides out (EventSource reconnects on its own).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: portfolio-api
+  namespace: portfolio-api
+  labels:
+    app.kubernetes.io/name: portfolio-api
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: portfolio-api
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: portfolio-api
+    spec:
+      serviceAccountName: portfolio-api
+      # The one workload of ours that needs a token: what it may do with it is rbac.yaml.
+      automountServiceAccountToken: true
+      # Room for in-flight runs to delete their pods on SIGTERM (main.go waits up to 20 s).
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        # distroless `nonroot`.
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: api
+          # Pinned by digest in kustomization.yaml (ADR 0008, 0011); the tag is informational.
+          image: ghcr.io/hubertmj/self-defending-portfolio/api:main
+          env:
+            # Keeps the Go GC ahead of the memory limit instead of meeting the OOM killer there.
+            - name: GOMEMLIMIT
+              value: "100MiB"
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+            - name: internal
+              containerPort: 8081
+              protocol: TCP
+          securityContext:
+            allowPrivilegeEscalation: false
+            privileged: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 20m
+              memory: 48Mi
+            limits:
+              cpu: 500m
+              memory: 128Mi
+          # /api/healthz is outside the request budget and touches nothing but the process.
+          livenessProbe:
+            httpGet:
+              path: /api/healthz
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /api/healthz
+              port: http
+            initialDelaySeconds: 1
+            periodSeconds: 5
+          volumeMounts:
+            # The scenario catalogue (owned with the scenarios, see kustomization.yaml). A directory
+            # mount, not subPath, so the kubelet swaps in a changed ConfigMap and the API picks it up
+            # without a restart.
+            - name: scenarios
+              mountPath: /etc/portfolio-api/scenarios
+              readOnly: true
+      volumes:
+        - name: scenarios
+          configMap:
+            name: scenarios
+            # The API starts (and serves posture and the event stream) before the catalogue exists;
+            # it simply lists no scenarios until then.
+            optional: true
+            items:
+              - key: scenarios.yaml
+                path: scenarios.yaml
