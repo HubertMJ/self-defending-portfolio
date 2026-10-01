@@ -620,6 +620,57 @@ runs today stays admissible). No Application, digest or route changes, so the li
 Stage 2 (the digest pins, the `portfolio-api` Application, hello's switch to the new site) is
 section 7.2.
 
+### 7.2 Stage 2: pin the digests, then let Argo CD roll it out
+
+The second merge adds the `portfolio-api` Application (wave 6: the API and, as its second source, the
+scenario catalogue `cluster/infra/sandbox/scenarios`), the sandbox ResourceQuota and LimitRange, the
+two new Talon rules, the Falcosidekick and Talon webhooks to the API, and hello's switch to the new
+site together with the route CSP that site needs (ADR 0019). It is committed with all-zero
+placeholder digests, which `make validate` and CI refuse (`scripts/check-image-digests.sh`), so it
+cannot reach `main` until they are filled.
+
+1. Pin the three digests from the stage 1 run, verify each, and validate:
+
+   ```sh
+   scripts/bump-image-digest.sh web      sha256:<web digest>       # cluster/infra/hello
+   scripts/bump-image-digest.sh api      sha256:<api digest>       # cluster/infra/portfolio-api
+   scripts/bump-image-digest.sh scenario sha256:<scenario digest>  # the scenario catalogue
+   scripts/verify-image.sh ghcr.io/hubertmj/self-defending-portfolio/web@sha256:<web digest>
+   scripts/verify-image.sh ghcr.io/hubertmj/self-defending-portfolio/api@sha256:<api digest>
+   scripts/verify-image.sh ghcr.io/hubertmj/self-defending-portfolio/scenario@sha256:<scenario digest>
+   make lint validate     # validate now runs Kyverno's signature check on all three digests
+   ```
+
+2. Commit the pins on the stage 2 branch, merge, push. `build-images` does not run again unless
+   `app/` changed; Argo CD syncs `falco-response` (new webhook output, Talon config), `sandbox` (quota,
+   LimitRange), `hello` (new digest and CSP; a rolling update, `maxUnavailable: 0`) and creates
+   `portfolio-api`.
+3. Accept it on the cluster, in this order:
+
+   ```sh
+   argocd app list                                  # every Application Synced/Healthy, portfolio-api included
+   SIGNED_IMAGE=ghcr.io/hubertmj/self-defending-portfolio/web@sha256:<web digest> tests/admission/run.sh
+   make runtime-test                                # phase 4 DoD, now with hello's new image as the victim
+   make scenario-test                               # the four scenarios: alert, action, end state
+   make abuse-test                                  # against https://hubertjablon.ski (spends your own quota)
+   curl -sI https://hubertjablon.ski/ | grep -i content-security-policy   # the ADR 0019 policy
+   curl -s https://hubertjablon.ski/api/healthz     # {"status":"ok"}
+   ```
+
+   Then open the site: posture panel filled, scenario list shows four entries, launching one shows
+   attack -> detection -> response in the timeline; the browser console shows no CSP or Trusted Types
+   violation.
+
+4. Once that has held for a while, drop the transitional `|build-web` alternative from the signer
+   identity in `verify-portfolio-images`, `scripts/verify-image.sh` and the cosign commands in 5.2,
+   in one commit of its own (ADR 0016). Until then a revert of stage 2 can bring back the phase 3
+   digest without a rebuild.
+
+Rollback: revert the stage 2 merge. hello goes back to the phase 3 digest (still admissible during the
+transition), the `portfolio-api` Application and its namespace are pruned, and Talon and
+Falcosidekick lose their webhook. Stage 1 can stay: it changes nothing Argo CD deploys apart from the
+two image policies' identity and namespace list.
+
 ## Rebuild from zero
 
 ```sh
