@@ -127,12 +127,16 @@ func TestViewOf(t *testing.T) {
 }
 
 func TestImageRef(t *testing.T) {
+	d1, d2 := "sha256:"+strings.Repeat("1", 64), "sha256:"+strings.Repeat("2", 64)
 	cases := []struct{ imageID, spec, want string }{
-		{"ghcr.io/a/b@sha256:11", "ghcr.io/a/b:main@sha256:22", "ghcr.io/a/b@sha256:11"},
-		{"docker-pullable://ghcr.io/a/b@sha256:11", "", "ghcr.io/a/b@sha256:11"},
-		{"sha256:33", "ghcr.io/a/b:main@sha256:22", "ghcr.io/a/b@sha256:33"},
-		{"", "registry:5000/a/b:tag@sha256:22", "registry:5000/a/b@sha256:22"},
+		{"ghcr.io/a/b@" + d1, "ghcr.io/a/b:main@" + d2, "ghcr.io/a/b@" + d1},
+		// The repository is the spec's, never the runtime's name for it.
+		{"docker-pullable://mirror.internal:5000/x/y@" + d1, "ghcr.io/a/b@" + d2, "ghcr.io/a/b@" + d1},
+		{d1, "ghcr.io/a/b:main@" + d2, "ghcr.io/a/b@" + d1},
+		{"ghcr.io/a/b@sha256:short", "ghcr.io/a/b@" + d2, "ghcr.io/a/b@" + d2},
+		{"", "registry:5000/a/b:tag@" + d2, "registry:5000/a/b@" + d2},
 		{"", "ghcr.io/a/b:main", ""},
+		{d1, "", ""},
 	}
 	for _, c := range cases {
 		if got := imageRef(c.imageID, c.spec); got != c.want {

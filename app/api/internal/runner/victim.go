@@ -159,8 +159,9 @@ func (p *victimProber) read(ctx context.Context, podIP string) VictimEvent {
 	return ev
 }
 
-// plainText keeps printable characters only (no control characters, no angle brackets, so not even
-// a careless renderer could be handed markup), collapses whitespace and caps the length in runes.
+// plainText keeps printable characters only (no control characters, no invisible format characters
+// such as bidi overrides or zero-width spaces, no angle brackets, so not even a careless renderer
+// could be handed markup), collapses whitespace and caps the length in runes.
 func plainText(s string, n int) string {
 	var b strings.Builder
 	space := false
@@ -169,7 +170,7 @@ func plainText(s string, n int) string {
 		case unicode.IsSpace(r):
 			space = b.Len() > 0
 			continue
-		case unicode.IsControl(r), r == '<', r == '>', r == unicode.ReplacementChar:
+		case !unicode.IsPrint(r), r == '<', r == '>', r == unicode.ReplacementChar:
 			continue
 		}
 		if space {

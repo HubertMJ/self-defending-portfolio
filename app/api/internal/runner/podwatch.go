@@ -109,24 +109,31 @@ func shortContainerID(id string) string {
 	return id
 }
 
-// imageRef is the image as "repository@sha256:<digest>": the digest the kubelet actually ran
-// (containerStatus.imageID) when it is known, else the digest the spec pins. A tag between the two
-// is dropped - the digest is the identity, and it is what `cosign verify` takes.
+// imageRef is the image as "repository@sha256:<digest>". The repository always comes from the pod
+// spec (what the catalogue pinned and admission verified); only the digest is taken from the
+// kubelet's containerStatus.imageID, as the digest it actually ran, and only if it is a sha256
+// digest - the runtime's own idea of the image's name is not published. A tag is dropped: the
+// digest is the identity, and it is what `cosign verify` takes.
 func imageRef(imageID, spec string) string {
-	imageID = strings.TrimPrefix(imageID, "docker-pullable://")
 	repo, digest := splitDigest(spec)
-	if r, d := splitDigest(imageID); d != "" {
-		digest = d
-		if r != "" {
-			repo = r
+	if i := strings.LastIndex(imageID, "sha256:"); i >= 0 {
+		if d := imageID[i:]; len(d) == len("sha256:")+64 && isHex(d[len("sha256:"):]) {
+			digest = d
 		}
-	} else if strings.HasPrefix(imageID, "sha256:") {
-		digest = imageID
 	}
 	if repo == "" || digest == "" {
 		return ""
 	}
 	return repo + "@" + digest
+}
+
+func isHex(s string) bool {
+	for _, c := range s {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 // splitDigest splits "repo[:tag]@sha256:..." into the repository without tag and the digest.

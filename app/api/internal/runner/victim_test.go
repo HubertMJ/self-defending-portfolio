@@ -116,6 +116,9 @@ func TestPlainText(t *testing.T) {
 	if got := plainText("  a\t\tb \r\n c  ", 80); got != "a b c" {
 		t.Fatalf("%q", got)
 	}
+	if got := plainText("SDP\u202eShop\u200b\u2066!", 80); got != "SDPShop!" {
+		t.Fatalf("format characters kept: %q", got)
+	}
 	if got := plainText(strings.Repeat("ż", 10), 5); got != "żżżż…" {
 		t.Fatalf("%q", got)
 	}
