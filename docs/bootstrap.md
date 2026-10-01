@@ -103,7 +103,7 @@ grep -rn 'REPLACE-ME-\|AGE_PUBLIC_KEY_PLACEHOLDER' cluster/ .sops.yaml
 
 | Placeholder | Where | Value |
 |-------------|-------|-------|
-| `HubertMJ` | `cluster/apps/*.yaml`, `cluster/bootstrap/argocd/root-application.yaml` | your GitHub owner |
+| `HubertMJ` | `cluster/apps/*.yaml`, `cluster/bootstrap/argocd/root-application.yaml` | GitHub owner (change only in a fork) |
 | `AGE_PUBLIC_KEY_PLACEHOLDER` | `.sops.yaml` | age public key from 4.1 |
 | `REPLACE-ME-ACME-CONTACT-EMAIL` | `cluster/infra/cert-manager-issuers/clusterissuer-*.yaml` | your email |
 | `REPLACE-ME-TUNNEL-UUID` | `cluster/infra/cloudflared/config.yaml` | tunnel UUID from 4.2 |

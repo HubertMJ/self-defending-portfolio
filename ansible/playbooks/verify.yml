@@ -98,7 +98,7 @@
       ansible.builtin.command:
         cmd: >-
           /usr/local/bin/k3s kubectl get pods -n kube-system -l k8s-app=cilium
-          -o jsonpath={.items[*].status.conditions[?(@.type=="Ready")].status}
+          -o 'jsonpath={.items[*].status.conditions[?(@.type=="Ready")].status}'
       register: verify_cilium
       changed_when: false
 

@@ -1,8 +1,7 @@
 # App-of-apps root. This is the last thing bootstrap applies by hand; everything after it is a
 # git commit (ADR 0005).
 #
-# repoURL contains a placeholder. Replace it before the first bootstrap:
-#   grep -rl HubertMJ cluster/ | xargs sed -i 's/HubertMJ/<your-gh-user>/g'
+# repoURL points at the public repository; a fork replaces the owner (see cluster/bootstrap/README.md).
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
