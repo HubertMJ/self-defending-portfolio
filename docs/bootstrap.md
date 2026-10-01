@@ -330,7 +330,8 @@ grep -n 'failureAction' cluster/infra/kyverno-policies/*.yaml
 ### 5.1 The first build must run
 
 Verification is an assertion about a signature that does not exist yet. Push to `main` and let
-`.github/workflows/build-web.yml` complete at least once; it builds the image, pushes it to
+the image workflow complete at least once (`.github/workflows/build-web.yml` in phase 3, replaced by
+`.github/workflows/build-images.yml` for every image under `app/` in phase 5, ADR 0016); it builds the image, pushes it to
 `ghcr.io/hubertmj/self-defending-portfolio/web`, signs the digest keylessly with cosign and attaches
 an SPDX SBOM attestation.
 
@@ -350,10 +351,10 @@ Check it the way Kyverno will, with no credentials:
 docker logout ghcr.io
 crane digest ghcr.io/hubertmj/self-defending-portfolio/web:<tag>     # or: docker manifest inspect
 cosign verify ghcr.io/hubertmj/self-defending-portfolio/web:<tag> \
-  --certificate-identity-regexp '^https://github\.com/HubertMJ/self-defending-portfolio/\.github/workflows/build-web\.yml@refs/heads/main$' \
+  --certificate-identity-regexp '^https://github\.com/HubertMJ/self-defending-portfolio/\.github/workflows/(build-images|build-web)\.yml@refs/heads/main$' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 cosign verify-attestation ghcr.io/hubertmj/self-defending-portfolio/web:<tag> --type spdxjson \
-  --certificate-identity-regexp '^https://github\.com/HubertMJ/self-defending-portfolio/\.github/workflows/build-web\.yml@refs/heads/main$' \
+  --certificate-identity-regexp '^https://github\.com/HubertMJ/self-defending-portfolio/\.github/workflows/(build-images|build-web)\.yml@refs/heads/main$' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
 
@@ -582,6 +583,34 @@ Rollback is the revert of that commit (back to Audit); the policies fail open ei
 | victim not labelled, Talon logs a JSON Patch error | the victim lacks the pre-set `sdp.hubertjablon.ski/quarantine: "false"` label |
 | Trivy scan Jobs fail pulling layers | a registry or blob host missing from `cluster/infra/trivy-operator/ciliumnetworkpolicy.yaml` |
 | dropped flows anywhere | `kubectl -n kube-system exec ds/cilium -c cilium-agent -- hubble observe --verdict DROPPED --namespace <ns> --last 50` |
+
+## 7. The portfolio API, the attack scenarios and the new site (phases 5 and 6)
+
+Phases 5 and 6 reach `main` in two merges, because Argo CD syncs `main` and the images the new
+manifests pin do not exist until CI has built them from `main` (ADR 0016).
+
+### 7.1 Stage 1: the images are built, nothing in the cluster changes
+
+The first merge carries the sources (`app/api`, `app/scenario`, the rewritten `app/web`), the single
+image workflow `.github/workflows/build-images.yml` and the widened signer identity in
+`verify-portfolio-images` (`build-images.yml` *or* the phase 3 `build-web.yml`, so the digest hello
+runs today stays admissible). No Application, digest or route changes, so the live site is untouched.
+
+1. Merge and push to `main`. Because the workflow file itself changed, `build-images` builds all three
+   images: `api`, `scenario` and `web`. Each job's summary prints `<image>@sha256:...`.
+2. **Make the two new packages public**, exactly as in 5.2: GHCR creates
+   `self-defending-portfolio/api` and `self-defending-portfolio/scenario` private, and Kyverno reads
+   signatures anonymously, so a private package fails verification like an unsigned image does.
+   Link both to the repository in their package settings.
+3. Check each digest from a machine that is not logged in to GHCR:
+
+   ```sh
+   docker logout ghcr.io
+   for n in api scenario web; do scripts/verify-image.sh ghcr.io/hubertmj/self-defending-portfolio/$n@sha256:<digest>; done
+   ```
+
+Stage 2 (the digest pins, the `portfolio-api` Application, hello's switch to the new site) is
+section 7.2.
 
 ## Rebuild from zero
 

@@ -1,5 +1,5 @@
 # The image behind https://hubertjablon.ski. Built, scanned, SBOM'd and signed by
-# .github/workflows/build-web.yml; Kyverno refuses to admit it unsigned (ADR 0011).
+# .github/workflows/build-images.yml; Kyverno refuses to admit it unsigned (ADR 0011, ADR 0016).
 #
 # Two stages (ADR 0019). The first compiles TypeScript and CSS into content-hashed static files and
 # runs the unit tests, so an image cannot be built from code whose tests fail. Nothing from it

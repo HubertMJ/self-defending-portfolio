@@ -9,7 +9,7 @@ timeline fed by Server-Sent Events (`GET /api/events`). The page is the public f
 whose subject is security, so it must hold to the same standard as the cluster under it: a strict
 CSP, no third-party requests, nothing that cannot be reviewed and pinned, and an image that keeps the
 phase 3 properties (nginx-unprivileged pinned by digest, non-root, read-only root filesystem,
-Trivy-gated, SBOM'd, keyless-signed by `build-web.yml`, ADR 0011).
+Trivy-gated, SBOM'd, keyless-signed by the image workflow, ADR 0011 and ADR 0016).
 
 The page also renders text that an attacker shapes: Falco's `output` field contains the command line
 of the process that triggered the rule. A visitor chooses which scenario runs, and a future scenario
@@ -36,8 +36,8 @@ file names, which the cache policy below depends on.
 ADR 0008) that runs `npm ci --ignore-scripts`, the type check, the DOM-sink check and the unit tests,
 then builds. Only `dist/` is copied into the unchanged nginx-unprivileged stage, so the shipped image
 has no Node, no `node_modules` and no sources; Trivy, the SBOM and the signature cover the same kind
-of artefact as before. Because the build happens inside the Dockerfile, `build-web.yml` needs no
-change to keep working.
+of artefact as before. Because the build happens inside the Dockerfile, the image workflow
+(`build-images.yml`, ADR 0016) needs nothing web-specific beyond the browser end-to-end gate.
 
 **Every byte from our own origin.** No CDN, no web fonts (system font stacks), no analytics, no
 third-party images. The only external links are plain `<a>` navigations (GitHub, MITRE ATT&CK).
