@@ -10,10 +10,14 @@
 #   out  :53    cluster DNS, *.cluster.local names only. The in-cluster client itself needs none (it
 #               dials the `kubernetes` Service IP from its environment); the rule exists so that a
 #               future lookup fails visibly in Hubble at the name, not as a silent timeout.
+#   out  :8080  the victim shop of scenario pods in `sandbox` (pods carrying the API's run-id label),
+#               to poll /state.json during a run (ADR 0022). The other half of
+#               cluster/infra/sandbox/ciliumnetworkpolicy-victim.yaml; that port and nothing else.
 #
-# Nothing to the internet, nothing to `sandbox` pods directly: the API reaches them only through the
-# API server (exec), never over the pod network, so the quarantine policy cannot be bypassed from
-# here.
+# Nothing to the internet. The scenario pods' execs still go through the API server; the one direct
+# flow into `sandbox` is the read-only state poll above, and it cannot bypass the quarantine: the
+# quarantine policy's ingressDeny on the pod beats this allow, so a quarantined shop stops answering,
+# which is exactly what the visitor is shown.
 #
 # Sync wave -1: in place before the Deployment, so the pod never runs unconfined.
 apiVersion: cilium.io/v2
@@ -68,3 +72,13 @@ spec:
           rules:
             dns:
               - matchPattern: "*.cluster.local"
+    - toEndpoints:
+        - matchLabels:
+            io.kubernetes.pod.namespace: sandbox
+          matchExpressions:
+            - key: sdp.hubertjablon.ski/run-id
+              operator: Exists
+      toPorts:
+        - ports:
+            - port: "8080"
+              protocol: TCP

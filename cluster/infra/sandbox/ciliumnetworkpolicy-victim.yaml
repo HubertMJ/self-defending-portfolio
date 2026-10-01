@@ -1,0 +1,40 @@
+# The victim's one inbound flow (ADR 0022): the portfolio API may connect to a scenario pod's fake
+# shop on :8080, to read /state.json while a run is on. Nothing else may connect to anything in
+# `sandbox` (networkpolicy.yaml is default-deny both ways, and this is the only ingress rule).
+#
+#   from  portfolio-api pods only (namespace *and* app label, as in cluster/infra/portfolio-api): not
+#         the Gateway, not the host - so not the kubelet either, which is why the victim's readiness
+#         probe is an exec probe (scenarios/scenarios.yaml) - and not another sandbox pod
+#   to    scenario pods only: the ones the API created, which carry its run-id label. tests/runtime's
+#         victim and anything else in the namespace stay closed
+#   port  8080/TCP only
+#
+# No Service and no route point at :8080; the API dials the pod IP from the Pod object it already
+# watches, so the shop is reachable from exactly one workload and never from the internet. The
+# matching egress half is in cluster/infra/portfolio-api/ciliumnetworkpolicy.yaml: Cilium enforces a
+# flow on both ends, and both have to allow it.
+#
+# The quarantine still wins: the standing CiliumClusterwideNetworkPolicy (quarantine-ccnp.yaml)
+# ingressDenies everything to a labelled pod, and in Cilium a deny beats every allow. The API's next
+# poll of a quarantined shop then fails - its "unreachable" is the visible proof that the cut works.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: sandbox-victim-from-api
+  namespace: sandbox
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+spec:
+  endpointSelector:
+    matchExpressions:
+      - key: sdp.hubertjablon.ski/run-id
+        operator: Exists
+  ingress:
+    - fromEndpoints:
+        - matchLabels:
+            io.kubernetes.pod.namespace: portfolio-api
+            app.kubernetes.io/name: portfolio-api
+      toPorts:
+        - ports:
+            - port: "8080"
+              protocol: TCP

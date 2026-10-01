@@ -1,4 +1,5 @@
-# Default-deny for the namespace, as in cluster/infra/hello. ciliumnetworkpolicy.yaml opens DNS only.
+# Default-deny for the namespace, as in cluster/infra/hello. ciliumnetworkpolicy.yaml opens DNS out;
+# ciliumnetworkpolicy-victim.yaml opens :8080 in to scenario pods, from the portfolio API only (ADR 0022).
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
