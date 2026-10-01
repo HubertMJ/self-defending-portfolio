@@ -1,4 +1,4 @@
-# Argo CD install, patched for KSOPS and for a LAN-only (no public) UI.
+# Argo CD install, patched for KSOPS and for a LAN-only (no public) UI, without Dex (no SSO).
 # Pinned by version in the resource URL (ADR 0008). Bumping Argo CD is a one-line diff here.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
@@ -11,7 +11,23 @@ resources:
   - https://raw.githubusercontent.com/argoproj/argo-cd/v3.5.3/manifests/install.yaml
   - root-application.yaml
 
+# Argo CD's Redis (a cache only: nothing in it survives a restart or needs to) one patch release ahead
+# of the 8.2.3-alpine that v3.5.3's install.yaml names, because v3.5.3 is still the newest Argo CD
+# 3.5 release and 8.2.3-alpine carries 11 CRITICAL+HIGH findings in the cluster (OpenSSL in the
+# Alpine base among them), all fixed in later 8.2 patches. Same 8.2 line, so the same protocol and
+# configuration; 8.2.10-alpine scans 0 CRITICAL/HIGH (ADR 0023). Pinned by tag and digest
+# (ADR 0008); the digest is the multi-arch index, identical on public.ecr.aws and docker.io:
+#   docker buildx imagetools inspect public.ecr.aws/docker/library/redis:8.2.10-alpine
+# An Argo CD bump that moves install.yaml past this Redis makes this entry the older one: drop it
+# then rather than pin Redis backwards.
+images:
+  - name: public.ecr.aws/docker/library/redis
+    newTag: 8.2.10-alpine
+    digest: sha256:b51665e66f00759be7c3152ad5ac3c66fb2f619c13ef62dea7cc1f9914524635
+
 patches:
   - path: argocd-cm.yaml
   - path: argocd-cmd-params-cm.yaml
   - path: argocd-repo-server-ksops.yaml
+  # No SSO, so no Dex: every Dex object in install.yaml is deleted (ADR 0023).
+  - path: argocd-dex-server-delete.yaml

@@ -1,0 +1,55 @@
+# No Dex (ADR 0023). Argo CD's install.yaml always ships Dex, the OIDC broker Argo CD uses for SSO,
+# but this Argo CD has no SSO: argocd-cm sets neither `dex.config` nor `oidc.config`, the UI is
+# reached only by `kubectl port-forward` from the LAN (ADR 0003), and the only login is the local
+# `admin` account. Dex therefore served nobody - and its image was the single largest source of
+# CRITICAL+HIGH findings in the cluster (52 on dexidp/dex v2.45.1, plus one more copy of the
+# argocd image in its `copyutil` init container). Removing an unused component is the only honest
+# way to make those findings go away; nothing is suppressed in the scanner.
+#
+# How: kustomize `$patch: delete` on every object install.yaml creates for Dex, matched by kind and
+# name. This is the supported route for a kustomize install (the Helm chart's `dex.enabled: false`
+# renders the same set of objects away). argocd-server keeps its optional `argocd-dex-server-tls`
+# volume and its ARGOCD_SERVER_DEX_SERVER setting: both are inert without `dex.config` (the server
+# only proxies /api/dex when SSO is configured), and the volume is `optional: true`, so nothing
+# fails when the Secret never appears.
+#
+# If SSO is ever wanted: delete this file from kustomization.yaml, add `dex.config` (or use
+# `oidc.config` directly against an external IdP, which needs no Dex at all) and re-apply.
+#
+# `kubectl apply -k` does not prune: re-applying the bootstrap stops *declaring* these objects but
+# does not delete the live ones. docs/bootstrap.md ("Removing Dex") has the one-off delete.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: argocd-dex-server
+$patch: delete
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: argocd-dex-server
+$patch: delete
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: argocd-dex-server
+$patch: delete
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: argocd-dex-server
+$patch: delete
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: argocd-dex-server
+$patch: delete
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: argocd-dex-server-network-policy
+$patch: delete

@@ -13,11 +13,12 @@ landed, and the only credential in play is Argo CD's own service account.
 | Path | What it is |
 |------|------------|
 | `bootstrap.sh` | idempotent installer: namespace, age key Secret, `kubectl apply -k argocd/`, wait, print next steps |
-| `argocd/kustomization.yaml` | pinned upstream `install.yaml` + the three patches below |
+| `argocd/kustomization.yaml` | pinned upstream `install.yaml` + the patches below + a newer Redis patch release (ADR 0023) |
 | `argocd/namespace.yaml` | `argocd` namespace with Pod Security Standards `restricted` |
 | `argocd/argocd-cm.yaml` | `kustomize.buildOptions` so the KSOPS exec plugin runs |
 | `argocd/argocd-cmd-params-cm.yaml` | `server.insecure: "true"` — the UI is LAN-only, never published |
 | `argocd/argocd-repo-server-ksops.yaml` | KSOPS init container + the age key mount |
+| `argocd/argocd-dex-server-delete.yaml` | deletes every Dex object: there is no SSO, so Dex served nobody (ADR 0023) |
 | `argocd/root-application.yaml` | the app-of-apps root, pointing at `cluster/apps` |
 
 ## Before the first run
@@ -70,6 +71,17 @@ changelog to point at (ADR 0008).
 
 `kustomize build cluster/bootstrap/argocd` works with a stock kustomize — no KSOPS, no plugins. The
 bootstrap layer deliberately does not depend on the plugin it installs.
+
+### No SSO, so no Dex
+
+Argo CD's `install.yaml` always ships Dex, its OIDC broker for single sign-on. This installation has
+no SSO (no `dex.config`, no `oidc.config`; the only login is the local `admin` account behind a
+port-forward), so Dex ran for nobody - and its image was the largest single source of CRITICAL and
+HIGH findings in the cluster. `argocd/argocd-dex-server-delete.yaml` removes its Deployment,
+Service, ServiceAccount, Role, RoleBinding and NetworkPolicy with kustomize `$patch: delete`.
+`kubectl apply` does not prune, so on a cluster that already runs Dex the live objects are deleted
+once by hand (`docs/bootstrap.md`, "Removing Dex"). SSO later is either `oidc.config` against an
+external IdP (no Dex needed) or dropping that patch.
 
 ### The UI is not exposed, so it does not terminate TLS
 

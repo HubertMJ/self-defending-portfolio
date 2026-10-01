@@ -171,7 +171,7 @@ spec:
         - matchName: auth.docker.io
         - matchName: production.cloudflare.docker.com
         - matchName: production.cloudfront.docker.com
-        # ghcr.io: the portfolio image, Policy Reporter, the adapter, Dex. Blobs come from
+        # ghcr.io: the portfolio images, Policy Reporter, the adapter. Blobs come from
         # pkg-containers.githubusercontent.com (observed).
         - matchName: ghcr.io
         - matchName: pkg-containers.githubusercontent.com

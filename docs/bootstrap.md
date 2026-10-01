@@ -707,6 +707,42 @@ independent of that, so one origin mistake cannot be served from cache for a yea
    # HTTP/2 200, cache-control: public, max-age=31536000, immutable
    ```
 
+## 8. Fewer third-party vulnerabilities (ADR 0023)
+
+The posture page counts every CRITICAL and HIGH finding Trivy Operator reports in every running
+image, and the count stays honest: nothing is ignored, filtered or suppressed (ADR 0023). It goes
+down only when an image goes away or is replaced by a fixed one. Most of those changes arrive through
+Argo CD like everything else; the ones below are the exceptions, because they touch what Argo CD does
+not manage.
+
+### 8.1 Argo CD: Dex removed, Redis one patch release on (bootstrap re-apply)
+
+`cluster/bootstrap/argocd/` is applied by hand (ADR 0005, amendment). Check that the diff is what you
+expect - the Dex objects gone from the rendered set, `argocd-redis` on `8.2.10-alpine@sha256:b516...`
+and nothing else - then apply:
+
+```sh
+kubectl diff -k cluster/bootstrap/argocd          # argocd-redis image; Dex is absent, not "deleted"
+kubectl apply -k cluster/bootstrap/argocd --server-side --force-conflicts
+kubectl -n argocd rollout status deploy/argocd-redis
+```
+
+#### Removing Dex
+
+`kubectl apply` does not prune, so the Dex objects the old bootstrap created stay until they are
+deleted once. Nothing refers to them (no `dex.config`, no `oidc.config` in `argocd-cm`):
+
+```sh
+kubectl -n argocd get cm argocd-cm -o jsonpath='{.data.dex\.config}{.data.oidc\.config}'   # empty
+kubectl -n argocd delete deployment/argocd-dex-server service/argocd-dex-server \
+  serviceaccount/argocd-dex-server role/argocd-dex-server rolebinding/argocd-dex-server \
+  networkpolicy/argocd-dex-server-network-policy
+argocd login localhost:8080 --username admin --plaintext   # through the usual port-forward: still works
+```
+
+Trivy Operator deletes the VulnerabilityReports of a workload that is gone, so the posture page
+drops Dex's findings within a scan cycle.
+
 ## Rebuild from zero
 
 ```sh
