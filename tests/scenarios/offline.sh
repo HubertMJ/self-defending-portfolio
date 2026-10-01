@@ -25,6 +25,9 @@
 #   5. The victim (ADR 0022), for scenarios with `victim: true`: the pod's own readiness probe reads a
 #      healthy /state.json ("up") under the same security context, and running the scenario's exec
 #      changes it (status, banner, and for a defacement the page checksum) - what the visitor watches.
+#      A scenario's pre_exec (run before the exec, never with a TTY) must have no TTY, must not run
+#      anything a Talon rule acts on (a network tool, /etc/shadow, a binary from /tmp), must exit 0
+#      after its pause, and must already have changed the victim when the detected exec starts.
 #
 # What it cannot prove: that Falco *emits* the alert. That needs the syscalls themselves - a live probe
 # (BPF, PERFMON and CAP_SYS_RESOURCE to lock its ring buffers, which a CI or build sandbox container
@@ -172,7 +175,10 @@ for s in yaml.safe_load(open(sys.argv[1])):
     probe = (target.get("readinessProbe") or {}).get("exec", {}).get("command", [])
     print("\t".join([s["id"], s["detection"], shlex.join(flags), shlex.join(target["command"]),
                      shlex.join(command), str(exec_["tty"]).lower(), trigger.rsplit("/", 1)[-1],
-                     str(bool(s.get("victim"))).lower(), shlex.join(probe)]))
+                     str(bool(s.get("victim"))).lower(), shlex.join(probe),
+                     # Last, with sentinels: read with IFS=tab collapses empty fields in between.
+                     str(s["pre_exec"].get("tty", False)).lower() if s.get("pre_exec") else "none",
+                     shlex.join(s["pre_exec"]["command"]) if s.get("pre_exec") else "-"]))
 PY
 
 # Starts the scenario's pod as a container with the given flags; prints its name.
@@ -187,7 +193,7 @@ start() {
 # The status field of a /state.json body (compact JSON, as the victim writes it).
 field() { sed -n "s/.*\"$1\":\"\([^\"]*\)\".*/\1/p" <<<"$2"; }
 
-while IFS=$'\t' read -r id detection flags cmd exec_cmd tty trigger victim probe; do
+while IFS=$'\t' read -r id detection flags cmd exec_cmd tty trigger victim probe pre_tty pre; do
   printf '  -- %s (%s)\n' "$id" "$detection"
   c=$(start "$id" "$flags" "$cmd")
   case $detection in
@@ -287,6 +293,27 @@ while IFS=$'\t' read -r id detection flags cmd exec_cmd tty trigger victim probe
       fail "$id: the victim is not up under the pod's security context: '${before:-no answer}'"
       continue
     fi
+    if [ "$pre" != - ]; then
+      if [ "$pre_tty" = false ]; then pass "$id: pre_exec has no TTY"
+      else fail "$id: pre_exec must not have a TTY (it would be a terminal shell, i.e. the detection)"; fi
+      if grep -qE '(^|[^[:alnum:]_])(wget|nc|curl)([^[:alnum:]_]|$)|/etc/shadow|/tmp/' <<<"$pre"; then
+        fail "$id: pre_exec runs something a Talon rule acts on: $pre"
+      else
+        pass "$id: pre_exec runs no network tool, reads no sensitive file, runs nothing from /tmp"
+      fi
+      pre_start=$SECONDS
+      if eval "$DOCKER exec $c3 $pre" >/dev/null 2>&1 && [ $((SECONDS - pre_start)) -ge 1 ]; then
+        pass "$id: pre_exec exits 0 after its pause ($((SECONDS - pre_start)) s)"
+      else
+        fail "$id: pre_exec failed or did not pause"
+      fi
+      mid=$(eval "$DOCKER exec $c3 $probe" 2>/dev/null || true)
+      if [ -n "$mid" ] && [ "$(field status "$mid")" != up ]; then
+        pass "$id: the victim is $(field status "$mid") before the detected exec starts (\"$(field banner "$mid")\")"
+      else
+        fail "$id: the pre_exec did not change the victim ('${mid:-no answer}')"
+      fi
+    fi
     eval "$DOCKER exec -d $c3 $exec_cmd"
     after=
     for _ in 1 2 3 4 5 6 7 8 9 10; do
@@ -297,7 +324,7 @@ while IFS=$'\t' read -r id detection flags cmd exec_cmd tty trigger victim probe
     if [ -n "$after" ] && [ "$(field status "$after")" != up ]; then
       changed="checksum unchanged"
       [ "$(field checksum "$after")" != "$(field checksum "$before")" ] && changed="page checksum changed"
-      pass "$id: the exec changes the victim: $(field status "$after"), \"$(field banner "$after")\", $changed"
+      pass "$id: the attack changes the victim: $(field status "$after"), \"$(field banner "$after")\", $changed"
     else
       fail "$id: the exec did not change the victim's state ('${after:-no answer}')"
     fi

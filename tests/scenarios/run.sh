@@ -17,7 +17,8 @@
 #
 # Per scenario, like the API: a Pod in `sandbox` from the scenario's PodSpec, with labels
 # sdp.hubertjablon.ski/run-id and sdp.hubertjablon.ski/quarantine: "false" and activeDeadlineSeconds =
-# timeout_seconds; wait for Ready; run `exec.command` in container `target` (through `script` for a
+# timeout_seconds; wait for Ready; run `pre_exec.command`, if any, to completion without a TTY, as the
+# API does (ADR 0022); run `exec.command` in container `target` (through `script` for a
 # real TTY when exec.tty is true); then, within timeout_seconds:
 #   terminate  -> the pod is deleted (by Talon, not by its deadline), Falco logged `detection` for it,
 #                 Talon logged a successful kubernetes:terminate for it;
@@ -143,7 +144,9 @@ for s in yaml.safe_load(open(f"{work}/scenarios.yaml")):
     json.dump(pod, open(f"{work}/{name}.json", "w"))
     exec_ = s.get("exec") or {"command": [], "tty": False}
     print("\t".join([s["id"], name, s["detection"], s["response"], str(s["timeout_seconds"]),
-                     str(exec_["tty"]).lower(), shlex.join(exec_["command"])]))
+                     str(exec_["tty"]).lower(),
+                     shlex.join(s["pre_exec"]["command"]) if s.get("pre_exec") else "-",
+                     shlex.join(exec_["command"])]))
 PY
 [ -s "$WORK_DIR/plan.tsv" ] || die "no scenario matched${ONLY:+ ONLY=$ONLY}"
 if grep -q $'\ttrue\t' "$WORK_DIR/plan.tsv"; then
@@ -180,7 +183,7 @@ talon_acted() { # actionner, pod, since
 }
 
 # The plan is read on fd 3: `script` and kubectl must not swallow it from stdin.
-while IFS=$'\t' read -r -u 3 id pod detection response timeout tty cmd; do
+while IFS=$'\t' read -r -u 3 id pod detection response timeout tty pre cmd; do
   step "$id: '$detection' -> $response (timeout ${timeout}s)"
 
   PODS+=("$pod")
@@ -199,6 +202,10 @@ while IFS=$'\t' read -r -u 3 id pod detection response timeout tty cmd; do
   fi
 
   t0=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  if [ "$pre" != - ]; then
+    # Never with a TTY, to completion; its exit status is not judged, as in the API.
+    eval "$KUBECTL exec -n $NAMESPACE $pod -c target -- $pre" </dev/null >"$WORK_DIR/$pod.pre.log" 2>&1 || true
+  fi
   start=$SECONDS
   start_exec "$pod" "$tty" "$cmd"
 

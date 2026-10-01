@@ -14,6 +14,9 @@
 #                    sdp.hubertjablon.ski/run-id and sdp.hubertjablon.ski/quarantine: "false") and
 #                    activeDeadlineSeconds, and changes nothing else
 #   exec             {command, tty} run in container `target` once the pod is Ready, or null
+#   pre_exec         optional {command}, run to completion in the same container *before* exec, never
+#                    with a TTY (the API refuses tty: true); for an attack whose detected step fires
+#                    the instant it starts, so its visible effect has to come first (scenario 1)
 #   victim           true: the pod serves the "SDP Shop" on :8080 and the API polls its /state.json
 #                    during the run (ADR 0022); absent or false: nothing to poll
 #
@@ -41,8 +44,9 @@
 # same process as before ADR 0022, started with `exec` so it replaces the shell: proc.name, its
 # arguments and its parent are what the rule saw before. tests/scenarios/offline.sh checks both, the
 # mutation and the rule's preconditions. The one exception is shell-in-container: there the detected
-# step *is* the shell starting, so the defacement can only follow it (by milliseconds; the kill takes
-# a second or more).
+# step *is* the TTY shell starting, and Talon deletes the pod about 0.35 s later - a defacement written
+# by that shell is gone before the 500 ms poll sees it. So the defacement is a separate pre_exec without
+# a TTY (which no Talon rule acts on), with a 1.5 s pause, and the exec is the plain interactive shell.
 #
 # Exec exit codes are not a success signal: `wget` fails by design (nothing listens on the target) and
 # a terminated pod ends the exec with an error. The API judges a run by the Falco and Talon events.
@@ -114,20 +118,23 @@
       - name: shop
         emptyDir:
           sizeLimit: 1Mi
-  # The shell defaces the shop (page and state), then `id` and `hostname` give the visitor something
-  # to see; `sleep` keeps the shell alive so the kill is what ends it, not the command running out.
-  # The shell is what Falco detects, so the defacement follows the detection here (see the top).
-  exec:
+  # First, without a TTY: deface the shop (page and state) and wait 1.5 s, three of the API's polls,
+  # so the visitor sees it. A shell without a TTY matches no rule Talon acts on (see the top).
+  pre_exec:
     command:
       - sh
       - -c
       - >-
         cd /srv/shop
-        && echo '<h1>SDP Shop has been defaced</h1><p>Owned from an interactive shell.</p>' > .index
+        && echo '<h1>SDP Shop has been defaced</h1><p>Owned through remote code execution.</p>' > .index
         && mv .index index.html
-        && echo '{"status":"defaced","title":"H4CK3D - SDP Shop","banner":"Page defaced from an interactive shell"}' > .state
-        && mv .state state.json;
-        id; hostname; sleep 60
+        && echo '{"status":"defaced","title":"H4CK3D - SDP Shop","banner":"Page defaced, attacker opening a shell"}' > .state
+        && mv .state state.json
+        && sleep 1.5
+  # Then the interactive shell, exactly as before ADR 0022: `id` and `hostname` give the visitor
+  # something to see; `sleep` keeps the shell alive so the kill is what ends it.
+  exec:
+    command: ["sh", "-c", "id; hostname; sleep 60"]
     tty: true
 
 # ---------------------------------------------------------------------------------------------------
