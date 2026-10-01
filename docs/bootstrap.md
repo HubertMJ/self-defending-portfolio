@@ -493,6 +493,15 @@ kubectl diff -k cluster/bootstrap/argocd        # expect only ConfigMap argocd-c
 kubectl apply -k cluster/bootstrap/argocd --server-side --force-conflicts
 ```
 
+One host change comes with this phase as well. `kernel.perf_event_paranoid` goes from Debian's 3
+to the upstream default 2 (ADR 0013, amendment), without which the least-privileged Falco probe
+cannot attach its tracepoints. It is part of the sysctl role:
+
+```sh
+cd ansible && ansible-playbook playbooks/hardening.yml --tags sysctl
+ssh <node> sysctl kernel.perf_event_paranoid        # 2
+```
+
 After each Application syncs, check the node's memory (plan budget: under 80 %, about 6.2 GiB):
 
 ```sh
@@ -554,7 +563,8 @@ show zero failures for both policies.
 | Symptom | Cause |
 |---------|-------|
 | `falco` Application error, `must specify --enable-helm` | the argocd-cm change above was not applied |
-| Falco CrashLoop, BPF / permission errors | AppArmor not `Unconfined`, or a capability missing from `containerSecurityContext` (all four must be listed next to `drop: [ALL]`) |
+| Falco CrashLoop, `perf_event_open() failed: Permission denied` | `kernel.perf_event_paranoid` is still Debian's 3; run the sysctl role (above) |
+| Falco CrashLoop, other BPF / permission errors | AppArmor not `Unconfined`, or a capability missing from `containerSecurityContext` (all four must be listed next to `drop: [ALL]`) |
 | Falco alerts but Talon does nothing | Talon holds no Lease (RBAC for `leases` in `falco-response`), or Falcosidekick's POSTs are dropped (`hubble observe --namespace falco-response`) |
 | Talon logs a 403 | it acted on a pod outside `sandbox`, which is the RBAC working; or its `sandbox` Role is missing |
 | victim not labelled, Talon logs a JSON Patch error | the victim lacks the pre-set `sdp.hubertjablon.ski/quarantine: "false"` label |

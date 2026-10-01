@@ -214,3 +214,48 @@ image's v5.3.0). The helmCharts path is unaffected, because the Helm image rende
 kustomize only applies the patch; the output was checked to be identical to a v5.8.1 `--enable-helm`
 build. Bumping `KUSTOMIZE_IMAGE` to v5.8.1 needs its registry.k8s.io digest, which could not be
 resolved from that sandbox.
+
+### Correction 2026-10-01: Debian's `perf_event_paranoid=3` and the least-privileged probe
+
+On the node (Debian 13, kernel 6.12.107+deb13), Falco crash-looped right after
+`Opening 'syscall' source with modern BPF probe`:
+`libbpf: tracepoint 'syscalls/sys_enter_connect' perf_event_open() failed: Permission denied`.
+
+**Cause.**
+- The modern probe attaches its TOCTOU-mitigation programs (`connect_e`, `creat_e`, `open_e`, ...)
+  to classic syscall tracepoints. libbpf does that through `perf_event_open()`
+  (`userspace/libpman/src/programs.c`, `attach_*_toctou_mitigation_progs`). They are attached
+  whenever those syscalls are of interest, and Falco 0.45 has no setting to turn them off.
+- Debian ships `kernel.perf_event_paranoid=3`, a Debian-only level. Its kernel patch refuses
+  `perf_event_open()` to any caller without CAP_SYS_ADMIN when paranoid > 2, and returns EACCES.
+  CAP_PERFMON, which upstream accepts for tracepoints, does not count. Nothing in this repository set
+  the value, so the Debian default applied.
+- What it is not:
+  - Not seccomp. A seccomp denial is EPERM, and kubelet `seccompDefault` is not enabled, so a
+    container without a profile runs unconfined.
+  - Not AppArmor. The profile is `Unconfined`.
+  - Not yama or `unprivileged_bpf_disabled`. Neither applies to a process with CAP_BPF and
+    CAP_PERFMON.
+
+**Options considered:**
+- CAP_SYS_ADMIN for Falco (rejected). It would work, but it is the broadest capability there is
+  (mounts, namespaces, most of the kernel's admin interfaces), and it would mean relaxing
+  `restricted-falco` (ADR 0012).
+- Privileged Falco (rejected). Worse than the above.
+- seccomp `Unconfined` or a Localhost profile (rejected). Not the cause, so it would change nothing.
+- (chosen) `kernel.perf_event_paranoid=2` through the existing sysctl role
+  (`ansible/roles/sysctl/defaults/main.yml`). 2 is the upstream kernel default: unprivileged
+  processes may only measure their own user-space activity, and tracepoints and kernel events still
+  need CAP_PERFMON. It is a host-wide setting, but it widens nothing beyond what every non-Debian
+  kernel allows, and it keeps the sensor at its four capabilities. Containers in the restricted
+  namespaces additionally run under the RuntimeDefault seccomp profile.
+
+**`disabled BPF iterators (not running in the root PID namespace ...)`** is informational. Without BPF
+iterators, libscap scans `/host/proc` (read-only) for the processes that already exist at start-up.
+`hostPID` is not needed, and Kyverno's `restricted-falco` does not relax Host Namespaces for it.
+
+**Apply:**
+```sh
+cd ansible && ansible-playbook playbooks/hardening.yml --tags sysctl   # sets it live and in /etc/sysctl.d
+```
+Then restart the Falco pod (or wait for the next crash-loop back-off).

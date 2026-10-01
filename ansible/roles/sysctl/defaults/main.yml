@@ -32,6 +32,15 @@ sysctl_settings:
   net.core.bpf_jit_harden: "1"
   kernel.yama.ptrace_scope: "1"
   kernel.sysrq: "0"
+  # Debian's default is 3, a Debian-only level (kernel patch "perf: allow further restriction of
+  # perf_event_open") that refuses perf_event_open() to every process without CAP_SYS_ADMIN - and
+  # CAP_PERFMON does not count. Falco's modern eBPF probe attaches its TOCTOU-mitigation programs
+  # to syscall tracepoints through perf_event_open(), so at 3 the least-privileged sensor (BPF,
+  # PERFMON, SYS_RESOURCE, SYS_PTRACE) dies with EACCES (ADR 0013, amendment). 2 is the upstream
+  # kernel default: unprivileged processes may only measure their own user-space activity, and
+  # tracepoints and kernel profiling still need CAP_PERFMON. The alternative was CAP_SYS_ADMIN for
+  # Falco, which is a far larger grant than this.
+  kernel.perf_event_paranoid: "2"
 
   # --- Filesystem hardening ---
   fs.protected_hardlinks: "1"
