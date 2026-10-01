@@ -87,3 +87,14 @@ custom rule could not match it. The live run covers that link.
 - The scenario list is the API's input; this mapping table is its explanation. A fifth scenario is a
   ConfigMap entry, a Talon rule if a new response is needed, and a precondition check in
   `tests/scenarios/offline.sh` (the script fails on a rule it has no check for).
+
+## Amendment 2026-10-01: the execs mark the victim first (ADR 0022)
+
+Every scenario pod now serves a fake shop that the visitor watches (ADR 0022), and every exec changes
+it before the detected step: `sh -c 'cd /srv/shop && echo ... > .state && mv .state state.json && sleep 1
+&& exec <program>'`. The detected program and its arguments are the ones in the table above, started
+with `exec` so the process Falco sees is unchanged in name, arguments and parent; shell-in-container
+defaces the page from the TTY shell that is itself the detection. No Falco or Talon rule changed. The
+marking shells have no TTY, so they do not trip "Terminal shell in container", and the sensitive file is
+still opened by `cat`, never by a shell redirect (shells are on that rule's trusted list).
+`tests/scenarios/offline.sh` checks the exec'd program, not argv0, and also checks the mutation.
