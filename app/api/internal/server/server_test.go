@@ -159,6 +159,17 @@ func TestHealthzAndScenarios(t *testing.T) {
 	if _, leaked := list[0]["pod"]; leaked {
 		t.Fatal("pod spec exposed publicly")
 	}
+	for _, c := range []struct{ method, path string }{{"GET", "/api/attack/shell-in-container"}, {"POST", "/api/events"}, {"DELETE", "/api/posture"}} {
+		req, _ := http.NewRequest(c.method, e.public.URL+c.path, nil)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusMethodNotAllowed || resp.Header.Get("Content-Type") != "application/json" {
+			t.Errorf("%s %s: %d %s", c.method, c.path, resp.StatusCode, resp.Header.Get("Content-Type"))
+		}
+	}
 	for _, u := range []string{e.public.URL + "/internal/falco", e.public.URL + "/api/nope"} {
 		resp, _ := http.Post(u, "application/json", strings.NewReader("{}"))
 		if resp.StatusCode != http.StatusNotFound {
