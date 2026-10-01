@@ -1,0 +1,35 @@
+# The API (ADR 0015), deployed by cluster/apps/portfolio-api.yaml.
+#
+# No `namespace:` transformer on purpose: two of the Roles in rbac.yaml live in `sandbox` and
+# `kube-bench`, next to the objects they grant access to, and a transformer would move them here.
+# Every object names its namespace itself.
+#
+# The scenario catalogue (ConfigMap `scenarios`, key scenarios.yaml, namespace portfolio-api) is
+# owned with the scenarios themselves, in cluster/infra/sandbox/scenarios/, and is referenced from
+# here once that kustomization exists:
+#   resources:
+#     - ../sandbox/scenarios
+# Until then the Deployment's volume is optional and the API lists no scenarios.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - namespace.yaml
+  - networkpolicy.yaml
+  - ciliumnetworkpolicy.yaml
+  - rbac.yaml
+  - deployment.yaml
+  - service.yaml
+  - httproute.yaml
+
+# Built by .github/workflows/build-images.yml (ADR 0016). Only the digest is referenced; the tag is
+# informational. Bump = commit.
+#
+# PLACEHOLDER DIGEST: the api image does not exist until build-images.yml has run on main. Replace
+# the zeros with the digest from that run's summary. Until then the pod cannot pull, and
+# `make validate` reports verify-portfolio-images failing for this Deployment - which is the policy
+# working, not a bug.
+images:
+  - name: ghcr.io/hubertmj/self-defending-portfolio/api
+    newTag: main
+    digest: sha256:0000000000000000000000000000000000000000000000000000000000000000

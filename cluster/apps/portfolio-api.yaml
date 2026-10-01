@@ -1,0 +1,41 @@
+# Wave 6: the API behind https://hubertjablon.ski/api (ADR 0015) - scenario list, attack runs in
+# `sandbox`, the live Falco/Talon feed and the posture summary. After wave 5 because it reads and
+# acts on what wave 5 installs: its Roles live in `sandbox` and `kube-bench`, its posture comes from
+# Kyverno's and Trivy's reports, and its live feed from Falcosidekick and Talon.
+#
+# Its own Application, not part of sandbox or falco-response: the API is the one workload of ours
+# with permissions in other namespaces, and those grants are reviewed together with it, in
+# cluster/infra/portfolio-api/rbac.yaml.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: portfolio-api
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "6"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/HubertMJ/self-defending-portfolio.git
+    targetRevision: main
+    path: cluster/infra/portfolio-api
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: portfolio-api
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    # The Roles in sandbox and kube-bench cannot be created before those namespaces exist; on a fresh
+    # cluster the retry rides that out instead of leaving the Application failed.
+    retry:
+      limit: 5
+      backoff:
+        duration: 10s
+        factor: 2
+        maxDuration: 3m
+    syncOptions:
+      # The Namespace (restricted, gateway-routes label) is a manifest in cluster/infra/portfolio-api.
+      - CreateNamespace=false

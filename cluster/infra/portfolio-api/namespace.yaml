@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: portfolio-api
+  labels:
+    # A static Go binary on distroless: non-root, no capabilities, read-only root. Restricted costs
+    # nothing, and this is the namespace whose ServiceAccount can create pods elsewhere, so it gets
+    # the strictest profile there is.
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
+    # Permits this namespace's HTTPRoute to attach to the portfolio Gateway, and - the same label,
+    # the same decision - lets cloudflared's second Envoy hop reach the backend (see
+    # cluster/infra/cloudflared/ciliumnetworkpolicy.yaml, last egress rule).
+    portfolio.hubertjablon.ski/gateway-routes: "true"
