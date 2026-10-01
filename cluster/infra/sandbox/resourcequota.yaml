@@ -1,0 +1,32 @@
+# The ceiling on everything that can run in `sandbox` at once (ADR 0017), sized by the phase 5/6
+# contract: the portfolio API runs one scenario at a time, and tests/runtime and tests/scenarios create
+# their victims one after another, so three pods is headroom, not a target. What a visitor can make the
+# cluster spend is bounded here, whatever the API's rate limits do: 3 pods, half a CPU and 512 MiB in
+# total on an 8 GB single node.
+#
+# Requests *and* limits are capped, so every container here must state both; the LimitRange next to
+# this fills in defaults for a container that does not (tests/runtime's victim sets no CPU limit).
+#
+# Nothing but pods belongs in `sandbox`: the object counts below are zero, so a compromised API (whose
+# RBAC already stops at pods) or a mistaken manifest cannot add a Service, a volume claim or a
+# replication controller that outlives a scenario.
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: sandbox
+  namespace: sandbox
+spec:
+  hard:
+    pods: "3"
+    requests.cpu: 500m
+    limits.cpu: 500m
+    requests.memory: 512Mi
+    limits.memory: 512Mi
+    # The drop-and-execute scenario's writable layer, plus container logs, for all pods together.
+    requests.ephemeral-storage: 64Mi
+    limits.ephemeral-storage: 128Mi
+    services: "0"
+    services.loadbalancers: "0"
+    services.nodeports: "0"
+    persistentvolumeclaims: "0"
+    replicationcontrollers: "0"

@@ -1,0 +1,32 @@
+# Per-container defaults and bounds in `sandbox` (ADR 0017), the companion of resourcequota.yaml.
+#
+#   default / defaultRequest - filled in for a container that omits a value, so the quota's
+#                              "requests and limits are required" never rejects an otherwise valid pod
+#                              (tests/runtime/victim-pod.yaml states no CPU limit and no
+#                              ephemeral-storage). Kyverno's require-pod-resources still judges what
+#                              the manifest says, so this is not a way around that policy.
+#   max                      - no single scenario pod can take the whole quota: at most a fifth of a
+#                              CPU, 128 MiB and 16 MiB of writable disk per container.
+#
+# The scenario pods (scenarios/scenarios.yaml) ask for 10m/16Mi and are capped at 100m/32Mi; three of
+# them at once use 300m of the 500m CPU limit and 96 MiB of the 512 MiB memory limit.
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: sandbox
+  namespace: sandbox
+spec:
+  limits:
+    - type: Container
+      defaultRequest:
+        cpu: 10m
+        memory: 16Mi
+        ephemeral-storage: 1Mi
+      default:
+        cpu: 100m
+        memory: 32Mi
+        ephemeral-storage: 8Mi
+      max:
+        cpu: 200m
+        memory: 128Mi
+        ephemeral-storage: 16Mi
