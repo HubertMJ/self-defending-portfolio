@@ -120,9 +120,10 @@ make cluster       # k3s (no flannel, no kube-proxy) + Cilium
 make bootstrap     # installs Argo CD once (needs KUBECONFIG and SOPS_AGE_KEY_FILE); from here on, git push
 ```
 
-A fork has to replace the repository owner, the ACME contact, the tunnel UUID and the age recipient
-first; the placeholders and the order are in [`cluster/bootstrap/README.md`](cluster/bootstrap/README.md)
-and [`docs/bootstrap.md`](docs/bootstrap.md) §4.0.
+The deployment-specific values (GitHub owner, hostname, ACME contact, tunnel UUID, age recipient,
+the two encrypted secrets) are committed for this cluster; a fork replaces them first. Where each one
+lives: [`cluster/bootstrap/README.md`](cluster/bootstrap/README.md) and
+[`docs/bootstrap.md`](docs/bootstrap.md) §4.0.
 
 <!-- TODO-CONTENT: measured time for a full rebuild from zero (docs/bootstrap.md, "Rebuild from zero"). -->
 
