@@ -31,12 +31,12 @@ Trivy Operator, which writes one report object per workload and scan type and re
 rescan.
 
 **Decision.**
-- **ServerSideDiff for charts co-owned through SSA.** `cluster/apps/kyverno.yaml` carries
-  `argocd.argoproj.io/compare-options: ServerSideDiff=true`: the diff is taken against a dry-run
-  server-side apply, which normalises empty maps and defaulted fields and matches the
-  `ServerSideApply=true` the app already syncs with. Applied per Application, not globally in
-  `argocd-cm`, so every app that relies on it says so. Fallback if it ever stops absorbing a chart's
-  output: an `ignoreDifferences` on those CRDs' `.metadata.labels` / `.metadata.annotations`.
+- **Ignore only empty metadata maps on Kyverno's CRDs.** `cluster/apps/kyverno.yaml` ignores
+  `.metadata.labels | select(. == {})` and the same for `annotations` on
+  `apiextensions.k8s.io/CustomResourceDefinition`. The `select` keeps the ignore exact: an empty map
+  rendered by the chart is tolerated, a real label or annotation is still diffed. Tried first and
+  rejected: `argocd.argoproj.io/compare-options: ServerSideDiff=true` on the Application; with it
+  applied and the app hard-refreshed, the same 11 CRDs stayed OutOfSync.
 - **Ignore child Application finalizers on `root`.** `root-application.yaml` ignores
   `.metadata.finalizers` on `argoproj.io/Application` and syncs with `RespectIgnoreDifferences=true`,
   so a sync of a child Application never writes git's shorter list over the runtime one. The ignore is

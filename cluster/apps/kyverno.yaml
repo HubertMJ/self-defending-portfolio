@@ -23,19 +23,6 @@ metadata:
   namespace: argocd
   annotations:
     argocd.argoproj.io/sync-wave: "1"
-    # Diff against what the API server would store, not against the raw chart output. Chart 3.9.1
-    # renders the 11 `policies.kyverno.io` CRDs with `metadata.labels: {}` and `annotations: {}`;
-    # the API server drops an empty map, so the client-side diff saw a missing field on every
-    # refresh and the app never reached Synced. With ServerSideDiff Argo CD asks the API server for
-    # a dry-run server-side apply of the manifest and compares that, which normalises empty maps,
-    # defaulted fields and the webhook fields Kyverno co-owns through SSA. It is the natural pair of
-    # ServerSideApply=true below (ADR 0005, amendment 2026-10-01).
-    #
-    # Fallback if a future chart drifts in a way server-side diff does not absorb: an
-    # ignoreDifferences entry for apiextensions.k8s.io/CustomResourceDefinition with the CRD names
-    # and jqPathExpressions [.metadata.labels, .metadata.annotations]. Not used now, because it
-    # would also hide a real label change on those CRDs.
-    argocd.argoproj.io/compare-options: ServerSideDiff=true
   finalizers:
     - resources-finalizer.argocd.argoproj.io
 spec:
@@ -135,6 +122,17 @@ spec:
     server: https://kubernetes.default.svc
     namespace: kyverno
   ignoreDifferences:
+    # Chart 3.9.1 renders the 11 `policies.kyverno.io` CRDs with `metadata.labels: {}` and
+    # `annotations: {}`; the API server stores no empty map, so the diff reported a missing field on
+    # every refresh and the app never reached Synced. `select(. == {})` drops the field from the
+    # comparison only while the chart renders it empty: a real label or annotation added by a later
+    # chart still shows up. ServerSideDiff=true was tried first and did not absorb it (ADR 0005,
+    # amendment 2026-10-01).
+    - group: apiextensions.k8s.io
+      kind: CustomResourceDefinition
+      jqPathExpressions:
+        - .metadata.labels | select(. == {})
+        - .metadata.annotations | select(. == {})
     # The standard Kyverno + Argo CD arrangement, and the reason this Application is not permanently
     # OutOfSync:
     #
