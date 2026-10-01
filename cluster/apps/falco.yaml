@@ -1,0 +1,211 @@
+# Wave 5: runtime detection, the sensor half (ADR 0013). Falco watches every syscall on the node with
+# its modern eBPF probe and sends each alert as JSON to Falcosidekick in `falco-response`
+# (cluster/apps/falco-response.yaml), which forwards it to Falco Talon for the response.
+#
+# Least privilege, as far as the probe allows (ADR 0012, ADR 0013):
+#   * modern eBPF in leastPrivileged mode: four capabilities (BPF, PERFMON, SYS_RESOURCE, SYS_PTRACE)
+#     instead of `privileged: true`, every other capability dropped;
+#   * AppArmor Unconfined (the default profile blocks the bpf() calls), as a pod-level field;
+#   * root, because the probe and /proc scanning need it - runAsUser left unset, never `0`;
+#   * no Kubernetes API access and no k8smeta collector: pod and namespace names come from the
+#     container runtime (CRI labels) through the container plugin;
+#   * no falcoctl: the image already carries the rules (/etc/falco/falco_rules.yaml, including
+#     "Terminal shell in container") and the container plugin (/usr/share/falco/plugins/
+#     libcontainer.so), so Falco needs no internet and nothing changes the rules at run time except
+#     a commit here.
+#
+# The namespace `falco` holds this DaemonSet and nothing else: its Pod Security admission is
+# `privileged` (PSA cannot express "restricted minus four capabilities"), and the precise judgement is
+# Kyverno's restricted-falco rule, which relaxes exactly the controls listed in
+# cluster/infra/kyverno-policies/pod-security-restricted.yaml.
+#
+# Two sources: the chart, and cluster/infra/falco/ for the Namespace, the default-deny NetworkPolicy
+# and the CiliumNetworkPolicy.
+#
+# Pinned to chart 9.2.0 / Falco 0.45.0 (ADR 0008), resolved from the repository index:
+#   curl -sfL https://falcosecurity.github.io/charts/index.yaml | yq '.entries.falco[0] | .version, .appVersion'
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: falco
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "5"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  sources:
+    - repoURL: https://falcosecurity.github.io/charts
+      chart: falco
+      targetRevision: 9.2.0
+      helm:
+        releaseName: falco
+        valuesObject:
+          image:
+            registry: docker.io
+            repository: falcosecurity/falco
+            tag: "0.45.0@sha256:788f1129c542171813083d4afc61b16730a47dde8c23d9c39370acef996349b6"
+
+          driver:
+            enabled: true
+            kind: modern_ebpf
+            modernEbpf:
+              leastPrivileged: true
+              # 4 = 8 MiB per CPU buffer, the chart default. Plan section 3: drop to 3 if the node's
+              # memory gate is tight after the first day of real usage.
+              bufSizePreset: 4
+            loader:
+              # modern_ebpf needs no driver loader (the probe is compiled into Falco), so the chart
+              # never runs the privileged loader init container for it either way. Stated `false`
+              # because only then does the chart mount the host's /proc read-only: with the loader
+              # "enabled" (even though skipped), /host/proc is writable, and a writable host /proc
+              # next to SYS_PTRACE means /proc/<pid>/mem of every host process is writable.
+              #
+              # Chart 9.2.0 limitation, recorded in ADR 0013 as an open item: the same switch also
+              # mounts /host/boot and /host/usr read-only and /host/lib/modules READ-WRITE, and no
+              # value makes that mount read-only. Fixing it needs an upstream chart change or a
+              # post-render step; until then it is the price of the read-only /proc.
+              enabled: false
+
+          # Replaces the chart's computed container context entirely (pod-template.tpl,
+          # falco.securityContext), so the four leastPrivileged capabilities are restated here next
+          # to `drop: [ALL]`. Kyverno's restricted-falco rule accepts exactly these four on the Falco
+          # image and fails a fifth (verified by `kyverno apply` in `make validate`). runAsUser,
+          # runAsNonRoot, allowPrivilegeEscalation and seccomp are left to the image/runtime defaults:
+          # the probe needs root, and those controls are relaxed for the Falco image only.
+          containerSecurityContext:
+            privileged: false
+            capabilities:
+              drop: ["ALL"]
+              add: ["BPF", "PERFMON", "SYS_RESOURCE", "SYS_PTRACE"]
+          # AppArmor as the pod-level field (Kubernetes >= 1.30). Not in containerSecurityContext:
+          # anything there would replace the block above. The chart also adds the legacy
+          # container.apparmor.security.beta.kubernetes.io annotation with the same value, which the
+          # API server accepts because the two agree.
+          podSecurityContext:
+            appArmorProfile:
+              type: Unconfined
+
+          # Plan section 3: 100m/256Mi requested, 768Mi ceiling (the chart's 512Mi/1Gi is sized for
+          # larger nodes). To be tightened to observed peak x 1.5 after the first day.
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 1000m
+              memory: 768Mi
+
+          # Pod and namespace names come from the CRI labels the container plugin reads; the k8smeta
+          # collector (a separate Deployment with cluster-wide watch rights) is not needed for that.
+          collectors:
+            enabled: true
+            kubernetes:
+              enabled: false
+            containerEngine:
+              enabled: true
+              # Only k3s's containerd. Every other engine is off so the plugin does not probe
+              # sockets that do not exist here, and only one host socket directory is mounted.
+              engines:
+                docker:
+                  enabled: false
+                podman:
+                  enabled: false
+                containerd:
+                  enabled: false
+                cri:
+                  enabled: true
+                  sockets: ["/run/k3s/containerd/containerd.sock"]
+                lxc:
+                  enabled: false
+                libvirt_lxc:
+                  enabled: false
+                bpm:
+                  enabled: false
+
+          # Rules and plugin come from the image (see the header); nothing is downloaded.
+          falcoctl:
+            artifact:
+              install:
+                enabled: false
+              follow:
+                enabled: false
+
+          # Falco's own service account needs nothing from the API server. The chart only renders
+          # its Role for driver.kind `auto`; stated so a chart bump cannot add one silently.
+          rbac:
+            create: false
+          # The ServiceAccount is cluster/infra/falco/serviceaccount.yaml instead of the chart's, for
+          # one field the chart has no value for: automountServiceAccountToken: false. A sensor with
+          # BPF and SYS_PTRACE should not also hold an API token, even one without permissions.
+          serviceAccount:
+            create: false
+            name: falco
+
+          # Rules on top of the image's falco_rules.yaml (loaded from /etc/falco/rules.d, after it).
+          # The isolation rule of the DoD (plan section 4.4): a network tool started in `sandbox` is
+          # not killed, it is labelled and cut off by the quarantine policy (Falco Talon, plan commit
+          # 7). `proc.name` is the executable's base name, so busybox applets invoked through their
+          # symlinks (`wget`, `nc`) match as well.
+          customRules:
+            sdp-rules.yaml: |-
+              - rule: SDP network tool in sandbox
+                desc: >
+                  A network transfer or connection tool was started in a container in the sandbox
+                  namespace. Workloads there have no reason to fetch anything; this is the trigger for
+                  the quarantine label (ADR 0013).
+                condition: >
+                  spawned_process and container and k8s.ns.name = "sandbox"
+                  and proc.name in (wget, nc, curl)
+                output: >
+                  Network tool started in sandbox (proc=%proc.name cmdline=%proc.cmdline
+                  user=%user.name container=%container.name image=%container.image.repository)
+                priority: WARNING
+                tags: [sdp, network, sandbox]
+
+          falco:
+            json_output: true
+            # Every alert carries the pod and namespace as output fields; Falco Talon's actions and
+            # its rule matching on `k8s.ns.name=sandbox` read them from there.
+            append_output:
+              - suggested_output: true
+              - extra_fields:
+                  - k8s.ns.name
+                  - k8s.pod.name
+            http_output:
+              enabled: true
+              # The full name: no search-domain walk through four DNS lookups per alert.
+              url: http://falcosidekick.falco-response.svc.cluster.local:2801/
+            # Alerts stay on stdout as well: `kubectl logs ds/falco` is what tests/runtime/run.sh and
+            # an operator read first. There is no syslog daemon in the container.
+            stdout_output:
+              enabled: true
+            syslog_output:
+              enabled: false
+            log_syslog: false
+            # The probes' endpoint (/healthz on 8765). Prometheus metrics stay off.
+            webserver:
+              enabled: true
+              listen_port: 8765
+              prometheus_metrics_enabled: false
+
+    - repoURL: https://github.com/HubertMJ/self-defending-portfolio.git
+      targetRevision: main
+      path: cluster/infra/falco
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: falco
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    retry:
+      limit: 5
+      backoff:
+        duration: 10s
+        factor: 2
+        maxDuration: 3m
+    syncOptions:
+      # The Namespace (privileged enforce, restricted audit) is a manifest in cluster/infra/falco.
+      - CreateNamespace=false

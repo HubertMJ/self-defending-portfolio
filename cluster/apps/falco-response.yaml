@@ -1,0 +1,85 @@
+# Wave 5: runtime detection, the response half (ADR 0013). Falcosidekick receives Falco's alerts over
+# HTTP (cluster/apps/falco.yaml) and fans them out; Falco Talon (plan commit 7) acts on them.
+#
+# Kept apart from the `falco` namespace on purpose: the sensor needs a privileged namespace and must
+# not hold anything that talks to the API server, while everything here runs PSS `restricted` and is
+# what holds API permissions (Talon's, scoped to `sandbox`).
+#
+# No Falcosidekick UI and no Redis: the alerts are read from Falco's and Falcosidekick's logs and,
+# from phase 6 on, from the posture page; a UI with its own store is one more thing to secure.
+#
+# Two sources: the chart, and cluster/infra/falco-response/ for the Namespace (restricted), the
+# default-deny NetworkPolicy and the CiliumNetworkPolicies.
+#
+# Pinned (ADR 0008), resolved from the repository index:
+#   curl -sfL https://falcosecurity.github.io/charts/index.yaml \
+#     | yq '.entries.falcosidekick[0] | .version, .appVersion'
+# Chart 0.14.0's Chart.yaml still says appVersion 2.31.1, but its values.yaml defaults to image 2.32.0,
+# which is what is pinned below by digest.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: falco-response
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "5"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  sources:
+    - repoURL: https://falcosecurity.github.io/charts
+      chart: falcosidekick
+      targetRevision: 0.14.0
+      helm:
+        releaseName: falcosidekick
+        valuesObject:
+          image:
+            registry: docker.io
+            repository: falcosecurity/falcosidekick
+            tag: "2.32.0@sha256:1976da72151850aae4436f33a5ed94bdef469f42a9b61c182b4feeb5441fb081"
+          # One node; a second replica would only double the alerts forwarded per event if Falco ever
+          # retried, and adds nothing to availability here.
+          replicaCount: 1
+          webui:
+            enabled: false
+          # The chart default sets runAsUser/fsGroup only; restricted needs the rest.
+          podSecurityContext:
+            runAsNonRoot: true
+            runAsUser: 1234
+            runAsGroup: 1234
+            fsGroup: 1234
+            seccompProfile:
+              type: RuntimeDefault
+          securityContext:
+            allowPrivilegeEscalation: false
+            privileged: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 200m
+              memory: 64Mi
+    - repoURL: https://github.com/HubertMJ/self-defending-portfolio.git
+      targetRevision: main
+      path: cluster/infra/falco-response
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: falco-response
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    retry:
+      limit: 5
+      backoff:
+        duration: 10s
+        factor: 2
+        maxDuration: 3m
+    syncOptions:
+      # The Namespace (restricted) is a manifest in cluster/infra/falco-response.
+      - CreateNamespace=false

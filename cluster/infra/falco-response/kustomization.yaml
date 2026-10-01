@@ -1,0 +1,11 @@
+# The non-chart half of cluster/apps/falco-response.yaml: the Namespace with its Pod Security labels
+# and the network policy for Falcosidekick (and, from plan commit 7, Falco Talon).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: falco-response
+
+resources:
+  - namespace.yaml
+  - networkpolicy.yaml
+  - ciliumnetworkpolicy.yaml

@@ -1,0 +1,46 @@
+# Falcosidekick accepts alerts from the Falco DaemonSet only (plan section 4.3). Its HTTP API has no
+# authentication, so this policy is what keeps any other pod from injecting a fake alert - which, once
+# Falco Talon is behind it, would be a way to get a pod in `sandbox` killed.
+#
+# Sync wave -1: applied before the Deployment, as in the other phase 4 namespaces.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: falcosidekick
+  namespace: falco-response
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+spec:
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: falcosidekick
+  ingress:
+    - fromEndpoints:
+        - matchLabels:
+            io.kubernetes.pod.namespace: falco
+            app.kubernetes.io/name: falco
+      toPorts:
+        - ports:
+            - port: "2801"
+              protocol: TCP
+    # The kubelet's probes (GET /ping on the same port).
+    - fromEntities:
+        - host
+      toPorts:
+        - ports:
+            - port: "2801"
+              protocol: TCP
+  egress:
+    - toEndpoints:
+        - matchLabels:
+            io.kubernetes.pod.namespace: kube-system
+            k8s-app: kube-dns
+      toPorts:
+        - ports:
+            - port: "53"
+              protocol: UDP
+            - port: "53"
+              protocol: TCP
+          rules:
+            dns:
+              - matchPattern: "*"

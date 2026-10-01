@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: falco-response
+  labels:
+    # Falcosidekick and Falco Talon are plain HTTP services: non-root, no capabilities, read-only root.
+    # The privileged part of runtime security stays in `falco`; this namespace is fully restricted.
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted

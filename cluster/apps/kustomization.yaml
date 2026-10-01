@@ -14,6 +14,8 @@
 #    5  policy-reporter         reports UI (cluster-internal) + Trivy CVE details plugin
 #    5  trivy-operator          image vulnerability / config / RBAC scanning + PolicyReport adapter
 #    5  kube-bench              daily CIS benchmark CronJob (k3s), results in the Job log
+#    5  falco                   runtime detection: modern eBPF sensor (privileged namespace, 4 capabilities)
+#    5  falco-response          Falcosidekick (alerts in) -> Falco Talon (response, plan commit 7)
 #
 # Waves only order the first sync of a fresh cluster loosely: the root Application has no health
 # check for its children, so it does not wait for one wave to be healthy before the next. Every
@@ -36,3 +38,5 @@ resources:
   - policy-reporter.yaml
   - trivy-operator.yaml
   - kube-bench.yaml
+  - falco.yaml
+  - falco-response.yaml

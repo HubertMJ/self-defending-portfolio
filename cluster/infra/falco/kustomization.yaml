@@ -1,0 +1,12 @@
+# The non-chart half of cluster/apps/falco.yaml: the Namespace with its Pod Security labels, Falco's
+# ServiceAccount (no token) and the network policy for the DaemonSet.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: falco
+
+resources:
+  - namespace.yaml
+  - serviceaccount.yaml
+  - networkpolicy.yaml
+  - ciliumnetworkpolicy.yaml

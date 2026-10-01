@@ -61,7 +61,8 @@ CHARTS=$(python3 scripts/lib/chart_sources.py cluster/apps "$VALUES_DIR")
 [ -n "$CHARTS" ] || { echo "render-charts: no chart Applications found under cluster/apps" >&2; exit 1; }
 
 # Splits the stream on `---` lines and drops every document annotated as a Helm test hook (see the
-# header), and every document that holds nothing but comments: a chart whose CRD files start with
+# header), removes null `initContainers:` keys (see below), and drops every document that holds
+# nothing but comments: a chart whose CRD files start with
 # their own `---` (trivy-operator's crds/) renders a `# Source:` line as a document of its own, which
 # kubectl and Argo CD skip but the kyverno CLI refuses to load ("Object 'Kind' is missing").
 # Text-level on purpose: parsing the ~6 MB of rendered CRD schema just to read one
@@ -75,7 +76,14 @@ docs = re.split(r"^---$", sys.stdin.read(), flags=re.M)
 test_hook = re.compile(r"^\s+[\"\x27]?helm\.sh/hook[\"\x27]?:\s*[\"\x27]?([\w-]+\s*,\s*)*test(-success|-failure)?\s*(,|[\"\x27]?\s*$)", re.M)
 # A line that is neither blank nor a comment; without one the document is empty YAML.
 content = re.compile(r"^[ \t]*[^#\s]", re.M)
-sys.stdout.write("---".join(d for d in docs if content.search(d) and not test_hook.search(d)))
+# `initContainers:` with no value (the falco chart renders one when no init container is enabled) is
+# YAML null. The API server drops a null field, so the Pod Kyverno judges in the cluster has no init
+# containers; the kyverno CLI instead matches its `=(initContainers)` patterns against the null and
+# reports a missing image tag and missing resources. Dropped here so the gate judges what is admitted.
+# Matched only when the next line is a sibling key (same indent, not a `- ` list item).
+null_init = re.compile(r"^( *)initContainers:[ \t]*\n(?=\1[^ \t\n-])", re.M)
+sys.stdout.write("---".join(null_init.sub("", d) for d in docs
+                            if content.search(d) and not test_hook.search(d)))
 '
 
 api_flags=()

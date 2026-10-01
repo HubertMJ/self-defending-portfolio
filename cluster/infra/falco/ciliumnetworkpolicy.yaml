@@ -1,0 +1,49 @@
+# The Falco DaemonSet may resolve names and deliver alerts to Falcosidekick, nothing else (plan
+# section 4.3). It runs in the pod network (no hostNetwork), so this policy applies to it. The
+# container runtime is reached through its unix socket, which is not network traffic.
+#
+# Sync wave -1: CiliumNetworkPolicy is a custom resource that Argo CD would otherwise apply after the
+# DaemonSet, and with default-deny in place Falco would start unable to deliver alerts.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: falco
+  namespace: falco
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+spec:
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: falco
+  ingress:
+    # The kubelet's startup, liveness and readiness probes on the webserver (/healthz).
+    - fromEntities:
+        - host
+      toPorts:
+        - ports:
+            - port: "8765"
+              protocol: TCP
+  egress:
+    # L7 DNS form, as in cluster/infra/cloudflared: Hubble logs every lookup the sensor makes.
+    - toEndpoints:
+        - matchLabels:
+            io.kubernetes.pod.namespace: kube-system
+            k8s-app: kube-dns
+      toPorts:
+        - ports:
+            - port: "53"
+              protocol: UDP
+            - port: "53"
+              protocol: TCP
+          rules:
+            dns:
+              - matchPattern: "*"
+    # http_output: every alert as JSON to Falcosidekick.
+    - toEndpoints:
+        - matchLabels:
+            io.kubernetes.pod.namespace: falco-response
+            app.kubernetes.io/name: falcosidekick
+      toPorts:
+        - ports:
+            - port: "2801"
+              protocol: TCP
