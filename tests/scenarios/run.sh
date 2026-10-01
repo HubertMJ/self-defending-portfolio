@@ -7,6 +7,7 @@
 #   KUBECONFIG=... tests/scenarios/run.sh                  (or: make scenario-test)
 #   KUBECTL="kubectl --kubeconfig ..." tests/scenarios/run.sh
 #   ONLY=network-tool tests/scenarios/run.sh               one scenario
+#   ISOLATE_TIMEOUT=90 tests/scenarios/run.sh             longer bound for the quarantine to bite
 #   SCENARIO_IMAGE=ghcr.io/hubertmj/self-defending-portfolio/scenario@sha256:... tests/scenarios/run.sh
 #
 # Scenarios come from the live ConfigMap (portfolio-api/scenarios), which is what the API executes; if it
@@ -40,6 +41,11 @@ NAMESPACE=sandbox
 ONLY=${ONLY:-}
 SCENARIO_IMAGE=${SCENARIO_IMAGE:-}
 PLACEHOLDER_DIGEST=sha256:0000000000000000000000000000000000000000000000000000000000000000
+# The quarantine label takes effect once Cilium has moved the pod to a new security identity, which
+# takes seconds to tens of seconds (measured 24-33 s on the cluster; ADR 0013, correction). Same bound
+# and the same measured print as tests/runtime/run.sh: 60 s is the failure threshold, not a typical
+# value.
+ISOLATE_TIMEOUT=${ISOLATE_TIMEOUT:-60}
 
 WORK_DIR=$(mktemp -d)
 PODS=()
@@ -214,8 +220,12 @@ while IFS=$'\t' read -r -u 3 id pod detection response timeout tty cmd; do
       if [ "$phase" = Running ]; then pass "$id: still Running (isolated, not killed)"
       else fail "$id: pod is ${phase:-gone}, expected Running"; fi
       lookup_fails() { ! lookup; }
-      if poll 20 lookup_fails; then pass "$id: can no longer resolve names (quarantine policy in effect)"
-      else fail "$id: can still resolve names 20 s after the label"; fi
+      label_seen=$SECONDS
+      if poll "$ISOLATE_TIMEOUT" lookup_fails; then
+        pass "$id: can no longer resolve names (quarantine in effect $((SECONDS - label_seen)) s after the label)"
+      else
+        fail "$id: can still resolve names ${ISOLATE_TIMEOUT}s after the label"
+      fi
       ;;
     *)
       fail "$id: unknown response '$response'"
