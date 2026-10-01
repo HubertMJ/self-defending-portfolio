@@ -1764,6 +1764,12 @@ html:not([data-tech="on"]) .tech-only {
   }
 }
 
+/* Grid items default to min-width: auto, so one unbreakable string (a pod name, an error code)
+   would widen the column past a 360 px screen. */
+.console__victim {
+  min-width: 0;
+}
+
 .console__side {
   display: grid;
   gap: 1.25rem;
@@ -2395,6 +2401,7 @@ html:not([data-tech="on"]) .tech-only {
 .browser__error p {
   margin: 0;
   max-width: 34rem;
+  overflow-wrap: anywhere;
 }
 
 .browser__error-title {

@@ -207,6 +207,19 @@ test.describe("live run console (mock)", () => {
   });
 });
 
+test.describe("narrow screens", () => {
+  test("no horizontal scroll at 360 px with a finished run, Technical Mode and every panel open", async ({ page }) => {
+    await page.setViewportSize({ width: 360, height: 780 });
+    await page.goto("/?mock=1&mock-speed=0.2");
+    await page.locator("#tech-toggle").click();
+    await page.locator('.scenario[data-scenario="network-tool"] button').click();
+    await expect(page.locator("#console .browser")).toHaveAttribute("data-status", "unreachable");
+    await page.locator("#console .verify > summary").click();
+    await page.locator("#console .rawlog > summary").click();
+    await noHorizontalScroll(page);
+  });
+});
+
 test.describe("technical mode", () => {
   test("toggles raw detail, is announced as a pressed button and persists", async ({ page }) => {
     const problems = guardConsole(page);
