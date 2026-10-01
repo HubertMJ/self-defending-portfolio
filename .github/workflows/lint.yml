@@ -36,7 +36,10 @@ jobs:
   validate:
     # Argo CD auto-syncs cluster/, so this job is the last cheap place a broken manifest can be
     # caught. It renders every kustomization and validates the output against the real Kubernetes
-    # and CRD schemas. Tooling runs in containers pinned by digest inside the scripts (ADR 0008).
+    # and CRD schemas, then renders every Helm chart Application and runs the Kyverno policies over
+    # all of it (ADR 0012). Tooling runs in containers pinned by digest inside the scripts (ADR 0008).
+    # Needs the network at run time - chart repositories, ghcr.io (kyverno-cli image, hello's signature
+    # and SBOM bundles) and the Sigstore TUF CDN - and fails closed when any of them is down.
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -44,14 +47,14 @@ jobs:
         with:
           python-version: "3.13"
       - name: python helpers
-        # PyYAML and Jinja2 only; both scripts read YAML, and the Cilium check renders the Ansible
+        # PyYAML and Jinja2 only; the scripts read YAML, and the Cilium check renders the Ansible
         # role's Jinja templates to compare resolved values.
         run: pip install 'PyYAML==6.0.2' 'Jinja2==3.1.6'
       - name: no plaintext Secret objects (ADR 0006)
         run: scripts/check-secrets-encrypted.sh
       - name: ansible and argo cd must agree about cilium
         run: scripts/check-cilium-values.sh
-      - name: kustomize build + kubeconform
+      - name: kustomize build + kubeconform, helm template + kyverno apply
         run: scripts/validate-cluster.sh
 
   secrets:

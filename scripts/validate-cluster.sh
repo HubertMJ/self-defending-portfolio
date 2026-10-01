@@ -3,6 +3,11 @@
 # and CRD schemas. This is the check that a commit which would break the cluster fails before it
 # reaches the cluster -- Argo CD auto-syncs, so CI is the last place a typo can be caught cheaply.
 #
+# Then it renders every Helm chart Application (scripts/render-charts.sh, hooks included) and runs
+# the repository's own Kyverno policies over everything rendered, offline (`kyverno apply`, ADR 0012):
+# a policy Kyverno would refuse to load, or a workload that an Enforce rule would reject, fails here
+# instead of at the next Argo CD sync.
+#
 # Everything runs in pinned containers (ADR 0008); nothing has to be installed on the host beyond
 # docker and python3. Set DOCKER=... to use a wrapper such as "sudo -n docker".
 set -euo pipefail
@@ -18,6 +23,9 @@ KUBECONFORM_IMAGE=${KUBECONFORM_IMAGE:-ghcr.io/yannh/kubeconform:v0.8.0-alpine@s
 # Ships kustomize plus the KSOPS plugin. Same image and digest as the argocd-repo-server init
 # container, so a local validation exercises exactly the binary the cluster will use.
 KSOPS_IMAGE=${KSOPS_IMAGE:-viaductoss/ksops:v4.5.1@sha256:4def9fdd4e2f850265740ebe9592c5455d19b76891e88e602df8b52d74b95334}
+# Same Kyverno release as the in-cluster controller (chart 3.9.1 = v1.19.1, cluster/apps/kyverno.yaml),
+# so a policy that loads here loads there, with the same PSS check library behind `podSecurity`.
+KYVERNO_CLI_IMAGE=${KYVERNO_CLI_IMAGE:-ghcr.io/kyverno/kyverno-cli:v1.19.1@sha256:ced7b2be0b04250cabfe695f15307f69eb715fe23234816388af4f3812915b2a}
 
 # kubeconform ships schemas for built-in Kubernetes kinds only. Gateway, HTTPRoute, ClusterIssuer,
 # CiliumNetworkPolicy and Application are CRDs, so their schemas come from the community catalog,
@@ -109,5 +117,47 @@ $DOCKER run --rm -v "$RENDER_DIR":/rendered:ro "$KUBECONFORM_IMAGE" \
   -summary \
   "${VERBOSE_FLAG[@]}" \
   /rendered
+
+step "rendering chart Applications (helm template, hooks included)"
+# After kubeconform on purpose: the chart renders are upstream's manifests, already validated by their
+# maintainers against the same API; what this script adds for them is the policy check below. They
+# land next to the kustomize renders so that one `--resource` directory holds everything Argo CD
+# would apply (observed with CLI v1.19.1: given a directory and further --resource files, it
+# evaluated only the directory's resources and silently ignored the files).
+DOCKER="$DOCKER" KUBERNETES_VERSION="$KUBERNETES_VERSION" scripts/render-charts.sh "$RENDER_DIR"
+
+step "kyverno apply (cluster/infra/kyverno-policies over every rendered workload)"
+# The policies are taken from their kustomize render, i.e. exactly the objects Argo CD applies.
+#
+# Exit status is the gate:
+#   * a policy the CLI cannot load (for example `images:` on a pod-level podSecurity control) is
+#     listed under "Policies Skipped" and counted as an error -> exit 1;
+#   * a resource that fails an Enforce rule -> exit 1;
+#   * a resource that fails an Audit rule is printed as "failed as audit warning" and does not fail
+#     the build (--audit-warn). Those lines are the work list for the Audit -> Enforce flip of the
+#     phase 4 policies (plan commit 9): that commit is green only once there are none left.
+#
+# Blind spot: only what is rendered from git is judged. Pods an operator creates at run time (Trivy
+# scan Jobs and the like) never reach this check; the PolicyReports in the cluster cover those, which
+# is why the Enforce flip needs both (ADR 0012).
+#
+# Kyverno prints a deprecation warning for every kyverno.io/v1 ClusterPolicy it loads; the migration
+# to CEL policies is a recorded later decision (ADR 0012), so the repetition is filtered out here.
+#
+# --user: the image runs as a fixed non-root uid, and mktemp's directory is 0700 for the invoking
+# user, so the CLI could not read it otherwise. Running as the invoking user is the narrower fix than
+# opening the directory, which may hold decrypted Secrets (see the KSOPS note above).
+#
+# verify-portfolio-images is evaluated for real: the CLI fetches the Sigstore trusted root and the
+# signature bundles of the digest pinned in cluster/infra/hello over the network, so a commit that
+# points hello at an unsigned digest fails here, before Argo CD tries to roll it out. The TUF cache
+# goes to $HOME, which for an arbitrary uid is `/` - hence a throwaway tmpfs as HOME.
+$DOCKER run --rm --user "$(id -u):$(id -g)" --tmpfs /home/cli -e HOME=/home/cli \
+  -v "$RENDER_DIR":/rendered:ro "$KYVERNO_CLI_IMAGE" \
+  apply /rendered/cluster_infra_kyverno-policies.yaml \
+  --resource /rendered \
+  --audit-warn \
+  --remove-color \
+  2>&1 | grep -v 'ClusterPolicy is deprecated'
 
 step "validate-cluster: ok"

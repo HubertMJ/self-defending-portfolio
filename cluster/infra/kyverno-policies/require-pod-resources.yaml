@@ -1,0 +1,83 @@
+# Every container states what it needs and the most memory it may take (ADR 0012).
+#
+# The cluster is one node with 8 GB. A container without a memory request is invisible to the
+# scheduler's arithmetic, and one without a memory limit can grow until the kernel's OOM killer picks
+# a victim - which on a single node may be the Kyverno admission controller, Argo CD or Cilium rather
+# than the container that leaked. Requests make the node's real commitment readable (`kubectl describe
+# node`), limits make a leak kill the leaking pod.
+#
+# What is required, and what is deliberately not:
+#   * requests.cpu, requests.memory - the scheduler's input; without them the pod is BestEffort and
+#     the first to be evicted under pressure, which is the wrong order for a security sensor.
+#   * limits.memory - memory is not compressible; exceeding it must be fatal to the container, not to
+#     the node.
+#   * limits.cpu is NOT required. CPU is compressible, and a CPU limit on something in the admission
+#     path turns into CFS throttling, then webhook timeouts (see the Kyverno admission controller in
+#     cluster/apps/kyverno.yaml, which has no CPU limit on purpose). New components in this phase set
+#     one anyway where they are not in that path (plan section 3).
+#
+#   # phase 4 switch: Audit -> Enforce after `kubectl get polr,cpolr -A` and `make validate`
+#   # (kyverno apply over every rendered chart, hooks included) both show 0 fail - plan commit 9
+#
+#   grep -n 'failureAction' cluster/infra/kyverno-policies/*.yaml
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: require-pod-resources
+  annotations:
+    policies.kyverno.io/title: Require pod resources
+    policies.kyverno.io/category: Best Practices
+    policies.kyverno.io/severity: medium
+    policies.kyverno.io/subject: Pod
+    policies.kyverno.io/description: >-
+      Every container and init container sets a CPU request, a memory request and a memory limit, so
+      the single node's capacity is accounted for and a memory leak kills the leaking pod rather than
+      something the cluster depends on.
+spec:
+  # Ignore: cluster-wide match, same trade as pod-security-restricted and disallow-latest-tag.
+  failurePolicy: Ignore
+  background: true
+  rules:
+    - name: require-requests-and-memory-limit
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+      exclude:
+        any:
+          - resources:
+              namespaces:
+                # Cilium and k3s's add-ons: installed outside Argo CD's chart values (Ansible, k3s
+                # manifests) with no requests or limits, and not ours to size per container.
+                - kube-system
+                # Debt, recorded in ADR 0012 (user decision 2026-10-01): Argo CD is installed by
+                # the bootstrap kustomization from upstream install.yaml, whose pods carry no
+                # requests or limits. Sizing them is a bootstrap patch with its own review, not a
+                # side effect of this policy; until then the exclusion keeps the Enforce flip from
+                # blocking Argo CD's own rollouts.
+                - argocd
+      validate:
+        failureAction: Audit
+        message: >-
+          Every container and init container in "{{ request.object.metadata.name }}" must set
+          resources.requests.cpu, resources.requests.memory and resources.limits.memory (ADR 0012).
+        pattern:
+          spec:
+            # `?*` = "present and non-empty". The `=(...)` anchor on initContainers means "if the
+            # field exists, every entry must match", so a Pod without init containers passes.
+            # ephemeralContainers are not listed: the API does not allow resources on them.
+            containers:
+              - resources:
+                  requests:
+                    cpu: "?*"
+                    memory: "?*"
+                  limits:
+                    memory: "?*"
+            =(initContainers):
+              - resources:
+                  requests:
+                    cpu: "?*"
+                    memory: "?*"
+                  limits:
+                    memory: "?*"

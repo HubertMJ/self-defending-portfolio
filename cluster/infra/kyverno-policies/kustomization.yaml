@@ -1,4 +1,5 @@
-# The three phase 3 ClusterPolicies, deployed by cluster/apps/kyverno-policies.yaml (sync wave 2).
+# The phase 3 image policies and the phase 4 workload policies (ADR 0011, ADR 0012), deployed by
+# cluster/apps/kyverno-policies.yaml (sync wave 2).
 #
 # No `namespace:` transformer: ClusterPolicy is cluster-scoped and setting one would stamp a
 # meaningless metadata.namespace onto every policy. The namespaces each policy applies to are part of
@@ -12,3 +13,6 @@ resources:
   - verify-portfolio-images.yaml
   - restrict-image-registries.yaml
   - disallow-latest-tag.yaml
+  # Phase 4, Audit until plan commit 9 (see the switch marker in each file).
+  - pod-security-restricted.yaml
+  - require-pod-resources.yaml

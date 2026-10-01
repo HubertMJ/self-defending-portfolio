@@ -1,0 +1,170 @@
+# Pod Security Standards `restricted`, judged by Kyverno in addition to the built-in Pod Security
+# admission (PSA) labels on each namespace (ADR 0012).
+#
+# Why both. PSA is the floor and cannot be switched off by a webhook outage, but it is all-or-nothing
+# per namespace: a namespace is `restricted` or it is `privileged`, and `privileged` means "no checks
+# at all". Falco needs four capabilities and host paths, kube-bench needs the host PID namespace -
+# under PSA alone their namespaces have to be `privileged`, and from then on anything else that lands
+# there is unchecked too. Kyverno's `podSecurity` rule runs the same upstream PSS check library, but
+# lets an exclusion name the *control* (and for container-level controls the *image*) it relaxes, so
+# those two namespaces get "restricted, minus exactly these controls" instead of "nothing". It also
+# writes a PolicyReport per workload, which is the input the phase 6 posture page reads; PSA only
+# writes audit log lines.
+#
+#   # phase 4 switch: Audit -> Enforce after `kubectl get polr,cpolr -A` and `make validate`
+#   # (kyverno apply over every rendered chart, hooks included) both show 0 fail - plan commit 9
+#
+# One grep shows every policy's current action:
+#
+#   grep -n 'failureAction' cluster/infra/kyverno-policies/*.yaml
+#
+# No PolicyException objects. `kyverno.io/v2` PolicyException is deprecated in 1.19, and an exception
+# in a separate file is one more place to look; the namespace-scoped rules below carry their
+# exclusions inline, next to the rule they relax, where a reviewer reads them together.
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: pod-security-restricted
+  annotations:
+    policies.kyverno.io/title: Pod Security Standards (restricted)
+    policies.kyverno.io/category: Pod Security Standards (Restricted)
+    policies.kyverno.io/severity: high
+    policies.kyverno.io/subject: Pod
+    policies.kyverno.io/description: >-
+      Every Pod satisfies the Pod Security Standards `restricted` profile (latest version). The only
+      relaxations are for the Falco sensor and the kube-bench CIS scanner, each confined to its own
+      namespace and listed control by control.
+spec:
+  # Ignore, not Fail: same trade as disallow-latest-tag. This policy matches almost every namespace,
+  # so with Fail a Kyverno outage would stop every Pod creation on a single-node cluster, including
+  # the Kyverno and Argo CD pods needed to end the outage. PSA labels on each namespace still hold
+  # while the webhook is down, so failing open here loses the per-control reporting, not the floor.
+  failurePolicy: Ignore
+  # Background scanning on: the PolicyReport for pods that already exist is half of the Audit ->
+  # Enforce gate (the other half is `kyverno apply` in `make validate`).
+  background: true
+  rules:
+    - name: restricted
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+      exclude:
+        any:
+          - resources:
+              # kube-system: Cilium (agent, envoy, operator) and k3s's own add-ons need host network,
+              # host paths and capabilities by design, and are installed by Ansible/k3s, not chosen
+              # per workload here. kube-system carries no PSA labels for the same reason, so the
+              # cluster default (`privileged`) applies there.
+              #
+              # falco and kube-bench are NOT exempt: they are judged by their own rules below, which
+              # relax only the controls those workloads cannot satisfy.
+              namespaces:
+                - kube-system
+                - falco
+                - kube-bench
+      validate:
+        failureAction: Audit
+        podSecurity:
+          level: restricted
+          # `latest` tracks the PSS version of the Kyverno build, which tracks the Kubernetes minor
+          # this cluster runs (k3s v1.35). Pinning a version would mean a check that silently stops
+          # learning new controls on every Kubernetes upgrade.
+          version: latest
+
+    # ---- Falco (plan commit 6) ----
+    #
+    # Falco's modern eBPF probe in least-privileged mode needs BPF, PERFMON, SYS_RESOURCE and
+    # SYS_PTRACE instead of `privileged: true`, read-only host paths (/proc, /etc, /dev, the container
+    # runtime socket), runs as root and is Unconfined under AppArmor. Each relaxation below is one PSS
+    # control.
+    #
+    # Kyverno limitation that shapes this list: `images:` is only accepted on container-level controls.
+    # On a pod-level control (HostPath Volumes, Volume Types, Host Namespaces, AppArmor) it makes the
+    # API server reject the whole ClusterPolicy, so those are scoped by the namespace match instead -
+    # which is why the namespace holds the Falco DaemonSet and nothing else (ADR 0012). Verified by
+    # `kyverno apply` in `make validate`: an invalid exclusion fails policy loading there first.
+    - name: restricted-falco
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+              namespaces:
+                - falco
+      validate:
+        failureAction: Audit
+        podSecurity:
+          level: restricted
+          version: latest
+          exclude:
+            # Exactly the four capabilities modernEbpf.leastPrivileged adds, and only on the Falco
+            # image: anything else in the namespace asking for capabilities still fails, and so does
+            # a Falco container adding a fifth (SYS_ADMIN, NET_ADMIN, ...).
+            #
+            # There is deliberately NO second, images-only `Capabilities` entry. Such an entry
+            # (without restrictedField/values) switches the whole control off for the image -
+            # verified: a Falco DaemonSet adding SYS_ADMIN then passes. The price is that Falco's
+            # values must satisfy the other half of the control themselves:
+            # containerSecurityContext.capabilities.drop: [ALL] alongside the four adds (plan
+            # commit 6). drop ALL + exactly these four passes; + SYS_ADMIN fails.
+            - controlName: Capabilities
+              images:
+                - docker.io/falcosecurity/falco:*
+              restrictedField: spec.containers[*].securityContext.capabilities.add
+              values:
+                - BPF
+                - PERFMON
+                - SYS_RESOURCE
+                - SYS_PTRACE
+            # Pod-level controls: no `images:` (see above); the namespace match is the scope.
+            - controlName: HostPath Volumes
+            - controlName: Volume Types
+            - controlName: AppArmor
+            # Container-level controls, scoped to the Falco image. "Running as Non-root" covers
+            # runAsNonRoot only; the separate "Running as Non-root user" control (runAsUser: 0) is
+            # NOT relaxed, so the Falco values must leave runAsUser unset - the image's default
+            # user is root, which is all the sensor needs.
+            - controlName: Running as Non-root
+              images:
+                - docker.io/falcosecurity/falco:*
+            - controlName: Seccomp
+              images:
+                - docker.io/falcosecurity/falco:*
+            - controlName: Privilege Escalation
+              images:
+                - docker.io/falcosecurity/falco:*
+
+    # ---- kube-bench (plan commit 5) ----
+    #
+    # The CIS checks read the host's process table and k3s's files on disk: host PID namespace,
+    # read-only hostPath mounts, and root to read root-owned files. These controls are pod-level
+    # (or pod-and-container), so they are scoped by the namespace - kube-bench's namespace holds one
+    # CronJob and nothing else. Capabilities, Seccomp and Privilege Escalation are NOT relaxed: the
+    # scanner needs none of them, so it drops ALL, runs RuntimeDefault and cannot escalate.
+    #
+    # Host Namespaces is narrowed to the one field kube-bench needs: hostPID: true passes, while
+    # hostNetwork or hostIPC still fail (verified with the CLI). "Running as Non-root user"
+    # (runAsUser: 0) is not relaxed either, so the CronJob must leave runAsUser unset (plan commit 5).
+    - name: restricted-kube-bench
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+              namespaces:
+                - kube-bench
+      validate:
+        failureAction: Audit
+        podSecurity:
+          level: restricted
+          version: latest
+          exclude:
+            - controlName: Host Namespaces
+              restrictedField: spec.hostPID
+              values:
+                - "true"
+            - controlName: HostPath Volumes
+            - controlName: Volume Types
+            - controlName: Running as Non-root

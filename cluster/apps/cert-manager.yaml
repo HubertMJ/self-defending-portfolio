@@ -94,6 +94,17 @@ spec:
             limits:
               cpu: 500m
               memory: 256Mi
+        # The post-install/post-upgrade hook Job that waits for the webhook to answer. The chart
+        # renders it with `resources: {}`, which require-pod-resources (ADR 0012) reports; once that
+        # policy is Enforce, an empty block would block every cert-manager upgrade at the hook. It
+        # only runs `cmctl check api` in a loop, so the floor is enough.
+        startupapicheck:
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              memory: 64Mi
   destination:
     server: https://kubernetes.default.svc
     namespace: cert-manager

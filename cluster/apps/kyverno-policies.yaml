@@ -2,11 +2,12 @@
 # namespace Argo CD creates pods in (cloudflared 2, gateway 3, hello 4). Separate Application rather
 # than extra values on cluster/apps/kyverno.yaml for two reasons: a ClusterPolicy cannot be applied
 # until its CRD is registered, which is a wave boundary; and a policy change is then a diff against a
-# three-file kustomization instead of a diff inside a Helm values blob.
+# small kustomization instead of a diff inside a Helm values blob.
 #
-# These are hand-written ClusterPolicies, not the upstream `kyverno-policies` chart. That chart ships
-# the Pod Security Standards bundle, which is phase 4; what phase 3 needs is image provenance, and
-# that has to name this repository's registry path, workflow and OIDC issuer.
+# These are hand-written ClusterPolicies, not the upstream `kyverno-policies` chart. What phase 3 needs
+# is image provenance, and that has to name this repository's registry path, workflow and OIDC issuer.
+# The chart's Pod Security Standards bundle was rejected in phase 4 as well: one `podSecurity` rule
+# with inline, per-control exclusions replaces its 17 policies (ADR 0012).
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
