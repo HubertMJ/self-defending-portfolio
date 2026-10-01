@@ -94,6 +94,11 @@ spec:
                 - hello
                 - sandbox
                 - portfolio-api
+                # falco-response runs our build of Talon (ADR 0020), the component that deletes and
+                # quarantines pods. Only images under our registry path are checked here
+                # (imageReferences), so Falcosidekick's upstream image is out of scope, which is also
+                # why restrict-image-registries does not list this namespace.
+                - falco-response
       verifyImages:
         # Only this project's images. A rule that matched `*` would demand our signature on
         # every third-party sidecar the cluster ever runs.
@@ -174,6 +179,7 @@ spec:
                 - hello
                 - sandbox
                 - portfolio-api
+                - falco-response
       verifyImages:
         - imageReferences:
             - "ghcr.io/hubertmj/self-defending-portfolio/*"

@@ -40,6 +40,9 @@ spec:
               # Kept identical to the namespace list in verify-portfolio-images.yaml: the two policies
               # are one statement about the same set of namespaces, and a divergence between them
               # would mean a namespace where origin is checked but provenance is not, or the reverse.
+              # One deliberate exception: falco-response is verified there but not restricted here,
+              # because it runs our Talon next to the upstream Falcosidekick image (ADR 0020). Origin
+              # for that namespace is the pinned digest in git, as for every third-party workload.
               namespaces:
                 - hello
                 - sandbox
