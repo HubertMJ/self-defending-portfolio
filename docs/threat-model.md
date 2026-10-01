@@ -99,9 +99,12 @@ of the phase 5/6 design and is not in the repository yet.
 ### TB3 · Visitor → attack scenarios in `sandbox` (planned)
 
 The `sandbox` namespace and its controls exist today; the API and scenario images do not. Planned
-design (phase 5): the API accepts `POST /api/attack/{id}` for one of four fixed scenario IDs, creates a
-pod from a template held in a ConfigMap, optionally execs a fixed command, correlates Falco/Talon events
-by pod name and streams them over SSE.
+design (phase 5): the API accepts `POST /api/attack/{id}` for one of four fixed scenario IDs
+(`shell-in-container`, `network-tool`, `sensitive-file-read`, `drop-and-execute`), creates a pod from a
+template held in a ConfigMap, optionally execs a fixed command, correlates Falco/Talon events by pod
+name and streams them over SSE. The scenarios' own safety model and their rule-to-response mapping are
+ADR 0017 and ADR 0018 on branch `phase-5-scenarios` (not merged); three end in `kubernetes:terminate`,
+`network-tool` in quarantine.
 
 | STRIDE | Threat | Control | Residual |
 |--------|--------|---------|----------|
