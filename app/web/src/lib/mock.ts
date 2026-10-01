@@ -18,6 +18,12 @@ export interface MockOptions {
   windowMs?: number;
   /** Seed the replay buffer with one completed run, as a live server would have. */
   history?: boolean;
+  /** Refuse this many stream connections first, as the API's stream cap does (429 + Retry-After). */
+  streamRefusals?: number;
+  /** Retry-After of those refusals, in seconds. */
+  streamRetryAfter?: number;
+  /** The first accepted stream opens and then stalls: no events, closed after a second. */
+  streamStall?: boolean;
 }
 
 const REPLAY = 50;
@@ -54,6 +60,13 @@ class MockEventSource implements EventSourceLike {
     this.onopen?.(new Event("open"));
   }
 
+  /** A refused or dead connection, as the browser reports it: CLOSED, then one error event. */
+  fail(): void {
+    this.readyState = 2;
+    this.backend.detach(this);
+    this.onerror?.(new Event("error"));
+  }
+
   close(): void {
     this.readyState = 2;
     this.backend.detach(this);
@@ -69,11 +82,17 @@ export class MockBackend {
   private readonly attempts: number[] = [];
   private activeRun: string | null = null;
   private seq = 0;
+  private streamRefusals: number;
+  private readonly streamRetryAfter: number;
+  private streamStall: boolean;
 
   constructor(opts: MockOptions = {}) {
     this.speed = opts.speed ?? 1;
     this.limit = opts.limit ?? 3;
     this.windowMs = opts.windowMs ?? 10 * 60_000;
+    this.streamRefusals = opts.streamRefusals ?? 0;
+    this.streamRetryAfter = opts.streamRetryAfter ?? 2;
+    this.streamStall = opts.streamStall ?? false;
     if (opts.history ?? true) this.seedHistory();
   }
 
@@ -83,6 +102,12 @@ export class MockBackend {
     await new Promise((r) => setTimeout(r, 120 * this.speed));
 
     if (method === "GET" && path === "/api/healthz") return json(200, { status: "ok" });
+    // The probe EventStream sends after a refused connect.
+    if (method === "GET" && path === "/api/events") {
+      return this.streamRefusals > 0
+        ? json(429, { error: "too many open event streams" }, { "Retry-After": String(this.streamRetryAfter) })
+        : new Response("", { status: 200, headers: { "Content-Type": "text/event-stream" } });
+    }
     if (method === "GET" && path === "/api/scenarios") return json(200, SCENARIOS);
     if (method === "GET" && path === "/api/posture") return json(200, posture());
 
@@ -112,6 +137,17 @@ export class MockBackend {
       throw new Error(`mock: no stream at ${url}`);
     }
     const src = new MockEventSource(this);
+    if (this.streamRefusals > 0) {
+      this.streamRefusals -= 1;
+      setTimeout(() => src.fail(), 30 * this.speed);
+      return src;
+    }
+    if (this.streamStall) {
+      this.streamStall = false;
+      setTimeout(() => src.open(), 30 * this.speed);
+      setTimeout(() => src.fail(), 1000);
+      return src;
+    }
     this.sources.add(src);
     setTimeout(() => {
       src.open();
@@ -205,5 +241,11 @@ export function mockOptionsFromUrl(search: string): MockOptions | null {
     const v = Number(q.get(k));
     return q.has(k) && Number.isFinite(v) && v >= 0 ? v : undefined;
   };
-  return { speed: num("mock-speed"), limit: num("mock-limit") };
+  return {
+    speed: num("mock-speed"),
+    limit: num("mock-limit"),
+    streamRefusals: num("mock-stream-refuse"),
+    streamRetryAfter: num("mock-stream-retry-after"),
+    streamStall: q.get("mock-stream-stall") === "1",
+  };
 }

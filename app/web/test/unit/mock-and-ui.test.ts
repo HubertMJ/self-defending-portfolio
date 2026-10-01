@@ -87,9 +87,18 @@ describe("mockOptionsFromUrl", () => {
   it("is off unless asked for", () => {
     expect(mockOptionsFromUrl("")).toBeNull();
     expect(mockOptionsFromUrl("?mock=0")).toBeNull();
-    expect(mockOptionsFromUrl("?mock=1")).toEqual({ speed: undefined, limit: undefined });
-    expect(mockOptionsFromUrl("?mock=1&mock-speed=0.2&mock-limit=1")).toEqual({ speed: 0.2, limit: 1 });
-    expect(mockOptionsFromUrl("?mock=1&mock-speed=-1")).toEqual({ speed: undefined, limit: undefined });
+    expect(mockOptionsFromUrl("?mock=1")).toMatchObject({ speed: undefined, limit: undefined });
+    expect(mockOptionsFromUrl("?mock=1&mock-speed=0.2&mock-limit=1")).toMatchObject({ speed: 0.2, limit: 1 });
+    expect(mockOptionsFromUrl("?mock=1&mock-speed=-1")).toMatchObject({ speed: undefined, limit: undefined });
+  });
+
+  it("reads the event-stream fault switches", () => {
+    expect(mockOptionsFromUrl("?mock=1")).toMatchObject({ streamRefusals: undefined, streamStall: false });
+    expect(mockOptionsFromUrl("?mock=1&mock-stream-refuse=3&mock-stream-retry-after=2&mock-stream-stall=1")).toMatchObject({
+      streamRefusals: 3,
+      streamRetryAfter: 2,
+      streamStall: true,
+    });
   });
 });
 

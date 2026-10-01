@@ -32,7 +32,9 @@ npm run dev                       # rebuild on change (index.html changes need a
 ```
 
 Mock mode is also available on the live site with `?mock=1` and is announced by a banner; it never
-calls the API. Extra knobs: `&mock-speed=0.2` (faster runs), `&mock-limit=1` (hit the 429 sooner).
+calls the API. Extra knobs: `&mock-speed=0.2` (faster runs), `&mock-limit=1` (hit the 429 sooner),
+`&mock-stream-refuse=3&mock-stream-retry-after=2` (the event stream is refused with 429 first) and
+`&mock-stream-stall=1` (the first accepted stream delivers nothing and dies).
 
 ## Check
 

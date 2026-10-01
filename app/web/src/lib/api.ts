@@ -73,6 +73,32 @@ export class ApiClient {
     return `${this.base}${path}`;
   }
 
+  /**
+   * Why was the event stream refused? EventSource cannot see the status of a failed connect, so this
+   * repeats the request with fetch, reads the status and Retry-After, and aborts before any body is
+   * read (a 200 means the stream would be accepted now). Returns the wait in ms for a 429/503, else
+   * undefined. Used by EventStream after a refused connection.
+   */
+  async streamRetryAfterMs(path = "/events"): Promise<number | undefined> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+    try {
+      const res = await this.fetchImpl(this.url(path), {
+        credentials: "omit",
+        cache: "no-store",
+        signal: controller.signal,
+        headers: { Accept: "text/event-stream" },
+      });
+      if (res.status !== 429 && res.status !== 503) return undefined;
+      return parseRetryAfter(res.headers.get("Retry-After")) * 1000;
+    } catch {
+      return undefined;
+    } finally {
+      clearTimeout(timer);
+      controller.abort();
+    }
+  }
+
   private async request(path: string, init: RequestInit = {}): Promise<Response> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);

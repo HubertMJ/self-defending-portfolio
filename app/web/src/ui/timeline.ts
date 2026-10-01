@@ -27,7 +27,8 @@ const CONNECTION_LABEL: Record<ConnectionState, string> = {
 
 export interface TimelineHandle {
   push(ev: StreamEvent): void;
-  setConnection(state: ConnectionState, retryInMs?: number): void;
+  /** retryInMs: delay of the one scheduled retry (counted down here); gaveUp: retries have stopped. */
+  setConnection(state: ConnectionState, retryInMs?: number, gaveUp?: boolean): void;
   setTitles(titles: Map<string, string>): void;
 }
 
@@ -138,6 +139,8 @@ export function announce(run: RunView, title: string): string {
   }
 }
 
+const monotonicNow = (): number => (typeof performance !== "undefined" ? performance.now() : Date.now());
+
 export function mountTimeline(
   root: HTMLElement,
   connEl: HTMLElement,
@@ -150,6 +153,8 @@ export function mountTimeline(
   let titles = new Map<string, string>();
   let lastAnnounced = "";
   let renderQueued = false;
+  // The one countdown of the connection line. Replaced, never stacked: every setConnection clears it.
+  let countdownTimer: ReturnType<typeof setInterval> | undefined;
 
   const titleOf = (scenario: string) => titles.get(scenario) ?? scenario;
 
@@ -189,13 +194,34 @@ export function mountTimeline(
       if (log.length > MAX_LOG) log.splice(0, log.length - MAX_LOG);
       schedule();
     },
-    setConnection(state, retryInMs) {
+    setConnection(state, retryInMs, gaveUp) {
+      if (countdownTimer !== undefined) {
+        clearInterval(countdownTimer);
+        countdownTimer = undefined;
+      }
       connEl.dataset.state = state;
-      const label = CONNECTION_LABEL[state];
+      const label = gaveUp ? "Live feed unavailable." : CONNECTION_LABEL[state];
       const children: (Node | string)[] = [h("span", { class: "conn__dot", "aria-hidden": "true" }), label];
       if (state === "offline" || state === "reconnecting") {
-        if (retryInMs !== undefined && state === "offline") children.push(` (next attempt in ${formatDuration(retryInMs)})`);
-        const b = h("button", { type: "button", class: "btn btn--ghost btn--small" }, "Retry now");
+        if (retryInMs !== undefined) {
+          // The deadline is fixed once, here; each tick only renders deadline - now.
+          const deadline = monotonicNow() + retryInMs;
+          // data-deadline identifies the attempt, so a test (or a reader of the DOM) can tell a new
+          // countdown from one that jumped.
+          const remaining = h("span", { class: "conn__retry", "data-deadline": String(Math.round(deadline)) });
+          const tick = () => {
+            const s = Math.max(0, Math.ceil((deadline - monotonicNow()) / 1000));
+            remaining.textContent = ` (next attempt in ${s} s)`;
+            if (s === 0 && countdownTimer !== undefined) {
+              clearInterval(countdownTimer);
+              countdownTimer = undefined;
+            }
+          };
+          tick();
+          countdownTimer = setInterval(tick, 250);
+          children.push(remaining);
+        }
+        const b = h("button", { type: "button", class: "btn btn--ghost btn--small" }, gaveUp ? "Try again" : "Retry now");
         b.addEventListener("click", onRetry);
         children.push(b);
       }

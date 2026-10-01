@@ -6,6 +6,13 @@
 // loop instead: exponential backoff with full jitter, reset after a connection has proven healthy,
 // paused while the tab is hidden so a forgotten tab does not keep a connection open for nothing.
 //
+// One scheduler owns every retry: a new retry always cancels the pending one, its delay is drawn once
+// per attempt, and the state callback carries that delay exactly once, so a countdown shown from it
+// counts down instead of jumping between freshly jittered values. EventSource cannot read why a
+// connection was refused, so after a refusal an optional probe asks the server (a 429 from the
+// stream cap carries Retry-After) and the retry waits at least that long. After maxAttempts refused
+// connections in a row the stream stops retrying on its own and says so; retryNow() starts over.
+//
 // The server replays the last 50 events on every connect, so a reconnect re-delivers events the page
 // has already shown. They are dropped here by identity (type + payload), which keeps the consumers
 // free of dedup logic.
@@ -30,10 +37,21 @@ export interface Clock {
   now(): number;
 }
 
+export interface StateDetail {
+  attempt: number;
+  /** Set once per scheduled retry: the delay until the next connection attempt. */
+  retryInMs?: number;
+  /** Automatic retries stopped after maxAttempts refusals; only retryNow() reconnects. */
+  gaveUp?: boolean;
+}
+
+/** Asks the server why the stream was refused: the Retry-After of a 429/503 in ms, else undefined. */
+export type RetryProbe = (url: string) => Promise<number | undefined>;
+
 export interface StreamOptions {
   url: string;
   onEvent: (ev: StreamEvent) => void;
-  onState?: (state: ConnectionState, detail: { attempt: number; retryInMs?: number }) => void;
+  onState?: (state: ConnectionState, detail: StateDetail) => void;
   factory?: EventSourceFactory;
   clock?: Clock;
   random?: () => number;
@@ -46,15 +64,22 @@ export interface StreamOptions {
   healthyAfterMs?: number;
   /** Size of the dedup window; comfortably above the server's 50-event replay. */
   dedupWindow?: number;
+  /** Refused connections in a row after which automatic retries stop. */
+  maxAttempts?: number;
+  /** Optional; see RetryProbe. Without it the retry waits the backoff alone. */
+  probe?: RetryProbe;
 }
 
 const EVENT_TYPES = ["run", "falco", "talon"] as const;
 const CLOSED = 2;
+/** Upper bound for a server-requested wait, so a broken Retry-After cannot park the feed for an hour. */
+const MAX_RETRY_AFTER_MS = 5 * 60_000;
 
 const defaultClock: Clock = {
   setTimeout: (fn, ms) => globalThis.setTimeout(fn, ms),
   clearTimeout: (h) => globalThis.clearTimeout(h as ReturnType<typeof setTimeout>),
-  now: () => Date.now(),
+  // Monotonic where available: a countdown must not jump when the wall clock is adjusted.
+  now: () => (typeof performance !== "undefined" ? performance.now() : Date.now()),
 };
 
 /** Full-jitter exponential backoff: uniform in [base/2, min(max, base * 2^attempt)]. */
@@ -65,11 +90,15 @@ export function backoffDelay(attempt: number, base: number, max: number, random:
 }
 
 export class EventStream {
-  private readonly opts: Required<Omit<StreamOptions, "onState">> & Pick<StreamOptions, "onState">;
+  private readonly opts: Required<Omit<StreamOptions, "onState" | "probe">> & Pick<StreamOptions, "onState" | "probe">;
   private source: EventSourceLike | null = null;
   private retryTimer: unknown = null;
   private healthyTimer: unknown = null;
   private failures = 0;
+  /** Refused connections in a row (a CLOSED source); reset only by a healthy connection. */
+  private refusals = 0;
+  /** Bumped whenever a pending retry is cancelled, so a probe that answers late is ignored. */
+  private epoch = 0;
   private stopped = true;
   private readonly seen: string[] = [];
   private readonly seenSet = new Set<string>();
@@ -85,6 +114,7 @@ export class EventStream {
       offlineAfter: 3,
       healthyAfterMs: 5000,
       dedupWindow: 200,
+      maxAttempts: 8,
       ...opts,
     };
   }
@@ -107,13 +137,14 @@ export class EventStream {
   retryNow(): void {
     if (this.stopped) return;
     this.clearRetry();
+    this.refusals = 0;
     this.teardown();
     this.connect();
   }
 
-  private setState(state: ConnectionState, retryInMs?: number): void {
+  private setState(state: ConnectionState, retryInMs?: number, gaveUp?: boolean): void {
     this.state = state;
-    this.opts.onState?.(state, { attempt: this.failures, retryInMs });
+    this.opts.onState?.(state, { attempt: this.failures, retryInMs, gaveUp });
   }
 
   private connect(): void {
@@ -135,6 +166,7 @@ export class EventStream {
       this.healthyTimer = clock.setTimeout(() => {
         this.healthyTimer = null;
         this.failures = 0;
+        this.refusals = 0;
       }, this.opts.healthyAfterMs);
     };
 
@@ -176,16 +208,37 @@ export class EventStream {
 
   private scheduleRetry(): void {
     if (this.stopped) return;
-    const delay = backoffDelay(this.failures, this.opts.baseDelayMs, this.opts.maxDelayMs, this.opts.random);
+    this.clearRetry();
+    const epoch = this.epoch;
+    this.refusals += 1;
+    if (this.refusals > this.opts.maxAttempts) {
+      this.setState("offline", undefined, true);
+      return;
+    }
+    // Drawn once for this attempt; nothing below recomputes it.
+    const backoff = backoffDelay(this.failures, this.opts.baseDelayMs, this.opts.maxDelayMs, this.opts.random);
     this.failures += 1;
-    this.setState(this.failures >= this.opts.offlineAfter ? "offline" : "reconnecting", delay);
-    this.retryTimer = this.opts.clock.setTimeout(() => {
-      this.retryTimer = null;
-      this.connect();
-    }, delay);
+    const state: ConnectionState = this.failures >= this.opts.offlineAfter ? "offline" : "reconnecting";
+    const arm = (retryAfterMs?: number) => {
+      if (this.stopped || epoch !== this.epoch) return;
+      const delay = Math.max(backoff, Math.min(MAX_RETRY_AFTER_MS, retryAfterMs ?? 0));
+      this.setState(state, delay);
+      this.retryTimer = this.opts.clock.setTimeout(() => {
+        this.retryTimer = null;
+        this.connect();
+      }, delay);
+    };
+    const { probe } = this.opts;
+    if (!probe) {
+      arm();
+      return;
+    }
+    this.setState(state);
+    probe(this.opts.url).then(arm, () => arm());
   }
 
   private clearRetry(): void {
+    this.epoch += 1;
     if (this.retryTimer !== null) {
       this.opts.clock.clearTimeout(this.retryTimer);
       this.retryTimer = null;

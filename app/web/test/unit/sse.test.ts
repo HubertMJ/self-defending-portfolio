@@ -223,3 +223,94 @@ describe("EventStream", () => {
     expect(events).toHaveLength(4);
   });
 });
+
+describe("EventStream retry scheduler", () => {
+  it("keeps exactly one pending retry, announced once with the delay it will wait", () => {
+    const { stream, states } = makeStream({ baseDelayMs: 1000, random: Math.random });
+    stream.start();
+    last().fail();
+    const announced = states.filter((s) => s.retryInMs !== undefined);
+    expect(announced).toHaveLength(1);
+    expect(vi.getTimerCount()).toBe(1);
+    // Nothing re-announces or re-jitters the delay while it runs down.
+    vi.advanceTimersByTime((announced[0].retryInMs as number) - 1);
+    expect(states.filter((s) => s.retryInMs !== undefined)).toHaveLength(1);
+    expect(FakeSource.all).toHaveLength(1);
+    vi.advanceTimersByTime(1);
+    expect(FakeSource.all).toHaveLength(2);
+  });
+
+  it("a stale error from a replaced source schedules nothing", () => {
+    const { stream } = makeStream({ baseDelayMs: 1000 });
+    stream.start();
+    const first = last();
+    first.fail();
+    vi.runOnlyPendingTimers();
+    first.onerror?.(new Event("error")); // detached handlers: nothing may fire
+    first.fail();
+    expect(vi.getTimerCount()).toBe(0);
+    expect(FakeSource.all).toHaveLength(2);
+  });
+
+  it("waits at least the server's Retry-After from the probe", async () => {
+    const probe = vi.fn(async () => 5000);
+    const { stream, states } = makeStream({ baseDelayMs: 1000, probe });
+    stream.start();
+    last().fail();
+    expect(states.at(-1)).toEqual({ state: "reconnecting", retryInMs: undefined });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(probe).toHaveBeenCalledWith("/api/events");
+    expect(states.at(-1)).toEqual({ state: "reconnecting", retryInMs: 5000 });
+    await vi.advanceTimersByTimeAsync(4999);
+    expect(FakeSource.all).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(FakeSource.all).toHaveLength(2);
+  });
+
+  it("falls back to the backoff when the probe fails, and ignores a probe answering after retryNow", async () => {
+    let resolveLate: (v: number) => void = () => {};
+    const probe = vi
+      .fn<(url: string) => Promise<number | undefined>>()
+      .mockImplementationOnce(() => Promise.reject(new Error("offline")))
+      .mockImplementationOnce(() => new Promise<number>((r) => (resolveLate = r)));
+    const { stream, states } = makeStream({ baseDelayMs: 1000, probe });
+    stream.start();
+    last().fail();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(states.at(-1)?.retryInMs).toBe(750);
+    await vi.advanceTimersByTimeAsync(750);
+    last().fail(); // second refusal: probe pending
+    stream.retryNow(); // user skips the wait
+    expect(FakeSource.all).toHaveLength(3);
+    resolveLate(60_000);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(vi.getTimerCount()).toBe(0); // the late answer armed nothing
+    expect(states.at(-1)?.retryInMs).toBeUndefined();
+  });
+
+  it("stops after maxAttempts refusals with a stable state, and retryNow starts over", () => {
+    const seen: { state: ConnectionState; gaveUp?: boolean }[] = [];
+    const stream = new EventStream({
+      url: "/api/events",
+      factory: (url) => new FakeSource(url),
+      random: () => 0.5,
+      maxAttempts: 3,
+      onEvent: () => {},
+      onState: (state, d) => seen.push({ state, gaveUp: d.gaveUp }),
+    });
+    stream.start();
+    for (let i = 0; i < 3; i++) {
+      last().fail();
+      vi.runOnlyPendingTimers();
+    }
+    last().fail();
+    expect(seen.at(-1)).toEqual({ state: "offline", gaveUp: true });
+    expect(vi.getTimerCount()).toBe(0);
+    vi.advanceTimersByTime(10 * 60_000);
+    expect(FakeSource.all).toHaveLength(4);
+    stream.retryNow();
+    expect(FakeSource.all).toHaveLength(5);
+    last().open();
+    expect(seen.at(-1)?.state).toBe("open");
+  });
+});

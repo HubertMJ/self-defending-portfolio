@@ -82,8 +82,10 @@ function main(): void {
     url: api.url("/events"),
     factory,
     onEvent: (ev) => timeline.push(ev),
-    onState: (state, { retryInMs }) => {
-      timeline.setConnection(state, retryInMs);
+    // EventSource cannot read why a connect was refused; this asks once per refusal (Retry-After).
+    probe: () => api.streamRetryAfterMs(),
+    onState: (state, { retryInMs, gaveUp }) => {
+      timeline.setConnection(state, retryInMs, gaveUp);
       setHeaderConn(state);
     },
   });

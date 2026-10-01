@@ -119,6 +119,38 @@ test.describe("mock mode", () => {
   });
 });
 
+test.describe("event stream reconnects", () => {
+  test("refused and stalled streams: one steady countdown per attempt, Retry-After honoured, then live", async ({ page }) => {
+    test.setTimeout(60_000);
+    const problems = guardConsole(page);
+    await page.goto("/?mock=1&mock-stream-refuse=3&mock-stream-retry-after=2&mock-stream-stall=1");
+    const conn = page.locator("#timeline-conn");
+    const samples = new Map<string, number[]>();
+    const deadline = Date.now() + 45_000;
+    while (Date.now() < deadline && (await conn.getAttribute("data-state")) !== "open") {
+      const retry = conn.locator(".conn__retry");
+      if (await retry.count()) {
+        const key = (await retry.getAttribute("data-deadline")) ?? "";
+        const m = /next attempt in (\d+) s/.exec((await retry.textContent()) ?? "");
+        if (key && m) samples.set(key, [...(samples.get(key) ?? []), Number(m[1])]);
+      }
+      await page.waitForTimeout(100);
+    }
+    await expect(conn).toHaveAttribute("data-state", "open");
+    // At least the two refusals whose probe saw the 429 announced a countdown.
+    expect(samples.size).toBeGreaterThanOrEqual(2);
+    const firsts = [...samples.values()].map((v) => v[0]);
+    // The first refusal's backoff is under a second; Retry-After (2 s) must win over it.
+    expect(firsts[0]).toBeGreaterThanOrEqual(2);
+    for (const values of samples.values()) {
+      for (let i = 1; i < values.length; i++) expect(values[i]).toBeLessThanOrEqual(values[i - 1]);
+    }
+    // Live again: the replayed history run is on the timeline.
+    await expect(page.locator(".run").first()).toBeVisible();
+    expect(problems).toEqual([]);
+  });
+});
+
 test.describe("accessibility basics", () => {
   test("skip link is the first stop and moves focus to main", async ({ page, isMobile }) => {
     test.skip(isMobile, "keyboard navigation is a desktop concern");
