@@ -14,6 +14,8 @@
 #                    sdp.hubertjablon.ski/run-id and sdp.hubertjablon.ski/quarantine: "false") and
 #                    activeDeadlineSeconds, and changes nothing else
 #   exec             {command, tty} run in container `target` once the pod is Ready, or null
+#   victim           true: the pod serves the "SDP Shop" on :8080 and the API polls its /state.json
+#                    during the run (ADR 0022); absent or false: nothing to poll
 #
 # What every pod spec has in common, and why (each one passes pod-security-restricted,
 # require-pod-resources, restrict-image-registries and verify-portfolio-images - checked for every
@@ -23,10 +25,24 @@
 #     RuntimeDefault; read-only root filesystem except where a scenario is *about* writing to it;
 #   * no ServiceAccount token, no service links: nothing in the pod can talk to the API server, and the
 #     environment lists no cluster services;
-#   * `sleep` as the container's process, so the pod is Ready at once and nothing listens on a port;
+#   * the victim (ADR 0022) as the container's process: app/scenario's static fake-shop server on
+#     :8080, docroot on a 1 MiB emptyDir at /srv/shop (the root filesystem stays read-only), Ready once
+#     its exec probe has read /state.json back - so "Ready" means "the shop is up", and the exec never
+#     races the server writing the healthy page. An exec probe, not httpGet: the kubelet's probes come
+#     from the host, and the sandbox policy admits only the portfolio API to :8080
+#     (../ciliumnetworkpolicy-victim.yaml). No Service, no route: the shop is not on the internet;
 #   * terminationGracePeriodSeconds 0: a terminated scenario pod is gone at once;
 #   * small requests and a hard memory and CPU limit, inside the sandbox LimitRange and ResourceQuota
 #     (../limitrange.yaml, ../resourcequota.yaml).
+#
+# What each exec does to the victim *before* the step Falco detects (rewrite the page, rewrite
+# state.json, both with busybox echo and mv), then `sleep 1`: the API polls the victim every 500 ms, so
+# the visitor sees the shop change before Talon kills or cuts the pod. The detected step itself is the
+# same process as before ADR 0022, started with `exec` so it replaces the shell: proc.name, its
+# arguments and its parent are what the rule saw before. tests/scenarios/offline.sh checks both, the
+# mutation and the rule's preconditions. The one exception is shell-in-container: there the detected
+# step *is* the shell starting, so the defacement can only follow it (by milliseconds; the kill takes
+# a second or more).
 #
 # Exec exit codes are not a success signal: `wget` fails by design (nothing listens on the target) and
 # a terminated pod ends the exec with an error. The API judges a run by the Falco and Talon events.
@@ -46,6 +62,7 @@
   detection: Terminal shell in container
   response: terminate
   timeout_seconds: 90
+  victim: true
   pod:
     restartPolicy: Never
     automountServiceAccountToken: false
@@ -64,7 +81,21 @@
         # One unbroken line, so a bump is a one-line diff that a grep for the digest finds.
         # yamllint disable-line rule:line-length
         image: &scenario-image ghcr.io/hubertmj/self-defending-portfolio/scenario@sha256:abe9585fe91fec1881895ae79418f6b756a4ca094c9e5e7f0b3dd8a1a76cdea0
-        command: ["sleep", "120"]
+        # The victim (ADR 0022). Anchored here, aliased in the other three scenarios.
+        command: &victim-command ["/usr/local/bin/victim", "-docroot", "/srv/shop"]
+        ports: &victim-ports
+          - name: shop
+            containerPort: 8080
+            protocol: TCP
+        readinessProbe: &victim-probe
+          exec:
+            command: ["/usr/local/bin/victim", "-check"]
+          periodSeconds: 1
+          timeoutSeconds: 1
+          failureThreshold: 3
+        volumeMounts: &victim-mounts
+          - name: shop
+            mountPath: /srv/shop
         securityContext:
           allowPrivilegeEscalation: false
           readOnlyRootFilesystem: true
@@ -77,10 +108,26 @@
           limits:
             cpu: 100m
             memory: 32Mi
-  # `id` and `hostname` give the visitor something to see; `sleep` keeps the shell alive so the kill is
-  # what ends it, not the command running out.
+    # The shop's docroot. 1 MiB: a page and a state file; the scenario user can write it (emptyDir is
+    # world-writable) and nothing else.
+    volumes: &victim-volumes
+      - name: shop
+        emptyDir:
+          sizeLimit: 1Mi
+  # The shell defaces the shop (page and state), then `id` and `hostname` give the visitor something
+  # to see; `sleep` keeps the shell alive so the kill is what ends it, not the command running out.
+  # The shell is what Falco detects, so the defacement follows the detection here (see the top).
   exec:
-    command: ["sh", "-c", "id; hostname; sleep 60"]
+    command:
+      - sh
+      - -c
+      - >-
+        cd /srv/shop
+        && echo '<h1>SDP Shop has been defaced</h1><p>Owned from an interactive shell.</p>' > .index
+        && mv .index index.html
+        && echo '{"status":"defaced","title":"H4CK3D - SDP Shop","banner":"Page defaced from an interactive shell"}' > .state
+        && mv .state state.json;
+        id; hostname; sleep 60
     tty: true
 
 # ---------------------------------------------------------------------------------------------------
@@ -91,7 +138,8 @@
 #
 #    The target is the pod's own loopback, discard port: nothing listens there, so wget fails with
 #    "connection refused" without a packet leaving the pod. No external host, no cluster service, and
-#    no DNS query is involved. No TTY and no shell, so rule 1 does not fire as well.
+#    no DNS query is involved. No TTY (the shell that marks the victim has none), so rule 1 does not
+#    fire as well.
 - id: network-tool
   title: Download tool in a container
   summary: >-
@@ -102,6 +150,7 @@
   detection: SDP network tool in sandbox
   response: quarantine
   timeout_seconds: 90
+  victim: true
   pod:
     restartPolicy: Never
     automountServiceAccountToken: false
@@ -116,7 +165,10 @@
     containers:
       - name: target
         image: *scenario-image
-        command: ["sleep", "120"]
+        command: *victim-command
+        ports: *victim-ports
+        readinessProbe: *victim-probe
+        volumeMounts: *victim-mounts
         securityContext:
           allowPrivilegeEscalation: false
           readOnlyRootFilesystem: true
@@ -129,8 +181,18 @@
           limits:
             cpu: 100m
             memory: 32Mi
+    volumes: *victim-volumes
+  # Marks the shop as beaconing, then wget (exec'd, so wget is the process Falco sees start).
   exec:
-    command: ["wget", "-q", "-T", "2", "-O", "/dev/null", "http://127.0.0.1:9/"]
+    command:
+      - sh
+      - -c
+      - >-
+        cd /srv/shop
+        && echo '{"status":"compromised","title":"SDP Shop","banner":"Beaconing to a command-and-control server"}' > .state
+        && mv .state state.json
+        && sleep 1
+        && exec wget -q -T 2 -O /dev/null http://127.0.0.1:9/
     tty: false
 
 # ---------------------------------------------------------------------------------------------------
@@ -154,6 +216,7 @@
   detection: Read sensitive file untrusted
   response: terminate
   timeout_seconds: 90
+  victim: true
   pod:
     restartPolicy: Never
     automountServiceAccountToken: false
@@ -170,7 +233,10 @@
     containers:
       - name: target
         image: *scenario-image
-        command: ["sleep", "120"]
+        command: *victim-command
+        ports: *victim-ports
+        readinessProbe: *victim-probe
+        volumeMounts: *victim-mounts
         securityContext:
           allowPrivilegeEscalation: false
           readOnlyRootFilesystem: true
@@ -183,8 +249,18 @@
           limits:
             cpu: 100m
             memory: 32Mi
+    volumes: *victim-volumes
+  # Marks the customer data as gone, then the read itself (cat, exec'd: `cat` opens the file).
   exec:
-    command: ["cat", "/etc/shadow"]
+    command:
+      - sh
+      - -c
+      - >-
+        cd /srv/shop
+        && echo '{"status":"compromised","title":"SDP Shop","banner":"Customer data exfiltrated"}' > .state
+        && mv .state state.json
+        && sleep 1
+        && exec cat /etc/shadow
     tty: false
 
 # ---------------------------------------------------------------------------------------------------
@@ -210,6 +286,7 @@
   detection: Drop and execute new binary in container
   response: terminate
   timeout_seconds: 90
+  victim: true
   pod:
     restartPolicy: Never
     automountServiceAccountToken: false
@@ -224,7 +301,10 @@
     containers:
       - name: target
         image: *scenario-image
-        command: ["sleep", "120"]
+        command: *victim-command
+        ports: *victim-ports
+        readinessProbe: *victim-probe
+        volumeMounts: *victim-mounts
         securityContext:
           allowPrivilegeEscalation: false
           # Must be writable: see the scenario comment above.
@@ -241,6 +321,16 @@
             memory: 32Mi
             # busybox is under 1 MiB; anything that writes more than this gets the pod evicted.
             ephemeral-storage: 8Mi
+    volumes: *victim-volumes
+  # Marks an unknown binary as running, then the drop and the execution, unchanged.
   exec:
-    command: ["sh", "-c", "cp /bin/busybox /tmp/busybox && exec /tmp/busybox sleep 60"]
+    command:
+      - sh
+      - -c
+      - >-
+        cd /srv/shop
+        && echo '{"status":"compromised","title":"SDP Shop","banner":"Compromised: unknown binary running"}' > .state
+        && mv .state state.json
+        && sleep 1
+        && cp /bin/busybox /tmp/busybox && exec /tmp/busybox sleep 60
     tty: false

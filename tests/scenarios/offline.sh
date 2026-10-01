@@ -20,7 +20,11 @@
 #      sensitive-file rule (open_read requires fd.num >= 0), and an executable on the overlay root for
 #      the drift rule (proc.is_exe_upper_layer). The two design decisions those rules force are checked
 #      from the other side as well: without the shadow group the read fails, and with a read-only root
-#      the drop fails.
+#      the drop fails. Where an exec is a shell that first marks the victim and then `exec`s the
+#      detected program (ADR 0022), the checks apply to that program - the process Falco sees.
+#   5. The victim (ADR 0022), for scenarios with `victim: true`: the pod's own readiness probe reads a
+#      healthy /state.json ("up") under the same security context, and running the scenario's exec
+#      changes it (status, banner, and for a defacement the page checksum) - what the visitor watches.
 #
 # What it cannot prove: that Falco *emits* the alert. That needs the syscalls themselves - a live probe
 # (BPF, PERFMON and CAP_SYS_RESOURCE to lock its ring buffers, which a CI or build sandbox container
@@ -135,7 +139,8 @@ pass "built $SCENARIO_TAG"
 # One line per scenario: id, detection, then shell-quoted docker flags, container command and exec
 # command. The flags translate the pod spec's security context, not a hand-written copy of it.
 python3 - "$SCENARIOS" <<'PY' > "$WORK_DIR/scenarios.tsv"
-import shlex, sys, yaml
+import re, shlex, sys, yaml
+SHELLS = {"ash", "bash", "csh", "ksh", "sh", "tcsh", "zsh", "dash"}
 for s in yaml.safe_load(open(sys.argv[1])):
     pod = s["pod"]; psc = pod.get("securityContext", {})
     target = next(c for c in pod["containers"] if c["name"] == "target")
@@ -143,6 +148,13 @@ for s in yaml.safe_load(open(sys.argv[1])):
     uid = csc.get("runAsUser", psc.get("runAsUser")); gid = csc.get("runAsGroup", psc.get("runAsGroup"))
     flags = ["--user", f"{uid}:{gid}", "--network", "none", "--security-opt", "no-new-privileges",
              "--memory", target["resources"]["limits"]["memory"].replace("Mi", "m")]
+    # emptyDir volumes become a tmpfs at the same path: writable, separate from the root filesystem
+    # (and so, like an emptyDir, not the overlay upper layer the drift rule looks at).
+    empty = {v["name"]: v["emptyDir"] for v in pod.get("volumes", []) if "emptyDir" in v}
+    for m in target.get("volumeMounts", []):
+        if m["name"] in empty:
+            size = str(empty[m["name"]].get("sizeLimit", "1Mi")).replace("Mi", "m").replace("Ki", "k")
+            flags += ["--tmpfs", f"{m['mountPath']}:rw,size={size},mode=1777"]
     if csc.get("capabilities", {}).get("drop") == ["ALL"]:
         flags += ["--cap-drop", "ALL"]
     for g in psc.get("supplementalGroups", []):
@@ -150,8 +162,17 @@ for s in yaml.safe_load(open(sys.argv[1])):
     if csc.get("readOnlyRootFilesystem"):
         flags += ["--read-only"]
     exec_ = s["exec"] or {"command": [], "tty": False}
+    # The program the rule sees: argv0, or for `sh -c '...; exec prog ...'` the last program the
+    # shell replaces itself with (ADR 0022: the shell marks the victim first).
+    command = exec_["command"]
+    trigger = command[0] if command else ""
+    if len(command) >= 3 and command[0].rsplit("/", 1)[-1] in SHELLS and command[1] == "-c":
+        execs = re.findall(r"(?:^|[;&|]\s*)exec\s+(\S+)", command[2])
+        trigger = execs[-1] if execs else command[0]
+    probe = (target.get("readinessProbe") or {}).get("exec", {}).get("command", [])
     print("\t".join([s["id"], s["detection"], shlex.join(flags), shlex.join(target["command"]),
-                     shlex.join(exec_["command"]), str(exec_["tty"]).lower()]))
+                     shlex.join(command), str(exec_["tty"]).lower(), trigger.rsplit("/", 1)[-1],
+                     str(bool(s.get("victim"))).lower(), shlex.join(probe)]))
 PY
 
 # Starts the scenario's pod as a container with the given flags; prints its name.
@@ -163,7 +184,10 @@ start() {
   printf '%s' "$name"
 }
 
-while IFS=$'\t' read -r id detection flags cmd exec_cmd tty; do
+# The status field of a /state.json body (compact JSON, as the victim writes it).
+field() { sed -n "s/.*\"$1\":\"\([^\"]*\)\".*/\1/p" <<<"$2"; }
+
+while IFS=$'\t' read -r id detection flags cmd exec_cmd tty trigger victim probe; do
   printf '  -- %s (%s)\n' "$id" "$detection"
   c=$(start "$id" "$flags" "$cmd")
   case $detection in
@@ -181,9 +205,8 @@ while IFS=$'\t' read -r id detection flags cmd exec_cmd tty; do
       ;;
     "SDP network tool in sandbox")
       # proc.name in (wget, nc, curl): the base name of the path executed, symlink included.
-      argv0=$(eval "set -- $exec_cmd"; basename "$1")
-      case $argv0 in wget|nc|curl) pass "$id: proc.name '$argv0' is in the rule's list" ;;
-        *) fail "$id: '$argv0' is not wget/nc/curl" ;; esac
+      case $trigger in wget|nc|curl) pass "$id: proc.name '$trigger' is in the rule's list" ;;
+        *) fail "$id: '$trigger' is not wget/nc/curl" ;; esac
       start_s=$SECONDS
       out=$(eval "$DOCKER exec $c $exec_cmd" 2>&1 || true)
       if grep -qi 'refused' <<<"$out" && [ $((SECONDS - start_s)) -le 5 ]; then
@@ -193,7 +216,11 @@ while IFS=$'\t' read -r id detection flags cmd exec_cmd tty; do
       fi
       ;;
     "Read sensitive file untrusted")
-      # open_read needs fd.num >= 0, i.e. the open must succeed; cat is not a trusted reader.
+      # open_read needs fd.num >= 0, i.e. the open must succeed; cat is not a trusted reader. A shell
+      # is (shell_binaries is on the rule's exclusion list), so the file must be opened by the
+      # exec'd program, not by a shell redirect.
+      case $trigger in ash|bash|csh|ksh|sh|tcsh|zsh|dash|"") fail "$id: the file would be opened by '$trigger', which the rule trusts" ;;
+        *) pass "$id: proc.name '$trigger' opens the file (not on the rule's trusted lists)" ;; esac
       if out=$(eval "$DOCKER exec $c $exec_cmd" 2>&1) && grep -q '^root:' <<<"$out"; then
         pass "$id: the read succeeds as uid $(eval "$DOCKER exec $c id -u") (open_read matches)"
       else
@@ -243,6 +270,38 @@ while IFS=$'\t' read -r id detection flags cmd exec_cmd tty; do
       fail "$id: no offline precondition check for rule '$detection' - add one here"
       ;;
   esac
+
+  # 5. The victim: healthy before, visibly changed by the exec (detached: the shell and drift
+  # scenarios sleep until a kill that does not come here).
+  if [ "$victim" = true ]; then
+    if [ -z "$probe" ]; then fail "$id: victim: true but no exec readinessProbe"; continue; fi
+    c3=$(start "$id-victim" "$flags" "$cmd")
+    before=
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+      before=$(eval "$DOCKER exec $c3 $probe" 2>/dev/null) && break
+      before=; sleep 0.5
+    done
+    if [ "$(field status "$before")" = up ]; then
+      pass "$id: the readiness probe reads a healthy shop ($before)"
+    else
+      fail "$id: the victim is not up under the pod's security context: '${before:-no answer}'"
+      continue
+    fi
+    eval "$DOCKER exec -d $c3 $exec_cmd"
+    after=
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+      after=$(eval "$DOCKER exec $c3 $probe" 2>/dev/null || true)
+      [ -n "$after" ] && [ "$(field status "$after")" != up ] && break
+      sleep 0.5
+    done
+    if [ -n "$after" ] && [ "$(field status "$after")" != up ]; then
+      changed="checksum unchanged"
+      [ "$(field checksum "$after")" != "$(field checksum "$before")" ] && changed="page checksum changed"
+      pass "$id: the exec changes the victim: $(field status "$after"), \"$(field banner "$after")\", $changed"
+    else
+      fail "$id: the exec did not change the victim's state ('${after:-no answer}')"
+    fi
+  fi
 done < "$WORK_DIR/scenarios.tsv"
 
 # ---------------------------------------------------------------------------- result
