@@ -606,10 +606,11 @@ runs today stays admissible). No Application, digest or route changes, so the li
 
 1. Merge and push to `main`. Because the workflow file itself changed, `build-images` builds all three
    images: `api`, `scenario` and `web`. Each job's summary prints `<image>@sha256:...`.
-2. **Make the two new packages public**, exactly as in 5.2: GHCR creates
-   `self-defending-portfolio/api` and `self-defending-portfolio/scenario` private, and Kyverno reads
-   signatures anonymously, so a private package fails verification like an unsigned image does.
-   Link both to the repository in their package settings.
+2. **Check that the two new packages are public.** Kyverno reads signatures anonymously, so a private
+   package fails verification like an unsigned image does. GHCR usually gives a package pushed by a
+   public repository's workflow the repository's visibility; if `self-defending-portfolio/api` or
+   `self-defending-portfolio/scenario` is private, make it public as in 5.2 and link it to the
+   repository. The check in step 3 (logged out) answers the question either way.
 3. Check each digest from a machine that is not logged in to GHCR:
 
    ```sh
