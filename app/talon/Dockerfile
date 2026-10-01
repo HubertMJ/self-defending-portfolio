@@ -25,6 +25,9 @@
 #       go mod tidy                                               # now ships that package itself
 #     cilium v1.17.15 rather than 1.19: the smallest jump that fixes both Cilium advisories, so the
 #     cilium networkpolicy actionner compiles against an API closest to the one upstream tested.
+#     Minimal version selection and `go mod tidy` then raised further transitive modules (the
+#     cloud.google.com and opentelemetry families, k8s.io/kubectl, among others) to what those
+#     three require; `diff` against upstream's go.mod at TALON_COMMIT shows the whole set.
 #   * upstream's own test suite runs in the builder (`go vet` + `go test`) against the raised
 #     dependencies: no tests, no image (as app/api).
 #   * the binary as upstream builds it (.ko.yaml): CGO off, -trimpath, stripped, the same
@@ -54,7 +57,10 @@ RUN go mod download && go mod verify
 
 FROM deps AS test
 # -race needs cgo, which the golang image has; the shipped binary below does not use it.
-RUN CGO_ENABLED=1 go vet ./... && CGO_ENABLED=1 go test -race -count=1 ./... && touch /tested
+# --network=none: these are upstream's tests, run against dependencies we raised, and a test that
+# reaches out (a notifier or an output dialling a real endpoint) must fail here rather than talk to
+# the internet from the build. Every module is already in the cache from `go mod download` above.
+RUN --network=none CGO_ENABLED=1 go vet ./... && CGO_ENABLED=1 go test -race -count=1 ./... && touch /tested
 
 FROM deps AS build
 ARG TALON_COMMIT=d273e352f80e114954f40c9843fd0a1b71a30d57
