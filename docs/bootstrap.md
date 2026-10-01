@@ -359,7 +359,11 @@ cosign verify-attestation ghcr.io/hubertmj/self-defending-portfolio/web:<tag> --
 
 Both commands must succeed from a machine that is not logged in to GHCR. The identity regexp and
 issuer above are character-for-character what `cluster/infra/kyverno-policies/verify-portfolio-images.yaml`
-asserts, so if `cosign` is happy, Kyverno will be.
+asserts, so if `cosign` is happy, Kyverno will be. That holds because the policy uses
+`type: SigstoreBundle`: cosign v3 stores the signature and attestation as OCI 1.1 referrers (Sigstore
+bundles), not as `.sig`/`.att` tags, and Kyverno's default `type: Cosign` would not find them
+(ADR 0011, amendment 2026-10-01). `--type spdxjson` is a cosign CLI short name; the policy has to
+spell out the predicate type `https://spdx.dev/Document`.
 
 ### 5.3 Point `hello` at the signed digest
 

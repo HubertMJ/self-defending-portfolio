@@ -77,3 +77,38 @@ every image, including good ones.
   digest bump lands; the ConfigMap is removed in the same commit as that bump.
 - Every action in the workflow is pinned to a full commit SHA with its tag in a comment (ADR 0008),
   and so are the cosign and tooling container images.
+
+## Amendment 2026-10-01: Kyverno verifies cosign v3 Sigstore bundles
+
+**Context.** cosign v3 (the workflow pins v3.1.3) writes the new Sigstore bundle format by default.
+The signature and the SPDX attestation are no longer pushed as `sha256-<digest>.sig` / `.att` tags;
+each is an OCI 1.1 referrer of the image digest with artifactType
+`application/vnd.dev.sigstore.bundle.v0.3+json`. Kyverno v1.19.1's default verifier (`type: Cosign`)
+only looks for the tags, so admission failed with "no signatures found" / "no matching attestations"
+for images that `cosign verify` accepts, and Argo CD could not sync the `hello` Deployment.
+
+**Decision.** Keep cosign's default bundle format and switch both `verifyImages` entries in
+`cluster/infra/kyverno-policies/verify-portfolio-images.yaml` to `type: SigstoreBundle`, which
+discovers bundles through the OCI referrers API. In that mode the attestation `type` is compared
+exactly with the in-toto `predicateType`, so the policy names `https://spdx.dev/Document`, never the
+cosign CLI short name `spdxjson` (which the CLI, and therefore `scripts/verify-image.sh`, still maps
+for itself). Issuer, subject regexp and the `mutateDigest` split (true on `verify-signature`, false
+on `verify-sbom-attestation`) are unchanged. The `rekor.url` field stays in the policy but this mode
+ignores it: Rekor, Fulcio and TSA trust come from the Sigstore TUF `trusted_root.json`, and only
+`ignoreTlog` (left false, so a log entry is still required) is honoured.
+
+**Rejected: signing with `--new-bundle-format=false --use-signing-config=false`.** That would bring
+back the `.sig`/`.att` tags the old verifier understands, but both flags are deprecated in cosign v3
+and slated for removal. It would move the same breakage to a future cosign bump, and leave the
+pipeline producing a format the Sigstore ecosystem is moving away from.
+
+**Deferred: ImageValidatingPolicy (`policies.kyverno.io/v1`).** `ClusterPolicy` is deprecated as of
+Kyverno 1.19, and ImageValidatingPolicy is its successor with first-class bundle support. Migrating is
+a rewrite of the policy and of `tests/admission/`, not a field change, so it is a candidate for a
+later phase rather than part of this fix.
+
+**Consequence / known limitation.** In SigstoreBundle mode the `verify-signature` rule has no
+predicate filter: any bundle that verifies against the pinned identity satisfies it, including the
+SBOM attestation bundle on its own. This is accepted because the identity is this one workflow file
+on `refs/heads/main` — anything that satisfies it came out of our own pipeline — and the SBOM's
+presence is asserted separately, by predicate type, in `verify-sbom-attestation`.
