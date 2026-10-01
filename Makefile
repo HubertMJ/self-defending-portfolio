@@ -1,8 +1,11 @@
-.PHONY: lint validate smoke vm hardening cluster verify bootstrap
+.PHONY: lint gitleaks validate smoke vm hardening cluster verify bootstrap
 DOCKER ?= docker
 
 lint:            ## run yamllint, ansible-lint, shellcheck, syntax-check (in container)
 	@DOCKER="$(DOCKER)" scripts/lint.sh
+
+gitleaks:        ## scan full git history for secrets
+	@$(DOCKER) run --rm -v "$(CURDIR)":/repo zricethezav/gitleaks:v8.24.3@sha256:e1b35e12a8c6fa8901f060459cfb6b2fc4c484d3afbe3b029733a3bbfab07055 git /repo --redact --no-banner
 
 validate:        ## render every kustomization under cluster/ and validate it against real schemas
 	@scripts/check-secrets-encrypted.sh

@@ -1,7 +1,6 @@
 name: lint
 on:
   push:
-    branches: [main]
   pull_request:
 
 permissions:
@@ -61,10 +60,11 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
-      - name: gitleaks
-        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: gitleaks (pinned container, same as `make gitleaks`)
+        run: >
+          docker run --rm -v "$PWD":/repo
+          zricethezav/gitleaks:v8.24.3@sha256:e1b35e12a8c6fa8901f060459cfb6b2fc4c484d3afbe3b029733a3bbfab07055
+          git /repo --redact --no-banner
 
   smoke:
     # Applies hardening.yml twice to a throwaway systemd container; the second run must be changed=0.
