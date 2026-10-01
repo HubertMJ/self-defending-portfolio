@@ -1,0 +1,243 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 960" width="1200" height="960" role="img" aria-labelledby="t d">
+  <title id="t">self-defending-portfolio: architecture overview</title>
+  <desc id="d">Four panels. 1: inbound network path from the visitor through Cloudflare and an outbound-only tunnel to cloudflared, the Cilium Gateway and the hello pods, with a planned portfolio API. 2: GitOps flow from git push through CI and Argo CD to the cluster. 3: supply chain from the build workflow through Trivy, keyless cosign signing and GHCR to Kyverno admission. 4: detection and response from a sandbox pod through Falco, Falcosidekick and Falco Talon back to the Kubernetes API, which deletes or quarantines the pod. Dashed elements are planned phase 5 work.</desc>
+  <style>
+    .bg { fill: #ffffff; }
+    .panel { fill: #f6f8fa; stroke: #d0d7de; stroke-width: 1; }
+    .zone { fill: none; stroke: #8c959f; stroke-width: 1; stroke-dasharray: 2 3; }
+    .box { fill: #ffffff; stroke: #57606a; stroke-width: 1.2; }
+    .key { fill: #ddf4ff; stroke: #0969da; stroke-width: 1.4; }
+    .plan { fill: #fff8c5; stroke: #9a6700; stroke-width: 1.2; stroke-dasharray: 6 4; }
+    .h { font: 600 18px system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; fill: #1f2328; }
+    .ph { font: 600 14px system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; fill: #1f2328; }
+    .b { font: 600 13px system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; fill: #1f2328; }
+    .s { font: 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; fill: #57606a; }
+    .l { font: 11px system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; fill: #57606a; }
+    .pl { font: italic 11px system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; fill: #9a6700; }
+    .a { fill: none; stroke: #57606a; stroke-width: 1.5; }
+    .ap { fill: none; stroke: #9a6700; stroke-width: 1.5; stroke-dasharray: 6 4; }
+    .ar { fill: none; stroke: #cf222e; stroke-width: 1.5; }
+    .mh { fill: #57606a; }
+    .mhp { fill: #9a6700; }
+    .mhr { fill: #cf222e; }
+    @media (prefers-color-scheme: dark) {
+      .bg { fill: #0d1117; }
+      .panel { fill: #161b22; stroke: #30363d; }
+      .zone { stroke: #6e7681; }
+      .box { fill: #0d1117; stroke: #8b949e; }
+      .key { fill: #0c2d6b; stroke: #4493f8; }
+      .plan { fill: #2e2512; stroke: #d29922; }
+      .h, .ph, .b { fill: #e6edf3; }
+      .s, .l { fill: #9198a1; }
+      .pl { fill: #d29922; }
+      .a { stroke: #8b949e; }
+      .ap { stroke: #d29922; }
+      .ar { stroke: #f85149; }
+      .mh { fill: #8b949e; }
+      .mhp { fill: #d29922; }
+      .mhr { fill: #f85149; }
+    }
+  </style>
+  <defs>
+    <marker id="m" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path class="mh" d="M0,0 L10,5 L0,10 z"/>
+    </marker>
+    <marker id="mp" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path class="mhp" d="M0,0 L10,5 L0,10 z"/>
+    </marker>
+    <marker id="mr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path class="mhr" d="M0,0 L10,5 L0,10 z"/>
+    </marker>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="1200" height="960"/>
+  <text class="h" x="20" y="34">self-defending-portfolio: architecture overview</text>
+  <text class="l" x="20" y="52">Solid = in the repository (phases 1-4). Dashed = planned phase 5/6 work. Details and sources: docs/architecture/README.md</text>
+
+  <!-- ============================================================ 1. network path -->
+  <rect class="panel" x="10" y="66" width="1180" height="224" rx="8"/>
+  <text class="ph" x="24" y="88">1 · Network path (no inbound port: the tunnel is dialled from inside)</text>
+
+  <rect class="zone" x="410" y="100" width="770" height="182" rx="6"/>
+  <text class="l" x="420" y="116">k3s01 VM (Proxmox, Debian 13) · nftables input policy drop · Cilium CNI</text>
+
+  <rect class="box" x="30" y="140" width="120" height="64" rx="6"/>
+  <text class="b" x="90" y="168" text-anchor="middle">visitor</text>
+  <text class="s" x="90" y="186" text-anchor="middle">browser</text>
+
+  <rect class="box" x="200" y="132" width="170" height="80" rx="6"/>
+  <text class="b" x="285" y="156" text-anchor="middle">Cloudflare edge</text>
+  <text class="s" x="285" y="174" text-anchor="middle">TLS to visitor</text>
+  <text class="s" x="285" y="190" text-anchor="middle">CNAME → tunnel</text>
+
+  <rect class="key" x="430" y="132" width="190" height="80" rx="6"/>
+  <text class="b" x="525" y="156" text-anchor="middle">cloudflared ×2</text>
+  <text class="s" x="525" y="174" text-anchor="middle">ns cloudflared</text>
+  <text class="s" x="525" y="190" text-anchor="middle">egress allow-list</text>
+
+  <rect class="key" x="680" y="132" width="210" height="80" rx="6"/>
+  <text class="b" x="785" y="156" text-anchor="middle">Gateway portfolio</text>
+  <text class="s" x="785" y="174" text-anchor="middle">ns gateway · Cilium Envoy</text>
+  <text class="s" x="785" y="190" text-anchor="middle">:443 cert LE DNS-01</text>
+
+  <rect class="box" x="950" y="132" width="210" height="80" rx="6"/>
+  <text class="b" x="1055" y="156" text-anchor="middle">hello ×2 :8080</text>
+  <text class="s" x="1055" y="174" text-anchor="middle">ns hello · default-deny</text>
+  <text class="s" x="1055" y="190" text-anchor="middle">signed web image</text>
+
+  <rect class="plan" x="950" y="224" width="210" height="48" rx="6"/>
+  <text class="b" x="1055" y="244" text-anchor="middle">portfolio API /api</text>
+  <text class="pl" x="1055" y="261" text-anchor="middle">planned · ns portfolio-api</text>
+
+  <path class="a" d="M150,172 L198,172" marker-end="url(#m)"/>
+  <text class="l" x="174" y="164" text-anchor="middle">HTTPS</text>
+  <path class="a" d="M372,160 L428,160" marker-end="url(#m)"/>
+  <text class="l" x="400" y="152" text-anchor="middle">requests</text>
+  <path class="a" d="M428,186 L372,186" marker-end="url(#m)"/>
+  <text class="l" x="400" y="204" text-anchor="middle">dials out</text>
+  <path class="a" d="M620,172 L678,172" marker-end="url(#m)"/>
+  <text class="l" x="649" y="164" text-anchor="middle">HTTPS</text>
+  <text class="l" x="649" y="232" text-anchor="middle">SNI + cert</text>
+  <text class="l" x="649" y="246" text-anchor="middle">verified</text>
+  <path class="a" d="M890,172 L948,172" marker-end="url(#m)"/>
+  <text class="l" x="919" y="164" text-anchor="middle">route</text>
+  <text class="l" x="919" y="196" text-anchor="middle">+ headers</text>
+  <path class="ap" d="M850,212 L850,248 L948,248" marker-end="url(#mp)"/>
+
+  <!-- ============================================================ 2. gitops -->
+  <rect class="panel" x="10" y="302" width="584" height="262" rx="8"/>
+  <text class="ph" x="24" y="324">2 · GitOps (every cluster change is a commit)</text>
+
+  <rect class="box" x="30" y="344" width="120" height="56" rx="6"/>
+  <text class="b" x="90" y="368" text-anchor="middle">operator</text>
+  <text class="s" x="90" y="386" text-anchor="middle">git push main</text>
+
+  <rect class="box" x="200" y="344" width="150" height="56" rx="6"/>
+  <text class="b" x="275" y="368" text-anchor="middle">GitHub repo</text>
+  <text class="s" x="275" y="386" text-anchor="middle">main branch</text>
+
+  <rect class="key" x="400" y="336" width="180" height="72" rx="6"/>
+  <text class="b" x="490" y="358" text-anchor="middle">Argo CD (ns argocd)</text>
+  <text class="s" x="490" y="376" text-anchor="middle">root → cluster/apps</text>
+  <text class="s" x="490" y="392" text-anchor="middle">KSOPS + age key</text>
+
+  <rect class="box" x="200" y="440" width="150" height="64" rx="6"/>
+  <text class="b" x="275" y="462" text-anchor="middle">CI lint.yml</text>
+  <text class="s" x="275" y="479" text-anchor="middle">validate, kyverno</text>
+  <text class="s" x="275" y="494" text-anchor="middle">gitleaks, smoke</text>
+
+  <rect class="box" x="400" y="440" width="180" height="64" rx="6"/>
+  <text class="b" x="490" y="462" text-anchor="middle">15 Applications</text>
+  <text class="s" x="490" y="479" text-anchor="middle">cluster/infra/*</text>
+  <text class="s" x="490" y="494" text-anchor="middle">+ pinned Helm charts</text>
+
+  <path class="a" d="M150,372 L198,372" marker-end="url(#m)"/>
+  <path class="a" d="M275,400 L275,438" marker-end="url(#m)"/>
+  <path class="a" d="M398,372 L352,372" marker-end="url(#m)"/>
+  <text class="l" x="375" y="364" text-anchor="middle">poll</text>
+  <path class="a" d="M490,408 L490,438" marker-end="url(#m)"/>
+  <text class="l" x="496" y="428">waves -2..5</text>
+  <text class="l" x="30" y="530">Once, by hand: Ansible (host hardening, k3s, Cilium seed) and cluster/bootstrap/bootstrap.sh.</text>
+  <text class="l" x="30" y="548">Secrets in git are SOPS/age-encrypted; CI refuses a plaintext Secret.</text>
+
+  <!-- ============================================================ 3. supply chain -->
+  <rect class="panel" x="606" y="302" width="584" height="262" rx="8"/>
+  <text class="ph" x="620" y="324">3 · Supply chain (only our own images, only if signed on main)</text>
+
+  <rect class="box" x="624" y="344" width="160" height="56" rx="6"/>
+  <text class="b" x="704" y="368" text-anchor="middle">build-web.yml</text>
+  <text class="s" x="704" y="386" text-anchor="middle">push to main</text>
+
+  <rect class="box" x="814" y="344" width="160" height="56" rx="6"/>
+  <text class="b" x="894" y="368" text-anchor="middle">Trivy gate</text>
+  <text class="s" x="894" y="386" text-anchor="middle">fixable HIGH/CRIT</text>
+
+  <rect class="key" x="1004" y="344" width="170" height="56" rx="6"/>
+  <text class="b" x="1089" y="368" text-anchor="middle">cosign keyless</text>
+  <text class="s" x="1089" y="386" text-anchor="middle">sign + SPDX attest</text>
+
+  <rect class="box" x="1004" y="440" width="170" height="64" rx="6"/>
+  <text class="b" x="1089" y="462" text-anchor="middle">Sigstore</text>
+  <text class="s" x="1089" y="479" text-anchor="middle">Fulcio cert, Rekor</text>
+  <text class="s" x="1089" y="494" text-anchor="middle">SAN build-web@main</text>
+
+  <rect class="box" x="814" y="440" width="160" height="64" rx="6"/>
+  <text class="b" x="894" y="462" text-anchor="middle">GHCR (public)</text>
+  <text class="s" x="894" y="479" text-anchor="middle">image + bundles</text>
+  <text class="s" x="894" y="494" text-anchor="middle">as OCI referrers</text>
+
+  <rect class="key" x="624" y="440" width="160" height="64" rx="6"/>
+  <text class="b" x="704" y="462" text-anchor="middle">Kyverno admission</text>
+  <text class="s" x="704" y="479" text-anchor="middle">ns hello, sandbox</text>
+  <text class="s" x="704" y="494" text-anchor="middle">failurePolicy Fail</text>
+
+  <path class="a" d="M784,372 L812,372" marker-end="url(#m)"/>
+  <path class="a" d="M974,372 L1002,372" marker-end="url(#m)"/>
+  <path class="a" d="M1089,400 L1089,438" marker-end="url(#m)"/>
+  <text class="l" x="1095" y="424">OIDC</text>
+  <path class="a" d="M1040,400 L960,438" marker-end="url(#m)"/>
+  <path class="a" d="M812,472 L786,472" marker-end="url(#m)"/>
+  <text class="l" x="620" y="530">Admitted: our registry path, signature + SBOM by that identity, no :latest; verified digest pinned.</text>
+  <text class="l" x="620" y="548">Same check from a laptop: scripts/verify-image.sh. Deploying a new digest is a reviewed commit.</text>
+
+  <!-- ============================================================ 4. detection and response -->
+  <rect class="panel" x="10" y="576" width="1180" height="324" rx="8"/>
+  <text class="ph" x="24" y="598">4 · Detection and response (no human in the loop, acts in ns sandbox only)</text>
+
+  <rect class="box" x="30" y="620" width="180" height="80" rx="6"/>
+  <text class="b" x="120" y="644" text-anchor="middle">pod in sandbox</text>
+  <text class="s" x="120" y="662" text-anchor="middle">restricted, DNS only</text>
+  <text class="s" x="120" y="678" text-anchor="middle">quarantine=false</text>
+
+  <rect class="key" x="260" y="620" width="200" height="80" rx="6"/>
+  <text class="b" x="360" y="644" text-anchor="middle">Falco DaemonSet</text>
+  <text class="s" x="360" y="662" text-anchor="middle">modern eBPF, 4 caps</text>
+  <text class="s" x="360" y="678" text-anchor="middle">ns falco, no API token</text>
+
+  <rect class="box" x="510" y="620" width="190" height="80" rx="6"/>
+  <text class="b" x="605" y="644" text-anchor="middle">Falcosidekick</text>
+  <text class="s" x="605" y="662" text-anchor="middle">:2801</text>
+  <text class="s" x="605" y="678" text-anchor="middle">ns falco-response</text>
+
+  <rect class="key" x="750" y="620" width="190" height="80" rx="6"/>
+  <text class="b" x="845" y="644" text-anchor="middle">Falco Talon</text>
+  <text class="s" x="845" y="662" text-anchor="middle">:2803, leader Lease</text>
+  <text class="s" x="845" y="678" text-anchor="middle">rules match sandbox</text>
+
+  <rect class="box" x="990" y="620" width="180" height="80" rx="6"/>
+  <text class="b" x="1080" y="644" text-anchor="middle">kube-apiserver</text>
+  <text class="s" x="1080" y="662" text-anchor="middle">RBAC: pods in</text>
+  <text class="s" x="1080" y="678" text-anchor="middle">sandbox only</text>
+
+  <path class="a" d="M210,660 L258,660" marker-end="url(#m)"/>
+  <text class="l" x="234" y="652" text-anchor="middle">syscalls</text>
+  <path class="a" d="M460,660 L508,660" marker-end="url(#m)"/>
+  <text class="l" x="484" y="652" text-anchor="middle">alert</text>
+  <path class="a" d="M700,660 L748,660" marker-end="url(#m)"/>
+  <text class="l" x="724" y="652" text-anchor="middle">POST</text>
+  <path class="a" d="M940,660 L988,660" marker-end="url(#m)"/>
+  <text class="l" x="964" y="652" text-anchor="middle">action</text>
+
+  <rect class="plan" x="510" y="730" width="430" height="52" rx="6"/>
+  <text class="b" x="725" y="752" text-anchor="middle">portfolio API → browser (SSE /api/events)</text>
+  <text class="pl" x="725" y="770" text-anchor="middle">planned · webhooks to internal port 8081, from falco-response only</text>
+  <path class="ap" d="M605,700 L605,728" marker-end="url(#mp)"/>
+  <path class="ap" d="M845,700 L845,728" marker-end="url(#mp)"/>
+  <path class="ap" d="M508,756 L170,756 L170,702" marker-end="url(#mp)"/>
+  <text class="pl" x="180" y="748">planned: the API creates scenario pods</text>
+
+  <path class="ar" d="M1080,700 L1080,832 L70,832 L70,702" marker-end="url(#mr)"/>
+  <text class="l" x="600" y="820" text-anchor="middle">"Terminal shell in container" → kubernetes:terminate (grace 0) · "SDP network tool in sandbox" → label quarantine=true</text>
+  <text class="l" x="600" y="852" text-anchor="middle">quarantine label selects a standing CiliumClusterwideNetworkPolicy that denies all ingress and egress · every action leaves a k8s Event</text>
+  <text class="l" x="600" y="884" text-anchor="middle">Proof: tests/runtime/run.sh (make runtime-test) asserts alert → POST → terminate → Event, the quarantine, and Talon's RBAC limits</text>
+
+  <!-- legend -->
+  <rect class="key" x="20" y="918" width="22" height="14" rx="3"/>
+  <text class="l" x="48" y="929">control point</text>
+  <rect class="box" x="150" y="918" width="22" height="14" rx="3"/>
+  <text class="l" x="178" y="929">component</text>
+  <rect class="plan" x="270" y="918" width="22" height="14" rx="3"/>
+  <text class="l" x="298" y="929">planned (phase 5/6)</text>
+  <path class="ar" d="M430,925 L470,925" marker-end="url(#mr)"/>
+  <text class="l" x="478" y="929">automatic response</text>
+</svg>
