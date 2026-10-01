@@ -7,7 +7,7 @@
 #   title, summary   what the visitor reads before clicking
 #   technique        MITRE ATT&CK technique id
 #   detection        the Falco rule that fires (stock rules are in the Falco 0.45.0 image's
-#                    /etc/falco/falco_rules.yaml, custom ones in cluster/apps/falco.yaml customRules)
+#                    /etc/falco/falco_rules.yaml, custom ones in cluster/infra/falco/kustomization.yaml customRules)
 #   response         what Falco Talon does: terminate (pod deleted) | quarantine (pod labelled, cut off)
 #   timeout_seconds  <= 120; the API sets activeDeadlineSeconds from it and gives up after it
 #   pod              a PodSpec. The API adds metadata (generateName, namespace `sandbox`, labels
@@ -84,7 +84,7 @@
     tty: true
 
 # ---------------------------------------------------------------------------------------------------
-# 2. A network tool: the custom rule "SDP network tool in sandbox" (WARNING, cluster/apps/falco.yaml)
+# 2. A network tool: the custom rule "SDP network tool in sandbox" (WARNING, cluster/infra/falco)
 #    fires on the *start* of wget/nc/curl in a sandbox container; Talon rule "Quarantine network tool
 #    in sandbox" labels the pod sdp.hubertjablon.ski/quarantine=true and the standing quarantine
 #    CiliumClusterwideNetworkPolicy cuts all of its traffic. The pod keeps running, isolated.

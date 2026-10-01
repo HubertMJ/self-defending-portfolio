@@ -19,9 +19,13 @@
 # timeout_seconds; wait for Ready; run `exec.command` in container `target` (through `script` for a
 # real TTY when exec.tty is true); then, within timeout_seconds:
 #   terminate  -> the pod is deleted (by Talon, not by its deadline), Falco logged `detection` for it,
-#                 Talon logged kubernetes:terminate for it and left an Event on it;
+#                 Talon logged a successful kubernetes:terminate for it;
 #   quarantine -> the pod is labelled quarantine=true and still Running, Falco logged `detection`,
-#                 Talon left a kubernetes:label Event, and a DNS lookup that worked before now fails.
+#                 Talon logged a successful kubernetes:label for it, and a DNS lookup that worked
+#                 before now fails.
+# Talon's log is its record of an action: Talon 0.3.0 writes no Kubernetes Events here (its k8sevents
+# notifier is off, ADR 0013 correction), and its JSON log line carries the actionner, the status and
+# the pod, as tests/runtime/run.sh asserts.
 # Every pod is deleted at the end of its case and on exit, whatever happens.
 #
 # Needs python3 with PyYAML (to read the scenario list; `make validate` needs it too) and `script`
@@ -161,10 +165,12 @@ stop_exec() {
 falco_alerted() { # rule, pod, since
   $KUBECTL -n falco logs ds/falco --since-time="$3" 2>/dev/null | grep -F "\"rule\":\"$1\"" | grep -qF "$2"
 }
-talon_event() { # pod, actionner
-  $KUBECTL -n "$NAMESPACE" get events --field-selector "involvedObject.name=$1" \
-    -o jsonpath='{range .items[*]}{.source.component}{" "}{.reason}{"\n"}{end}' 2>/dev/null \
-    | grep -q "^falco-talon .*$2"
+# Talon logs JSON lines (talon/config.yaml); the text form and ANSI colours are tolerated, as in
+# tests/runtime/run.sh, so the assertion does not depend on the log format. A notification line (the
+# webhook to the API) carries the actionner and a status but no pod, so it cannot match on its own.
+talon_acted() { # actionner, pod, since
+  $KUBECTL -n falco-response logs deploy/falco-talon --since-time="$3" 2>/dev/null \
+    | sed 's/\x1b\[[0-9;]*m//g' | grep -F "$1" | grep -E '"status":"success"|status=success' | grep -qF "$2"
 }
 
 # The plan is read on fd 3: `script` and kubectl must not swallow it from stdin.
@@ -224,14 +230,8 @@ while IFS=$'\t' read -r -u 3 id pod detection response timeout tty cmd; do
 
   actionner=kubernetes:terminate
   [ "$response" = quarantine ] && actionner=kubernetes:label
-  if $KUBECTL -n falco-response logs deploy/falco-talon --since-time="$t0" 2>/dev/null \
-     | grep "$actionner" | grep -qF "$pod"; then
-    pass "$id: Talon logged $actionner for $pod"
-  else
-    fail "$id: no $actionner line for $pod in the Talon log since $t0"
-  fi
-  if poll 10 talon_event "$pod" "$actionner"; then pass "$id: Talon recorded a $actionner Event on $pod"
-  else fail "$id: no falco-talon Event for $actionner on $pod"; fi
+  if poll 10 talon_acted "$actionner" "$pod" "$t0"; then pass "$id: Talon logged a successful $actionner for $pod"
+  else fail "$id: no successful $actionner line for $pod in the Talon log since $t0"; fi
 
   $KUBECTL -n "$NAMESPACE" delete pod "$pod" --ignore-not-found --wait=false >/dev/null 2>&1 || true
 done 3< "$WORK_DIR/plan.tsv"

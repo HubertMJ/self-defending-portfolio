@@ -59,7 +59,8 @@ a credential read and an executed foreign binary are post-compromise steps, ther
 worth keeping, and a quarantine label is a Pod UPDATE through `verify-portfolio-images` (failurePolicy
 Fail) that would sit in front of the kill. Quarantine stays the answer for the network tool only,
 where "still running, cut off" is the more instructive end state. Talon's RBAC does not change: the
-Role in `sandbox` already has pods get/patch/delete and events create. All four Falco priorities are at
+Role in `sandbox` already has pods get/patch/delete (no events: Talon's k8sevents notifier is off since
+the ADR 0013 correction). All four Falco priorities are at
 or above Falcosidekick's `notice` cut-off.
 
 **Checked offline and live.** `tests/scenarios/offline.sh` (`make scenario-offline`) validates the
@@ -67,7 +68,7 @@ stock and custom rules with the pinned Falco binary, asserts that every scenario
 Talon match is loaded, enabled and forwarded, runs `falco-talon rules check`, and verifies each
 scenario's rule preconditions under the pod's own security context in a local container.
 `tests/scenarios/run.sh` (`make scenario-test`) is the end-to-end proof on the cluster: alert in the
-Falco log, action in the Talon log and as an Event on the pod, and the end state (pod gone, or labelled,
+Falco log, a successful action naming the pod in Talon's JSON log, and the end state (pod gone, or labelled,
 Running and unable to resolve names).
 
 Not done offline, and why: replaying a capture (`falco -e`). There is none to replay; recording one

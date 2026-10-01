@@ -6,7 +6,7 @@
 #   DOCKER="sudo -n docker" tests/scenarios/offline.sh
 #
 # What it proves, per link:
-#   1. Falco loads the rules: the image's falco_rules.yaml plus cluster/apps/falco.yaml's customRules
+#   1. Falco loads the rules: the image's falco_rules.yaml plus cluster/infra/falco's customRules
 #      validate with the pinned Falco binary (`falco -V`).
 #   2. The names line up: every scenario's `detection`, and every rule Talon matches on, is a rule that
 #      Falco actually loads, enabled, at a priority Falcosidekick forwards (>= notice). A renamed or
@@ -34,7 +34,7 @@ cd "$(dirname "$0")"
 REPO_ROOT=$(cd ../.. && pwd)
 
 DOCKER=${DOCKER:-docker}
-# Same digests as cluster/apps/falco.yaml and cluster/infra/falco-response/talon-deployment.yaml.
+# Same digests as cluster/infra/falco/kustomization.yaml and cluster/infra/falco-response/talon-deployment.yaml.
 FALCO_IMAGE=${FALCO_IMAGE:-docker.io/falcosecurity/falco:0.45.0@sha256:788f1129c542171813083d4afc61b16730a47dde8c23d9c39370acef996349b6}
 TALON_IMAGE=${TALON_IMAGE:-docker.io/falcosecurity/falco-talon:0.3.0@sha256:333224a111a0722ff3f418ffe6bc5d8a3be0941f37c67520bc845e62f1234ad3}
 SCENARIO_TAG=sdp-scenario:offline-test
@@ -55,14 +55,20 @@ fail() { printf '  FAIL  %s\n' "$*" >&2; failures=$((failures + 1)); }
 
 # ---------------------------------------------------------------------------- 1. Falco loads the rules
 
-step "falco -V: stock rules + cluster/apps/falco.yaml customRules ($FALCO_IMAGE)"
+step "falco -V: stock rules + cluster/infra/falco customRules ($FALCO_IMAGE)"
 
-python3 - "$REPO_ROOT/cluster/apps/falco.yaml" "$WORK_DIR" <<'PY'
+# The chart's values are the helmCharts entry of the falco kustomization (ADR 0013, amendment).
+python3 - "$REPO_ROOT/cluster/infra/falco/kustomization.yaml" "$WORK_DIR" <<'PY'
 import sys, yaml
-app = yaml.safe_load(open(sys.argv[1]))
-for source in app["spec"]["sources"]:
-    for name, body in source.get("helm", {}).get("valuesObject", {}).get("customRules", {}).items():
-        open(f"{sys.argv[2]}/{name}", "w").write(body)
+kust = yaml.safe_load(open(sys.argv[1]))
+rules = {}
+for chart in kust.get("helmCharts", []):
+    if chart.get("name") == "falco":
+        rules = chart.get("valuesInline", {}).get("customRules", {})
+if not rules:
+    sys.exit("offline.sh: no customRules in the falco helmCharts entry")
+for name, body in rules.items():
+    open(f"{sys.argv[2]}/{name}", "w").write(body)
 PY
 mapfile -t CUSTOM < <(cd "$WORK_DIR" && ls ./*.yaml)
 mounts=() ; validate=(-V /etc/falco/falco_rules.yaml)

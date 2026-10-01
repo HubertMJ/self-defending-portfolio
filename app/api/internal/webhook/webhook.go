@@ -39,7 +39,7 @@ type TalonEvent struct {
 
 // falcoPayload is Falcosidekick's webhook body: the Falco alert as Falco emitted it
 // (json_output: true), with output_fields carrying k8s.ns.name and k8s.pod.name
-// (cluster/apps/falco.yaml appends both to every rule's output).
+// (cluster/infra/falco/kustomization.yaml appends both to every rule's output).
 type falcoPayload struct {
 	Output       string         `json:"output"`
 	Priority     string         `json:"priority"`
