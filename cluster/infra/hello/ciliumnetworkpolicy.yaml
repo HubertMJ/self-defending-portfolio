@@ -21,6 +21,11 @@ spec:
       app.kubernetes.io/name: hello
   ingress:
     - fromEntities:
+        # Traffic from the Cilium Gateway (Envoy, host network) reaches the backend with the
+        # reserved "ingress" identity; Envoy also evaluates this policy for the original client
+        # and answers 403 "Access denied" when it does not match. "host" keeps kubelet probes and
+        # host-network debugging allowed.
+        - ingress
         - host
       toPorts:
         - ports:
