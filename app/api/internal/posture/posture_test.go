@@ -2,6 +2,7 @@ package posture
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"sync/atomic"
 	"testing"
@@ -33,14 +34,24 @@ func result(source, policy, res string) map[string]any {
 	return map[string]any{"source": source, "policy": policy, "result": res}
 }
 
-func vuln(ns, name, repo, digest string, c, h, m, l int64) *unstructured.Unstructured {
+func vuln(ns, name, repo, digest string, c, h, m, l int64, findings ...map[string]any) *unstructured.Unstructured {
+	list := make([]any, len(findings))
+	for i, f := range findings {
+		list[i] = f
+	}
 	return obj(VulnerabilityReports, "VulnerabilityReport", ns, name, map[string]any{
 		"report": map[string]any{
-			"registry": map[string]any{"server": "ghcr.io"},
-			"artifact": map[string]any{"repository": repo, "digest": digest, "tag": "main"},
-			"summary":  map[string]any{"criticalCount": c, "highCount": h, "mediumCount": m, "lowCount": l},
+			"registry":        map[string]any{"server": "ghcr.io"},
+			"artifact":        map[string]any{"repository": repo, "digest": digest, "tag": "main"},
+			"summary":         map[string]any{"criticalCount": c, "highCount": h, "mediumCount": m, "lowCount": l},
+			"vulnerabilities": list,
 		},
 	})
+}
+
+// finding is one entry of a report's vulnerability list; fixed "" means no fixed version exists.
+func finding(sev, fixed string) map[string]any {
+	return map[string]any{"vulnerabilityID": "CVE-2026-0001", "severity": sev, "fixedVersion": fixed}
 }
 
 type fixedCounter int
@@ -70,9 +81,15 @@ func TestAggregate(t *testing.T) {
 		obj(ClusterPolicyReports, "ClusterPolicyReport", "", "c", map[string]any{"results": []any{
 			result("kyverno", "disallow-latest-tag", "pass"),
 		}}),
-		vuln("hello", "rs-hello-1", "hubertmj/self-defending-portfolio/web", "sha256:aa", 0, 1, 2, 3),
-		vuln("hello", "rs-hello-2", "hubertmj/self-defending-portfolio/web", "sha256:aa", 0, 1, 2, 3), // same image
-		vuln("falco", "ds-falco", "falcosecurity/falco", "sha256:bb", 1, 0, 0, 0),
+		vuln("hello", "rs-hello-1", "hubertmj/self-defending-portfolio/web", "sha256:aa", 0, 1, 2, 3,
+			finding("HIGH", ""), finding("MEDIUM", "1.2.3")),
+		vuln("hello", "rs-hello-2", "hubertmj/self-defending-portfolio/web", "sha256:aa", 0, 1, 2, 3, // same image
+			finding("HIGH", ""), finding("MEDIUM", "1.2.3")),
+		vuln("falco", "ds-falco", "falcosecurity/falco", "sha256:bb", 1, 2, 0, 0,
+			finding("CRITICAL", "0.45.1"), finding("HIGH", "1.26.8"), finding("HIGH", " ")),
+		// Same repository name under another owner: third party, not ours.
+		vuln("x", "rs-x", "hubertmj/self-defending-portfolio-fork/web", "sha256:cc", 0, 1, 0, 0,
+			finding("HIGH", "2.0.0")),
 	)
 	kube := fake.NewClientset()
 	clk := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
@@ -93,7 +110,10 @@ func TestAggregate(t *testing.T) {
 			t.Errorf("policy %d = %+v, want %+v", i, s.Kyverno.Policies[i], want[i])
 		}
 	}
-	if s.Trivy != (Trivy{Images: 2, Critical: 1, High: 1, Medium: 2, Low: 3}) {
+	wantOurs := TrivyGroup{Images: 1, High: 1, Medium: 2, Low: 3}
+	wantThird := TrivyGroup{Images: 2, Critical: 1, High: 3, FixableCritical: 1, FixableHigh: 2}
+	wantTotal := TrivyGroup{Images: 3, Critical: 1, High: 4, Medium: 2, Low: 3, FixableCritical: 1, FixableHigh: 2}
+	if s.Trivy.Ours != wantOurs || s.Trivy.ThirdParty != wantThird || s.Trivy.TrivyGroup != wantTotal {
 		t.Errorf("trivy = %+v", s.Trivy)
 	}
 	if s.KubeBench.LastRun != nil {
@@ -192,5 +212,25 @@ W1001 03:17:02.000 trailing warning
 	}
 	if _, err := ParseKubeBench([]byte("fake logs")); !errors.Is(err, ErrNoBenchJSON) {
 		t.Fatalf("garbage: %v", err)
+	}
+}
+
+// The first version's keys stay at the top level of `trivy`; the splits are added next to them.
+func TestTrivyJSONShape(t *testing.T) {
+	b, err := json.Marshal(Trivy{TrivyGroup: TrivyGroup{Images: 3, High: 4}, Ours: TrivyGroup{Images: 1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(b, &m); err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range []string{"images", "critical", "high", "medium", "low", "fixable_critical", "fixable_high", "ours", "third_party"} {
+		if _, ok := m[k]; !ok {
+			t.Errorf("key %q missing in %s", k, b)
+		}
+	}
+	if m["images"] != float64(3) || m["ours"].(map[string]any)["images"] != float64(1) {
+		t.Errorf("%s", b)
 	}
 }

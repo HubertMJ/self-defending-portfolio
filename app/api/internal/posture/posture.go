@@ -28,6 +28,7 @@ import (
 	"io"
 	"log/slog"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -66,12 +67,48 @@ type PolicyCount struct {
 	Warn int    `json:"warn"`
 }
 
+// Trivy is the image vulnerability summary. The top-level counts are every distinct running image,
+// unchanged from the first version of this document, so the total stays visible and older clients
+// keep working. Two splits make it honest to read (ADR 0020):
+//
+//   - ours / third_party: images built by this repository (OurImagePrefix) against everything else.
+//     A visitor should see that "236 critical + high" is upstream software we run, not what we ship;
+//   - fixable_*: findings for which a fixed version exists. Severity totals come from each report's
+//     summary; fixable counts from its vulnerability list (fixedVersion set), which the operator
+//     writes in full.
 type Trivy struct {
-	Images   int `json:"images"`
-	Critical int `json:"critical"`
-	High     int `json:"high"`
-	Medium   int `json:"medium"`
-	Low      int `json:"low"`
+	TrivyGroup
+	Ours       TrivyGroup `json:"ours"`
+	ThirdParty TrivyGroup `json:"third_party"`
+}
+
+// TrivyGroup is one set of distinct images and their findings.
+type TrivyGroup struct {
+	Images          int `json:"images"`
+	Critical        int `json:"critical"`
+	High            int `json:"high"`
+	Medium          int `json:"medium"`
+	Low             int `json:"low"`
+	FixableCritical int `json:"fixable_critical"`
+	FixableHigh     int `json:"fixable_high"`
+}
+
+// OurImagePrefix is where this repository's images live (registry server + repository).
+const OurImagePrefix = "ghcr.io/hubertmj/self-defending-portfolio/"
+
+func (g *TrivyGroup) add(s imageFindings) {
+	g.Images++
+	g.Critical += s.critical
+	g.High += s.high
+	g.Medium += s.medium
+	g.Low += s.low
+	g.FixableCritical += s.fixableCritical
+	g.FixableHigh += s.fixableHigh
+}
+
+type imageFindings struct {
+	ours                                                      bool
+	critical, high, medium, low, fixableCritical, fixableHigh int
 }
 
 type KubeBench struct {
@@ -241,14 +278,14 @@ func (a *Aggregator) kyverno(ctx context.Context) (Kyverno, error) {
 }
 
 func (a *Aggregator) trivy(ctx context.Context) (Trivy, error) {
-	type sev struct{ c, h, m, l int64 }
-	images := map[string]sev{}
+	images := map[string]imageFindings{}
 	err := a.list(ctx, VulnerabilityReports, func(u *unstructured.Unstructured) {
 		server, _, _ := unstructured.NestedString(u.Object, "report", "registry", "server")
 		repo, _, _ := unstructured.NestedString(u.Object, "report", "artifact", "repository")
 		digest, _, _ := unstructured.NestedString(u.Object, "report", "artifact", "digest")
 		tag, _, _ := unstructured.NestedString(u.Object, "report", "artifact", "tag")
-		key := server + "/" + repo
+		name := server + "/" + repo
+		key := name
 		if digest != "" {
 			key += "@" + digest
 		} else {
@@ -257,24 +294,47 @@ func (a *Aggregator) trivy(ctx context.Context) (Trivy, error) {
 		if repo == "" {
 			key = u.GetNamespace() + "/" + u.GetName()
 		}
-		var s sev
-		s.c, _, _ = unstructured.NestedInt64(u.Object, "report", "summary", "criticalCount")
-		s.h, _, _ = unstructured.NestedInt64(u.Object, "report", "summary", "highCount")
-		s.m, _, _ = unstructured.NestedInt64(u.Object, "report", "summary", "mediumCount")
-		s.l, _, _ = unstructured.NestedInt64(u.Object, "report", "summary", "lowCount")
-		images[key] = s
+		f := imageFindings{ours: repo != "" && strings.HasPrefix(name+"/", OurImagePrefix)}
+		f.critical = summaryCount(u, "criticalCount")
+		f.high = summaryCount(u, "highCount")
+		f.medium = summaryCount(u, "mediumCount")
+		f.low = summaryCount(u, "lowCount")
+		vulns, _, _ := unstructured.NestedSlice(u.Object, "report", "vulnerabilities")
+		for _, v := range vulns {
+			m, ok := v.(map[string]any)
+			if !ok {
+				continue
+			}
+			if fixed, _ := m["fixedVersion"].(string); strings.TrimSpace(fixed) == "" {
+				continue
+			}
+			switch sev, _ := m["severity"].(string); sev {
+			case "CRITICAL":
+				f.fixableCritical++
+			case "HIGH":
+				f.fixableHigh++
+			}
+		}
+		images[key] = f
 	})
 	if err != nil {
 		return Trivy{}, err
 	}
-	out := Trivy{Images: len(images)}
-	for _, s := range images {
-		out.Critical += int(s.c)
-		out.High += int(s.h)
-		out.Medium += int(s.m)
-		out.Low += int(s.l)
+	var out Trivy
+	for _, f := range images {
+		out.add(f)
+		if f.ours {
+			out.Ours.add(f)
+		} else {
+			out.ThirdParty.add(f)
+		}
 	}
 	return out, nil
+}
+
+func summaryCount(u *unstructured.Unstructured, field string) int {
+	n, _, _ := unstructured.NestedInt64(u.Object, "report", "summary", field)
+	return int(n)
 }
 
 // maxBenchLog bounds what is read from the Job log; the k3s benchmark's JSON is ~150 KiB.
