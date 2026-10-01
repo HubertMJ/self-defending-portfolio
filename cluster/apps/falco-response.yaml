@@ -53,6 +53,15 @@ spec:
               # ("SDP network tool in sandbox") or NOTICE ("Terminal shell in container").
               minimumpriority: notice
               checkcert: true
+            # The live feed of the portfolio API (ADR 0015): the same alerts, to its internal port. The
+            # API publishes only those from `sandbox` and counts the rest for its 24 h total. The name
+            # is absolute (trailing dot), so it is one DNS query rather than a walk through the pod's
+            # search domains. Plain HTTP inside the cluster, like the Talon output above; the
+            # CiliumNetworkPolicies on both ends are what make it trustworthy. No credential in the URL:
+            # gitleaks' generic-api-key rule only sees "api" in the host name.
+            webhook:
+              address: http://portfolio-api.portfolio-api.svc.cluster.local.:8081/internal/falco  # gitleaks:allow
+              minimumpriority: notice
           # The chart default sets runAsUser/fsGroup only; restricted needs the rest.
           podSecurityContext:
             runAsNonRoot: true
