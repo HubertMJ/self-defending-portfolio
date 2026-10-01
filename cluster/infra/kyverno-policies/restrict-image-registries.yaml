@@ -1,0 +1,63 @@
+# The companion to verify-portfolio-images, and not redundant with it.
+#
+# verify-portfolio-images says "images from ghcr.io/hubertmj/self-defending-portfolio/ must be signed
+# by our workflow". It says nothing about an image from somewhere else entirely: a `docker.io/alpine`
+# in the hello namespace matches none of its imageReferences, so it is simply out of scope and
+# admitted. This policy closes that door from the other side - in the namespaces that serve the site
+# and run the attack scenarios, there is exactly one place an image may come from. Together they mean:
+# our registry path only, and signed.
+#
+#   # phase 3 switch: Audit -> Enforce once hello runs the signed image
+#
+# Audit until then for the same reason as verify-portfolio-images, and more immediately: `hello` runs
+# nginxinc/nginx-unprivileged today, which this rule rejects outright. Enforcing before the image is
+# ours would stop the running site. One grep shows all three policies' current actions:
+#
+#   grep -n 'failureAction' cluster/infra/kyverno-policies/*.yaml
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: restrict-image-registries
+  annotations:
+    policies.kyverno.io/title: Restrict image registries
+    policies.kyverno.io/category: Supply Chain Security
+    policies.kyverno.io/severity: high
+    policies.kyverno.io/subject: Pod
+    policies.kyverno.io/description: >-
+      In the namespaces that serve the site and run the demo scenarios, container images may only come
+      from this project's own registry path. An image from any other registry or owner is rejected
+      before it is pulled, so there is no path by which a third-party image runs there unverified.
+spec:
+  # Fail: bounded to the two namespaces below, same reasoning as verify-portfolio-images.
+  failurePolicy: Fail
+  # Pattern matching on a string, so there is a report to be had for pods that already exist.
+  background: true
+  rules:
+    - name: validate-registries
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+              # Kept identical to the namespace list in verify-portfolio-images.yaml: the two policies
+              # are one statement about the same set of namespaces, and a divergence between them
+              # would mean a namespace where origin is checked but provenance is not, or the reverse.
+              namespaces:
+                - hello
+                - sandbox
+      validate:
+        failureAction: Enforce
+        message: >-
+          Images in this namespace must come from ghcr.io/hubertmj/self-defending-portfolio/ - that is
+          the only registry path whose contents this project builds and signs.
+        pattern:
+          spec:
+            # Trailing `*` matches the repository name and the `:tag@sha256:...` suffix. The prefix is
+            # anchored because Kyverno patterns are whole-string matches, so a registry named
+            # `evil.example.com/ghcr.io/hubertmj/...` does not satisfy it.
+            containers:
+              - image: "ghcr.io/hubertmj/self-defending-portfolio/*"
+            =(initContainers):
+              - image: "ghcr.io/hubertmj/self-defending-portfolio/*"
+            =(ephemeralContainers):
+              - image: "ghcr.io/hubertmj/self-defending-portfolio/*"

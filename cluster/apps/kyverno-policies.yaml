@@ -1,0 +1,45 @@
+# Wave 2: the policies, after the controller and its CRDs (wave 1) and before the first workload
+# namespace Argo CD creates pods in (cloudflared 2, gateway 3, hello 4). Separate Application rather
+# than extra values on cluster/apps/kyverno.yaml for two reasons: a ClusterPolicy cannot be applied
+# until its CRD is registered, which is a wave boundary; and a policy change is then a diff against a
+# three-file kustomization instead of a diff inside a Helm values blob.
+#
+# These are hand-written ClusterPolicies, not the upstream `kyverno-policies` chart. That chart ships
+# the Pod Security Standards bundle, which is phase 4; what phase 3 needs is image provenance, and
+# that has to name this repository's registry path, workflow and OIDC issuer.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: kyverno-policies
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/HubertMJ/self-defending-portfolio.git
+    targetRevision: main
+    path: cluster/infra/kyverno-policies
+  destination:
+    server: https://kubernetes.default.svc
+    # ClusterPolicies are cluster-scoped; this namespace is only the fallback for anything that is
+    # not, and is where a PolicyException would land (features.policyExceptions.namespace).
+    namespace: kyverno
+  syncPolicy:
+    automated:
+      # Pruning is on here, unlike the chart Application: deleting a policy file must delete the
+      # policy, otherwise a rule that was deliberately withdrawn keeps enforcing.
+      prune: true
+      selfHeal: true
+    syncOptions:
+      # Argo CD dry-runs every object against the API server before syncing. On a first sync of a
+      # fresh cluster the ClusterPolicy CRD is created in wave 1 of the same operation, so the
+      # dry-run of these objects happens against an API server that does not know the kind yet and
+      # fails the whole sync. This option skips the dry-run for kinds whose CRD is not registered
+      # yet, which is exactly that case.
+      - SkipDryRunOnMissingResource=true
+      # The namespace belongs to the kyverno Application (wave 1) together with its Pod Security
+      # Standards labels; this Application must not invent a second, unlabelled one.
+      - CreateNamespace=false

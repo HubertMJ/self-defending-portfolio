@@ -215,7 +215,8 @@ kubectl -n argocd get applications -w
 ```
 
 Expected order, by sync wave: `gateway-api-crds` (-2), `cilium` (-1), `cert-manager` (0),
-`cert-manager-issuers` (1), `cloudflared` (2), `gateway` (3), `hello` (4).
+`cert-manager-issuers` and `kyverno` (1), `kyverno-policies` and `cloudflared` (2), `gateway` (3),
+`hello` (4).
 
 `cilium` will show as adopting an existing release rather than creating one — Ansible installed it in
 step 3 and Argo CD takes it over field by field via server-side apply. See the header comment in
@@ -303,6 +304,164 @@ curl -s https://hubertjablon.ski | grep -i reword
 | Cloudflare 502, tunnel healthy | Gateway has no certificate yet, or `cilium-gateway-portfolio` does not exist — check the GatewayClass is `Programmed` |
 | Cloudflare 502, certificate ready | origin TLS verification failed; `originServerName` must equal the certificate's hostname |
 | `gateway` Application stuck `Progressing` | Gateway API CRDs (wave -2) or the `cilium` GatewayClass (wave -1) missing |
+
+## 5. Supply chain (phase 3)
+
+Kyverno arrives with the rest of the cluster (`cluster/apps/kyverno.yaml`, wave 1; chart 3.9.1 /
+Kyverno v1.19.1) and its three ClusterPolicies in wave 2
+(`cluster/apps/kyverno-policies.yaml` -> `cluster/infra/kyverno-policies/`). Nothing below has to be
+done to bring the cluster up; it is the ordered handover from "policies installed and watching" to
+"policies gating", which cannot happen before a signed image exists.
+
+Two of the three policies are committed as **Audit**: they record violations in PolicyReports and
+admit the Pod. `disallow-latest-tag` is **Enforce** from the start, because nothing in `cluster/`
+uses a floating tag.
+
+```sh
+grep -n 'failureAction' cluster/infra/kyverno-policies/*.yaml
+```
+
+| Policy | Committed action | Scope |
+|--------|------------------|-------|
+| `verify-portfolio-images` | Audit → Enforce (below) | Pods in `hello`, `sandbox` |
+| `restrict-image-registries` | Audit → Enforce (below) | Pods in `hello`, `sandbox` |
+| `disallow-latest-tag` | Enforce | Pods everywhere except kube-system, kyverno, argocd, cilium-secrets, cert-manager, gateway, cloudflared |
+
+### 5.1 The first build must run
+
+Verification is an assertion about a signature that does not exist yet. Push to `main` and let
+`.github/workflows/build-web.yml` complete at least once; it builds the image, pushes it to
+`ghcr.io/hubertmj/self-defending-portfolio/web`, signs the digest keylessly with cosign and attaches
+an SPDX SBOM attestation.
+
+### 5.2 The GHCR package must be public
+
+Kyverno pulls the image manifest, the cosign signature and the attestation **anonymously**, from
+inside the cluster. A package that GHCR created private makes every verification fail with
+`UNAUTHORIZED`, which looks exactly like an unsigned image.
+
+GitHub → your profile → Packages → `self-defending-portfolio/web` → Package settings → Change
+visibility → Public. Also link it to the repository there, so the package inherits the repo's
+Actions permissions.
+
+Check it the way Kyverno will, with no credentials:
+
+```sh
+docker logout ghcr.io
+crane digest ghcr.io/hubertmj/self-defending-portfolio/web:<tag>     # or: docker manifest inspect
+cosign verify ghcr.io/hubertmj/self-defending-portfolio/web:<tag> \
+  --certificate-identity-regexp '^https://github\.com/HubertMJ/self-defending-portfolio/\.github/workflows/build-web\.yml@refs/heads/main$' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+cosign verify-attestation ghcr.io/hubertmj/self-defending-portfolio/web:<tag> --type spdxjson \
+  --certificate-identity-regexp '^https://github\.com/HubertMJ/self-defending-portfolio/\.github/workflows/build-web\.yml@refs/heads/main$' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+```
+
+Both commands must succeed from a machine that is not logged in to GHCR. The identity regexp and
+issuer above are character-for-character what `cluster/infra/kyverno-policies/verify-portfolio-images.yaml`
+asserts, so if `cosign` is happy, Kyverno will be.
+
+### 5.3 Point `hello` at the signed digest
+
+`cluster/infra/hello/deployment.yaml` runs `nginxinc/nginx-unprivileged`, which is not ours and which
+nobody signed. Replace it with our own image, pinned by digest, using a kustomize `images:`
+transformer in `cluster/infra/hello/kustomization.yaml` rather than by editing the Deployment: the
+image reference then has one home, the diff of a rebuild is one line, and nothing else in the
+Deployment moves.
+
+```yaml
+# cluster/infra/hello/kustomization.yaml
+images:
+  - name: nginxinc/nginx-unprivileged
+    newName: ghcr.io/hubertmj/self-defending-portfolio/web
+    newTag: <version>
+    digest: <sha256:...>   # use digest OR newTag; digest is what ADR 0008 wants
+```
+
+The image must listen on 8080 as a non-root uid and run with a read-only root filesystem, because the
+`hello` namespace enforces Pod Security Standards `restricted` and the Deployment's `securityContext`
+already says so. Check `runAsUser` in the Deployment against the uid the new image actually uses.
+
+### 5.4 Flip Audit → Enforce, in the same commit
+
+This is one commit with 5.3, not a follow-up. Enforce before the image is ours stops the site;
+our image without Enforce means phase 3 is not done.
+
+In `cluster/infra/kyverno-policies/verify-portfolio-images.yaml`:
+
+- `verify-signature`: `failureAction: Audit` → `Enforce` **and** `mutateDigest: false` → `true`.
+  Those two move together: Kyverno refuses to install a rule that rewrites the image reference while
+  only auditing (`mutateDigest must be set to false for 'Audit' failure action`), and `mutateDigest`
+  is what closes the gap between the digest that was verified and the one the kubelet pulls.
+- `verify-sbom-attestation`: `failureAction: Audit` → `Enforce`. Its `mutateDigest` stays `false` —
+  `verify-signature` already pinned the digest. Do not `sed` the file.
+
+In `cluster/infra/kyverno-policies/restrict-image-registries.yaml`: `failureAction: Audit` →
+`Enforce`.
+
+```sh
+make validate
+git commit -am 'phase 3: hello runs the signed image, image policies enforce' && git push
+kubectl -n argocd get app hello kyverno-policies -w
+kubectl get clusterpolicy                       # all three Ready
+kubectl get policyreport -A                     # should go quiet for hello
+```
+
+### 5.5 Prove it
+
+```sh
+export KUBECONFIG=$PWD/kubeconfig
+tests/admission/run.sh
+```
+
+Three `kubectl apply --dry-run=server` calls that must all be **denied**, each by the policy named in
+the Pod's `tests.hubertjablon.ski/expect-policy` annotation: an unsigned image from our own registry
+path, a perfectly ordinary `docker.io/library/busybox:1.37`, and a `:latest` tag. The specs are
+`restricted`-compliant on purpose, so the only thing left for the cluster to object to is the image —
+a PSS rejection would make the test pass for the wrong reason. Nothing is scheduled and no image is
+pulled.
+
+Pass the signed digest to assert the other half, that the gate has a hole exactly where it should:
+
+```sh
+SIGNED_IMAGE=ghcr.io/hubertmj/self-defending-portfolio/web@sha256:... tests/admission/run.sh
+```
+
+The same policies can be exercised without a cluster, which is what CI does:
+
+```sh
+docker run --rm -v "$PWD":/work -w /work \
+  ghcr.io/kyverno/kyverno-cli:v1.19.1@sha256:ced7b2be0b04250cabfe695f15307f69eb715fe23234816388af4f3812915b2a \
+  apply cluster/infra/kyverno-policies/ --resource tests/admission/latest-pod.yaml
+```
+
+### 5.6 Kyverno's egress is deliberately open for now
+
+The `kyverno` namespace has **no NetworkPolicy**, and the chart's own `networkPolicy` options are
+left off. Verification needs the API server, GHCR (image manifests, signatures, attestations), Fulcio
+and Rekor; a default-deny namespace would turn every one of those into a verification failure, which
+with `failurePolicy: Fail` means a cluster that cannot start Pods. Phase 4 adds a
+`CiliumNetworkPolicy` that allows exactly those destinations and denies the rest.
+
+One related trade-off, recorded where it will be read: `verify-portfolio-images` and
+`restrict-image-registries` use `failurePolicy: Fail` (a Kyverno outage must not admit an unverified
+Pod) but match only two namespaces, so an outage cannot wedge the cluster. `disallow-latest-tag`
+matches almost every namespace and therefore uses `failurePolicy: Ignore`: with `Fail` it would
+stop every Pod creation on this single node during a Kyverno outage, including the Kyverno and Argo CD
+pods needed to end it. A floating tag slipping in during those minutes is caught by CI and reported
+afterwards; an unrecoverable cluster is not.
+
+### Troubleshooting
+
+| Symptom | Cause |
+|---------|-------|
+| every verification fails with `UNAUTHORIZED` or `MANIFEST_UNKNOWN` | the GHCR package is still private (5.2), or the tag was never pushed |
+| `failed to verify image ...: no matching signatures` | the workflow ran on a branch or as a `pull_request`, so the certificate SAN is not `@refs/heads/main` |
+| `image attestations verification failed, verifiedCount: 0` | the build ran before `cosign attest` was added, or signed a different digest than it attested |
+| `kyverno-policies` Application `Degraded`, `no matches for kind "ClusterPolicy"` | wave 1 has not finished; `SkipDryRunOnMissingResource=true` covers the dry-run but the CRD still has to exist before the apply |
+| `mutateDigest must be set to false for 'Audit' failure action` | half a flip: `failureAction` was set back to `Audit` without putting `mutateDigest` back to `false` (5.4) |
+| webhook timeouts on Pod creation, cluster-wide | Kyverno cannot reach Rekor/Fulcio/GHCR; check egress before suspecting the policy (5.6) |
+| Pods cannot be created at all and Kyverno is down | `kubectl delete validatingwebhookconfiguration -l webhook.kyverno.io/managed-by=kyverno` breaks the deadlock; Kyverno recreates them on startup |
 
 ## Rebuild from zero
 

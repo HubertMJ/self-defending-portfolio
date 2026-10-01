@@ -1,0 +1,40 @@
+# A floating tag (ADR 0008). Same restricted-compliant shape as unsigned-pod.yaml, for the same
+# reason: the only thing a policy can object to here is the image reference.
+#
+# docker.io rather than our own registry path so that when all three policies are enforcing, the
+# denial is attributable - this Pod trips disallow-latest-tag (and restrict-image-registries, which is
+# why run.sh asserts that the expected policy name appears in the message rather than that it is the
+# only one).
+apiVersion: v1
+kind: Pod
+metadata:
+  name: admission-test-latest-tag
+  namespace: hello
+  labels:
+    app.kubernetes.io/name: admission-test
+  annotations:
+    tests.hubertjablon.ski/expect-policy: disallow-latest-tag
+spec:
+  restartPolicy: Never
+  automountServiceAccountToken: false
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 65534
+    runAsGroup: 65534
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: probe
+      image: docker.io/library/busybox:latest
+      command: ["/bin/false"]
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: ["ALL"]
+      resources:
+        requests:
+          cpu: 10m
+          memory: 16Mi
+        limits:
+          memory: 32Mi

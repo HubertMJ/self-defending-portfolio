@@ -1,0 +1,86 @@
+# Two ways an image can be wrong, one per Pod. Both are rejected by a different policy, and
+# tests/admission/run.sh reads the expected policy name off each Pod's annotation, so adding a case
+# here needs no change to the script.
+#
+# Everything about these specs except the image is deliberately valid: the `hello` namespace enforces
+# Pod Security Standards `restricted`, and a spec that also violated PSS would be rejected by the
+# built-in admission plugin before Kyverno was ever consulted, which would make this test pass for the
+# wrong reason. Non-root, no capabilities, read-only root filesystem, seccomp RuntimeDefault, no
+# service account token, resources set - so the only thing left to object to is the image.
+#
+# `kubectl apply --dry-run=server` runs the full admission chain, including webhooks, and then throws
+# the object away. Nothing is scheduled and no image is ever pulled, which is why the tags below do
+# not have to exist.
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: admission-test-unsigned-portfolio
+  namespace: hello
+  labels:
+    app.kubernetes.io/name: admission-test
+  annotations:
+    # An image from our own registry path that no workflow signed: this is phase 3's Definition of
+    # Done in one object.
+    tests.hubertjablon.ski/expect-policy: verify-portfolio-images
+spec:
+  restartPolicy: Never
+  automountServiceAccountToken: false
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 65534
+    runAsGroup: 65534
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: probe
+      image: ghcr.io/hubertmj/self-defending-portfolio/web:unsigned-test
+      command: ["/bin/false"]
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: ["ALL"]
+      resources:
+        requests:
+          cpu: 10m
+          memory: 16Mi
+        limits:
+          memory: 32Mi
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: admission-test-foreign-registry
+  namespace: hello
+  labels:
+    app.kubernetes.io/name: admission-test
+  annotations:
+    # A real, public, pinned, perfectly ordinary image that simply is not ours. verify-portfolio-images
+    # does not match it at all (different registry path), so this is the case that proves
+    # restrict-image-registries is doing work the signature policy cannot do.
+    tests.hubertjablon.ski/expect-policy: restrict-image-registries
+spec:
+  restartPolicy: Never
+  automountServiceAccountToken: false
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 65534
+    runAsGroup: 65534
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: probe
+      image: docker.io/library/busybox:1.37
+      command: ["/bin/false"]
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: ["ALL"]
+      resources:
+        requests:
+          cpu: 10m
+          memory: 16Mi
+        limits:
+          memory: 32Mi

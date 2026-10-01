@@ -1,0 +1,14 @@
+# The three phase 3 ClusterPolicies, deployed by cluster/apps/kyverno-policies.yaml (sync wave 2).
+#
+# No `namespace:` transformer: ClusterPolicy is cluster-scoped and setting one would stamp a
+# meaningless metadata.namespace onto every policy. The namespaces each policy applies to are part of
+# the policies themselves, in their match/exclude blocks, which is where a reader looks for them.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  # Ordering is cosmetic (Kyverno evaluates all applicable policies for every request), so these are
+  # listed strongest claim first.
+  - verify-portfolio-images.yaml
+  - restrict-image-registries.yaml
+  - disallow-latest-tag.yaml

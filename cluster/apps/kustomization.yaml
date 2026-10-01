@@ -6,6 +6,8 @@
 #   -1  cilium                  CNI + Gateway API data plane (adopted from the Ansible install)
 #    0  cert-manager            controller, webhook, CRDs
 #    1  cert-manager-issuers    ClusterIssuers + the Cloudflare DNS-01 token (SOPS)
+#    1  kyverno                 admission controller + CRDs
+#    2  kyverno-policies        the ClusterPolicies it enforces (CRDs must exist first)
 #    2  cloudflared             the tunnel (SOPS)
 #    3  gateway                 the Gateway and its HTTP-to-HTTPS redirect
 #    4  hello                   the page
@@ -19,6 +21,8 @@ resources:
   - cilium.yaml
   - cert-manager.yaml
   - cert-manager-issuers.yaml
+  - kyverno.yaml
+  - kyverno-policies.yaml
   - cloudflared.yaml
   - gateway.yaml
   - hello.yaml

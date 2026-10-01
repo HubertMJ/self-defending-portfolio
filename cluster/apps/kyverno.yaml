@@ -1,0 +1,174 @@
+# Wave 1: the admission controller. After cert-manager (wave 0) because Kyverno's own webhook
+# certificates are an option it can delegate to cert-manager later, and before cloudflared (2),
+# gateway (3) and hello (4) so that by the time a workload Pod is created the webhook that judges it
+# already exists. The policies themselves are a separate Application in wave 2
+# (cluster/apps/kyverno-policies.yaml): CRDs and controller must be running before a ClusterPolicy
+# can be applied, and splitting them is what makes that orderable.
+#
+# Pinned to chart 3.9.1 / Kyverno v1.19.1 (ADR 0008). Resolved from the repository index, not from
+# "latest":
+#   curl -sfL https://kyverno.github.io/kyverno/index.yaml | yq '.entries.kyverno[0] | .version, .appVersion'
+#
+# Single node, so every controller runs one replica. The chart's podAntiAffinity is
+# `preferred`, so one replica schedules; `required` would have left it Pending.
+#
+# Kyverno owns its own webhook configurations at runtime: it writes the caBundle after generating the
+# self-signed serving certificate and it rewrites `.webhooks[].rules` every time a policy changes, so
+# that the API server only calls it for resources some policy actually matches. Argo CD must not
+# fight that - see ignoreDifferences below.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: kyverno
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://kyverno.github.io/kyverno/
+    chart: kyverno
+    targetRevision: 3.9.1
+    helm:
+      releaseName: kyverno
+      valuesObject:
+        # CRDs with the chart, not out of band: the controller and the CRD schemas it validates
+        # against are one version. The same reasoning as cert-manager's crds.enabled.
+        crds:
+          install: true
+        features:
+          # PolicyException is the documented escape hatch for a single workload that cannot satisfy
+          # a policy. Confining exceptions to the kyverno namespace means granting one of them needs
+          # write access to a namespace nothing else writes to, so an exception is a reviewable
+          # commit rather than something any namespace owner can mint for themselves.
+          policyExceptions:
+            enabled: true
+            namespace: kyverno
+          # Chart default, restated: with this on, every policy would behave as failurePolicy:
+          # Ignore and an unsigned image would be admitted whenever the webhook could not be
+          # reached. That is the exact failure this phase exists to prevent, so a chart bump that
+          # flipped the default must show up as a diff.
+          forceFailurePolicyIgnore:
+            enabled: false
+        config:
+          # Defaults kept verbatim (kube-system, kube-public, kube-node-lease, Events, Nodes,
+          # ReplicaSets, Kyverno's own objects, ...). Deliberately NOT extended with argocd,
+          # cilium-secrets or kyverno: a resourceFilter is global and would exempt those namespaces
+          # from every future policy, including the phase 4 PSS and resource-limit rules. Scoping
+          # belongs in each policy's match/exclude block, where it is visible next to the rule it
+          # relaxes. See cluster/infra/kyverno-policies/.
+          #
+          # excludeGroups also stays at its default (system:nodes): the kubelet re-sends a Pod spec
+          # on its own behalf during some updates, and judging it a second time only produces noise.
+          excludeGroups:
+            - system:nodes
+        admissionController:
+          replicas: 1
+          container:
+            # The chart's securityContext default is already PSS `restricted` (runAsUser 65534,
+            # runAsNonRoot, readOnlyRootFilesystem, no capabilities, seccomp RuntimeDefault), which
+            # is why the namespace below can enforce `restricted`. Restated so a chart bump that
+            # relaxed it fails the sync instead of quietly widening the controller's privileges.
+            securityContext:
+              runAsNonRoot: true
+              allowPrivilegeEscalation: false
+              readOnlyRootFilesystem: true
+              privileged: false
+              capabilities:
+                drop: ["ALL"]
+              seccompProfile:
+                type: RuntimeDefault
+            resources:
+              requests:
+                cpu: 100m
+                memory: 192Mi
+              limits:
+                # No CPU limit on the admission controller on purpose: this is in the synchronous
+                # path of every Pod creation, and CFS throttling there turns into webhook timeouts,
+                # which with failurePolicy: Fail turns into a cluster that cannot start Pods.
+                memory: 512Mi
+        backgroundController:
+          replicas: 1
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 192Mi
+        cleanupController:
+          replicas: 1
+          resources:
+            requests:
+              cpu: 20m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+        reportsController:
+          replicas: 1
+          # Reports are what the phase 6 posture page reads, so this one is not optional. It holds
+          # every PolicyReport in memory while aggregating, hence the larger ceiling.
+          resources:
+            requests:
+              cpu: 50m
+              memory: 96Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: kyverno
+  ignoreDifferences:
+    # The standard Kyverno + Argo CD arrangement, and the reason this Application is not permanently
+    # OutOfSync:
+    #
+    #   * caBundle - the admission controller generates its own serving certificate and patches the
+    #     CA into every webhook entry. The chart renders that field empty.
+    #   * rules / failurePolicy / sideEffects - Kyverno recomputes the whole `.webhooks` array from
+    #     the installed policies (autoUpdateWebhooks, on by default), so the live object legitimately
+    #     differs from the rendered one and changes again on every policy commit.
+    #
+    # Ignoring the entire `.webhooks` array is upstream's own guidance; a narrower jsonPointer per
+    # field would still diff whenever Kyverno adds or removes an entry.
+    #
+    # ServerSideApply=true below is the other half: Kyverno is a legitimate co-owner of these
+    # objects' fields, and SSA merges instead of demanding the client-side last-applied annotation.
+    # `Replace=false` (the default) is restated in the syncOptions for the same reason - replacing a
+    # webhook configuration would delete Kyverno's caBundle and rules and leave the API server
+    # calling a webhook it cannot authenticate, which with failurePolicy: Fail wedges the cluster.
+    - group: admissionregistration.k8s.io
+      kind: MutatingWebhookConfiguration
+      jqPathExpressions:
+        - .webhooks[]?
+    - group: admissionregistration.k8s.io
+      kind: ValidatingWebhookConfiguration
+      jqPathExpressions:
+        - .webhooks[]?
+  syncPolicy:
+    automated:
+      # Pruning is off: a values typo that dropped a template must not delete the admission
+      # controller while its webhooks still exist with failurePolicy: Fail - that combination stops
+      # every Pod creation in the cluster, including Kyverno's own. selfHeal still reverts drift.
+      prune: false
+      selfHeal: true
+    syncOptions:
+      # Kyverno's CRDs (ClusterPolicy alone is ~700 KiB of schema) are far past the 262 144-byte
+      # limit of the client-side last-applied annotation, and SSA is what lets Kyverno co-own the
+      # webhook configurations above.
+      - ServerSideApply=true
+      - Replace=false
+      - CreateNamespace=true
+    # Every Kyverno pod is non-root, drops all capabilities, has a read-only root filesystem and sets
+    # seccomp RuntimeDefault by chart default (verified in kyverno-3.9.1/values.yaml for the
+    # admission, background, cleanup and reports controllers and for the webhooksCleanup hook Job),
+    # so `restricted` holds - `baseline` is not needed. Written here, not as a Namespace manifest,
+    # because Argo CD owns this namespace's lifecycle together with the chart.
+    managedNamespaceMetadata:
+      labels:
+        pod-security.kubernetes.io/enforce: restricted
+        pod-security.kubernetes.io/enforce-version: latest
+        pod-security.kubernetes.io/audit: restricted
+        pod-security.kubernetes.io/warn: restricted

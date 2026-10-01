@@ -1,0 +1,176 @@
+# Phase 3's Definition of Done: an image that this repository's GitHub Actions workflow did not sign
+# does not run.
+#
+# There is no key anywhere in this repository. Signing is keyless (sigstore/fulcio): the workflow
+# proves its identity with the GitHub-issued OIDC token, Fulcio mints a short-lived certificate whose
+# SAN is the workflow's own identity URL, cosign signs the digest with it and logs the entry in Rekor.
+# Verification is therefore an assertion about *who* produced the image, checked against a public
+# transparency log - nothing to rotate, nothing to leak, and a forged signature would have to come
+# with a Fulcio certificate issued to this exact workflow on this exact branch.
+#
+#   # phase 3 switch: Audit -> Enforce once hello runs the signed image
+#
+# Both rules below run with `failureAction: Enforce` (flipped when hello moved to the signed image). One grep finds every action in the
+# directory, in all three policies:
+#
+#   grep -n 'failureAction' cluster/infra/kyverno-policies/*.yaml
+#
+# The flip is three lines, not two: verify-signature's `mutateDigest` has to move with its action,
+# because Kyverno rejects a rule that rewrites the image reference while only auditing. The inline
+# comment on that field spells it out. verify-sbom-attestation's `mutateDigest` stays false.
+#
+# The reason is ordering, not doubt. `hello` currently runs nginxinc/nginx-unprivileged, which nobody
+# signed; committing Enforce before hello's image is ours would make the hello Application fail to
+# sync the moment this policy lands. Audit admits the Pod and records the violation in a
+# PolicyReport, so the policy is observably working before it is load-bearing. The flip belongs in the
+# same commit that points cluster/infra/hello at the signed digest - see docs/bootstrap.md, "Phase 3".
+#
+# `validationFailureAction` at spec level is deprecated in kyverno.io/v1 (it is a whole-policy switch
+# that predates per-rule actions), so the action lives on each rule instead.
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: verify-portfolio-images
+  annotations:
+    policies.kyverno.io/title: Verify portfolio image signatures and SBOM
+    policies.kyverno.io/category: Supply Chain Security
+    policies.kyverno.io/severity: high
+    policies.kyverno.io/subject: Pod
+    policies.kyverno.io/description: >-
+      Every container image from this project's registry path must carry a cosign keyless signature
+      made by the build-web.yml workflow on refs/heads/main, and an SPDX SBOM attestation signed by
+      the same identity. Unsigned, foreign-signed or SBOM-less images are rejected.
+spec:
+  # Fail, not Ignore: if the admission controller cannot be reached, a Pod in these namespaces must
+  # not be admitted unverified - "we could not check" and "it is signed" are not the same answer.
+  # The blast radius of that choice is bounded by the `namespaces` list below; the cluster-wide
+  # policy (disallow-latest-tag) deliberately makes the opposite trade.
+  failurePolicy: Fail
+  # Signature verification is a network round trip to GHCR, Fulcio's root bundle and Rekor. The API
+  # server's own 10 s default would cut a cold verification off mid-flight; 30 s is the documented
+  # ceiling for a webhook and leaves room for a first-call TUF refresh.
+  webhookTimeoutSeconds: 30
+  # Admission only. A background scan would re-verify every existing Pod on every policy change and
+  # on every resync, which means repeated registry and Rekor traffic for an answer that cannot change
+  # for an immutable digest. It also could not mutate anything, which is half of what these rules do.
+  background: false
+  rules:
+    - name: verify-signature
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+              # The single list of namespaces this project's own images run in. `sandbox` is created
+              # in phase 5 for the attack scenarios; naming it now means the phase 5 commit adds a
+              # namespace, not a policy exception. System namespaces are absent rather than
+              # excluded: nothing outside this list is in scope, so nothing outside it needs a
+              # carve-out, and no global resourceFilter had to be widened in
+              # cluster/apps/kyverno.yaml to achieve that.
+              namespaces:
+                - hello
+                - sandbox
+      verifyImages:
+        # Only this project's images. A rule that matched `*` would demand our signature on
+        # every third-party sidecar the cluster ever runs.
+        - imageReferences:
+            - "ghcr.io/hubertmj/self-defending-portfolio/*"
+          # ---- the phase 3 switch lives here, and it is two fields, not one ----
+          #
+          # Kyverno refuses to install a verifyImages rule that mutates the digest while only
+          # auditing ("mutateDigest must be set to false for 'Audit' failure action"), and rightly
+          # so: rewriting the image reference is a change to the workload, which is not something an
+          # Audit rule is allowed to do. So the two flip together, and the Audit state has to say
+          # mutateDigest: false.
+          #
+          #   Audit   -> mutateDigest: false
+          #   Enforce -> mutateDigest: true
+          #
+          # mutateDigest matters because without it, verification proves something about the image
+          # the tag pointed at during admission while the kubelet is free to pull whatever the tag
+          # points at a second later - the classic time-of-check-to-time-of-use gap in tag-based
+          # deployment. Rewriting the reference to the digest that was actually verified closes it.
+          failureAction: Enforce
+          mutateDigest: true
+          # Refuse an image reference that cannot be pinned to a digest at all.
+          verifyDigest: true
+          # Without this, an image for which no signature data exists at all is treated as "no
+          # applicable attestor" and admitted. This is the field that makes the policy a gate.
+          required: true
+          attestors:
+            - count: 1
+              entries:
+                - keyless:
+                    # Who may sign: the workflow, by its own identity URL. Anchored at both ends so
+                    # that neither a fork (.../OtherOwner/...) nor a pull_request run
+                    # (@refs/pull/7/merge) nor a second workflow in this repository satisfies it.
+                    # A regex rather than `subject:` because `subject` is an exact string and this
+                    # value is long enough that a future tag-triggered build will want an
+                    # alternative branch alongside the existing one.
+                    # Broken across two lines with YAML's double-quoted line continuation (a
+                    # trailing backslash drops the newline and the indentation that follows),
+                    # so the value is one unbroken regex despite the 140-column limit.
+                    subjectRegExp: "^https://github\\.com/HubertMJ/self-defending-portfolio/\
+                      \\.github/workflows/build-web\\.yml@refs/heads/main$"
+                    # Who vouched for that identity: GitHub's OIDC provider. Pinning the issuer is
+                    # what stops an identity minted by any other OIDC provider from matching the
+                    # subject above.
+                    issuer: https://token.actions.githubusercontent.com
+                    rekor:
+                      # The public transparency log. Stated explicitly even though it is the
+                      # default, because the alternative to naming it is not noticing when it
+                      # changes. ignoreTlog is left at false: the log entry is the proof that the
+                      # signature existed at a point in time, which is what makes a later key
+                      # compromise detectable rather than retroactive.
+                      url: https://rekor.sigstore.dev
+
+    - name: verify-sbom-attestation
+      # A signature says "we built this". An SBOM attestation says "and this is what is inside it",
+      # signed by the same identity, which is what makes the phase 6 Trivy posture page's input
+      # trustworthy rather than something re-derived from the image at display time.
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+              namespaces:
+                - hello
+                - sandbox
+      verifyImages:
+        - imageReferences:
+            - "ghcr.io/hubertmj/self-defending-portfolio/*"
+          # Flips with verify-signature's failureAction above. The two mutateDigest fields do NOT
+          # both flip, so do not sed this file: verify-signature already pins and verifies the
+          # digest, and repeating that here would only mean a second registry round trip for an
+          # answer already given. The two lines below stay false in both states.
+          failureAction: Enforce
+          type: Cosign
+          mutateDigest: false
+          verifyDigest: false
+          attestations:
+            # in-toto predicate type for an SPDX document; this is what `syft ... -o spdx-json`
+            # produces and what `cosign attest --type spdxjson` records.
+            - type: https://spdx.dev/Document
+              attestors:
+                - count: 1
+                  entries:
+                    - keyless:
+                        subjectRegExp: "^https://github\\.com/HubertMJ/self-defending-portfolio/\
+                          \\.github/workflows/build-web\\.yml@refs/heads/main$"
+                        issuer: https://token.actions.githubusercontent.com
+                        rekor:
+                          url: https://rekor.sigstore.dev
+              conditions:
+                - all:
+                    # Deliberately shallow: the point of this rule is that a signed SPDX document
+                    # exists and was produced by our workflow, not that its contents pass a
+                    # judgement. Package-level opinions are Trivy's job (phase 4).
+                    #
+                    # `|| ''` matters: a bare `{{ spdxVersion }}` against a predicate that has no
+                    # such field is a variable-substitution error, which Kyverno reports as a rule
+                    # error rather than as the clear "not an SPDX document" failure below.
+                    - key: "{{ spdxVersion || '' }}"
+                      operator: NotEquals
+                      value: ""
+                      message: >-
+                        attestation is not an SPDX document: the predicate has no spdxVersion field

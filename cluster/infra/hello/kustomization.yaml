@@ -11,9 +11,9 @@ resources:
   - networkpolicy.yaml
   - ciliumnetworkpolicy.yaml
 
-configMapGenerator:
-  # Hash-suffixed, so editing index.html rolls the Deployment instead of waiting for nginx to
-  # notice a changed mount.
-  - name: hello-content
-    files:
-      - index.html
+# The page lives in the image built by .github/workflows/build-web.yml (ADR 0011). Only the
+# digest is referenced; the tag is informational. Bump = commit (Renovate later).
+images:
+  - name: ghcr.io/hubertmj/self-defending-portfolio/web
+    newTag: main
+    digest: sha256:1f92875a0938d90fb1136d14aedc8fc64a1b97a6566da4ccb63b783313a7dfa5

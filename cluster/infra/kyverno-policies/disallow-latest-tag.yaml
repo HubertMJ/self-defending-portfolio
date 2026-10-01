@@ -1,0 +1,115 @@
+# ADR 0008 in the form the cluster can enforce: every version is pinned, `:latest` is forbidden.
+#
+# Adapted from the upstream Kyverno sample `disallow-latest-tag`, with two changes: initContainers and
+# ephemeralContainers are covered (the sample only looks at `containers`, so a mutable init image or a
+# `kubectl debug` sidecar would slip through), and system namespaces are excluded here rather than in
+# the global resourceFilters.
+#
+#   # phase 3 switch: Audit -> Enforce once hello runs the signed image
+#
+# This one is Enforce from the start, and needs no switch: nothing in cluster/ uses a floating tag
+# today (scripts and manifests pin tag plus digest), so there is nothing for it to break. It is
+# written next to the same marker only so that a reader looking for "what is gating what" finds all
+# three policies' actions in one grep:
+#
+#   grep -n 'failureAction' cluster/infra/kyverno-policies/*.yaml
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: disallow-latest-tag
+  annotations:
+    policies.kyverno.io/title: Disallow latest tag
+    policies.kyverno.io/category: Best Practices
+    policies.kyverno.io/severity: medium
+    policies.kyverno.io/subject: Pod
+    policies.kyverno.io/description: >-
+      Every container, init container and ephemeral container image must carry an explicit tag or
+      digest, and that tag must not be `latest`. A floating tag makes a rollback unreproducible and
+      makes "what is running" unanswerable.
+spec:
+  # Ignore, not Fail - the opposite of verify-portfolio-images, on purpose.
+  #
+  # This policy matches almost every namespace in the cluster, so with Fail a Kyverno outage would
+  # stop every Pod creation everywhere, on a single node, including the Kyverno pods needed to end
+  # the outage and the Argo CD pods needed to deploy a fix. The thing at risk if this policy
+  # fails open for a few minutes is a floating tag reaching the cluster, which CI already rejects
+  # and which a PolicyReport will surface afterwards. That is a smaller loss than an unrecoverable
+  # cluster. verify-portfolio-images can afford Fail because it only matches two namespaces.
+  failurePolicy: Ignore
+  # Pattern matching against a string; no registry, no network, so the API server's default timeout
+  # is already generous. Left unset rather than set to a number that would need justifying.
+  #
+  # Background scanning on: this is the policy whose PolicyReport answers "is anything already
+  # running on a mutable tag", which is the interesting question for a cluster that existed before
+  # the policy did.
+  background: true
+  rules:
+    - name: require-image-tag
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+      exclude:
+        any:
+          - resources:
+              # Namespaces whose images this project does not choose: upstream charts and the
+              # controllers that have to keep running for the cluster to be repairable. Excluded
+              # here, in the rule, rather than in cluster/apps/kyverno.yaml's resourceFilters,
+              # because a resourceFilter is global and would also exempt them from the phase 4 Pod
+              # Security Standards and resource-limit policies.
+              namespaces:
+                - kube-system
+                - kyverno
+                - argocd
+                - cilium-secrets
+                - cert-manager
+                - gateway
+                - cloudflared
+      validate:
+        failureAction: Enforce
+        message: >-
+          An image tag or digest is required: "{{ request.object.metadata.name }}" has an image with
+          no version at all, which resolves to :latest at pull time.
+        pattern:
+          spec:
+            # `*:*` requires a colon in the reference, which is what both a tag and a digest have and
+            # a bare `nginx` does not. The anchors below (`=(...)`) mean "if this field exists, it
+            # must match" - without them a Pod with no initContainers would be a violation.
+            containers:
+              - image: "*:*"
+            =(initContainers):
+              - image: "*:*"
+            =(ephemeralContainers):
+              - image: "*:*"
+
+    - name: validate-image-tag
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+      exclude:
+        any:
+          - resources:
+              namespaces:
+                - kube-system
+                - kyverno
+                - argocd
+                - cilium-secrets
+                - cert-manager
+                - gateway
+                - cloudflared
+      validate:
+        failureAction: Enforce
+        message: >-
+          Using the mutable tag :latest is not allowed (ADR 0008). Pin a version, and preferably a
+          digest as well.
+        pattern:
+          spec:
+            containers:
+              - image: "!*:latest"
+            =(initContainers):
+              - image: "!*:latest"
+            =(ephemeralContainers):
+              - image: "!*:latest"
