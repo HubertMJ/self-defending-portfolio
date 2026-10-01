@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: policy-reporter
+  labels:
+    # Core, UI and Trivy plugin are non-root, drop every capability, run read-only with seccomp
+    # RuntimeDefault (chart defaults, restated in cluster/apps/policy-reporter.yaml). Nothing here needs
+    # more than `restricted`.
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted

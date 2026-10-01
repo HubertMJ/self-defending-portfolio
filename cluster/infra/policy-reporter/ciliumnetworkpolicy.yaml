@@ -1,0 +1,180 @@
+# One CiliumNetworkPolicy per Policy Reporter workload, on top of the namespace's default-deny. Who
+# talks to whom was read from the chart's config templates and the plugin's source, not guessed:
+#
+#   UI      -> core   :8080   results and namespaces (configs/ui.tmpl, the default-cluster Secret)
+#   UI      -> plugin :8080   CVE details (`plugin.trivy` entry of the default-cluster Secret)
+#   plugin  -> core   :8080   (configs/trivy-plugin.tmpl, core.host)
+#   core    -> kube-apiserver  list/watch PolicyReports, read its Secrets (chart ClusterRole and Role)
+#   UI      -> kube-apiserver  reads its cluster Secret via secretRef (the chart's UI secret-reader Role)
+#   plugin  -> mirror.gcr.io   the init container's Trivy DB download, once per pod start
+#
+# Core never calls the plugin (plan section 4.3 assumed it would; configs/core.tmpl has no plugin
+# endpoint), and the plugin has no Kubernetes API access at all (cluster/apps/policy-reporter.yaml).
+#
+# Sync wave -1: CiliumNetworkPolicy is a custom resource, which Argo CD would otherwise apply after the
+# Deployments. With default-deny already in place that would start the pods into a total blackout and
+# leave them crash-looping until the next sync; one wave earlier, the holes exist before the pods do.
+#
+# Every DNS rule uses the L7 form from cluster/infra/cloudflared: required where a toFQDNs rule follows
+# (Cilium learns the allowed IPs from the DNS answers it proxies), and it makes Hubble log each lookup.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: policy-reporter-core
+  namespace: policy-reporter
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+spec:
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: policy-reporter
+  ingress:
+    # The REST API, from the UI and the Trivy plugin only. The API has no authentication configured
+    # (basicAuth is empty), so this rule is what keeps the rest of the cluster out of it.
+    - fromEndpoints:
+        - matchLabels:
+            app.kubernetes.io/name: policy-reporter-ui
+        - matchLabels:
+            app.kubernetes.io/name: policy-reporter-trivy-plugin
+      toPorts:
+        - ports:
+            - port: "8080"
+              protocol: TCP
+    # The kubelet's liveness and readiness probes (reserved:host identity).
+    - fromEntities:
+        - host
+      toPorts:
+        - ports:
+            - port: "8080"
+              protocol: TCP
+  egress:
+    - toEndpoints:
+        - matchLabels:
+            io.kubernetes.pod.namespace: kube-system
+            k8s-app: kube-dns
+      toPorts:
+        - ports:
+            - port: "53"
+              protocol: UDP
+            - port: "53"
+              protocol: TCP
+          rules:
+            dns:
+              - matchPattern: "*"
+    # The `kubernetes` Service is DNAT-ed to the API server's real port before policy is evaluated,
+    # so the rule names 6443, not 443.
+    - toEntities:
+        - kube-apiserver
+      toPorts:
+        - ports:
+            - port: "6443"
+              protocol: TCP
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: policy-reporter-ui
+  namespace: policy-reporter
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+spec:
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: policy-reporter-ui
+  ingress:
+    # Probes only. The operator's way in is `kubectl port-forward`, which the kubelet splices into the
+    # pod's network namespace and so never crosses this policy (cluster/apps/policy-reporter.yaml).
+    - fromEntities:
+        - host
+      toPorts:
+        - ports:
+            - port: "8080"
+              protocol: TCP
+  egress:
+    - toEndpoints:
+        - matchLabels:
+            io.kubernetes.pod.namespace: kube-system
+            k8s-app: kube-dns
+      toPorts:
+        - ports:
+            - port: "53"
+              protocol: UDP
+            - port: "53"
+              protocol: TCP
+          rules:
+            dns:
+              - matchPattern: "*"
+    - toEndpoints:
+        - matchLabels:
+            app.kubernetes.io/name: policy-reporter
+        - matchLabels:
+            app.kubernetes.io/name: policy-reporter-trivy-plugin
+      toPorts:
+        - ports:
+            - port: "8080"
+              protocol: TCP
+    # Not in plan section 4.3: the UI resolves its cluster entry through a secretRef, i.e. a GET on a
+    # Secret in this namespace (the chart grants exactly that with a Role).
+    - toEntities:
+        - kube-apiserver
+      toPorts:
+        - ports:
+            - port: "6443"
+              protocol: TCP
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: policy-reporter-trivy-plugin
+  namespace: policy-reporter
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+spec:
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: policy-reporter-trivy-plugin
+  ingress:
+    - fromEndpoints:
+        - matchLabels:
+            app.kubernetes.io/name: policy-reporter-ui
+      toPorts:
+        - ports:
+            - port: "8080"
+              protocol: TCP
+    - fromEntities:
+        - host
+      toPorts:
+        - ports:
+            - port: "8080"
+              protocol: TCP
+  egress:
+    - toEndpoints:
+        - matchLabels:
+            io.kubernetes.pod.namespace: kube-system
+            k8s-app: kube-dns
+      toPorts:
+        - ports:
+            - port: "53"
+              protocol: UDP
+            - port: "53"
+              protocol: TCP
+          rules:
+            dns:
+              - matchPattern: "*"
+    - toEndpoints:
+        - matchLabels:
+            app.kubernetes.io/name: policy-reporter
+      toPorts:
+        - ports:
+            - port: "8080"
+              protocol: TCP
+    # The Trivy DB, pulled as an OCI artifact by the init container. mirror.gcr.io serves the blob
+    # itself (checked: the blob URL redirects to another path on mirror.gcr.io, not to a storage
+    # bucket), so one name is enough. The online CVE/GHSA lookups that would need api.github.com and
+    # cveawg.mitre.org are switched off in the chart values.
+    - toFQDNs:
+        - matchName: mirror.gcr.io
+      toPorts:
+        - ports:
+            - port: "443"
+              protocol: TCP

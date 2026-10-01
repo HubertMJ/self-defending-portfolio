@@ -1,0 +1,12 @@
+# The non-chart half of cluster/apps/policy-reporter.yaml: the Namespace with its Pod Security labels
+# and the network policy for the three Policy Reporter workloads (core, UI, Trivy plugin). The chart
+# itself is the Application's other source.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: policy-reporter
+
+resources:
+  - namespace.yaml
+  - networkpolicy.yaml
+  - ciliumnetworkpolicy.yaml

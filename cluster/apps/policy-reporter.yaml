@@ -1,0 +1,220 @@
+# Wave 5: the reports UI. Reads the PolicyReports that Kyverno writes (ADR 0012) and, once the Trivy
+# Operator and its PolicyReport adapter run (cluster/apps/trivy-operator.yaml), Trivy's vulnerability
+# and config audit results as well (ADR 0014). Nothing here is in an admission or data path: if this
+# Application is broken, the cluster only loses a page to look at.
+#
+# Waves between child Applications are cosmetic in this repository (the root Application has no
+# health check for its children, so Argo CD does not wait for one wave to be healthy before the next).
+# This Application converges on its own: the PolicyReport CRDs it reads come with Kyverno, and it
+# starts fine before any report exists.
+#
+# Cluster-internal only. The UI has no Service of type LoadBalancer, no HTTPRoute and no Ingress, and
+# its CiliumNetworkPolicy admits nothing but the kubelet's probes. The way in is a port-forward, which
+# needs `pods/portforward` in this namespace, i.e. cluster credentials:
+#
+#   kubectl -n policy-reporter port-forward svc/policy-reporter-ui 8082:8080   ->  http://localhost:8082
+#
+# A port-forward is spliced into the pod's network namespace by the kubelet, so it is not subject to
+# the pod's network policy; nothing else can reach the UI.
+#
+# Two sources (the phase 4 layout for a chart that needs neighbours): the chart, and
+# cluster/infra/policy-reporter/ for the Namespace with its Pod Security labels, the default-deny
+# NetworkPolicy and the per-workload CiliumNetworkPolicies. The Namespace lives in git, not in
+# managedNamespaceMetadata, because the network policies must exist before the first pod does and
+# belong next to it in review.
+#
+# Pinned to chart 3.10.0 (ADR 0008), resolved from the repository index:
+#   curl -sfL https://kyverno.github.io/policy-reporter/index.yaml \
+#     | yq '.entries["policy-reporter"][0] | .version, .appVersion'
+# Every image is pinned by tag and digest below; the chart concatenates `registry/repository:tag`,
+# so the digest rides along in `tag` (checked with `helm template ... | grep image:`).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: policy-reporter
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "5"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  sources:
+    - repoURL: https://kyverno.github.io/policy-reporter
+      chart: policy-reporter
+      targetRevision: 3.10.0
+      helm:
+        releaseName: policy-reporter
+        valuesObject:
+          image:
+            registry: ghcr.io
+            repository: kyverno/policy-reporter
+            tag: "3.10.0@sha256:a77e93fe511772e105aae30274d205ed1377f231c6d1ec272604221dc04a3c2c"
+          # Chart defaults, restated so a chart bump that relaxed one shows up as a diff (the same
+          # reasoning as cluster/apps/kyverno.yaml): non-root uid, no capabilities, read-only root,
+          # seccomp RuntimeDefault - PSS `restricted`, which the namespace enforces.
+          securityContext:
+            runAsUser: 1234
+            runAsNonRoot: true
+            privileged: false
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+          # Holds every PolicyReport result in its SQLite file (an emptyDir) and in memory. The chart
+          # derives GOMEMLIMIT from the limit (autoMemoryLimit, ratio 0.9), so the limit is also what
+          # the Go runtime aims to stay under.
+          resources:
+            requests:
+              cpu: 10m
+              memory: 48Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+          # The chart's own NetworkPolicy is off (default): the namespace's default-deny and the
+          # CiliumNetworkPolicies in cluster/infra/policy-reporter/ are the policy, in one place.
+          networkPolicy:
+            enabled: false
+
+          ui:
+            enabled: true
+            image:
+              registry: ghcr.io
+              repository: kyverno/policy-reporter-ui
+              tag: "2.8.1@sha256:748d8c18851ba76ca8129a14b28f43bf9bee04ac9fc80926abd28f6fcba99a06"
+            # ClusterIP is the chart default; restated because "the UI is not exposed" is the
+            # property this Application is reviewed for.
+            service:
+              type: ClusterIP
+            ingress:
+              enabled: false
+            httproute:
+              enabled: false
+            networkPolicy:
+              enabled: false
+            podSecurityContext:
+              runAsUser: 1234
+              runAsGroup: 1234
+            securityContext:
+              runAsUser: 1234
+              runAsNonRoot: true
+              privileged: false
+              allowPrivilegeEscalation: false
+              readOnlyRootFilesystem: true
+              capabilities:
+                drop: ["ALL"]
+              seccompProfile:
+                type: RuntimeDefault
+            resources:
+              requests:
+                cpu: 10m
+                memory: 32Mi
+              limits:
+                cpu: 100m
+                memory: 96Mi
+
+          plugin:
+            # The Kyverno plugin adds policy details and PolicyException generation buttons to the UI.
+            # Not needed: the policies are in git, and exceptions are deliberately not used (ADR 0012).
+            kyverno:
+              enabled: false
+            # The Trivy plugin (user decision 2026-10-01). Verified from the plugin's source
+            # (kyverno/policy-reporter-plugins, tag trivy-plugin-v0.5.1): it does NOT turn Trivy
+            # Operator reports into PolicyReports - that is the trivy-operator-polr-adapter, which
+            # runs next to the operator (cluster/apps/trivy-operator.yaml). The plugin answers the UI's
+            # "details" requests for a CVE / GHSA ID: description, affected and fixed versions,
+            # references. The results themselves come from PolicyReports like everything else.
+            trivy:
+              enabled: true
+              image:
+                registry: ghcr.io
+                repository: kyverno/policy-reporter/trivy-plugin
+                tag: "0.5.1@sha256:d598b7eb2be81b8f0a7b759d38ae782b2c809bc771b54a6db41c43227caa7908"
+              # The init container downloads the Trivy vulnerability DB once per pod start
+              # (`trivy image --download-db-only`); the plugin then reads CVE details from it.
+              # Same Trivy release and registry as the Trivy Operator (mirror.gcr.io, one pinned
+              # digest for every Trivy binary in the cluster) instead of the chart's ghcr.io default.
+              cli:
+                image:
+                  registry: mirror.gcr.io
+                  repository: aquasec/trivy
+                  tag: "0.74.0@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969"
+              # The DB repository is stated so the init container needs exactly one egress host
+              # (mirror.gcr.io, which also serves the blobs itself - verified, no redirect to a
+              # storage bucket); Trivy's own default would fall back to ghcr.io.
+              extraArgs:
+                db-repository: mirror.gcr.io/aquasec/trivy-db:2
+              # Both online lookups are off. With them on, every details view of a GHSA ID calls
+              # api.github.com and every CVE calls cveawg.mitre.org (plus raw.githubusercontent.com),
+              # which would mean three more FQDNs in the egress policy for text the local DB already
+              # has. Off, the plugin answers from the Trivy DB only (pkg/vulnr/service.go).
+              cveawg:
+                disable: true
+              github:
+                disable: true
+              # The DB is roughly 1 GiB unpacked; capped so a runaway download is evicted rather than
+              # filling the node's disk.
+              dbVolume:
+                emptyDir:
+                  sizeLimit: 2Gi
+              # No Kubernetes API access. The plugin only builds a client when a basic-auth or core
+              # API secretRef is configured (pkg/config/resolver.go, lazily), and none is: so no token
+              # is mounted and the chart's secret-reader Role is not rendered.
+              serviceAccount:
+                automount: false
+              rbac:
+                enabled: false
+              networkPolicy:
+                enabled: false
+              podSecurityContext:
+                runAsUser: 1234
+                runAsGroup: 1234
+              securityContext:
+                runAsUser: 1234
+                runAsNonRoot: true
+                privileged: false
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+                seccompProfile:
+                  type: RuntimeDefault
+              # The chart applies the same block to the DB-download init container. Sizing is an
+              # estimate (plan section 3): the download streams to disk, and the bolt DB is read via
+              # mmap, whose page cache is reclaimable rather than counted against a hard ceiling.
+              resources:
+                requests:
+                  cpu: 10m
+                  memory: 64Mi
+                limits:
+                  cpu: 200m
+                  memory: 256Mi
+    - repoURL: https://github.com/HubertMJ/self-defending-portfolio.git
+      targetRevision: main
+      path: cluster/infra/policy-reporter
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: policy-reporter
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    # A failed automated sync is not retried for the same commit unless asked to. Child waves are
+    # cosmetic (see the header), so a first sync that races something - an image pull, the API server
+    # restarting - must try again on its own rather than wait for the next commit.
+    retry:
+      limit: 5
+      backoff:
+        duration: 10s
+        factor: 2
+        maxDuration: 3m
+    syncOptions:
+      # The Namespace (with its Pod Security labels) is a manifest in cluster/infra/policy-reporter/.
+      - CreateNamespace=false
+      # No CRD is rendered today (ui.crds.* and target.crd are off), so this is for the next bump
+      # rather than the current one: switching one of them on would add a CRD larger than the
+      # 262 144-byte client-side last-applied annotation allows. Same choice as every other chart
+      # Application here (plan section 4.1).
+      - ServerSideApply=true

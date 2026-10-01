@@ -1,0 +1,12 @@
+# Default-deny for the namespace, the same portable baseline as cluster/infra/hello. Every flow the
+# three workloads need is a CiliumNetworkPolicy in ciliumnetworkpolicy.yaml.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+  namespace: policy-reporter
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
