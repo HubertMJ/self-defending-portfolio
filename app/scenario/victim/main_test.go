@@ -128,3 +128,19 @@ func TestRoutes(t *testing.T) {
 		t.Fatalf("dotfile: %d", rec.Code)
 	}
 }
+
+func TestCheckURL(t *testing.T) {
+	cases := map[string]string{
+		":8080":        "http://127.0.0.1:8080/state.json",
+		"0.0.0.0:9000": "http://127.0.0.1:9000/state.json",
+		"[::]:8081":    "http://127.0.0.1:8081/state.json",
+		"localhost":    "http://127.0.0.1:8080/state.json",
+		"":             "http://127.0.0.1:8080/state.json",
+		"host:":        "http://127.0.0.1:8080/state.json",
+	}
+	for addr, want := range cases {
+		if got := checkURL(addr); got != want {
+			t.Errorf("checkURL(%q) = %q, want %q", addr, got, want)
+		}
+	}
+}

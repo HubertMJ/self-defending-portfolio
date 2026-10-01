@@ -32,6 +32,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -81,6 +82,16 @@ type State struct {
 	Checksum string `json:"checksum"`
 }
 
+// checkURL is the probe's URL for the listen address: always loopback, the port from addr, or 8080
+// when addr names none (a bare host, or something unparsable - the probe must not crash on it).
+func checkURL(addr string) string {
+	port := "8080"
+	if _, p, err := net.SplitHostPort(addr); err == nil && p != "" {
+		port = p
+	}
+	return "http://" + net.JoinHostPort("127.0.0.1", port) + "/state.json"
+}
+
 func main() {
 	docroot := flag.String("docroot", "/srv/shop", "writable directory the shop is served from (an emptyDir)")
 	addr := flag.String("addr", ":8080", "listen address")
@@ -89,7 +100,7 @@ func main() {
 	flag.Parse()
 
 	if *check {
-		os.Exit(probe("http://127.0.0.1" + (*addr)[strings.LastIndex(*addr, ":"):] + "/state.json"))
+		os.Exit(probe(checkURL(*addr)))
 	}
 
 	if err := initDocroot(*docroot); err != nil {
