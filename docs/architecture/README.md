@@ -200,7 +200,7 @@ flowchart TB
     TA -- "SDP network tool in sandbox<br/>-> kubernetes:label quarantine=true" --> K8S
     TA -- "k8s Event on the pod" --> K8S
     K8S -. "label selects pod" .-> Q
-    Q -. "isolates" .-> P
+    P -. "isolated by" .- Q
     SK -. "planned: webhook to API :8081" .-> API["portfolio API (planned)<br/>SSE /api/events to browser"]
     TA -. "planned: notifier to API :8081" .-> API
 ```
