@@ -99,21 +99,22 @@ commit landed, not because somebody ran a command.
 Read `cluster/bootstrap/README.md` alongside this — it explains *why* each piece looks the way it
 does. This section is the *order*.
 
-### 4.0 Placeholders
+### 4.0 Deployment-specific values
 
-Four placeholders are committed on purpose, because the repository is public and the manifests exist
-before the accounts do. Replace them first:
+This repository deploys one cluster, and every value that names it is committed for real: GitHub
+owner `HubertMJ` (registry path `ghcr.io/hubertmj/...`), hostname and zone `hubertjablon.ski`, the
+ACME contact, the tunnel UUID, the age recipient in `.sops.yaml` and the two encrypted secrets. On this
+repository there is nothing to replace; go to 4.4 if the key and the secrets already exist.
+
+A fork replaces every one of them first. The full table of where each value lives is in
+`cluster/bootstrap/README.md` ("Before the first run"); this finds every file to look at:
 
 ```sh
-grep -rn 'REPLACE-ME-\|AGE_PUBLIC_KEY_PLACEHOLDER' cluster/ .sops.yaml
+grep -rIl -i 'hubertmj\|hubertjablon\.ski' --exclude-dir=.git .
 ```
 
-| Placeholder | Where | Value |
-|-------------|-------|-------|
-| `HubertMJ` | `cluster/apps/*.yaml`, `cluster/bootstrap/argocd/root-application.yaml` | GitHub owner (change only in a fork) |
-| `AGE_PUBLIC_KEY_PLACEHOLDER` | `.sops.yaml` | age public key from 4.1 |
-| `REPLACE-ME-ACME-CONTACT-EMAIL` | `cluster/infra/cert-manager-issuers/clusterissuer-*.yaml` | your email |
-| `REPLACE-ME-TUNNEL-UUID` | `cluster/infra/cloudflared/config.yaml` | tunnel UUID from 4.2 |
+Only the `.example` templates carry `REPLACE-ME` values, and `bootstrap.sh` refuses to run if one is
+found anywhere else under `cluster/` or in `.sops.yaml`.
 
 ### 4.1 age key and `.sops.yaml`
 
@@ -125,7 +126,7 @@ mkdir -p ~/.config/sops/age
 age-keygen -o ~/.config/sops/age/keys.txt        # prints the public key on stderr
 export SOPS_AGE_KEY_FILE=~/.config/sops/age/keys.txt
 
-# paste the public key (age1...) into .sops.yaml, replacing AGE_PUBLIC_KEY_PLACEHOLDER
+# put the public key (age1...) into .sops.yaml as the recipient (a fork replaces the committed one)
 grep -o 'age1[0-9a-z]*' ~/.config/sops/age/keys.txt
 $EDITOR .sops.yaml
 ```
@@ -166,8 +167,9 @@ Copy the UUID into `tunnel:` in `cluster/infra/cloudflared/config.yaml`.
 
 ### 4.3 Encrypt the two secrets
 
-Both directories ship a `.example` template and no real file. `kustomize build` — and therefore the
-Argo CD sync — fails until the real encrypted file exists. That is deliberate; see
+Both directories ship a `.example` template next to the encrypted file (on this repository both
+encrypted files are committed; a fork re-creates them with its own key). Without the encrypted file,
+`kustomize build` — and therefore the Argo CD sync — fails. That is deliberate; see
 `cluster/bootstrap/README.md`.
 
 ```sh
@@ -287,8 +289,10 @@ curl -sI http://hubertjablon.ski        # 301 to https
 Phase 2 is done when this changes the site and nothing else does:
 
 ```sh
-$EDITOR cluster/infra/hello/index.html
-git commit -am 'hello: reword' && git push
+$EDITOR app/web/public/index.html
+git commit -am 'web: reword' && git push
+# since phase 3 the page is an image: wait for build-web.yml, then commit the new digest it prints
+# into cluster/infra/hello/kustomization.yaml (section 5.3) and push again
 # wait for Argo CD's poll (3 min by default), or nudge it:
 kubectl -n argocd patch app hello --type merge -p '{"metadata":{"annotations":{"argocd.argoproj.io/refresh":"normal"}}}'
 curl -s https://hubertjablon.ski | grep -i reword

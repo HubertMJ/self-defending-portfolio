@@ -22,24 +22,27 @@ landed, and the only credential in play is Argo CD's own service account.
 
 ## Before the first run
 
-**1. Replace the repository owner.** Every Application that reads this repository carries a
-placeholder instead of a GitHub owner, because the manifests are committed before the repository has
-one:
+**1. The deployment-specific values are already filled in.** This repository deploys one cluster
+(`hubertjablon.ski`, GitHub owner `HubertMJ`), and every value that names it is committed for real.
+A fork has to replace each of them before its first sync:
+
+| Value | Where | What it is |
+|-------|-------|------------|
+| `HubertMJ` / `hubertmj` | `cluster/apps/*.yaml`, `cluster/bootstrap/argocd/root-application.yaml`, the image path in `cluster/infra/hello/`, both image policies in `cluster/infra/kyverno-policies/`, `.github/workflows/build-web.yml`, `scripts/verify-image.sh`, `tests/admission/` | GitHub owner; the registry path is its lower-case form |
+| `hubertjablon.ski` | `cluster/infra/gateway/`, `cluster/infra/hello/`, `cluster/infra/cloudflared/config.yaml`, `cluster/infra/cert-manager-issuers/` | the site's hostname and DNS zone |
+| ACME contact email | `cluster/infra/cert-manager-issuers/clusterissuer-*.yaml` | Let's Encrypt account contact |
+| tunnel UUID | `tunnel:` in `cluster/infra/cloudflared/config.yaml` | output of `cloudflared tunnel create portfolio` |
+| age recipient | `.sops.yaml` | your age public key |
+| `*.sops.yaml` | `cluster/infra/cert-manager-issuers/`, `cluster/infra/cloudflared/` | encrypted to this repository's key; a fork re-creates both from the `.example` templates |
 
 ```sh
-grep -rl HubertMJ cluster/ | xargs sed -i 's/HubertMJ/<your-gh-user>/g'   # only when forking
+grep -rIl -i 'hubertmj\|hubertjablon\.ski' --exclude-dir=.git .   # every file a fork has to look at
 ```
 
-`bootstrap.sh` refuses to run while that string is still present.
-
-**2. Replace the other placeholders.** They are all greppable and all deliberate:
-
-| Placeholder | Where | What it is |
-|-------------|-------|------------|
-| `HubertMJ` | `cluster/apps/*.yaml`, `cluster/bootstrap/argocd/root-application.yaml` | GitHub owner (change only in a fork) |
-| `REPLACE-ME-ACME-CONTACT-EMAIL` | `cluster/infra/cert-manager-issuers/clusterissuer-*.yaml` | Let's Encrypt account contact |
-| `REPLACE-ME-TUNNEL-UUID` | `cluster/infra/cloudflared/config.yaml` | output of `cloudflared tunnel create portfolio` |
-| `AGE_PUBLIC_KEY_PLACEHOLDER` | `.sops.yaml` | your age public key |
+**2. Templates must not reach the cluster unfilled.** The `.example` templates carry
+`REPLACE-ME` values. `bootstrap.sh` refuses to run while any file under `cluster/` other than a
+`.example` template, or `.sops.yaml`, still contains `REPLACE-ME` or the age placeholder,
+which catches a template copied into place and committed before it was filled in.
 
 **3. Create the age key and the two encrypted secrets.** See `docs/bootstrap.md`, phase 2. The
 cluster comes up without them; the two Applications that need them stay `Degraded` with the
