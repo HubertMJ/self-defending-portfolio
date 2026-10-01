@@ -29,7 +29,7 @@ run() {
     sdp-tooling sh -ec "
       ansible-galaxy collection install -r requirements.yml -p /work/.ansible/collections >/dev/null
       ansible-galaxy collection install community.docker -p /work/.ansible/collections >/dev/null
-      ansible-playbook -i tests/inventory.yml playbooks/hardening.yml --skip-tags '$SKIP_TAGS' $*"
+      ansible-playbook -i tests/inventory.yml playbooks/hardening.yml --skip-tags '$SKIP_TAGS'"
 }
 echo '### run 1 (apply)'; run | tee /tmp/sdp-run1.log | tail -15
 echo '### run 2 (must be idempotent)'; run | tee /tmp/sdp-run2.log | tail -15
