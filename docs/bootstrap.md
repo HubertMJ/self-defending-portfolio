@@ -770,6 +770,58 @@ make verify
 A restart of k3s on one node interrupts the API server for under a minute. Running containers keep
 running (their containerd shims outlive the restart), and Argo CD and Kyverno reconnect on their own.
 
+### 8.3 Falco Talon from this repository (two stages, like section 7)
+
+`app/talon` is built and signed by `build-images.yml` only from `main`, and the manifests that run it
+pin its digest, so it reaches the cluster in two pushes - the same pattern as 7.1/7.2:
+
+1. **Stage 1: the image.** Push everything up to and including the commit that adds `app/talon/`
+   (and none of the commit "falco-response: run Talon from this repository's signed image"). The
+   workflow builds `talon` (Trivy gate, SBOM, cosign) and prints `.../talon@sha256:...`. Nothing in
+   the cluster changes. Make sure the new GHCR package `self-defending-portfolio/talon` is public
+   (5.2), then from a machine that is not logged in to GHCR:
+
+   ```sh
+   scripts/verify-image.sh ghcr.io/hubertmj/self-defending-portfolio/talon@sha256:<digest>
+   docker run --rm -v "$PWD/cluster/infra/falco-response/talon":/t:ro \
+     ghcr.io/hubertmj/self-defending-portfolio/talon@sha256:<digest> rules check -c /t/config.yaml -r /t/rules.yaml
+   ```
+
+2. **Stage 2: the switch.** On the switch commit, replace the placeholder and validate - `make
+   validate` refuses the placeholder and runs Kyverno's signature check on the real digest, now
+   that `falco-response` is in `verify-portfolio-images`:
+
+   ```sh
+   scripts/bump-image-digest.sh talon sha256:<digest>   # cluster/infra/falco-response/kustomization.yaml
+   make lint validate scenario-offline                  # scenario-offline reads the same digest
+   git commit --amend --no-edit && git push
+   ```
+
+   Argo CD rolls `falco-talon` (one replica: an alert that arrives in the seconds of the roll may go
+   unanswered, the same window as any Talon update). Accept it:
+
+   ```sh
+   kubectl -n falco-response get deploy falco-talon -o jsonpath='{.spec.template.spec.containers[0].image}'
+   kubectl -n falco-response logs deploy/falco-talon | head -5     # JSON lines, leader elected
+   make runtime-test && make scenario-test
+   ```
+
+Rollback: revert the switch commit; the upstream 0.3.0 image comes back and the two policy additions
+go with it.
+
+### 8.4 Everything else arrives with the sync
+
+Falcosidekick 2.35.0 (`falco-response`), Trivy 0.75.0 (`trivy-operator`, `policy-reporter`) and the
+posture API/page changes (`build-images.yml`, then `scripts/bump-image-digest.sh api|web ...` as in
+7.2) need nothing by hand. After a scan cycle, the number on the page is the live count again:
+
+```sh
+kubectl get vulnerabilityreports -A -o json | jq '[.items[] | {k: (.report.registry.server + "/"
+  + .report.artifact.repository + "@" + .report.artifact.digest), n: (.report.summary.criticalCount
+  + .report.summary.highCount)}] | unique_by(.k) | map(.n) | add'
+curl -s https://hubertjablon.ski/api/posture | jq '.trivy | {critical, high, own, third_party}'
+```
+
 ## Rebuild from zero
 
 ```sh

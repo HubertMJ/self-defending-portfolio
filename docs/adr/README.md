@@ -26,10 +26,11 @@ decision are appended as dated amendments in the same file.
 | [0018](0018-scenario-detection-and-response-mapping.md) | Attack scenarios: which Falco rule detects each one, and what Talon does about it | 5 | accepted |
 | [0019](0019-frontend-stack-and-csp.md) | Frontend stack and Content Security Policy: vanilla TypeScript + esbuild, no third-party origins, Trusted Types | 6 | accepted, amended 2026-10-01 (errors never cacheable; rollout skew accepted) |
 | [0021](0021-evidence-events-and-victim-poller.md) | Evidence events (pod, enriched falco/talon, victim) and a hardened reader for the attacked pod's victim app | 7 | accepted |
+| [0023](0023-third-party-vulnerabilities.md) | Third-party vulnerabilities go down only by removing or replacing images (Dex removed, newest releases, Talon built here), never by hiding them; posture shows own vs third-party | 7 | accepted |
 
 Phases 5 and 6 were built on parallel branches and merged together; the numbers they had reserved
 are all in use except 0020 (phase 6 documentation needed no decision of its own), which is released.
-The next ADR is 0020.
+0020 stays unused; the next ADR is 0024.
 
 ## Open items carried by accepted ADRs
 
@@ -38,7 +39,8 @@ Decisions are accepted with their known costs written down. The ones still open:
 | Item | ADR |
 |------|-----|
 | `make validate` renders with kustomize v5.7.1; Argo CD's repo-server runs its own v5.8.1 | [0013](0013-runtime-detection-and-response.md) |
-| Talon 0.3.0's k8sevents notifier cannot work (object keys title-cased); off until a release fixes it | [0013](0013-runtime-detection-and-response.md) |
+| Talon 0.3.0's k8sevents notifier cannot work (object keys title-cased); the fix is in the commit app/talon builds, the notifier stays off until enabling it is decided | [0013](0013-runtime-detection-and-response.md), [0023](0023-third-party-vulnerabilities.md) |
+| Third-party images with fixed but unreleased or unadopted findings: Argo CD, KSOPS, Falcosidekick, Cilium 1.19, metrics-server; Talon's raised dependencies need re-checking on each upstream release | [0023](0023-third-party-vulnerabilities.md) |
 | Argo CD has no requests/limits and is excluded from the resources policy | [0012](0012-pod-security-and-resource-policy.md) |
 | `ClusterPolicy` is deprecated in Kyverno 1.19; migration to ImageValidatingPolicy / CEL policies deferred | [0011](0011-supply-chain.md), [0012](0012-pod-security-and-resource-policy.md) |
 | The signer identity still accepts the phase 3 `build-web.yml` (transition); dropped once hello runs a `build-images.yml` digest | [0016](0016-one-image-workflow.md) |
