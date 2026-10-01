@@ -57,7 +57,7 @@ const STATUS_LINE: Record<VictimView, string> = {
   compromised: "200 OK · compromised",
   unreachable: "no response",
   gone: "pod deleted",
-  waiting: "waiting",
+  waiting: "no answer yet",
   none: "no data",
 };
 
@@ -68,7 +68,7 @@ const CAPTION: Record<VictimView, string> = {
   compromised: "The attack is running inside the shop's container.",
   unreachable: "Network cut by Cilium: the quarantine label isolates the pod, so even the API's probe gets no answer.",
   gone: "Pod killed by Talon: there is nothing left to answer.",
-  waiting: "Waiting for the scenario pod to start the shop…",
+  waiting: "The scenario pod is starting the shop; it shows here once it answers the API's first probe.",
   none: "This run has no victim telemetry (the API or scenario predates it).",
 };
 
@@ -101,9 +101,18 @@ export function renderVictim(run: RunView, readOnly: boolean): HTMLElement {
     case "gone":
       view = errorPage("ERR_POD_NOT_FOUND", "This site no longer exists", `Pod ${last.pod} was deleted by Falco Talon. The next run gets a fresh replica.`);
       break;
-    case "waiting":
-      view = h("div", { class: "browser__blank" }, h("span", { class: "browser__spinner", "aria-hidden": "true" }), "Starting…");
+    case "waiting": {
+      // No answer from the shop yet. The pod watch says how far the pod is; the probe only reports
+      // once the shop has answered once, so "booting" is what the visitor is looking at.
+      const phase = run.pods[run.pods.length - 1]?.phase;
+      view = h(
+        "div",
+        { class: "browser__blank" },
+        h("span", { class: "browser__spinner", "aria-hidden": "true" }),
+        h("span", {}, "Shop booting", phase ? h("span", { class: "browser__phase" }, ` · pod ${phase}`) : null),
+      );
       break;
+    }
     default:
       view = h("div", { class: "browser__blank" }, "No victim app in this run.");
   }
@@ -146,7 +155,7 @@ export function labelOf(state: VictimView): string {
     case "gone":
       return "Gone";
     case "waiting":
-      return "Starting";
+      return "Booting";
     default:
       return "No data";
   }
