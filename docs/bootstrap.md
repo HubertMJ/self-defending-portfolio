@@ -743,6 +743,33 @@ argocd login localhost:8080 --username admin --plaintext   # through the usual p
 Trivy Operator deletes the VulnerabilityReports of a workload that is gone, so the posture page
 drops Dex's findings within a scan cycle.
 
+### 8.2 k3s v1.35.9+k3s1: the bundled CoreDNS (Ansible, by hand)
+
+CoreDNS and metrics-server are not Argo CD's: k3s deploys them from manifests compiled into its
+binary, so their images move only with k3s. v1.35.9+k3s1 (2026-09-30) bundles CoreDNS 1.14.7
+(v1.35.8: 1.14.6, 14 HIGH in the cluster; with today's Trivy DB 1.14.6 scans 26 HIGH, 1.14.7 16)
+and the same metrics-server v0.9.0, which stays: nothing newer is published, and `kubectl top` (6)
+uses it. The release also moves Kubernetes to v1.35.9 and containerd to v2.2.7-k3s1; its Traefik
+warning does not apply (Traefik is disabled, `k3s_disable_components`).
+
+`k3s_version` is pinned in `ansible/inventory/group_vars/k3s_nodes.yml` (and the role default). The
+role downloads the binary from the release and checks it against the release's own
+`sha256sum-amd64.txt`, so the bump is the version string only. Run the k3s role alone - never the
+cilium role against the live cluster (`cluster/apps/cilium.yaml`):
+
+```sh
+cd ansible
+ansible-playbook playbooks/cluster.yml --tags k3s --check --diff   # expect: the binary, "Restart k3s"
+ansible-playbook playbooks/cluster.yml --tags k3s                   # restarts k3s once; pods keep running
+cd .. && kubectl get nodes -o wide                                  # VERSION v1.35.9+k3s1, Ready
+kubectl -n kube-system get deploy coredns -o jsonpath='{.spec.template.spec.containers[0].image}'
+# rancher/mirrored-coredns-coredns:1.14.7
+make verify
+```
+
+A restart of k3s on one node interrupts the API server for under a minute. Running containers keep
+running (their containerd shims outlive the restart), and Argo CD and Kyverno reconnect on their own.
+
 ## Rebuild from zero
 
 ```sh

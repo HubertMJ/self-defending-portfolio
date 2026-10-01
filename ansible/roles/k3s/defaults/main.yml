@@ -1,7 +1,7 @@
 ---
 # Pinned k3s release. Bump deliberately: the binary and its checksum are
 # fetched from the matching GitHub release, and a change here restarts k3s.
-k3s_version: v1.35.8+k3s1
+k3s_version: v1.35.9+k3s1
 
 # Release architecture suffix used for the checksum file name.
 k3s_arch: amd64
