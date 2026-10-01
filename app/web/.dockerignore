@@ -1,6 +1,16 @@
-# The build context is app/web and the image needs exactly two things: nginx.conf and public/.
-# Everything else is excluded explicitly so an accidental file next to them cannot be baked in.
+# The build context is app/web. Everything is excluded, then exactly what the two stages need is
+# let back in, so an accidental file (a local dist/, node_modules, test reports) cannot be baked in.
 *
 !nginx.conf
-!public/
-public/**/.*
+!security-headers.conf
+!package.json
+!package-lock.json
+!tsconfig.json
+!vitest.config.ts
+!scripts/
+!src/
+!static/
+!test/
+test/*
+!test/unit/
+**/.*
