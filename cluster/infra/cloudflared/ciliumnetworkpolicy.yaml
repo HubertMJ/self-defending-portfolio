@@ -49,6 +49,15 @@ spec:
         - ports:
             - port: "443"
               protocol: TCP
+    # The Gateway Service is backed by Cilium's Envoy, which Cilium represents as the reserved
+    # "ingress" entity. The L7 proxy evaluates this egress policy against that entity, so the
+    # toServices rule above is not enough on its own (Hubble: http-request DROPPED).
+    - toEntities:
+        - ingress
+      toPorts:
+        - ports:
+            - port: "443"
+              protocol: TCP
   ingress:
     # Only the node's kubelet, for the liveness and readiness probes on the metrics port. Cilium
     # gives kubelet traffic the reserved:host identity.
