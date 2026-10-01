@@ -115,7 +115,7 @@ every namespace (pod-security-restricted passes: argocd 28, cert-manager 9, clou
 falco-response 7, hello 5, kube-bench 1, kyverno 14, policy-reporter 9, trivy-system 8;
 require-pod-resources the same minus the excluded `argocd`). The offline gate (`kyverno apply` in
 `make validate`) shows 0 fail for both over everything rendered from git, and over the phase 5
-scenario pod specs (`phase-5-scenarios`, rendered as Pods by `scripts/lib/scenario_pods.py`). So every
+scenario pod specs (ADR 0017, rendered as Pods by `scripts/lib/scenario_pods.py`). So every
 rule of `pod-security-restricted` (`restricted`, `restricted-falco`, `restricted-kube-bench`) and of
 `require-pod-resources` is now `failureAction: Enforce`.
 

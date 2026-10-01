@@ -1,6 +1,6 @@
 # ADR 0019: Frontend stack and Content Security Policy: vanilla TypeScript + esbuild, no third-party origins, Trusted Types
 
-Date: 2026-10-01 · Status: proposed
+Date: 2026-10-01 · Status: accepted
 
 ## Context
 Phase 6 replaces the one-page placeholder in `app/web` with the real site: the portfolio, a live
@@ -74,8 +74,10 @@ HTTP inside the cluster.
 **Headers in the image and at the Gateway.** ADR 0010 put the headers in the HTTPRoute so they apply
 to every backend. That stays, but the HTTPRoute's `ResponseHeaderModifier` uses `set`, so its CSP
 replaces nginx's in the cluster, and its current value (`script-src 'none'`) would block this page
-outright. The HTTPRoute's CSP must be changed to the policy above in the same release as this image
-(owned outside `app/web`; requested in the phase 6 handoff). Setting the headers in nginx as well
+outright. The HTTPRoute's CSP is therefore the policy above, character for character, changed in the
+same commit that points hello at this image; `scripts/check-web-csp.sh` (`make validate`, CI) fails
+if the two ever differ. The route keeps its own CSP rather than dropping it, so any other backend
+attached to the Gateway still gets a policy (ADR 0010). Setting the headers in nginx as well
 means the image is safe on its own — in `docker run`, in the Playwright suite, behind any other
 proxy — and the suite tests the policy the page will actually get. `scripts/serve.mjs` (the local
 and test server) parses `security-headers.conf`, so the policy has one source in `app/web`.
@@ -106,9 +108,10 @@ exercises it without a cluster.
 - One more base image to pin and bump (`node` builder). It never ships, but a compromised builder
   could alter `dist/`; the digest pin and `npm ci` against a lockfile with integrity hashes are the
   controls, and Renovate will propose bumps once enabled (ADR 0008).
-- Until the HTTPRoute CSP is updated, deploying this image would render the static content but no
-  live panels (scripts blocked). The two changes must land together.
+- With the phase 3 route CSP this image would render the static content but no live panels (scripts
+  blocked), so the route's CSP and hello's digest change in one commit, and the CSP check keeps them
+  from drifting apart afterwards.
 - The image build now runs the unit tests; the Playwright suite needs a browser and runs as a
-  separate CI step (requested from the workflow owner), or locally (`npm run test:e2e`).
+  step of `build-images.yml` before the image is built (ADR 0016), or locally (`npm run test:e2e`).
 - Mock mode ships in the production bundle (a few KB minified). It cannot reach the API and is visibly
   labelled, so it adds no capability a visitor did not already have.

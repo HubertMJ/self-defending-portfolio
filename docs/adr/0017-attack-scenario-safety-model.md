@@ -88,9 +88,11 @@ the alert, the Talon action and the end state.
 - The two relaxations are visible in the ConfigMap and in this ADR; both stay within PSS `restricted`
   and pass every Kyverno policy. Neither applies to any other pod in the cluster.
 - The scenario image digest is a placeholder (all zeros) until the first build of `app/scenario` on
-  main. Until then `make validate` judges the scenario pods with hello's signed image standing in for
-  the signature check only, and says so; `tests/scenarios/run.sh` refuses to run without a real digest
-  or `SCENARIO_IMAGE`.
+  main (ADR 0016: images reach main in two merges). `scripts/check-image-digests.sh` fails
+  `make validate` and CI while it is, so the catalogue cannot reach the cluster unpinned; with
+  `ALLOW_PLACEHOLDER_DIGESTS=1` on a branch, `scripts/lib/scenario_pods.py` judges the scenario pods
+  with hello's image standing in for the signature check only, and says so.
+  `tests/scenarios/run.sh` refuses to run without a real digest or `SCENARIO_IMAGE`.
 - Deploying the ConfigMap is the portfolio-api Application's job (an extra source,
   `cluster/infra/sandbox/scenarios`), because the namespace is that Application's; the sandbox
   Application does not render it.

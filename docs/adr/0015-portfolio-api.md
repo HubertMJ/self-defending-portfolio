@@ -6,8 +6,10 @@ Date: 2026-10-01 · Status: accepted
 Phase 5 turns the cluster into the exhibit: a visitor of https://hubertjablon.ski picks one of four
 controlled attacks, it runs in `sandbox`, and the page shows Falco detecting it and Falco Talon
 answering it, live, next to the cluster's security posture (Kyverno, Trivy, kube-bench). The
-shared contract fixes the endpoints, the event shapes, the scenario format (a ConfigMap owned with
-the scenario images) and the abuse limits.
+phase 5/6 contract between the API, the scenarios and the frontend (built in parallel and merged
+together) fixes the endpoints, the event shapes, the scenario format (a ConfigMap owned with the
+scenario images) and the abuse limits; this ADR and ADR 0017 are where that contract is recorded,
+and `app/web/src/lib/contract.ts` is its typed form.
 
 That means an anonymous internet visitor can make the cluster create pods. Everything below is
 about keeping that one capability narrow: what the backend may do, who may reach which part of it,

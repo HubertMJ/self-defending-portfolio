@@ -72,10 +72,13 @@ unverified image should be able to run.
   more than one image.)
 - A push that changes several apps builds them in parallel jobs; the `main` tags of different
   images move independently, and the workflow-level concurrency group still serialises two pushes.
-- Until the first `build-images.yml` run on main, `cluster/infra/portfolio-api` pins a placeholder
-  digest (`sha256:000…0`) and the `validate` job's `kyverno apply` fails for it, by design: the
-  policy is evaluated for real and there is no signature for a digest that does not exist. The
-  follow-up commit pins the digest from the workflow summary, which prints the exact lines.
-- `docs/bootstrap.md` still shows the phase 3 identity in its manual `cosign verify` example; with
-  the transition alternative it keeps working for hello's current digest, and it should switch to
-  `build-images` together with the transition's removal.
+- New images reach main in two merges (docs/bootstrap.md, section 7). The first carries the sources,
+  this workflow and the widened identity, and changes nothing Argo CD deploys apart from the two image
+  policies; CI on main then builds and signs every image. The second pins the digests from the
+  workflow summaries (`scripts/bump-image-digest.sh <name> <digest>`) and adds what uses them. Until
+  then the manifests carry an all-zero placeholder digest, and `scripts/check-image-digests.sh`
+  fails `make validate` and CI on it, so a placeholder cannot reach main.
+- `docs/bootstrap.md` and `scripts/verify-image.sh` use the same transitional regexp as the policy.
+  All three drop `|build-web` together, in a commit of its own once hello runs a digest built by
+  `build-images.yml` and has been seen working; keeping the alternative until then is what lets
+  that switch be reverted without a rebuild.

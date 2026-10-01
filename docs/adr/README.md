@@ -17,20 +17,18 @@ decision are appended as dated amendments in the same file.
 | [0009](0009-nftables-host-firewall.md) | nftables host firewall with default-deny input | 0 | accepted |
 | [0010](0010-cilium-gateway-api.md) | Cilium's built-in Gateway API instead of ingress-nginx | 2 | accepted, amended 2026-10-01 (internal LoadBalancer address for the Gateway) |
 | [0011](0011-supply-chain.md) | Build, scan, describe and sign our own image; verify it at admission | 3 | accepted, amended 2026-10-01 (Kyverno verifies cosign v3 Sigstore bundles) |
-| [0012](0012-pod-security-and-resource-policy.md) | Pod Security `restricted` and pod resources as Kyverno policies, Audit before Enforce | 4 | accepted |
-| [0013](0013-runtime-detection-and-response.md) | Runtime detection and response: Falco modern eBPF least-privileged, Falcosidekick, Falco Talon scoped to `sandbox` | 4 | accepted |
+| [0012](0012-pod-security-and-resource-policy.md) | Pod Security `restricted` and pod resources as Kyverno policies, Audit before Enforce | 4 | accepted, amended 2026-10-01 (both policies Enforce) |
+| [0013](0013-runtime-detection-and-response.md) | Runtime detection and response: Falco modern eBPF least-privileged, Falcosidekick, Falco Talon scoped to `sandbox` | 4 | accepted, amended 2026-10-01 (read-only host mounts via a kustomize post-render; corrections: Argo CD's own kustomize, `perf_event_paranoid=2`, no Talon Events, Talon JSON log) |
 | [0014](0014-posture-scanning.md) | Posture scanning: Trivy Operator client/server with offline scan Jobs, kube-bench CronJob with a k3s config override, Policy Reporter internal only | 4 | accepted |
-| 0015 | *reserved: phase 5 API* | 5 | reserved |
-| 0016 | *reserved: phase 5 API* | 5 | reserved |
-| 0017 | Attack scenarios: a safety model for letting anonymous visitors attack the cluster | 5 | in progress (branch `phase-5-scenarios`) |
-| 0018 | Attack scenarios: which Falco rule detects each one, and what Talon does about it | 5 | in progress (branch `phase-5-scenarios`) |
-| 0019 | Frontend stack and Content Security Policy: vanilla TypeScript + esbuild, no third-party origins, Trusted Types | 6 | in progress (branch `phase-6-frontend`) |
-| 0020 | *reserved: phase 6 documentation* | 6 | reserved |
+| [0015](0015-portfolio-api.md) | The portfolio API: one Go process runs visitor-triggered attacks in `sandbox`, streams detection and response over SSE, and rations itself | 5 | accepted |
+| [0016](0016-one-image-workflow.md) | One matrix workflow builds and signs every image; the admission identity stays one file on main | 5 | accepted |
+| [0017](0017-attack-scenario-safety-model.md) | Attack scenarios: a safety model for letting anonymous visitors attack the cluster | 5 | accepted |
+| [0018](0018-scenario-detection-and-response-mapping.md) | Attack scenarios: which Falco rule detects each one, and what Talon does about it | 5 | accepted |
+| [0019](0019-frontend-stack-and-csp.md) | Frontend stack and Content Security Policy: vanilla TypeScript + esbuild, no third-party origins, Trusted Types | 6 | accepted |
 
-Rows marked "in progress" are ADRs written on a parallel branch that has not merged yet; they become
-links when it does. Reserved numbers are held for work in progress on parallel branches. A reserved
-number that ends up unused is released, and later ADRs are renumbered when those branches merge, so
-the table never links to a file that does not exist.
+Phases 5 and 6 were built on parallel branches and merged together; the numbers they had reserved
+are all in use except 0020 (phase 6 documentation needed no decision of its own), which is released.
+The next ADR is 0020.
 
 ## Open items carried by accepted ADRs
 
@@ -38,11 +36,13 @@ Decisions are accepted with their known costs written down. The ones still open:
 
 | Item | ADR |
 |------|-----|
-| Falco chart mounts `/host/lib/modules` read-write in least-privileged mode | [0013](0013-runtime-detection-and-response.md) |
+| `make validate` renders with kustomize v5.7.1; Argo CD's repo-server runs its own v5.8.1 | [0013](0013-runtime-detection-and-response.md) |
+| Talon 0.3.0's k8sevents notifier cannot work (object keys title-cased); off until a release fixes it | [0013](0013-runtime-detection-and-response.md) |
 | Argo CD has no requests/limits and is excluded from the resources policy | [0012](0012-pod-security-and-resource-policy.md) |
-| `pod-security-restricted` and `require-pod-resources` still in Audit | [0012](0012-pod-security-and-resource-policy.md) |
 | `ClusterPolicy` is deprecated in Kyverno 1.19; migration to ImageValidatingPolicy / CEL policies deferred | [0011](0011-supply-chain.md), [0012](0012-pod-security-and-resource-policy.md) |
-| Digest bumps are manual commits until Renovate is enabled | [0008](0008-pinned-versions.md), [0011](0011-supply-chain.md) |
+| The signer identity still accepts the phase 3 `build-web.yml` (transition); dropped once hello runs a `build-images.yml` digest | [0016](0016-one-image-workflow.md) |
+| Digest bumps are manual commits (`scripts/bump-image-digest.sh`) until Renovate is enabled | [0008](0008-pinned-versions.md), [0011](0011-supply-chain.md), [0016](0016-one-image-workflow.md) |
+| The API's 24 h counters and run history are in memory only; one replica by design | [0015](0015-portfolio-api.md) |
 
 The full list of gaps and residual risks, including ones no ADR records yet, is in the
 [threat model](../threat-model.md#7-known-gaps-and-residual-risk).
