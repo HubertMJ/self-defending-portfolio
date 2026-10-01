@@ -7,6 +7,11 @@ metadata:
     app.kubernetes.io/name: hello
 spec:
   replicas: 2
+  # Two old ReplicaSets are enough to roll back with; the default ten kept ReplicaSets from before
+  # phase 3, whose pod templates still name the upstream nginxinc image. They run no pods, but
+  # Kyverno's background scan judges their templates too, so restrict-image-registries kept reporting
+  # failures for objects nobody deploys. Old templates age out at the next rollouts.
+  revisionHistoryLimit: 2
   selector:
     matchLabels:
       app.kubernetes.io/name: hello
