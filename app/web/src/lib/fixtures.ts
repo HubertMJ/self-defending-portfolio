@@ -52,7 +52,11 @@ export function posture(now: number = Date.now()): Posture {
         { name: "restrict-image-registries", pass: 61, fail: 0, warn: 0 },
       ],
     },
-    trivy: { images: 27, critical: 0, high: 3, medium: 41, low: 88 },
+    trivy: {
+      images: 27, critical: 0, high: 3, medium: 41, low: 88, fixable_critical: 0, fixable_high: 3,
+      ours: { images: 4, critical: 0, high: 0, medium: 2, low: 9, fixable_critical: 0, fixable_high: 0 },
+      third_party: { images: 23, critical: 0, high: 3, medium: 39, low: 79, fixable_critical: 0, fixable_high: 3 },
+    },
     kube_bench: { last_run: new Date(now - 5 * 3600_000).toISOString(), pass: 98, fail: 4, warn: 21, info: 2 },
     falco: { alerts_24h: 17 },
     talon: { actions_24h: 9 },

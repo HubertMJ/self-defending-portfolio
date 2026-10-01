@@ -2,7 +2,7 @@
 // say about the cluster right now, from GET /api/posture (cached server-side for 60 s).
 
 import type { ApiClient, Result } from "../lib/api";
-import type { KyvernoPolicy, Posture } from "../lib/contract";
+import type { KyvernoPolicy, Posture, TrivySummary } from "../lib/contract";
 import { h, relativeTime, replace } from "../lib/dom";
 import { offlinePanel } from "./common";
 
@@ -13,6 +13,38 @@ type Tone = "good" | "warning" | "critical" | "neutral";
 function statusChip(tone: Tone, label: string): HTMLElement {
   const glyph = tone === "good" ? "✓" : tone === "neutral" ? "•" : "!";
   return h("span", { class: `chip chip--${tone}` }, h("span", { "aria-hidden": "true" }, glyph), label);
+}
+
+/**
+ * The headline is what this project ships: findings in its own images. Third-party images (Argo CD,
+ * Cilium, Falco, ...) are counted underneath, with how many of those have a fix upstream, and the
+ * total stays on the tile (ADR 0020). Without the split (an older API) it is the plain total.
+ */
+function vulnerabilityTile(tr: TrivySummary): HTMLElement {
+  const total = tr.critical + tr.high;
+  const { ours, third_party: third } = tr;
+  if (!ours || !third) {
+    return tile({
+      label: "Image vulnerabilities",
+      value: String(total),
+      unit: "critical + high",
+      tone: tr.critical > 0 ? "critical" : tr.high > 0 ? "warning" : "good",
+      status: tr.critical > 0 ? "Critical present" : tr.high > 0 ? "High present" : "None critical/high",
+      foot: [`Trivy, ${tr.images} running images`],
+    });
+  }
+  const thirdTotal = third.critical + third.high;
+  return tile({
+    label: "Image vulnerabilities",
+    value: String(ours.critical + ours.high),
+    unit: "critical + high in our images",
+    tone: ours.critical > 0 ? "critical" : ours.high > 0 ? "warning" : "good",
+    status: ours.critical > 0 ? "Critical in our images" : ours.high > 0 ? "High in our images" : "None in our images",
+    foot: [
+      `Third-party: ${thirdTotal} critical + high, ${third.fixable_critical + third.fixable_high} fixable upstream`,
+      `Total ${total} across ${tr.images} running images (${ours.images} ours)`,
+    ],
+  });
 }
 
 function tile(opts: {
@@ -101,14 +133,7 @@ export function renderPostureData(p: Posture, now: number = Date.now()): HTMLEle
       status: ky.fail > 0 ? "Failing checks" : ky.warn > 0 ? "Warnings only" : "All passing",
       foot: [`${p.kyverno.policies.length} Kyverno policies · ${ky.pass} pass · ${ky.warn} warn`],
     }),
-    tile({
-      label: "Image vulnerabilities",
-      value: String(tr.critical + tr.high),
-      unit: "critical + high",
-      tone: tr.critical > 0 ? "critical" : tr.high > 0 ? "warning" : "good",
-      status: tr.critical > 0 ? "Critical present" : tr.high > 0 ? "High present" : "None critical/high",
-      foot: [`Trivy, ${tr.images} running images`],
-    }),
+    vulnerabilityTile(tr),
     tile({
       label: "CIS benchmark",
       value: kbScored ? `${kbPct}%` : "–",

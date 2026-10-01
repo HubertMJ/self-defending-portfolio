@@ -59,6 +59,21 @@ describe("ApiClient GETs", () => {
     if (!res.ok) expect(res.error).toBe("bad-response");
   });
 
+  it("accepts a posture from an API without the ours/third-party split", async () => {
+    const p = posture(0);
+    const { images, critical, high, medium, low } = p.trivy;
+    const old = { ...p, trivy: { images, critical, high, medium, low } };
+    const res = await client(async () => json(200, old)).posture();
+    expect(res).toEqual({ ok: true, value: old });
+  });
+
+  it("rejects a half split (ours without third_party) as bad-response", async () => {
+    const p = posture(0);
+    const half = { ...p, trivy: { ...p.trivy, third_party: undefined } };
+    const res = await client(async () => json(200, JSON.parse(JSON.stringify(half)))).posture();
+    expect(res.ok).toBe(false);
+  });
+
   it("treats a network error as offline", async () => {
     const res = await client(async () => {
       throw new TypeError("Failed to fetch");

@@ -67,6 +67,34 @@ export type StreamEvent =
   | { type: "falco"; data: FalcoEvent }
   | { type: "talon"; data: TalonEvent };
 
+/** Distinct running images and their CRITICAL..LOW findings; fixable_* have a fixed version upstream. */
+export interface TrivyGroup {
+  images: number;
+  critical: number;
+  high: number;
+  medium: number;
+  low: number;
+  fixable_critical: number;
+  fixable_high: number;
+}
+
+/**
+ * Every running image (the original keys), plus - from the API version that has them (ADR 0020) -
+ * the split between this project's images and third-party ones. Optional, so the page keeps working
+ * against an API that predates the split.
+ */
+export interface TrivySummary {
+  images: number;
+  critical: number;
+  high: number;
+  medium: number;
+  low: number;
+  fixable_critical?: number;
+  fixable_high?: number;
+  ours?: TrivyGroup;
+  third_party?: TrivyGroup;
+}
+
 export interface KyvernoPolicy {
   name: string;
   pass: number;
@@ -77,7 +105,7 @@ export interface KyvernoPolicy {
 export interface Posture {
   generated_at: string;
   kyverno: { policies: KyvernoPolicy[] };
-  trivy: { images: number; critical: number; high: number; medium: number; low: number };
+  trivy: TrivySummary;
   kube_bench: { last_run: string | null; pass: number; fail: number; warn: number; info: number };
   falco: { alerts_24h: number };
   talon: { actions_24h: number };
@@ -147,12 +175,24 @@ export function parseStreamEvent(type: string, raw: string): StreamEvent | null 
   }
 }
 
+const TRIVY_GROUP = ["images", "critical", "high", "medium", "low", "fixable_critical", "fixable_high"] as const;
+
+function isTrivy(t: unknown): boolean {
+  if (!hasCounts(t, ["images", "critical", "high", "medium", "low"])) return false;
+  for (const k of ["fixable_critical", "fixable_high"] as const) {
+    if (t[k] !== undefined && !isCount(t[k])) return false;
+  }
+  // The split is all or nothing: half of it would make the headline compare unlike things.
+  if (t.ours === undefined && t.third_party === undefined) return true;
+  return hasCounts(t.ours, TRIVY_GROUP) && hasCounts(t.third_party, TRIVY_GROUP);
+}
+
 export function isPosture(v: unknown): v is Posture {
   if (!isObj(v) || !isStr(v.generated_at)) return false;
   const k = v.kyverno;
   if (!isObj(k) || !Array.isArray(k.policies)) return false;
   if (!k.policies.every((p) => hasCounts(p, ["pass", "fail", "warn"]) && isStr(p.name))) return false;
-  if (!hasCounts(v.trivy, ["images", "critical", "high", "medium", "low"])) return false;
+  if (!isTrivy(v.trivy)) return false;
   const kb = v.kube_bench;
   if (!hasCounts(kb, ["pass", "fail", "warn", "info"])) return false;
   if (!(kb.last_run === null || isStr(kb.last_run))) return false;
