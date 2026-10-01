@@ -43,9 +43,10 @@ firewall_service_cidr: "{{ k3s_service_cidr | default('10.43.0.0/16') }}"
 #   6443  kube-apiserver, reached by in-cluster clients and by the Cilium agent
 #   10250 kubelet API, used by the apiserver for exec/logs and by metrics-server
 #   4240  cilium-agent health endpoint
+#   4244  hubble peer service (cilium-agent, host network); hubble-relay dials it from a pod
 #   53    CoreDNS, which runs as a pod but is queried through the node address
 # Extend these lists instead of widening the CIDR rules.
-firewall_pod_to_host_tcp_ports: [53, 4240, 6443, 10250]
+firewall_pod_to_host_tcp_ports: [53, 4240, 4244, 6443, 10250]
 firewall_pod_to_host_udp_ports: [53]
 
 # Extra ports to open, e.g. Cilium health checks (4240/tcp) or VXLAN

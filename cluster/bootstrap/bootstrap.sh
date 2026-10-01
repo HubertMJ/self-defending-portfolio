@@ -26,7 +26,7 @@ command -v "$KUBECTL" >/dev/null || die "kubectl not found; set KUBECTL or expor
 grep -q 'AGE-SECRET-KEY-' "$SOPS_AGE_KEY_FILE" \
   || die "$SOPS_AGE_KEY_FILE does not look like an age identity file (no AGE-SECRET-KEY- line)"
 
-if grep -rq 'REPLACE-ME-GITHUB-OWNER' "$REPO_ROOT/cluster"; then
+if grep -rq --exclude=bootstrap.sh 'REPLACE-ME-GITHUB-OWNER' "$REPO_ROOT/cluster"; then
   die "cluster/ still contains REPLACE-ME-GITHUB-OWNER; set the repository owner first (see cluster/bootstrap/README.md)"
 fi
 
@@ -42,6 +42,11 @@ step "secret $ARGOCD_NS/sops-age (age identity, never printed)"
   --dry-run=client -o yaml | "$KUBECTL" apply -f -
 
 step "argo cd (kustomize build $ARGOCD_KUSTOMIZATION)"
+# The kustomization carries both the Argo CD CRDs and the root Application. On a fresh cluster the
+# first apply registers the CRDs but cannot yet create the Application (no REST mapping). Apply,
+# wait for the CRD to be established, apply again; both applies are idempotent.
+"$KUBECTL" apply -k "$ARGOCD_KUSTOMIZATION" --server-side --force-conflicts || true
+"$KUBECTL" wait --for=condition=Established crd/applications.argoproj.io --timeout=120s
 "$KUBECTL" apply -k "$ARGOCD_KUSTOMIZATION" --server-side --force-conflicts
 
 step "waiting for argocd-server (timeout $WAIT_TIMEOUT)"
