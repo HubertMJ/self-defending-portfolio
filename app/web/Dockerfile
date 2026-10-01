@@ -6,7 +6,7 @@
 # stock image starts as root to bind :80, which PSS `restricted` forbids (see
 # cluster/infra/hello/deployment.yaml). Pinned by tag *and* digest (ADR 0008) to the same digest
 # the Deployment used before this image existed, so the base did not silently change in the move.
-FROM nginxinc/nginx-unprivileged:1.27.5-alpine@sha256:65e3e85dbaed8ba248841d9d58a899b6197106c23cb0ff1a132b7bfe0547e4c0
+FROM nginxinc/nginx-unprivileged:1.31.6-alpine@sha256:26b0bf6fbf07297983cb341998d79c831508787de26627dd2a112321b9c3a4af
 
 # Build-time only; the running container never reads these. USER is restored below.
 USER root
