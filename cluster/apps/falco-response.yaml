@@ -16,8 +16,16 @@
 # Pinned (ADR 0008), resolved from the repository index:
 #   curl -sfL https://falcosecurity.github.io/charts/index.yaml \
 #     | yq '.entries.falcosidekick[0] | .version, .appVersion'
-# Chart 0.14.0's Chart.yaml still says appVersion 2.31.1, but its values.yaml defaults to image 2.32.0,
-# which is what is pinned below by digest.
+# Chart 0.14.0's Chart.yaml still says appVersion 2.31.1, and its values.yaml defaults to image 2.32.0.
+# 0.14.0 is still the newest chart, but Falcosidekick itself is at 2.35.0 (2026-08-31), so the image
+# is set past the chart default (ADR 0023): 2.32.0 carried 43 CRITICAL+HIGH findings in the cluster,
+# 2.35.0 has 3 CRITICAL + 11 HIGH with today's Trivy DB (8 + 62 for 2.32.0 with the same DB). What is
+# left is in dependencies Falcosidekick has not raised yet (amqp091-go, grpc, x/crypto, the Alpine
+# OpenSSL); all of them have fixes, so the next release, or building it here like Talon
+# (app/talon), is what removes them. The releases in between change other outputs (OTLP TLS, Telegram,
+# Azure Event Hubs, PolicyReport timestamps); the HTTP outputs used here (talon, webhook) and every
+# value below are unchanged. Release notes: https://github.com/falcosecurity/falcosidekick/releases
+#   docker buildx imagetools inspect docker.io/falcosecurity/falcosidekick:2.35.0
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
@@ -39,7 +47,7 @@ spec:
           image:
             registry: docker.io
             repository: falcosecurity/falcosidekick
-            tag: "2.32.0@sha256:1976da72151850aae4436f33a5ed94bdef469f42a9b61c182b4feeb5441fb081"
+            tag: "2.35.0@sha256:216ddb75229dcbf78cf57b1cf2140bd1b9092fcd72e4fd20b4d3057395d6765b"
           # One node; a second replica would only double the alerts forwarded per event if Falco ever
           # retried, and adds nothing to availability here.
           replicaCount: 1
