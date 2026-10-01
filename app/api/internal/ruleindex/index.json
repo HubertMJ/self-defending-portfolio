@@ -1,0 +1,72 @@
+{
+  "falco": {
+    "SDP network tool in sandbox": {
+      "file": "cluster/infra/falco/kustomization.yaml",
+      "line": 151
+    }
+  },
+  "talon": {
+    "Terminal shell in container": {
+      "name": "Kill terminal shell in sandbox",
+      "file": "cluster/infra/falco-response/talon/rules.yaml",
+      "line": 35
+    },
+    "SDP network tool in sandbox": {
+      "name": "Quarantine network tool in sandbox",
+      "file": "cluster/infra/falco-response/talon/rules.yaml",
+      "line": 47
+    },
+    "Read sensitive file untrusted": {
+      "name": "Kill sensitive file read in sandbox",
+      "file": "cluster/infra/falco-response/talon/rules.yaml",
+      "line": 68
+    },
+    "Drop and execute new binary in container": {
+      "name": "Kill drifted binary in sandbox",
+      "file": "cluster/infra/falco-response/talon/rules.yaml",
+      "line": 80
+    }
+  },
+  "policies": [
+    {
+      "kind": "ClusterPolicy",
+      "name": "disallow-latest-tag",
+      "file": "cluster/infra/kyverno-policies/disallow-latest-tag.yaml"
+    },
+    {
+      "kind": "ClusterPolicy",
+      "name": "pod-security-restricted",
+      "file": "cluster/infra/kyverno-policies/pod-security-restricted.yaml"
+    },
+    {
+      "kind": "ClusterPolicy",
+      "name": "require-pod-resources",
+      "file": "cluster/infra/kyverno-policies/require-pod-resources.yaml"
+    },
+    {
+      "kind": "ClusterPolicy",
+      "name": "restrict-image-registries",
+      "file": "cluster/infra/kyverno-policies/restrict-image-registries.yaml"
+    },
+    {
+      "kind": "ClusterPolicy",
+      "name": "verify-portfolio-images",
+      "file": "cluster/infra/kyverno-policies/verify-portfolio-images.yaml"
+    },
+    {
+      "kind": "CiliumNetworkPolicy",
+      "name": "sandbox-dns-only",
+      "file": "cluster/infra/sandbox/ciliumnetworkpolicy.yaml"
+    },
+    {
+      "kind": "NetworkPolicy",
+      "name": "default-deny",
+      "file": "cluster/infra/sandbox/networkpolicy.yaml"
+    },
+    {
+      "kind": "CiliumClusterwideNetworkPolicy",
+      "name": "quarantine",
+      "file": "cluster/infra/sandbox/quarantine-ccnp.yaml"
+    }
+  ]
+}
