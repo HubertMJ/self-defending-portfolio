@@ -126,6 +126,5 @@ that fails keeps its last value rather than failing the page.
   synthetic visitor addresses); the Go tests cover the same arithmetic, the global limit included,
   with `-race`.
 - Known gaps, recorded: the 24 h counters are not persistent; the posture page reflects only what the
-  reports say, so it is as current as the last Trivy scan and kube-bench run; and the scenario
-  catalogue's ConfigMap has to be included from `cluster/infra/sandbox/scenarios` once it exists
-  (`cluster/infra/portfolio-api/kustomization.yaml` says where).
+  reports say, so it is as current as the last Trivy scan and kube-bench run. The scenario catalogue is
+  the Application's second source, `cluster/infra/sandbox/scenarios` (owned with the scenarios).

@@ -5,11 +5,9 @@
 # Every object names its namespace itself.
 #
 # The scenario catalogue (ConfigMap `scenarios`, key scenarios.yaml, namespace portfolio-api) is
-# owned with the scenarios themselves, in cluster/infra/sandbox/scenarios/, and is referenced from
-# here once that kustomization exists:
-#   resources:
-#     - ../sandbox/scenarios
-# Until then the Deployment's volume is optional and the API lists no scenarios.
+# owned with the scenarios themselves, in cluster/infra/sandbox/scenarios/, and deployed as the second
+# source of cluster/apps/portfolio-api.yaml. The Deployment's volume is optional, so the API starts
+# (and lists no scenarios) if that source is missing.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 

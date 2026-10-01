@@ -17,10 +17,16 @@ metadata:
     - resources-finalizer.argocd.argoproj.io
 spec:
   project: default
-  source:
-    repoURL: https://github.com/HubertMJ/self-defending-portfolio.git
-    targetRevision: main
-    path: cluster/infra/portfolio-api
+  sources:
+    - repoURL: https://github.com/HubertMJ/self-defending-portfolio.git
+      targetRevision: main
+      path: cluster/infra/portfolio-api
+    # The scenario catalogue: ConfigMap `scenarios` in this namespace, reviewed next to the sandbox it
+    # describes (cluster/infra/sandbox/scenarios, its own kustomization with a fixed name). A source
+    # here rather than a resource of the kustomization above, so each directory renders on its own.
+    - repoURL: https://github.com/HubertMJ/self-defending-portfolio.git
+      targetRevision: main
+      path: cluster/infra/sandbox/scenarios
   destination:
     server: https://kubernetes.default.svc
     namespace: portfolio-api
