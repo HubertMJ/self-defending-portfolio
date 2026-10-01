@@ -168,6 +168,16 @@ jobs:
           cache-from: type=gha,scope=${{ matrix.name }}
           cache-to: type=gha,mode=max,scope=${{ matrix.name }}
 
+      # An image with its own smoke test (app/<name>/test/image-smoke.sh - today only web) runs it
+      # against the digest just pushed, the way the cluster runs it, before anything signs it: a
+      # failure means the digest is never signed, so Kyverno never admits it. Generic, like the e2e
+      # step: the condition is a file, not an image name.
+      - name: image smoke test
+        if: hashFiles(format('app/{0}/test/image-smoke.sh', matrix.name)) != ''
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: '"${CONTEXT}/test/image-smoke.sh" "${IMAGE}@${DIGEST}"'
+
       # The gate, on the digest that was actually pushed rather than on a tag that could have moved
       # between the push and now. ignore-unfixed: a CVE with no upstream patch is not something this
       # pipeline can act on, so failing on it would only teach us to ignore red builds.

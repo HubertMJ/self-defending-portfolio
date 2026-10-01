@@ -115,3 +115,30 @@ exercises it without a cluster.
   step of `build-images.yml` before the image is built (ADR 0016), or locally (`npm run test:e2e`).
 - Mock mode ships in the production bundle (a few KB minified). It cannot reach the API and is visibly
   labelled, so it adds no capability a visitor did not already have.
+
+## Amendment 2026-10-01: an error is never cacheable, and what a rollout may still show
+
+**What happened.** The first rollout of a new web digest left the live page without JavaScript.
+During the rolling update (two replicas, `maxSurge: 1`) a visitor got the new `index.html` from a
+new pod and then asked an old pod for the new `/assets/main-<hash>.js`, which it does not have. nginx
+answered 404 - with `Cache-Control: public, max-age=31536000, immutable`, because the `/assets/`
+location added that header with `always`, which applies it to every status. The Cloudflare edge
+cached that 404 for a year and served it to every visitor until the URL was purged by hand.
+
+**Decision.**
+- `Cache-Control` is chosen by status (`map $status` in `nginx.conf`): the long-lived immutable
+  policy for a 200 or 304 under `/assets/`, `no-cache` for a 200 or 304 of a page, and `no-store`
+  for every other status in both locations. The dev server (`scripts/serve.mjs`) does the same, the
+  Playwright suite asserts it, and `test/image-smoke.sh` asserts it on the real image; the image
+  workflow runs that smoke test after the push and before signing (ADR 0016), so an image that would
+  cache an error is never admitted.
+- Version skew during a rollout is accepted rather than engineered away. With errors uncacheable and
+  `index.html` revalidated on every load, the worst a visitor can see is one page view without the
+  live panels during the seconds both versions serve, and a reload fixes it; the static portfolio
+  content renders without JavaScript anyway. Considered and not done: shipping the previous release's
+  hashed assets in each image (needs the previous digest at build time, a second image as a build
+  input, and a policy for how many releases to keep), and `strategy: Recreate` for hello (a visible
+  outage on every deploy, which is worse than the skew it removes).
+- The edge gets one manual rule (docs/bootstrap.md, 7.3): caching of `/assets/*` follows the origin's
+  `Cache-Control` and never applies to 4xx/5xx, so a future origin mistake cannot be amplified for a
+  year either.

@@ -672,6 +672,31 @@ transition), the `portfolio-api` Application and its namespace are pruned, and T
 Falcosidekick lose their webhook. Stage 1 can stay: it changes nothing Argo CD deploys apart from the
 two image policies' identity and namespace list.
 
+### 7.3 Cloudflare: cached assets follow the origin, errors are never cached
+
+Manual, in the Cloudflare dashboard (this repository has no Cloudflare API access by design, ADR 0003).
+The origin already marks every error `no-store` (ADR 0019, amendment); this rule makes the edge
+independent of that, so one origin mistake cannot be served from cache for a year.
+
+1. **Purge what is already wrong.** Caching -> Configuration -> Purge Cache -> Custom Purge -> URL:
+   every `https://hubertjablon.ski/assets/...` URL that answered 404 (or purge everything once; the
+   assets are content-hashed and refill on first request).
+2. **Cache Rule for the assets.** Caching -> Cache Rules -> Create rule:
+   - When incoming requests match: URI Path starts with `/assets/`;
+   - Cache eligibility: Eligible for cache;
+   - Edge TTL: use the cache-control header if present, bypass the cache if not;
+   - Status code TTL: range 400-599 -> No store;
+   - Browser TTL: respect origin.
+3. **Check from outside**, for a missing and an existing asset:
+
+   ```sh
+   curl -sI https://hubertjablon.ski/assets/main-NOTBUILT.js | grep -i -E '^HTTP|cache-control|cf-cache-status'
+   # HTTP/2 404, cache-control: no-store, cf-cache-status: BYPASS or MISS - never HIT
+   curl -sI "https://hubertjablon.ski$(curl -s https://hubertjablon.ski/ | grep -o '/assets/main-[A-Za-z0-9_-]*\.js' | head -1)" \
+     | grep -i -E '^HTTP|cache-control'
+   # HTTP/2 200, cache-control: public, max-age=31536000, immutable
+   ```
+
 ## Rebuild from zero
 
 ```sh

@@ -55,7 +55,8 @@ const server = createServer(async (req, res) => {
     const cache = path.startsWith("/assets/") ? "public, max-age=31536000, immutable" : "no-cache";
     send(200, body, { "Content-Type": TYPES[extname(file)] ?? "application/octet-stream", "Cache-Control": cache });
   } catch {
-    send(404, "not found\n", { "Content-Type": "text/plain; charset=utf-8" });
+    // As nginx.conf: an error is never cacheable (a cached 404 for a hashed asset outlives a deploy).
+    send(404, "not found\n", { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" });
   }
 });
 

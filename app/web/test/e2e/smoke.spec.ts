@@ -40,7 +40,17 @@ test.describe("security headers", () => {
     const asset = /\/assets\/(main-[\w-]+\.js)/.exec(html)?.[1];
     expect(asset).toBeTruthy();
     const js = await request.get(`/assets/${asset}`);
+    expect(js.status()).toBe(200);
     expect(js.headers()["cache-control"]).toBe("public, max-age=31536000, immutable");
+
+    // A missing hashed asset (another release's, during a rollout) and a missing page are never
+    // cacheable: a 404 with the immutable policy would be served by the CDN for a year.
+    const missing = await request.get("/assets/main-NOTBUILT.js");
+    expect(missing.status()).toBe(404);
+    expect(missing.headers()["cache-control"]).toBe("no-store");
+    const missingPage = await request.get("/no-such-page");
+    expect(missingPage.status()).toBe(404);
+    expect(missingPage.headers()["cache-control"]).toBe("no-store");
 
     const api = await request.get("/api/scenarios");
     expect(api.status()).toBe(404);
