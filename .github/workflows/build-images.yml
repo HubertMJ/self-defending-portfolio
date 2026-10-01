@@ -153,6 +153,11 @@ jobs:
       # which changes the digest shape and makes `cosign sign <image>@<digest>` ambiguous about what
       # it covered. We produce the SBOM explicitly below and sign the image manifest we pushed.
       # The GHA cache is scoped per image, so the images do not evict each other's layers.
+      #
+      # GIT_SHA goes to the api image only: it links its rule and policy references to the exact
+      # commit it was built from (ADR 0021). The one place this file names an image, because a
+      # build argument no Dockerfile declares is a warning on every other build, and a commit baked
+      # into an image that has no use for it would only change its digest on every push.
       - name: build and push
         id: build
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
@@ -165,6 +170,7 @@ jobs:
           sbom: false
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: ${{ matrix.name == 'api' && format('GIT_SHA={0}', github.sha) || '' }}
           cache-from: type=gha,scope=${{ matrix.name }}
           cache-to: type=gha,mode=max,scope=${{ matrix.name }}
 

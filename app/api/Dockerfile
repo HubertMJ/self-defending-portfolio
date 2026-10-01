@@ -28,6 +28,12 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
 
 FROM gcr.io/distroless/static-debian13:nonroot@sha256:e2e927ec666bae08560abb3c55d0659eceabb657f56b6782ab500a9fc7f555e3
 COPY --from=build /out/portfolio-api /portfolio-api
+# The commit this image was built from (build-images.yml passes github.sha), served in
+# /api/scenarios/{id}/details so the page links each rule to the source of exactly this build
+# (ADR 0021). Declared in the last stage only: a new commit changes this one layer, not the build
+# cache of the stages above. A local build without the argument publishes no commit.
+ARG GIT_SHA=""
+ENV GIT_SHA=${GIT_SHA}
 USER 65532:65532
 # 8080: the public API behind the Gateway. 8081: the Falcosidekick and Talon webhooks only.
 EXPOSE 8080 8081
