@@ -24,7 +24,8 @@ release keeps working.
 - `pod` (new): from a watch on the run's one pod (`fieldSelector=metadata.name=<pod>`, opened before
   the pod is created so the creation is its first event): phase as kubectl summarises it (Pending,
   ContainerCreating, Running, Succeeded, Failed, Terminating, Deleted), reason, UID, container id
-  (12), image as `repository@sha256:...` from the kubelet's `imageID`, labels changed since the
+  (12), image as `repository@sha256:...` (the repository from the pod spec, only the sha256 digest
+  from the kubelet's `imageID`), labels changed since the
   previous event (Talon's quarantine label appears here as it lands), deleted. Published only when one
   of those changes. The view is built field by field from the pod object, so `nodeName`, `hostIP` and
   `podIP` cannot leak by being forgotten in a filter. RBAC: `watch` on pods, in `sandbox` only - the
@@ -35,10 +36,21 @@ release keeps working.
   (was 300). Anything not on the list - hostname, k8s.pod.uid, whatever a future Falco adds - is
   dropped.
 - `talon`: `actionner`, `api_received_at`, `output` (Talon's result text, or its error, capped at 300).
-- Free text (Falco output and field values, Talon output) goes through a scrubber that replaces URLs,
-  `*.svc[.cluster.local]` names and non-loopback IPv4 addresses. Loopback stays: `http://127.0.0.1:9/`
-  is the evidence that the network-tool scenario sent nothing off the pod. The scrubber is a backstop
-  for the abnormal case (a Talon error quoting the API server URL), not the policy - the allow-list is.
+- Free text (Falco output and field values, Talon output) goes through a scrubber that drops
+  invisible format characters (bidi overrides, zero-width spaces: a command line must not read
+  differently from what ran) and replaces URLs, names ending in `.svc` or `.cluster.local` (any case),
+  IPv4 addresses wherever they appear and IPv6 addresses standing as a token, loopback excepted.
+  Loopback stays: `http://127.0.0.1:9/` is the evidence that the network-tool scenario sent nothing
+  off the pod. The scrubber is a backstop for the abnormal case (a Talon error quoting the API server
+  URL), not the policy - the allow-list is.
+- **HTML is not escaped, on purpose.** Falco output, Falco fields, Talon output and the details'
+  `exec_command` are evidence and are published verbatim - a scenario's command can contain markup
+  it writes into the victim's page (`<h1>...`), and that is exactly what the visitor should read. The
+  control is on the web side: every string from the API is rendered as text (`textContent`, never
+  `innerHTML`), under the Trusted Types CSP of ADR 0019, which makes an accidental HTML sink throw
+  instead of render. Escaping in the API would corrupt the evidence and would protect nothing a
+  text-only renderer does not already protect. The victim app's own title and banner are different:
+  they are attacker-chosen display text, not evidence, and are stripped of angle brackets.
 
 **Victim poller.** A catalogue entry with `victim: true` (optional, default false) runs an image that
 serves `/state.json` on :8080 (`{status, title, banner, checksum}`). From `pod_ready` until the run
@@ -54,7 +66,7 @@ the body is written by whatever runs in the attacked pod:
 - 300 ms for the whole exchange, response headers capped at 4 KiB, body capped at 4 KiB;
 - redirects are not followed; only 200 with `application/json` is accepted;
 - `status` must be `up`, `defaced` or `compromised`; title (80) and banner (120) are reduced to plain
-  text (no control characters, no angle brackets, whitespace collapsed, length capped); the checksum
+  text (no control or invisible format characters, no angle brackets, whitespace collapsed, length capped); the checksum
   must be 1-16 lowercase hex or it is dropped.
 
 Anything else is `unreachable` - which during a quarantine is the point: the probe failing is the
@@ -78,8 +90,11 @@ quarantined pod is not a kill.
 - The commit is the build's `GIT_SHA` (a build argument in the final stage of `app/api/Dockerfile`,
   passed as `github.sha` for the api image only by `build-images.yml`), published only if it is hex.
 - `GET /api/runs/{id}`: every event of one of the last 50 runs, as published, with the stream's ids.
-  A store fed by a synchronous hub tap (never dropped, unlike a subscriber), bounded at 50 runs and
-  500 events per run; Falco and Talon events are filed under the run whose pod they name.
+  A store fed by a synchronous hub tap (never dropped, unlike a subscriber), bounded by count and by
+  size, since event sizes are not ours to choose: 50 runs; per run 500 events and 256 KiB of event
+  data, past which the run is marked `truncated`; 8 MiB over all runs, past which the oldest runs are
+  dropped first (a run that alone exceeds it is truncated). Falco and Talon events are filed under the
+  run whose pod they name.
 - `GET /api/limits`: the asking visitor's attack budget (limit, window, remaining, seconds until one
   more is available), the global one, whether a run is active, and the visitor's free stream slots.
   Read-only: asking spends nothing but the ordinary request budget.
