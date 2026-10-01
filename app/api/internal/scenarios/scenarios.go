@@ -61,6 +61,10 @@ type Scenario struct {
 	TimeoutSeconds int             `json:"timeout_seconds"`
 	Pod            json.RawMessage `json:"pod"`
 	Exec           *Exec           `json:"exec"`
+	// Victim marks a scenario whose image serves the victim app (state.json on :8080). Optional,
+	// false when absent: only then does the runner probe the pod (runner/victim.go, ADR 0021), so a
+	// scenario image without the app never shows a spurious "unreachable".
+	Victim bool `json:"victim"`
 
 	// Template is Pod decoded: either a PodTemplateSpec ({metadata, spec}) or a bare PodSpec.
 	Template corev1.PodTemplateSpec `json:"-"`
@@ -74,11 +78,13 @@ type Public struct {
 	Technique string `json:"technique"`
 	Detection string `json:"detection"`
 	Response  string `json:"response"`
+	Victim    bool   `json:"victim"`
 }
 
 // Public returns the visitor-facing fields.
 func (s Scenario) Public() Public {
-	return Public{ID: s.ID, Title: s.Title, Summary: s.Summary, Technique: s.Technique, Detection: s.Detection, Response: s.Response}
+	return Public{ID: s.ID, Title: s.Title, Summary: s.Summary, Technique: s.Technique, Detection: s.Detection,
+		Response: s.Response, Victim: s.Victim}
 }
 
 // Timeout is the scenario's run time limit, defaulted and capped.

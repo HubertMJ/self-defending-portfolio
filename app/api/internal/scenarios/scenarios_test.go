@@ -31,6 +31,7 @@ const sample = `
   technique: T1105
   detection: SDP network tool in sandbox
   response: quarantine
+  victim: true
   pod:
     metadata:
       labels:
@@ -55,6 +56,9 @@ func TestParseBothPodForms(t *testing.T) {
 	}
 	if !list[0].Exec.TTY || list[0].Container() != "victim" {
 		t.Fatalf("exec: %+v", list[0].Exec)
+	}
+	if list[0].Victim || list[0].Public().Victim || !list[1].Victim || !list[1].Public().Victim {
+		t.Fatalf("victim flag: %v %v", list[0].Victim, list[1].Victim)
 	}
 	if list[1].Template.Labels["extra"] != "yes" || list[1].Exec != nil || list[1].Timeout() != DefaultTimeout {
 		t.Fatalf("second: %+v", list[1])
