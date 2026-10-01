@@ -8,22 +8,18 @@
 # transparency log - nothing to rotate, nothing to leak, and a forged signature would have to come
 # with a Fulcio certificate issued to this exact workflow on this exact branch.
 #
-#   # phase 3 switch: Audit -> Enforce once hello runs the signed image
-#
-# Both rules below run with `failureAction: Enforce` (flipped when hello moved to the signed image). One grep finds every action in the
-# directory, in all three policies:
+# Both rules run with `failureAction: Enforce`. They started in Audit and were flipped in the commit
+# that pointed cluster/infra/hello at the signed digest (docs/bootstrap.md, "Phase 3"): while hello
+# still ran nginxinc/nginx-unprivileged, which nobody signed, Enforce would have stopped the site, and
+# Audit let the policy be observed working before it was load-bearing. One grep finds every action in
+# the directory, across all five policies:
 #
 #   grep -n 'failureAction' cluster/infra/kyverno-policies/*.yaml
 #
-# The flip is three lines, not two: verify-signature's `mutateDigest` has to move with its action,
-# because Kyverno rejects a rule that rewrites the image reference while only auditing. The inline
-# comment on that field spells it out. verify-sbom-attestation's `mutateDigest` stays false.
-#
-# The reason is ordering, not doubt. `hello` currently runs nginxinc/nginx-unprivileged, which nobody
-# signed; committing Enforce before hello's image is ours would make the hello Application fail to
-# sync the moment this policy lands. Audit admits the Pod and records the violation in a
-# PolicyReport, so the policy is observably working before it is load-bearing. The flip belongs in the
-# same commit that points cluster/infra/hello at the signed digest - see docs/bootstrap.md, "Phase 3".
+# Going back to Audit (for a rollback) is three lines, not two: verify-signature's `mutateDigest` has
+# to move with its action, because Kyverno rejects a rule that rewrites the image reference while only
+# auditing. The inline comment on that field spells it out. verify-sbom-attestation's `mutateDigest`
+# stays false in both states.
 #
 # `validationFailureAction` at spec level is deprecated in kyverno.io/v1 (it is a whole-policy switch
 # that predates per-rule actions), so the action lives on each rule instead.

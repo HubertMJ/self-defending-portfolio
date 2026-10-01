@@ -5,12 +5,9 @@
 # `kubectl debug` sidecar would slip through), and system namespaces are excluded here rather than in
 # the global resourceFilters.
 #
-#   # phase 3 switch: Audit -> Enforce once hello runs the signed image
-#
-# This one is Enforce from the start, and needs no switch: nothing in cluster/ uses a floating tag
-# today (scripts and manifests pin tag plus digest), so there is nothing for it to break. It is
-# written next to the same marker only so that a reader looking for "what is gating what" finds all
-# three policies' actions in one grep:
+# Enforce from the start, with no Audit phase: nothing in cluster/ used a floating tag when it landed
+# (scripts and manifests pin tag plus digest), so there was nothing for it to break. All five
+# policies' actions are in one grep:
 #
 #   grep -n 'failureAction' cluster/infra/kyverno-policies/*.yaml
 apiVersion: kyverno.io/v1
