@@ -34,7 +34,7 @@ helmCharts:
     releaseName: falco
     namespace: falco
     # The Kubernetes version the cluster runs, as for the other charts (scripts/render-charts.sh).
-    kubeVersion: "1.35.8"
+    kubeVersion: "1.35.9"
     valuesInline:
       image:
         registry: docker.io

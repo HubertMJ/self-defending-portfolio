@@ -38,7 +38,7 @@ CRDS_CATALOG_SCHEMA="https://raw.githubusercontent.com/datreeio/CRDs-catalog/${C
 
 # Kubernetes version the manifests must be valid against. Matches k3s_version in
 # ansible/inventory/group_vars/k3s_nodes.yml, minus the +k3s1 suffix.
-KUBERNETES_VERSION=${KUBERNETES_VERSION:-1.35.8}
+KUBERNETES_VERSION=${KUBERNETES_VERSION:-1.35.9}
 
 # For kustomizations that render a Helm chart (`helmCharts`, see the rendering loop).
 # shellcheck disable=SC1091  # a one-line pin (HELM_IMAGE), sourced from the repository root

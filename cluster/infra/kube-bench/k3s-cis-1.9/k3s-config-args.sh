@@ -15,7 +15,7 @@
 #   * `secrets-encryption: true`, which k3s v1.35 translates into
 #     --encryption-provider-config=<data-dir>/server/cred/encryption-config.json and
 #     --encryption-provider-config-automatic-reload=true (pkg/daemons/control/server.go,
-#     pkg/daemons/control/deps/deps.go at v1.35.8+k3s1);
+#     pkg/daemons/control/deps/deps.go at v1.35.9+k3s1);
 #   * a "Managed etcd cluster" line when `cluster-init: true` (the audits use it to decide whether the
 #     etcd client flags apply), and no kube-proxy line with `disable-kube-proxy: true`, as k3s logs.
 # Flags k3s sets on its own (--profiling=false, --anonymous-auth=false, the TLS file paths, ...) are

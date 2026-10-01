@@ -46,7 +46,7 @@ DOCKER=${DOCKER:-docker}
 . scripts/lib/helm-image.sh
 
 # Matches validate-cluster.sh and k3s_version in ansible/inventory/group_vars/k3s_nodes.yml.
-KUBERNETES_VERSION=${KUBERNETES_VERSION:-1.35.8}
+KUBERNETES_VERSION=${KUBERNETES_VERSION:-1.35.9}
 
 # API groups the live cluster serves that a chart in this repository checks for at render time.
 # Cilium creates its GatewayClass only when gateway.networking.k8s.io/v1 GatewayClass is registered
