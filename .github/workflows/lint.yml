@@ -33,7 +33,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: >-
           shellcheck scripts/*.sh cluster/bootstrap/bootstrap.sh tests/*.sh tests/admission/*.sh tests/runtime/*.sh
-          cluster/infra/kube-bench/k3s-cis-1.9/*.sh
+          tests/scenarios/*.sh cluster/infra/kube-bench/k3s-cis-1.9/*.sh
 
   validate:
     # Argo CD auto-syncs cluster/, so this job is the last cheap place a broken manifest can be
