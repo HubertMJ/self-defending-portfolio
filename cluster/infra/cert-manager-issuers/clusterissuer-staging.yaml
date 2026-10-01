@@ -8,7 +8,7 @@ metadata:
 spec:
   acme:
     server: https://acme-staging-v02.api.letsencrypt.org/directory
-    # ACME account contact; expiry and policy notices go here. Replace before the first sync.
+    # ACME account contact; expiry and policy notices go here. A fork replaces it with its own.
     email: hubert.m.jablonski@gmail.com
     privateKeySecretRef:
       name: letsencrypt-staging-account-key

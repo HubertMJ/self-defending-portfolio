@@ -2,10 +2,10 @@
 # file with the age identity mounted into argocd-repo-server and emits the plaintext resource into
 # the build output. The plaintext never touches disk and never enters git.
 #
-# cloudflare-api-token.sops.yaml is deliberately NOT in this repository yet: only the
-# .example template is. Until you encrypt the real file, `kustomize build` of this directory fails
-# with "no such file or directory" — loudly, at sync time, instead of silently producing a
-# ClusterIssuer that references a Secret that does not exist.
+# cloudflare-api-token.sops.yaml is committed (encrypted to the age recipient in .sops.yaml), next to
+# its .example template. A fork deletes it and encrypts its own from the template; until that file
+# exists, `kustomize build` of this directory fails with "no such file or directory" — loudly, at sync
+# time, instead of silently producing a ClusterIssuer that references a Secret that does not exist.
 apiVersion: viaduct.ai/v1
 kind: ksops
 metadata:
