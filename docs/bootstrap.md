@@ -544,11 +544,11 @@ It creates short-lived victim pods in `sandbox` (our signed web image, `restrict
 
 1. `kubectl exec -it` a shell into a victim (through `script`, so there is a real TTY) and asserts
    that the pod is deleted within 30 s, with a Falco "Terminal shell in container" alert, a
-   Falcosidekick POST to Talon, a Talon `kubernetes:terminate` log line and a Talon Event on the pod.
+   Falcosidekick POST to Talon, and a successful Talon `kubernetes:terminate` log line.
 2. Runs `wget` in a second victim and asserts that Talon labels it `quarantine=true`, that it keeps
    running, and that a DNS lookup that worked before now fails (the quarantine policy).
 3. Asserts with `kubectl auth can-i` that Talon's ServiceAccount can delete and patch pods in
-   `sandbox` and read that one Namespace, and nothing in `hello` or `kube-system`, no secrets, no exec.
+   `sandbox` and nothing in `hello` or `kube-system`, no Namespaces, no Events, no secrets, no exec.
 
 Needs `script` (util-linux) on the operator machine.
 

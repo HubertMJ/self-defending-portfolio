@@ -14,11 +14,17 @@ deduplication:
   # ../talon-rbac.yaml grants exactly that Lease.
   leader_election: true
   time_window_seconds: 5
-# Every action Talon takes is recorded as a Kubernetes Event on the pod it acted on, in the pod's
-# namespace (the RBAC in ../talon-rbac.yaml allows that in `sandbox` only). tests/runtime/run.sh asserts
-# on those Events.
-default_notifiers:
-  - k8sevents
+# No notifiers. Talon's log (one `status=success` line per action, with the pod and namespace) is the
+# record, and tests/runtime/run.sh asserts on it.
+#
+# The k8sevents notifier was dropped because it cannot work in Talon 0.3.0. notifiers.Notify
+# title-cases every object key ("namespace" -> "Namespace") before calling a notifier, but k8sevents
+# reads the lowercase key, gets "", and falls back to namespace `default` with an empty pod name.
+# Observed on the cluster: "events is forbidden ... in the namespace \"default\"" (ADR 0013,
+# correction). Fixed on Talon's master (it reads Objects["Namespace"]), but not in any release.
+# Re-enable it, with the namespace-read ClusterRole and the events grant, once a release carries
+# the fix.
+default_notifiers: []
 otel:
   traces_enabled: false
   metrics_enabled: false

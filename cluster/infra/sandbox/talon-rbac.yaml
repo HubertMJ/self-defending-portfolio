@@ -3,11 +3,11 @@
 #
 #   pods get/delete  - kubernetes:terminate reads the pod (owner checks) and deletes it
 #   pods patch       - kubernetes:label sets the quarantine label (JSON patch)
-#   events create    - the k8sevents notifier records every action on the pod it acted on
 #
 # Taken from Talon 0.3.0's source for the two actionners and the notifier in use, which is narrower
-# than plan section 4.4: no pods `list` (only the drain and sysdig actionners list pods) and no events
-# `patch` (the notifier only creates). No `update` on pods, no pods/exec, no secrets.
+# than plan section 4.4: no pods `list` (only the drain and sysdig actionners list pods), and no events at
+# all since the k8sevents notifier is off (talon/config.yaml). No `update` on pods, no pods/exec, no
+# secrets.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -17,9 +17,6 @@ rules:
   - apiGroups: [""]
     resources: ["pods"]
     verbs: ["get", "patch", "delete"]
-  - apiGroups: [""]
-    resources: ["events"]
-    verbs: ["create"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

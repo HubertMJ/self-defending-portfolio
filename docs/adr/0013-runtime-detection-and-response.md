@@ -79,13 +79,13 @@ in `falco-response` (4 s lease, 2 s retry - a small constant API load).
   label actionner sends a JSON Patch `replace`, which fails on a missing key (source, v0.3.0), so pods in
   `sandbox` carry the label as `"false"` from the start.
 
-**RBAC, from Talon 0.3.0's source for the actionners and notifier in use:**
-- Role in `sandbox`: pods `get, patch, delete`; events `create`.
+**RBAC, from Talon 0.3.0's source for the actionners in use:**
+- Role in `sandbox`: pods `get, patch, delete`.
 - Role in `falco-response`: leases `create`, and `get, update` on `falco-talon` only.
-- ClusterRole `falco-talon-namespace-read`: namespaces `get` with `resourceNames: [sandbox]` (the
-  k8sevents notifier reads the acted-on pod's Namespace; user decision 2026-10-01).
-- Nothing else: no pods in other namespaces, no exec, no secrets, no nodes, no NetworkPolicies. This is
-  narrower than plan section 4.4 (no pods `list`, no events `patch`), because nothing in use calls them.
+- Nothing else: no pods in other namespaces, no exec, no secrets, no nodes, no NetworkPolicies, and
+  nothing cluster-scoped. This is narrower than plan section 4.4 (no pods `list`), because nothing in
+  use calls it. The k8sevents notifier and its grants (events `create` in `sandbox`, namespaces `get`
+  on `sandbox`) were removed after deployment (correction below).
   `kubectl auth can-i delete pods -n hello --as=system:serviceaccount:falco-response:falco-talon` = no.
 
 **`sandbox`** (`cluster/apps/sandbox.yaml`): PSS `restricted`, already covered by the image policies of
@@ -93,7 +93,8 @@ ADR 0011, default-deny with DNS as the only allowed flow, the quarantine policy 
 
 ## Consequences
 - An interactive shell in a `sandbox` pod is answered by deletion within seconds, and a network tool by
-  isolation, without any human in the loop; every action leaves a Kubernetes Event on the pod.
+  isolation, without any human in the loop; every action leaves a `status=success` line in Talon's
+  log (Kubernetes Events once a Talon release fixes its k8sevents notifier, see the correction below).
 - Talon can only ever act on pods in `sandbox`. Extending automatic response to another namespace is a
   Role there and a rule here, both reviewed; until then a matching rule elsewhere fails with a 403.
 - The sensor is still close to host-equivalent if compromised (BPF and PERFMON read kernel memory,
@@ -259,3 +260,34 @@ iterators, libscap scans `/host/proc` (read-only) for the processes that already
 cd ansible && ansible-playbook playbooks/hardening.yml --tags sysctl   # sets it live and in /etc/sysctl.d
 ```
 Then restart the Falco pod (or wait for the next crash-loop back-off).
+
+### Correction 2026-10-01: no Kubernetes Events from Talon 0.3.0
+
+On the cluster, every action ran (the shell pod was killed at once, the network-tool pod was
+quarantined), but each notification failed with:
+`events is forbidden: User "system:serviceaccount:falco-response:falco-talon" cannot create resource
+"events" ... in the namespace "default"`.
+
+**Cause, from the v0.3.0 source.** This is a Talon bug, not RBAC:
+- `notifiers.Notify` title-cases every object key before calling a notifier
+  (`cases.Title(...)`: "namespace" becomes "Namespace", "pod" becomes "Pod").
+- `notifiers/k8sevents` reads `log.Objects["namespace"]`, gets "", and `GetNamespace("")` fails. It
+  then falls back to `default` and an empty involved-object name.
+
+So no Event could land in `sandbox`, whatever the RBAC. Talon's master branch reads
+`Objects["Namespace"]`, but no release after v0.3.0 carries the fix, and an unreleased build cannot be
+pinned by tag and digest (ADR 0008).
+
+**Options considered:**
+- Granting `events create` in `default` (rejected): it would only produce Events attached to an empty
+  pod name in the wrong namespace.
+- A Talon built from master (rejected): an unpinned, unsigned image in the response path.
+- (chosen) Disable the notifier (`default_notifiers: []`) and remove the grants that existed only for
+  it: events `create` in the `sandbox` Role, and the `falco-talon-namespace-read` ClusterRole and its
+  binding. Talon now has no cluster-scoped permission at all.
+
+The record of Talon's actions is its log: one `status=success` line per action, naming the action, the
+actionner, the pod and the namespace. `tests/runtime/run.sh` asserts on that line instead of an Event,
+and now also asserts that the ServiceAccount can neither read the `sandbox` Namespace nor create Events.
+This departs from the 2026-10-01 user decision that the DoD asserts Events; restore the notifier, both
+grants and the Event assertion once a Talon release carries the fix.

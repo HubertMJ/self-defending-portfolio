@@ -146,19 +146,13 @@ else
   fail "no successful POST to Talon in the Falcosidekick log since $t0"
 fi
 
+# Talon's log is the record of its actions (no Kubernetes Events in 0.3.0, ADR 0013 correction): one
+# `status=success` line for kubernetes:terminate naming the pod.
 if $KUBECTL -n falco-response logs deploy/falco-talon --since-time="$t0" 2>/dev/null \
-   | grep 'kubernetes:terminate' | grep -q "$shell_pod"; then
-  pass "Talon logged kubernetes:terminate for $shell_pod"
+   | grep 'kubernetes:terminate' | grep 'status=success' | grep -q "$shell_pod"; then
+  pass "Talon logged a successful kubernetes:terminate for $shell_pod"
 else
-  fail "no kubernetes:terminate line for $shell_pod in the Talon log since $t0"
-fi
-
-events=$($KUBECTL -n "$NAMESPACE" get events --field-selector "involvedObject.name=$shell_pod" \
-  -o jsonpath='{range .items[*]}{.source.component}{" "}{.reason}{"\n"}{end}' 2>/dev/null || true)
-if grep -q '^falco-talon .*kubernetes:terminate' <<<"$events"; then
-  pass "Talon recorded an Event on $shell_pod ($(grep -m1 '^falco-talon ' <<<"$events" | cut -d' ' -f2))"
-else
-  fail "no falco-talon Event for kubernetes:terminate on $shell_pod"
+  fail "no successful kubernetes:terminate line for $shell_pod in the Talon log since $t0"
 fi
 
 # ---------------------------------------------------------------------------- case 2: isolation
@@ -217,12 +211,13 @@ expect_no() { if can "$@"; then fail "CAN $* (must not)"; else pass "cannot $*";
 
 expect_yes delete pods -n sandbox
 expect_yes patch pods -n sandbox
-expect_yes get namespaces/sandbox
 expect_no delete pods -n hello
 expect_no delete pods -n kube-system
 expect_no get secrets -n sandbox
 expect_no create pods/exec -n sandbox
 expect_no get namespaces/hello
+expect_no get namespaces/sandbox
+expect_no create events -n sandbox
 
 # ---------------------------------------------------------------------------- result
 

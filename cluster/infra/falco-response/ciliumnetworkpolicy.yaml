@@ -83,7 +83,7 @@ spec:
               protocol: TCP
   egress:
     # The API server, and nothing else: Talon reaches it through the in-cluster service IP from its
-    # environment (no DNS), and its notifier is Kubernetes Events. The `kubernetes` Service is DNAT-ed to
+    # environment (no DNS), and it has no outbound notifier. The `kubernetes` Service is DNAT-ed to
     # the API server's real port before policy is evaluated.
     - toEntities:
         - kube-apiserver

@@ -4,9 +4,9 @@
 #
 # What Talon 0.3.0 calls, read from its source at that tag:
 #   * leader election: get/create/update Lease "falco-talon" in $NAMESPACE (internal/kubernetes/client);
-#   * k8sevents notifier: get the acted-on pod's Namespace, create an Event in it (notifiers/k8sevents);
+#   * (k8sevents notifier: Namespace get + Event create - not used, see talon/config.yaml);
 #   * kubernetes:terminate: get and delete the pod; kubernetes:label: patch the pod (in `sandbox`).
-# Nothing else: no secrets, no exec, no nodes, no NetworkPolicies.
+# Nothing else: no secrets, no exec, no nodes, no NetworkPolicies, and nothing cluster-scoped.
 #
 #   kubectl auth can-i delete pods -n hello --as=system:serviceaccount:falco-response:falco-talon   # no
 apiVersion: v1
@@ -41,32 +41,6 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
   name: falco-talon-leader-election
-subjects:
-  - kind: ServiceAccount
-    name: falco-talon
-    namespace: falco-response
----
-# The k8sevents notifier reads the Namespace object of the pod it acted on. Namespaces are
-# cluster-scoped, so this has to be a ClusterRole - pinned by resourceNames to `sandbox`, the only
-# namespace Talon acts in (user decision 2026-10-01). It is the only cluster-scoped grant Talon has.
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  name: falco-talon-namespace-read
-rules:
-  - apiGroups: [""]
-    resources: ["namespaces"]
-    resourceNames: ["sandbox"]
-    verbs: ["get"]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-  name: falco-talon-namespace-read
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: falco-talon-namespace-read
 subjects:
   - kind: ServiceAccount
     name: falco-talon
