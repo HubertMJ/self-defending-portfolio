@@ -88,12 +88,18 @@ to the upstream image.
 
 Being ours, Talon is now checked at admission: `falco-response` joins both rules of
 `verify-portfolio-images` (Falcosidekick's docker.io image is outside its imageReferences, so it is out
-of scope, not exempted), and `restrict-image-registries` gains `validate-registries-talon`, which pins
-the origin of Talon's pods in that namespace. It selects them by the Deployment's label through a
-precondition, not `match.selector`: a label selector in any rule switches off Kyverno's autogen for
-the whole policy, which would drop the Deployment-level rules - and the offline gate in `make
-validate`, which only sees Deployments - for the other namespaces too. Checked both ways with `make
-validate`: upstream's image in falco-response fails, a signed image of ours passes.
+of scope, not exempted), and `restrict-image-registries` gains `validate-registries-falco-response`:
+our registry path for every pod in the namespace, except a pod whose images are all
+`docker.io/falcosecurity/falcosidekick:*`. The rule names the exception rather than selecting
+"Talon's pods", because a label or a ServiceAccount is chosen by whoever writes the pod: a pod
+without Talon's label, or a foreign image running as ServiceAccount `falco-talon`, would walk past a
+rule that keyed on either. The exception is a precondition (AnyNotIn over all the pod's images), not
+`match.selector`: a label selector in any rule switches off Kyverno's autogen for the whole policy,
+which would drop the Deployment-level rules - and the offline gate in `make validate`, which only
+sees Deployments - for the other namespaces too. Checked with kyverno-cli 1.19.1: upstream's Talon
+image rejected, a foreign image as ServiceAccount `falco-talon` rejected, Falcosidekick plus a
+foreign init container rejected, Falcosidekick alone (Pod and the chart's Deployment) accepted, a
+signed image of ours accepted.
 
 The k8sevents notifier fix ADR 0013 waits for (87dd820, title-cased Namespace/Pod keys; 5d5808c, the
 involved object's uid) is in the built commit. The notifier stays off: enabling it needs a

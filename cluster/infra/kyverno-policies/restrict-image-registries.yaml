@@ -26,7 +26,7 @@ metadata:
       from this project's own registry path. An image from any other registry or owner is rejected
       before it is pulled, so there is no path by which a third-party image runs there unverified.
 spec:
-  # Fail: bounded to the namespaces below (and, in falco-response, to Talon's pods), same reasoning
+  # Fail: bounded to the namespaces below (and falco-response, minus Falcosidekick), same reasoning
   # as verify-portfolio-images.
   failurePolicy: Fail
   # Pattern matching on a string, so there is a report to be had for pods that already exist.
@@ -42,7 +42,7 @@ spec:
               # are one statement about the same set of namespaces, and a divergence between them
               # would mean a namespace where origin is checked but provenance is not, or the reverse.
               # The one deliberate exception is falco-response, which verify-portfolio-images lists
-              # whole and this policy covers through the second rule below, for Talon's pods only.
+              # whole and this policy covers through the second rule below, Falcosidekick excepted.
               namespaces:
                 - hello
                 - sandbox
@@ -63,14 +63,26 @@ spec:
               - image: "ghcr.io/hubertmj/self-defending-portfolio/*"
             =(ephemeralContainers):
               - image: "ghcr.io/hubertmj/self-defending-portfolio/*"
-    # Falco Talon in falco-response (ADR 0023). Talon runs this project's own signed build
-    # (app/talon), and it is the workload there that holds Kubernetes API permissions (it deletes
-    # and labels pods in `sandbox`), so its origin is pinned like the namespaces above. Scoped to its
-    # pods by label rather than to the whole namespace because Falcosidekick, next to it, is still
-    # docker.io's image and would be rejected by a namespace-wide rule; building it here too would
-    # let this rule become a namespace in the list above. The label is the Deployment's selector
-    # (cluster/infra/falco-response/talon-deployment.yaml), and only Argo CD writes to falco-response.
-    - name: validate-registries-talon
+    # falco-response (ADR 0023): our registry path for every pod, with one exception - a pod whose
+    # images are *all* Falcosidekick's upstream image, the one third-party component there.
+    #
+    # Inverted on purpose. Talon runs this project's own signed build (app/talon) and is the
+    # workload in this namespace that holds Kubernetes API permissions, but a rule that selected
+    # "Talon's pods" would have to key on something the pod's author chooses: a label (leave it off
+    # and the rule never matches) or a ServiceAccount (any pod can name falco-talon). Naming the
+    # exception instead closes both: a pod is exempt only by *being* Falcosidekick - every container
+    # image under docker.io/falcosecurity/falcosidekick - so a foreign image runs here under no name,
+    # with no label, and as no ServiceAccount. Building Falcosidekick here as well would retire the
+    # exception and make falco-response one more namespace in validate-registries.
+    #
+    # A precondition, not `match.selector` or an `exclude` on images: a label selector in any rule
+    # switches off Kyverno's autogen for the whole policy, which would take the Deployment-level rules
+    # (and the offline `kyverno apply` gate in `make validate`, which only sees Deployments) away
+    # from validate-registries above too. Autogen rewrites request.object.spec to the pod template's
+    # for the controller rules. The key is every image of the pod (containers, initContainers,
+    # ephemeralContainers, missing lists as empty); AnyNotIn with a wildcard value is true as soon as
+    # one image is not Falcosidekick's, and then the pattern below decides.
+    - name: validate-registries-falco-response
       match:
         any:
           - resources:
@@ -78,21 +90,22 @@ spec:
                 - Pod
               namespaces:
                 - falco-response
-      # Talon's pods only, by the label the Deployment selects on. A precondition, not a
-      # `match.selector`: a label selector in any rule switches off Kyverno's autogen for the whole
-      # policy, which would take the Deployment-level rules (and the offline `kyverno apply` gate in
-      # `make validate`, which only sees Deployments) away from validate-registries above too.
-      # Autogen rewrites request.object.metadata to the pod template's for the controller rules.
       preconditions:
         all:
-          - key: "{{ request.object.metadata.labels.\"app.kubernetes.io/name\" || '' }}"
-            operator: Equals
-            value: falco-talon
+          # Folded: the line breaks become spaces, which JMESPath ignores.
+          - key: >-
+              {{ [request.object.spec.containers[].image,
+              request.object.spec.initContainers[].image || `[]`,
+              request.object.spec.ephemeralContainers[].image || `[]`][] }}
+            operator: AnyNotIn
+            value:
+              - "docker.io/falcosecurity/falcosidekick:*"
       validate:
         failureAction: Enforce
         message: >-
-          Falco Talon's images must come from ghcr.io/hubertmj/self-defending-portfolio/ - that is
-          the only registry path whose contents this project builds and signs.
+          Images in falco-response must come from ghcr.io/hubertmj/self-defending-portfolio/ - the
+          only registry path whose contents this project builds and signs - except a pod made only
+          of the upstream Falcosidekick image.
         pattern:
           spec:
             # Same pattern as validate-registries.

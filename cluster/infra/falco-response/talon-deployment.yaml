@@ -5,9 +5,9 @@
 # plus bug fixes, same configuration keys) compiled with fixed dependencies, Trivy-gated, SBOM'd and
 # cosign-signed by build-images.yml. Until then this ran docker.io/falcosecurity/falco-talon:0.3.0,
 # whose 24 CRITICAL+HIGH findings no Talon release fixes. Being ours, it is also verified at
-# admission: falco-response is in verify-portfolio-images, and restrict-image-registries pins this
-# Deployment's pods to our registry path - the workload here that holds API permissions now runs
-# only an image our workflow signed. Pinned by digest in kustomization.yaml.
+# admission: falco-response is in verify-portfolio-images, and restrict-image-registries admits only
+# our registry path in this namespace, Falcosidekick's upstream image excepted - the workload here
+# that holds API permissions now runs only an image our workflow signed. Pinned by digest in kustomization.yaml.
 #
 # Plain manifests modelled on the upstream falco-talon chart 0.5.0 (templates/deployment.yaml,
 # services.yaml), not the chart itself: the chart writes `image.tag` into the app.kubernetes.io/version

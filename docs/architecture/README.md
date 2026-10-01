@@ -182,7 +182,7 @@ flowchart LR
 | Why keyless, why a bundle, why fixable-only | [ADR 0011](../adr/0011-supply-chain.md) (and its 2026-10-01 amendment) |
 | Why one matrix workflow and not a reusable one (the identity must be one file on main) | [ADR 0016](../adr/0016-one-image-workflow.md) |
 | Admission: signature + SBOM by identity, `type: SigstoreBundle`, `mutateDigest`, `failurePolicy: Fail`; identity regex `build-images.yml` (and, until hello's digest is rebuilt, `build-web.yml`) `@refs/heads/main` | [`verify-portfolio-images.yaml`](../../cluster/infra/kyverno-policies/verify-portfolio-images.yaml) |
-| Admission: only `ghcr.io/hubertmj/self-defending-portfolio/*` in `hello`, `sandbox` and `portfolio-api`, and for Falco Talon's pods in `falco-response` (ADR 0023) | [`restrict-image-registries.yaml`](../../cluster/infra/kyverno-policies/restrict-image-registries.yaml) |
+| Admission: only `ghcr.io/hubertmj/self-defending-portfolio/*` in `hello`, `sandbox` and `portfolio-api`, and in `falco-response` except the upstream Falcosidekick image (ADR 0023) | [`restrict-image-registries.yaml`](../../cluster/infra/kyverno-policies/restrict-image-registries.yaml) |
 | Admission: no image without a tag or with `:latest` (cluster-wide minus system namespaces) | [`disallow-latest-tag.yaml`](../../cluster/infra/kyverno-policies/disallow-latest-tag.yaml) |
 | The same verdict without a cluster | [`scripts/verify-image.sh`](../../scripts/verify-image.sh) |
 | The negative test (unsigned, foreign, `:latest` all rejected) | [`tests/admission/run.sh`](../../tests/admission/run.sh) |
