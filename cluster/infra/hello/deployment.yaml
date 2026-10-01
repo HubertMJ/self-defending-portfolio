@@ -22,7 +22,7 @@ spec:
     spec:
       automountServiceAccountToken: false
       securityContext:
-        # 101 is the `nginx` user baked into nginxinc/nginx-unprivileged.
+        # 101 is the `nginx` user of the nginx-unprivileged base that app/web/Dockerfile builds on.
         runAsNonRoot: true
         runAsUser: 101
         runAsGroup: 101
@@ -38,9 +38,11 @@ spec:
               app.kubernetes.io/name: hello
       containers:
         - name: nginx
-          # nginx-unprivileged, not nginx: the stock image starts as root to bind port 80 and then
-          # drops privileges, which PSS `restricted` forbids outright. This variant listens on 8080
-          # as uid 101 from the start. Pinned by tag and digest (ADR 0008).
+          # Our own image (app/web, built and signed by .github/workflows/build-web.yml, ADR 0011),
+          # based on nginx-unprivileged rather than nginx: the stock image starts as root to bind port
+          # 80 and then drops privileges, which PSS `restricted` forbids outright; this one listens on
+          # 8080 as uid 101 from the start. The tag here is informational: kustomization.yaml's
+          # `images:` pins the digest that is actually pulled (ADR 0008).
           image: ghcr.io/hubertmj/self-defending-portfolio/web:main
           ports:
             - name: http
