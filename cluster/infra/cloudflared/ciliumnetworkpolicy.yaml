@@ -58,6 +58,17 @@ spec:
         - ports:
             - port: "443"
               protocol: TCP
+    # Cilium evaluates this egress policy a second time when Envoy forwards the request to the
+    # route's backend (verified with Hubble: without this rule the Gateway answers 403). Backends
+    # live in namespaces that carry the same label the Gateway's allowedRoutes selector requires,
+    # so "may attach a route" and "may be reached through the tunnel" stay one decision.
+    - toEndpoints:
+        - matchLabels:
+            io.cilium.k8s.namespace.labels.portfolio.hubertjablon.ski/gateway-routes: "true"
+      toPorts:
+        - ports:
+            - port: "8080"
+              protocol: TCP
   ingress:
     # Only the node's kubelet, for the liveness and readiness probes on the metrics port. Cilium
     # gives kubelet traffic the reserved:host identity.
