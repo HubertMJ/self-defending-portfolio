@@ -384,6 +384,45 @@ func sendInternal(t *testing.T, e *env, path, body string) {
 	}
 }
 
+// The stream must pass through compressing and buffering proxies (Cloudflare's edge, Envoy) as it is
+// written: exact SSE media type, no-transform, and a preamble of at least 2 KiB before the first
+// event, all of it flushed before anything is published.
+func TestEventStreamHeadersAndPreamble(t *testing.T) {
+	e := newEnv(t, limits.DefaultAttackConfig())
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, "GET", e.public.URL+"/api/events", nil)
+	req.Header.Set("CF-Connecting-IP", "192.0.2.20")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if got := resp.Header.Get("Content-Type"); got != "text/event-stream" {
+		t.Errorf("Content-Type = %q, want exactly text/event-stream", got)
+	}
+	if got := resp.Header.Get("Cache-Control"); !strings.Contains(got, "no-transform") || !strings.Contains(got, "no-store") {
+		t.Errorf("Cache-Control = %q, want no-store and no-transform", got)
+	}
+	if got := resp.Header.Get("X-Accel-Buffering"); got != "no" {
+		t.Errorf("X-Accel-Buffering = %q", got)
+	}
+	// Nothing has been published: everything readable now is the preamble, flushed on its own.
+	buf := make([]byte, 4096)
+	got := 0
+	deadline := time.Now().Add(2 * time.Second)
+	for got < len(streamPreamble) && time.Now().Before(deadline) {
+		n, err := resp.Body.Read(buf[got:])
+		got += n
+		if err != nil {
+			break
+		}
+	}
+	if got < 2048 || !strings.HasPrefix(string(buf[:got]), "retry: 5000\n\n:") {
+		t.Fatalf("preamble: read %d bytes %q, want retry plus a 2 KiB comment", got, string(buf[:min(got, 40)]))
+	}
+}
+
 func TestInternalRejectsGarbage(t *testing.T) {
 	e := newEnv(t, limits.DefaultAttackConfig())
 	resp, _ := http.Post(e.internal.URL+"/internal/falco", "application/json", strings.NewReader("nope"))
@@ -452,7 +491,9 @@ func (s *sse) next(t *testing.T, timeout time.Duration) string {
 				return ""
 			}
 			if strings.HasPrefix(f, ":") {
-				s.sawHeartbeat = true
+				if strings.HasPrefix(f, ": heartbeat") {
+					s.sawHeartbeat = true
+				}
 				continue
 			}
 			if strings.HasPrefix(f, "retry:") {

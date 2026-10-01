@@ -19,6 +19,7 @@ import (
 	"net"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/hubertmj/self-defending-portfolio/app/api/internal/clientip"
@@ -292,8 +293,16 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 	defer s.cfg.Hub.Unsubscribe(sub)
 
 	h := w.Header()
-	h.Set("Content-Type", "text/event-stream; charset=utf-8")
-	// Tells buffering proxies (nginx-style, and Cloudflare honours it) to pass events through.
+	// Exactly the SSE media type, without a charset parameter (an event stream is UTF-8 by
+	// definition): proxies that pass event streams through unbuffered match on this string, and a
+	// parameter is one more way for an exact comparison to miss.
+	h.Set("Content-Type", "text/event-stream")
+	// no-transform: no hop may compress or otherwise rewrite the stream. A compressing proxy (the
+	// Cloudflare edge compresses text/* for browsers that send Accept-Encoding) holds bytes until its
+	// compression block fills, which for a stream that sends a few hundred bytes per run means the
+	// timeline stays empty. Cloudflare does not compress a response marked no-transform.
+	h.Set("Cache-Control", "no-store, no-transform")
+	// Tells nginx-style buffering proxies to pass events through.
 	h.Set("X-Accel-Buffering", "no")
 	w.WriteHeader(http.StatusOK)
 
@@ -305,7 +314,7 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 		}
 		return rc.Flush() == nil
 	}
-	if !write("retry: 5000\n\n") {
+	if !write(streamPreamble) {
 		return
 	}
 	for _, ev := range replay {
@@ -338,6 +347,12 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 }
+
+// streamPreamble opens every stream: the reconnect delay, then a 2 KiB comment. Proxies that buffer
+// the first bytes of a response before deciding to stream it (or until a block is full) have
+// something to fill that buffer with, so the replay and the first live event are not held back
+// behind it. EventSource ignores comments.
+var streamPreamble = "retry: 5000\n\n:" + strings.Repeat(" ", 2048) + "\n\n"
 
 func frame(ev events.Event) string {
 	return fmt.Sprintf("id: %d\nevent: %s\ndata: %s\n\n", ev.ID, ev.Type, ev.Data)

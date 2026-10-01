@@ -41,7 +41,13 @@ needs no frame protocol. The hub keeps the last 50 events: a new visitor sees th
 a reconnecting one resumes exactly where it was. A client that stops reading is dropped (it
 reconnects and resumes) rather than slowing everyone else. A 15 s heartbeat keeps Envoy's and
 Cloudflare's idle timers quiet; the HTTPRoute disables Envoy's 15 s request timeout for
-`/api/events` alone; the API closes every stream after 30 minutes.
+`/api/events` alone; the API closes every stream after 30 minutes. Every hop between the pod and the browser (Envoy,
+cloudflared, the Cloudflare edge) must pass the stream through as written, so the response says
+exactly `Content-Type: text/event-stream` (no charset parameter), `Cache-Control: no-store,
+no-transform` (no hop may compress it; a compressing proxy holds a few hundred bytes of events until
+its block fills) and `X-Accel-Buffering: no`, and every stream opens with `retry` plus a 2 KiB comment
+that fills any first-bytes buffer before the replay is written. Added after the first live run,
+where the replay reached the pod's own port but not the browser.
 
 **The run.** `POST /api/attack/{id}` -> `queued`; the pod is created in `sandbox` from the
 scenario's template plus what the runner insists on: labels `sdp.hubertjablon.ski/run-id`,
