@@ -16,3 +16,5 @@ rules:
 ignore: |
   .ansible/
   .venv/
+  # SOPS-encrypted values are single long base64 lines
+  cluster/**/*.sops.yaml
