@@ -1,6 +1,11 @@
 # Falco Talon's configuration (ADR 0013). Mounted at /etc/falco-talon/config.yaml by
 # ../talon-deployment.yaml. No secret values: no notifier with a webhook or credentials is configured,
 # so this is a ConfigMap, not a Secret.
+# JSON lines instead of the default `color`, which writes ANSI escapes even into a pipe (so the log
+# could not be grepped reliably, ADR 0013 correction). One object per line, with keys such as
+# "status", "actionner", "pod" and "namespace": what tests/runtime/run.sh and the phase 6 posture
+# page read.
+log_format: json
 listen_address: 0.0.0.0
 listen_port: 2803
 # Reload rules.yaml when the ConfigMap volume changes. The configMapGenerator's hash suffix rolls the

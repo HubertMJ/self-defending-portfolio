@@ -291,3 +291,31 @@ actionner, the pod and the namespace. `tests/runtime/run.sh` asserts on that lin
 and now also asserts that the ServiceAccount can neither read the `sandbox` Namespace nor create Events.
 This departs from the 2026-10-01 user decision that the DoD asserts Events; restore the notifier, both
 grants and the Event assertion once a Talon release carries the fix.
+
+### Correction 2026-10-01: Talon's log format, and how long isolation takes
+
+**Log format.** Talon 0.3.0 defaults to `log_format: color` and writes ANSI escapes even when stdout is
+not a terminal, so `status=success` never matched in a pipe. `talon/config.yaml` now sets
+`log_format: json`: one JSON object per line, with keys such as `status`, `actionner`, `pod` and
+`namespace`. That is also the form the phase 6 posture page will read. `tests/runtime/run.sh` strips
+ANSI codes and accepts either the JSON or the text form, so it does not depend on the setting.
+
+**Isolation latency.** The quarantine is not instantaneous. When Talon sets the label, Cilium has to
+move the pod to a new security identity:
+- it allocates the identity, which in the default CRD mode is a CiliumIdentity object written through
+  the API server;
+- it waits `identity-change-grace-period` (5 s by default; this repository does not change it), so
+  that other nodes can learn the new identity first;
+- it regenerates the endpoint's policy maps.
+
+Until that finishes, the pod's new flows are judged under its old identity. On the cluster, one run
+still resolved names 20 s after the label became visible; the next run passed. `tests/runtime/run.sh`
+therefore allows 60 s and prints the measured seconds from the label to the first failed lookup. The
+first live runs set the expectation; a value near the bound means isolation is slower than this ADR
+assumes, and needs looking at.
+- This window applies to isolation only. The DoD response, terminate, does not depend on Cilium at
+  all.
+- Shortening the grace period is a Cilium setting (`identityChangeGracePeriod`) that has to stay
+  identical in the Ansible role (`scripts/check-cilium-values.sh`). It is left at the default: on a
+  single node there is no other node to wait for, but changing the CNI's identity handling to tune a
+  test is not a trade worth making without measurements.

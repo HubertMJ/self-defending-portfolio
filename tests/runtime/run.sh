@@ -28,7 +28,13 @@ NAMESPACE=sandbox
 TALON_SA=system:serviceaccount:falco-response:falco-talon
 # How long each asynchronous step may take before it counts as a failure (seconds).
 KILL_TIMEOUT=${KILL_TIMEOUT:-30}
-ISOLATE_TIMEOUT=${ISOLATE_TIMEOUT:-20}
+# Talon labels the pod within seconds of the alert.
+LABEL_TIMEOUT=${LABEL_TIMEOUT:-20}
+# The label takes effect only once Cilium has moved the pod to a new security identity: it allocates
+# the identity (a CiliumIdentity object, CRD mode), waits identity-change-grace-period (5 s by default)
+# and regenerates the endpoint's policy. That is seconds to tens of seconds, measured and printed below
+# (ADR 0013, correction). 60 s is the bound beyond which it counts as a failure, not a typical value.
+ISOLATE_TIMEOUT=${ISOLATE_TIMEOUT:-60}
 
 WORK_DIR=$(mktemp -d)
 PODS=()
@@ -147,9 +153,15 @@ else
 fi
 
 # Talon's log is the record of its actions (no Kubernetes Events in 0.3.0, ADR 0013 correction): one
-# `status=success` line for kubernetes:terminate naming the pod.
-if $KUBECTL -n falco-response logs deploy/falco-talon --since-time="$t0" 2>/dev/null \
-   | grep 'kubernetes:terminate' | grep 'status=success' | grep -q "$shell_pod"; then
+# successful kubernetes:terminate line naming the pod. Talon is configured for JSON lines
+# ("status":"success"); the text form (status=success) and ANSI colour codes are tolerated too, so the
+# assertion does not depend on the log format.
+talon_log() {
+  $KUBECTL -n falco-response logs deploy/falco-talon --since-time="$t0" 2>/dev/null \
+    | sed 's/\x1b\[[0-9;]*m//g'
+}
+if talon_log | grep 'kubernetes:terminate' | grep -E '"status":"success"|status=success' \
+   | grep -q "$shell_pod"; then
   pass "Talon logged a successful kubernetes:terminate for $shell_pod"
 else
   fail "no successful kubernetes:terminate line for $shell_pod in the Talon log since $t0"
@@ -180,10 +192,10 @@ $KUBECTL -n "$NAMESPACE" exec "$iso_pod" -- wget -q -T 2 -O /dev/null http://kub
 labelled() {
   [ "$($KUBECTL -n "$NAMESPACE" get pod "$iso_pod" -o jsonpath='{.metadata.labels.sdp\.hubertjablon\.ski/quarantine}')" = true ]
 }
-if poll "$ISOLATE_TIMEOUT" labelled; then
+if poll "$LABEL_TIMEOUT" labelled; then
   pass "$iso_pod labelled sdp.hubertjablon.ski/quarantine=true"
 else
-  fail "$iso_pod was not labelled quarantine=true within ${ISOLATE_TIMEOUT}s"
+  fail "$iso_pod was not labelled quarantine=true within ${LABEL_TIMEOUT}s"
 fi
 
 phase=$($KUBECTL -n "$NAMESPACE" get pod "$iso_pod" -o jsonpath='{.status.phase}' 2>/dev/null || true)
@@ -194,8 +206,9 @@ else
 fi
 
 lookup_fails() { ! lookup; }
+label_seen=$SECONDS
 if poll "$ISOLATE_TIMEOUT" lookup_fails; then
-  pass "$iso_pod can no longer resolve names (quarantine policy in effect)"
+  pass "$iso_pod can no longer resolve names (quarantine in effect $((SECONDS - label_seen)) s after the label)"
 else
   fail "$iso_pod can still resolve names ${ISOLATE_TIMEOUT}s after the label"
 fi
