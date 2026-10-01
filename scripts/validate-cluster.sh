@@ -41,7 +41,9 @@ kustomize() { $DOCKER run --rm -v "$1":/work -w /work "$KUSTOMIZE_IMAGE" build "
 # Same thing, but with the KSOPS plugin and the age identity available, so encrypted resources are
 # actually decrypted. The key is mounted read-only at a fixed path; it is never copied or printed.
 kustomize_ksops() {
-  $DOCKER run --rm \
+  # --user 0: the image runs as uid 65532 and the operator's key file is 0600, so the
+  # non-root user inside the container could not read it. Root in a throwaway container is fine.
+  $DOCKER run --rm --user 0:0 \
     -v "$1":/work:ro \
     -v "$SOPS_AGE_KEY_FILE":/age/keys.txt:ro \
     -w /work \

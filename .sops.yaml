@@ -3,4 +3,4 @@
 creation_rules:
   - path_regex: .*\.sops\.ya?ml$
     encrypted_regex: ^(data|stringData)$
-    age: "AGE_PUBLIC_KEY_PLACEHOLDER"
+    age: "age1xvnwzadpkqlre6r2yn78wrhshr6eurzxmqknw3xpd203xh9pkckqwladry"

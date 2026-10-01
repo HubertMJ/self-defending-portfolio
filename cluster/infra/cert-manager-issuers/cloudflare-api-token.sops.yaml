@@ -1,0 +1,36 @@
+# TEMPLATE — not consumed by kustomize. Copy, fill in, encrypt, commit the encrypted result:
+#
+#   cp cloudflare-api-token.sops.yaml.example cloudflare-api-token.sops.yaml
+#   $EDITOR cloudflare-api-token.sops.yaml        # paste the real token
+#   sops -e -i cloudflare-api-token.sops.yaml     # in place; .sops.yaml selects the age recipient
+#   git add cloudflare-api-token.sops.yaml
+#
+# The token is a Cloudflare API token (not the global API key) scoped to:
+#   Zone / DNS / Edit  +  Zone / Zone / Read   on zone hubertjablon.ski only.
+# That is the least cert-manager needs to write and clean up _acme-challenge TXT records.
+#
+# .sops.yaml encrypts only `data` and `stringData`, so the keys stay readable in a diff and the
+# values do not. Reviewing a secret rotation is therefore a real review.
+apiVersion: v1
+kind: Secret
+metadata:
+    name: cloudflare-api-token
+    namespace: cert-manager
+type: Opaque
+stringData:
+    api-token: ENC[AES256_GCM,data:PaINTwfzrdRgmxn2iIB8Ig5HwqqX35D2P72xmFx/eiqM/NyvwUAYwBbQNycii+jih9bfuEQ=,iv:U3LcsSbFJmmkuIrHl/qhYTjtYqVa9F/oHlHTewOndro=,tag:bgTrJdy+jSkxvksF/YBoxg==,type:str]
+sops:
+    age:
+        - recipient: age1xvnwzadpkqlre6r2yn78wrhshr6eurzxmqknw3xpd203xh9pkckqwladry
+          enc: |
+            -----BEGIN AGE ENCRYPTED FILE-----
+            YWdlLWVuY3J5cHRpb24ub3JnL3YxCi0+IFgyNTUxOSBWRlVsUXhOeE4wYTA3eW5m
+            SXlYc3Yza0Y0d3FISzcyalZJaTE3bFRTb25zCmtzNWxnNWlqc2pGNXY4a2E4Vko4
+            QitiSEpYdDArRGNndGFjbTV6cVN4Zm8KLS0tIEZSMmJZU2FvUUJ4TVZHZFBLQmxL
+            OThOdWVGaFNyZkdQb2dLa0QyQTYzN2sKwbLePBRj9/IDe0eYDzf+g//L2vYdDBAZ
+            2S2Yag6PjvwRIQupS9htzLeg4y2HldQ/q63PFNNmd6UckdyHZCMYlA==
+            -----END AGE ENCRYPTED FILE-----
+    lastmodified: "2026-10-01T05:57:46Z"
+    mac: ENC[AES256_GCM,data:tk1dYEqMaPvoZmHD+WX2TEIkqOXqVCuFAwTM8z/3UfAkss2MuVOL3XuI4WqWVXdcddriohZT4Va6bT5PFqAxFo0Ja5cBaztOgPdEL4Bq4FLuGimsRY8RpVe/2UKMOHsbqEv7v5gT6teX530zI7piio20F0GhgXy/lujCX0pXY0c=,iv:Tj3bNg4VLeA6wRoB2qrbbJ6q6cCO9rFLCgrYzRLqA2E=,tag:/Fsjkm8IXNpc/IA73ltUDg==,type:str]
+    encrypted_regex: ^(data|stringData)$
+    version: 3.10.2

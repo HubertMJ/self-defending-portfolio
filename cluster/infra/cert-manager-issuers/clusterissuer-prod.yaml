@@ -10,7 +10,7 @@ spec:
   acme:
     server: https://acme-v02.api.letsencrypt.org/directory
     # ACME account contact; expiry and policy notices go here. Replace before the first sync.
-    email: REPLACE-ME-ACME-CONTACT-EMAIL
+    email: hubert.m.jablonski@gmail.com
     privateKeySecretRef:
       name: letsencrypt-prod-account-key
     solvers:

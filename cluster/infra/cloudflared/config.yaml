@@ -13,7 +13,7 @@
 
 # UUID printed by `cloudflared tunnel create portfolio` (also the "TunnelID" field inside
 # credentials.json). See docs/bootstrap.md phase 2.
-tunnel: REPLACE-ME-TUNNEL-UUID
+tunnel: 19925663-e2ab-49e3-9edb-54a0463812ab
 credentials-file: /etc/cloudflared/credentials/credentials.json
 metrics: 0.0.0.0:2000
 no-autoupdate: true
