@@ -38,8 +38,8 @@ export PVE_INSECURE=1   # only if Proxmox still uses its self-signed certificate
 ## 1. Create the VM
 
 ```sh
-make vm            # or: scripts/pve-create-vm.sh  (VMID 120, k3s01, 10.2.1.20)
-ssh ansible@10.2.1.20 true   # accept the host key after checking the fingerprint on the Proxmox console
+make vm            # or: scripts/pve-create-vm.sh  (VMID 120, k3s01, 10.4.1.20 in DMZ VLAN 41)
+ssh ansible@10.4.1.20 true   # accept the host key after checking the fingerprint on the Proxmox console
 ```
 
 The VM is created with `ciupgrade=0`, so cloud-init does not run a distribution upgrade on first

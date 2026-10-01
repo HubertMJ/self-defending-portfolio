@@ -42,7 +42,7 @@ def load(path):
 # here is a restatement of the inventory, not an assumption about it.
 context = {
     "inventory_hostname_short": "k3s01",
-    "ansible_default_ipv4": {"address": "10.2.1.20"},
+    "ansible_default_ipv4": {"address": "10.4.1.20"},
 }
 # Only these two files: the role's own defaults, and the inventory that overrides them. The k3s
 # role's defaults are deliberately not loaded -- they reference playbook-time magic variables that

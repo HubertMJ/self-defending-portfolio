@@ -3,15 +3,20 @@ base_hostname: k3s01
 base_timezone: Europe/Warsaw
 
 # --- network facts used by firewall / k3s / cilium ---
-k3s_node_ip: 10.2.1.20
-lan_cidr: 10.2.1.0/24
+k3s_node_ip: 10.4.1.20
+# The node lives in the DMZ VLAN (41, 10.4.1.0/24). Administration comes from other VLANs:
+# LAB 1 (docker01, where Ansible runs) and Trusted (operator workstation).
+lan_cidr: 10.4.1.0/24
+admin_cidrs:
+  - 10.2.1.0/24   # LAB 1 (VLAN 21)
+  - 10.1.1.0/24   # Trusted (VLAN 11)
 k3s_cluster_cidr: 10.42.0.0/16
 k3s_service_cidr: 10.43.0.0/16
 
 # --- who may reach the host ---
 ssh_hardening_allow_users: [ansible]
-firewall_admin_cidrs: ["{{ lan_cidr }}"]
-firewall_k3s_api_cidrs: ["{{ lan_cidr }}"]
+firewall_admin_cidrs: "{{ admin_cidrs }}"
+firewall_k3s_api_cidrs: "{{ admin_cidrs }}"
 
 # --- pinned versions (bump deliberately, see docs/adr/0008) ---
 k3s_version: v1.35.8+k3s1

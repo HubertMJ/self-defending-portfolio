@@ -8,8 +8,8 @@
 #   PVE_TOKEN     the token secret
 # Optional overrides (defaults match ansible/inventory):
 #   PVE_NODE (auto-detected if the host has a single node), VMID (default 120), VM_NAME (k3s01),
-#   VM_CORES (4), VM_MEMORY_MB (8192), VM_DISK_GB (60), VM_STORAGE (local-lvm), VM_BRIDGE (vmbr0),
-#   VM_VLAN (empty = untagged), VM_IP (10.2.1.20/24), VM_GW (10.2.1.1), VM_DNS (10.2.1.6),
+#   VM_CORES (4), VM_MEMORY_MB (8192), VM_DISK_GB (60), VM_STORAGE (Lexar), VM_BRIDGE (vmbr0),
+#   VM_VLAN (41 = DMZ), VM_IP (10.4.1.20/24), VM_GW (10.4.1.1), VM_DNS (10.4.1.1), VM_MAC,
 #   VM_USER (ansible), SSH_PUBKEY_FILE (~/.ssh/id_ed25519.pub), DEBIAN_IMAGE_URL, PVE_INSECURE (0/1)
 #
 # Idempotent-ish: refuses to run if VMID already exists. Destroy with: qm destroy <VMID> --purge (on the node).
@@ -21,12 +21,12 @@ VM_NAME="${VM_NAME:-k3s01}"
 VM_CORES="${VM_CORES:-4}"
 VM_MEMORY_MB="${VM_MEMORY_MB:-8192}"
 VM_DISK_GB="${VM_DISK_GB:-60}"
-VM_STORAGE="${VM_STORAGE:-local-lvm}"
+VM_STORAGE="${VM_STORAGE:-Lexar}"
 VM_BRIDGE="${VM_BRIDGE:-vmbr0}"
-VM_VLAN="${VM_VLAN:-}"
-VM_IP="${VM_IP:-10.2.1.20/24}"
-VM_GW="${VM_GW:-10.2.1.1}"
-VM_DNS="${VM_DNS:-10.2.1.6}"
+VM_VLAN="${VM_VLAN:-41}"          # DMZ
+VM_IP="${VM_IP:-10.4.1.20/24}"
+VM_GW="${VM_GW:-10.4.1.1}"
+VM_DNS="${VM_DNS:-10.4.1.1}"       # gateway resolver; keeps the DMZ independent of LAB 1
 VM_USER="${VM_USER:-ansible}"
 SSH_PUBKEY_FILE="${SSH_PUBKEY_FILE:-$HOME/.ssh/id_ed25519.pub}"
 DEBIAN_IMAGE_URL="${DEBIAN_IMAGE_URL:-https://cloud.debian.org/images/cloud/trixie/latest/debian-13-genericcloud-amd64.qcow2}"
@@ -90,7 +90,8 @@ wait_task "$UPID"
 # first boot and holds the dpkg lock for minutes, which collides with the first
 # Ansible run. Patching is the unattended_upgrades role's job, and hardening.yml
 # additionally waits for `cloud-init status --wait` before touching apt.
-NET="virtio,bridge=${VM_BRIDGE}"; [[ -n "$VM_VLAN" ]] && NET+=",tag=${VM_VLAN}"
+VM_MAC="${VM_MAC:-BC:24:11:4B:35:01}"   # fixed so the UniFi reservation exists before first boot
+NET="virtio=${VM_MAC},bridge=${VM_BRIDGE}"; [[ -n "$VM_VLAN" ]] && NET+=",tag=${VM_VLAN}"
 SSHKEYS=$(python3 -c 'import sys,urllib.parse;print(urllib.parse.quote(open(sys.argv[1]).read().strip(),safe=""))' "$SSH_PUBKEY_FILE")
 UPID=$(api POST "/nodes/${PVE_NODE}/qemu" \
   "vmid=${VMID}" "name=${VM_NAME}" "ostype=l26" "machine=q35" "bios=ovmf" \
