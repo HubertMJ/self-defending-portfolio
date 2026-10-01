@@ -2,9 +2,16 @@
 # upstream Deployment by `name` rather than replacing it.
 #
 # The ksops image is distroless and has no shell, so the copy is done by the binary itself:
-# `ksops install --with-kustomize <dir>` drops both `ksops` and a matching `kustomize` into the
-# shared emptyDir. Those then shadow the repo-server's own kustomize via subPath mounts, which is
-# how the plugin ends up on the build's PATH.
+# `ksops install <dir>` drops the `ksops` binary into the shared emptyDir, and a subPath mount puts
+# it on the repo-server's PATH, where kustomize finds it as an exec KRM function
+# (`exec: path: ksops` in each ksops.yaml; needs --enable-alpha-plugins --enable-exec, argocd-cm).
+#
+# Only the plugin, not the kustomize the ksops image also carries. Until 2026-10-01 this used
+# `--with-kustomize` and mounted that binary over /usr/local/bin/kustomize, so the repo-server ran
+# kustomize v5.3.0 (ksops build) instead of the v5.8.1 Argo CD v3.5.3 ships. v5.3.0's helmCharts
+# calls `helm version -c --short`, which the bundled Helm 4 rejects, so no kustomization could render
+# a chart (ADR 0013, amendment). KSOPS itself only needs exec KRM functions, which v5.8.1 runs the
+# same way (checked offline: a sops/age-encrypted Secret decrypts with kustomize 5.8.1 + this ksops).
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -22,7 +29,6 @@ spec:
           command:
             - /usr/local/bin/ksops
             - install
-            - --with-kustomize
             - /custom-tools
           securityContext:
             allowPrivilegeEscalation: false
@@ -56,9 +62,7 @@ spec:
             - name: SOPS_AGE_KEY_FILE
               value: /.config/sops/age/keys.txt
           volumeMounts:
-            - name: custom-tools
-              mountPath: /usr/local/bin/kustomize
-              subPath: kustomize
+            # No mount over /usr/local/bin/kustomize: the repo-server keeps Argo CD's own kustomize.
             - name: custom-tools
               mountPath: /usr/local/bin/ksops
               subPath: ksops

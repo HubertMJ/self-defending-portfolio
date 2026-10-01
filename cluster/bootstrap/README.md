@@ -89,7 +89,9 @@ decrypted in-cluster by KSOPS with this key (ADR 0006).
 
 The usual KSOPS init container is `sh -c 'cp ... /custom-tools/'`. `viaductoss/ksops:v4.5.1` is
 distroless: no `sh`, no `cp`. The copy is therefore done by the binary itself,
-`ksops install --with-kustomize /custom-tools`, which is the form upstream documents for v4.5. The
+`ksops install /custom-tools`. Only the plugin is installed. Upstream's `--with-kustomize` form also
+copies the image's kustomize (v5.3.0) over Argo CD's own (v5.8.1), and that older kustomize cannot
+render Helm charts with the Helm 4 that Argo CD v3.5.3 bundles (ADR 0013, amendment). The
 init container also needs `runAsUser: 65532` explicitly, because the image's `USER` is the *name*
 `nonroot`, which the kubelet cannot resolve to a UID — `runAsNonRoot: true` alone fails it.
 

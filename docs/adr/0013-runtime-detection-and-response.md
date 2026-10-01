@@ -165,3 +165,52 @@ a socket of an unloaded protocol family) is a path to host root for a compromise
 - A chart bump is reviewed as before. If the chart stops rendering one of the patched mounts, the patch
   would add a volumeMount without a name, which kubeconform rejects; a newly added writable host mount
   fails the hostPath check.
+
+### Correction 2026-10-01: the repo-server was not running Argo CD's kustomize
+
+After deployment the falco Application failed with `unable to run: 'helm version -c --short' ...
+unknown shorthand flag: 'c'`. The offline check above had used Argo CD's own kustomize 5.8.1. The
+repo-server, however, ran kustomize **v5.3.0**: the KSOPS bootstrap patch
+(`cluster/bootstrap/argocd/argocd-repo-server-ksops.yaml`) ran `ksops install --with-kustomize` and
+mounted the ksops image's kustomize over `/usr/local/bin/kustomize`. Kustomize up to v5.7.1 checks the
+helm version with `helm version -c --short`, which Helm 4 (bundled with Argo CD v3.5.3) rejects. v5.8.1
+calls `helm version --short` and accepts Helm 3 and 4. The failure was reproduced offline with the
+ksops image's binary and Argo CD's exact flags. It failed closed: nothing was applied, and the
+unpatched chart never ran.
+
+**Options considered:**
+1. A wrapper script that strips `-c` before calling helm, plus `--helm-command`. It works around a
+   kustomize that is three minors behind Argo CD's, and leaves a hand-written shim in the build path.
+2. A ConfigManagementPlugin sidecar: a second image and tool chain in the repo-server for one patch.
+3. (chosen) Stop shadowing Argo CD's kustomize. The KSOPS init container now runs
+   `ksops install /custom-tools` (plugin only), and only `/usr/local/bin/ksops` is mounted. The
+   repo-server runs the kustomize v5.8.1 that Argo CD v3.5.3 ships with Helm 4.2.1. There is no extra
+   binary and no flag beyond `--enable-helm`, and the tool versions are the ones Argo CD pins and tests
+   together.
+
+**Verified offline**, since quay.io (and so the argocd image) is not reachable from the sandbox this
+was written in. The run simulated the repo-server environment:
+- kustomize 5.8.1, from the release tarball whose sha256 matches Argo CD v3.5.3's
+  `hack/installers/checksums/kustomize_5.8.1_linux_amd64.tar.gz.sha256`;
+- Helm 4.2.1 at the same git commit as Argo CD's (`d591a19`);
+- the ksops binary copied out of the pinned ksops image, on `PATH`;
+- Argo CD's exact arguments: `build <path> --enable-alpha-plugins --enable-exec --enable-helm
+  --helm-kube-version 1.35.8`.
+
+Results:
+- `cluster/infra/falco` pulls the chart from a chart repository, renders it, and every `/host` mount
+  comes out read-only.
+- A KSOPS kustomization shaped like `cluster/infra/cloudflared`, with a sops/age-encrypted test Secret,
+  decrypts.
+- The same falco build with the ksops image's kustomize v5.3.0 reproduces the production error.
+
+**Re-apply:** `kubectl diff -k cluster/bootstrap/argocd` should show only the `argocd-repo-server`
+Deployment: the `--with-kustomize` argument and the `/usr/local/bin/kustomize` subPath mount removed.
+Then `kubectl apply -k cluster/bootstrap/argocd --server-side --force-conflicts`. The repo-server rolls,
+and the falco Application renders on its next refresh.
+
+**Open item:** `make validate` renders with the kustomize v5.7.1 image (and, with an age key, the ksops
+image's v5.3.0). The helmCharts path is unaffected, because the Helm image renders the chart and
+kustomize only applies the patch; the output was checked to be identical to a v5.8.1 `--enable-helm`
+build. Bumping `KUSTOMIZE_IMAGE` to v5.8.1 needs its registry.k8s.io digest, which could not be
+resolved from that sandbox.

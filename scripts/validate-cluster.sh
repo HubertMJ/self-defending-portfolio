@@ -21,7 +21,10 @@ DOCKER=${DOCKER:-docker}
 KUSTOMIZE_IMAGE=${KUSTOMIZE_IMAGE:-registry.k8s.io/kustomize/kustomize:v5.7.1@sha256:937e7832dc0b09288b1398399dadb97382a27bbc35bee8fdcac47c7de4fff14d}
 KUBECONFORM_IMAGE=${KUBECONFORM_IMAGE:-ghcr.io/yannh/kubeconform:v0.8.0-alpine@sha256:6b90a5f23d846140ce0194fe050b1995e546eba938f3a6bf10c039dd5e24588f}
 # Ships kustomize plus the KSOPS plugin. Same image and digest as the argocd-repo-server init
-# container, so a local validation exercises exactly the binary the cluster will use.
+# container, so a local validation exercises exactly the ksops binary the cluster uses. Its kustomize
+# (v5.3.0, ksops build) is no longer the cluster's: the repo-server keeps Argo CD's own v5.8.1 since
+# ADR 0013's amendment. Only used when an age key is present; the decryption itself is the same KRM
+# function either way.
 KSOPS_IMAGE=${KSOPS_IMAGE:-viaductoss/ksops:v4.5.1@sha256:4def9fdd4e2f850265740ebe9592c5455d19b76891e88e602df8b52d74b95334}
 # Same Kyverno release as the in-cluster controller (chart 3.9.1 = v1.19.1, cluster/apps/kyverno.yaml),
 # so a policy that loads here loads there, with the same PSS check library behind `podSecurity`.
