@@ -56,6 +56,10 @@ jobs:
         run: scripts/check-secrets-encrypted.sh
       - name: ansible and argo cd must agree about cilium
         run: scripts/check-cilium-values.sh
+      - name: the hello route serves the web image's CSP (ADR 0019)
+        run: scripts/check-web-csp.sh
+      - name: no placeholder image digests (ADR 0016)
+        run: scripts/check-image-digests.sh
       - name: kustomize build + kubeconform, helm template + kyverno apply
         run: scripts/validate-cluster.sh
 

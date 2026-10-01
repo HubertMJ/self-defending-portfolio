@@ -23,10 +23,11 @@ resources:
 # Built by .github/workflows/build-images.yml (ADR 0016). Only the digest is referenced; the tag is
 # informational. Bump = commit.
 #
-# PLACEHOLDER DIGEST: the api image does not exist until build-images.yml has run on main. Replace
-# the zeros with the digest from that run's summary. Until then the pod cannot pull, and
-# `make validate` reports verify-portfolio-images failing for this Deployment - which is the policy
-# working, not a bug.
+# PLACEHOLDER DIGEST: the api image does not exist until build-images.yml has run on main (phases 5/6,
+# stage 1). Replace the zeros with the digest from that run's summary:
+#   scripts/bump-image-digest.sh api sha256:<digest>
+# Until then `make validate` and CI refuse the commit (scripts/check-image-digests.sh), so it cannot
+# reach main and Argo CD with a Deployment that could never pull.
 images:
   - name: ghcr.io/hubertmj/self-defending-portfolio/api
     newTag: main

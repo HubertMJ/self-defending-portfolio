@@ -1,8 +1,11 @@
-# The route a visitor's request actually takes, and the only place security headers are set.
+# The route a visitor's request actually takes, and the place whose security headers win.
 #
-# Setting them here rather than in nginx.conf means they are enforced for every backend that ever
+# Setting them here as well as in the image means they are enforced for every backend that ever
 # attaches to this Gateway, they are a reviewable field in a typed API instead of a string in a
-# config file, and swapping nginx for something else does not silently drop them.
+# config file, and swapping nginx for something else does not silently drop them. Since phase 6 the
+# web image sends the same set itself (app/web/security-headers.conf, ADR 0019); `set` below replaces
+# the image's value header by header, so the two must agree, which scripts/check-web-csp.sh asserts
+# for the CSP.
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
@@ -50,14 +53,20 @@ spec:
                 value: nosniff
               - name: Referrer-Policy
                 value: strict-origin-when-cross-origin
-              # This page is a single static document with inline CSS and no scripts, so the policy
-              # can be nearly total. It will loosen when the phase 5 demo app needs SSE and its own
-              # bundle, and that loosening will be a visible diff.
+              # The CSP of the site (ADR 0019), character for character the one in
+              # app/web/security-headers.conf, which nginx sends and the Playwright suite enforces.
+              # `set` replaces the backend's header, so this value is what a visitor gets; if the two
+              # ever differ, the page is tested against one policy and served another, and
+              # `make validate` (scripts/check-web-csp.sh) fails. Same-origin only: scripts, styles,
+              # the /api calls and the event stream ('self'), Trusted Types enforced. Kept at the
+              # route rather than dropped so that any backend attached here gets a policy, as
+              # ADR 0010 intends.
               - name: Content-Security-Policy
                 value: >-
-                  default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:;
-                  script-src 'none'; object-src 'none'; frame-ancestors 'none'; base-uri 'none';
-                  form-action 'none'
+                  default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; font-src 'self';
+                  connect-src 'self'; manifest-src 'self'; base-uri 'none'; form-action 'none';
+                  frame-ancestors 'none'; object-src 'none'; require-trusted-types-for 'script';
+                  trusted-types 'none'
               - name: Permissions-Policy
                 value: accelerometer=(), camera=(), geolocation=(), gyroscope=(), microphone=(), payment=(), usb=()
               - name: Cross-Origin-Opener-Policy

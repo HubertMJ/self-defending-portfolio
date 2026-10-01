@@ -38,11 +38,11 @@ spec:
               app.kubernetes.io/name: hello
       containers:
         - name: nginx
-          # Our own image (app/web, built and signed by .github/workflows/build-web.yml, ADR 0011),
-          # based on nginx-unprivileged rather than nginx: the stock image starts as root to bind port
-          # 80 and then drops privileges, which PSS `restricted` forbids outright; this one listens on
-          # 8080 as uid 101 from the start. The tag here is informational: kustomization.yaml's
-          # `images:` pins the digest that is actually pulled (ADR 0008).
+          # Our own image (app/web, built and signed by .github/workflows/build-images.yml, ADR 0011,
+          # ADR 0016), based on nginx-unprivileged rather than nginx: the stock image starts as root
+          # to bind port 80 and then drops privileges, which PSS `restricted` forbids outright; this
+          # one listens on 8080 as uid 101 from the start. The tag here is informational:
+          # kustomization.yaml's `images:` pins the digest that is actually pulled (ADR 0008).
           image: ghcr.io/hubertmj/self-defending-portfolio/web:main
           ports:
             - name: http

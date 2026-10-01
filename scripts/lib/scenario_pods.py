@@ -21,7 +21,10 @@ reject that, which would make `make validate` red for a reason no commit here ca
 only while - the digest is the placeholder, the rendered Pods use the signed image hello runs instead,
 and this script says so on stderr. Every other policy judges the spec exactly as written; the signature
 check of the scenario image itself starts with the first real digest, at which point this substitution
-switches itself off.
+switches itself off. A placeholder never reaches main: scripts/check-image-digests.sh fails
+`make validate` and CI on it first, so the substitution only matters on a branch run with
+ALLOW_PLACEHOLDER_DIGESTS=1 (where hello may still carry a placeholder too, and the stand-in then
+fails the signature check like any unsigned image).
 """
 
 import re
