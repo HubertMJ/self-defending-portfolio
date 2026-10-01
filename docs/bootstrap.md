@@ -290,10 +290,10 @@ curl -sI http://hubertjablon.ski        # 301 to https
 Phase 2 is done when this changes the site and nothing else does:
 
 ```sh
-$EDITOR app/web/public/index.html
+$EDITOR app/web/src/index.html        # app/web/public/ until phase 6
 git commit -am 'web: reword' && git push
-# since phase 3 the page is an image: wait for build-web.yml, then commit the new digest it prints
-# into cluster/infra/hello/kustomization.yaml (section 5.3) and push again
+# since phase 3 the page is an image: wait for the image workflow (build-images.yml since phase 5),
+# then pin the digest it prints: scripts/bump-image-digest.sh web sha256:... (section 5.3), push again
 # wait for Argo CD's poll (3 min by default), or nudge it:
 kubectl -n argocd patch app hello --type merge -p '{"metadata":{"annotations":{"argocd.argoproj.io/refresh":"normal"}}}'
 curl -s https://hubertjablon.ski | grep -i reword
@@ -380,8 +380,8 @@ Before phase 3, `hello` ran `nginxinc/nginx-unprivileged` plus a ConfigMap, whic
 which nobody signed. It now runs our own image, pinned by digest through a kustomize `images:`
 transformer in `cluster/infra/hello/kustomization.yaml` rather than in the Deployment: the image
 reference has one home, a rebuild is a one-line diff, and nothing else in the Deployment moves. Every
-new build is deployed the same way, by committing the digest that `build-web.yml` prints in its job
-summary:
+new build is deployed the same way, by committing the digest that the image workflow (`build-web.yml`
+in phase 3, `build-images.yml` since phase 5) prints in its job summary:
 
 ```yaml
 # cluster/infra/hello/kustomization.yaml

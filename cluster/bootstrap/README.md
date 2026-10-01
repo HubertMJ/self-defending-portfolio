@@ -28,8 +28,8 @@ A fork has to replace each of them before its first sync:
 
 | Value | Where | What it is |
 |-------|-------|------------|
-| `HubertMJ` / `hubertmj` | `cluster/apps/*.yaml`, `cluster/bootstrap/argocd/root-application.yaml`, the image path in `cluster/infra/hello/`, both image policies in `cluster/infra/kyverno-policies/`, `.github/workflows/build-web.yml`, `scripts/verify-image.sh`, `tests/admission/` | GitHub owner; the registry path is its lower-case form |
-| `hubertjablon.ski` | `cluster/infra/gateway/`, `cluster/infra/hello/`, `cluster/infra/cloudflared/config.yaml`, `cluster/infra/cert-manager-issuers/` | the site's hostname and DNS zone |
+| `HubertMJ` / `hubertmj` | `cluster/apps/*.yaml`, `cluster/bootstrap/argocd/root-application.yaml`, the image paths in `cluster/infra/hello/`, `cluster/infra/portfolio-api/` and `cluster/infra/sandbox/scenarios/`, both image policies in `cluster/infra/kyverno-policies/`, `.github/workflows/build-images.yml`, `scripts/verify-image.sh`, `scripts/bump-image-digest.sh`, `scripts/lib/scenario_pods.py`, `app/` (Go module path, image labels, scenario image checks), `tests/` | GitHub owner; the registry path is its lower-case form |
+| `hubertjablon.ski` | `cluster/infra/gateway/`, `cluster/infra/hello/`, `cluster/infra/portfolio-api/`, `cluster/infra/cloudflared/config.yaml`, `cluster/infra/cert-manager-issuers/`, `app/` (API same-origin check, site content), `tests/` | the site's hostname and DNS zone |
 | ACME contact email | `cluster/infra/cert-manager-issuers/clusterissuer-*.yaml` | Let's Encrypt account contact |
 | tunnel UUID | `tunnel:` in `cluster/infra/cloudflared/config.yaml` | output of `cloudflared tunnel create portfolio` |
 | age recipient | `.sops.yaml` | your age public key |
