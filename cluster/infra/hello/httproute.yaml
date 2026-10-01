@@ -16,6 +16,23 @@ spec:
   hostnames:
     - hubertjablon.ski
   rules:
+    # Cloudflare terminates the visitor's TLS and always reaches the tunnel origin over HTTPS, so
+    # a plain-http visitor request still arrives here on the https listener. The edge tells us via
+    # X-Forwarded-Proto; answer with a permanent redirect so HSTS can take over. Cloudflare's
+    # "Always Use HTTPS" zone setting does the same one hop earlier; this rule makes the behaviour
+    # part of the repository instead of a dashboard checkbox.
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+          headers:
+            - name: X-Forwarded-Proto
+              value: http
+      filters:
+        - type: RequestRedirect
+          requestRedirect:
+            scheme: https
+            statusCode: 301
     - matches:
         - path:
             type: PathPrefix
