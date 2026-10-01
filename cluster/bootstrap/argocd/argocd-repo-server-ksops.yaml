@@ -12,6 +12,10 @@ metadata:
 spec:
   template:
     spec:
+      # The repo-server runs as uid 999 and the mounted age key must not be world-readable, so the
+      # secret volume is group-owned by the pod's fsGroup and mode 0440.
+      securityContext:
+        fsGroup: 999
       initContainers:
         - name: install-ksops
           image: viaductoss/ksops:v4.5.1@sha256:4def9fdd4e2f850265740ebe9592c5455d19b76891e88e602df8b52d74b95334
@@ -70,7 +74,7 @@ spec:
             # machine. It is the one secret that cannot come from git, because it is the key that
             # decrypts everything that does come from git.
             secretName: sops-age
-            defaultMode: 256  # 0400
+            defaultMode: 288  # 0440, readable by fsGroup 999 only
             items:
               - key: keys.txt
                 path: keys.txt
