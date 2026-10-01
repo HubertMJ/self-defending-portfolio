@@ -15,11 +15,11 @@ resources:
 # digest is referenced; the tag is informational. Bump = commit (Renovate later):
 #   scripts/bump-image-digest.sh web sha256:<digest from the build-images run summary>
 #
-# PLACEHOLDER DIGEST (phases 5/6, stage 2): the phase 6 frontend (app/web, ADR 0019) is built only once
-# stage 1 is on main. Until the zeros are replaced with that build's digest, `make validate` and CI
-# refuse this file (scripts/check-image-digests.sh); the digest it replaces, signed by the phase 3
-# build-web.yml, was sha256:1f92875a0938d90fb1136d14aedc8fc64a1b97a6566da4ccb63b783313a7dfa5.
+# The phase 6 frontend (app/web, ADR 0019), built by build-images.yml on main from phases 5/6 stage 1.
+# The digest it replaces, signed by the phase 3 build-web.yml, was
+# sha256:1f92875a0938d90fb1136d14aedc8fc64a1b97a6566da4ccb63b783313a7dfa5 (the rollback target while
+# verify-portfolio-images still accepts that identity).
 images:
   - name: ghcr.io/hubertmj/self-defending-portfolio/web
     newTag: main
-    digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+    digest: sha256:415d07c8d8fec9d6689da771862854a955b530a2cf78609905689ceeafa01671

@@ -23,12 +23,10 @@ resources:
 # Built by .github/workflows/build-images.yml (ADR 0016). Only the digest is referenced; the tag is
 # informational. Bump = commit.
 #
-# PLACEHOLDER DIGEST: the api image does not exist until build-images.yml has run on main (phases 5/6,
-# stage 1). Replace the zeros with the digest from that run's summary:
+# Bump with the digest from a build-images run summary:
 #   scripts/bump-image-digest.sh api sha256:<digest>
-# Until then `make validate` and CI refuse the commit (scripts/check-image-digests.sh), so it cannot
-# reach main and Argo CD with a Deployment that could never pull.
+# A placeholder digest is refused by `make validate` and CI (scripts/check-image-digests.sh).
 images:
   - name: ghcr.io/hubertmj/self-defending-portfolio/api
     newTag: main
-    digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+    digest: sha256:603a381d7a6be27d314cd6174b95438d975b465d6f60fd4e7a8db38cfe79a617

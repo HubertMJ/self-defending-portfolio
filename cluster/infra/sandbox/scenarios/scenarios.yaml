@@ -59,12 +59,11 @@
         type: RuntimeDefault
     containers:
       - name: target
-        # PLACEHOLDER digest (all zeros) until the first build of app/scenario on main; replace it with
-        # `scripts/bump-image-digest.sh scenario sha256:<digest from that run's summary>`. Until then
-        # `make validate` and CI refuse the commit (scripts/check-image-digests.sh).
+        # Built by build-images.yml on main; bump with
+        # `scripts/bump-image-digest.sh scenario sha256:<digest from the run's summary>`.
         # One unbroken line, so a bump is a one-line diff that a grep for the digest finds.
         # yamllint disable-line rule:line-length
-        image: &scenario-image ghcr.io/hubertmj/self-defending-portfolio/scenario@sha256:0000000000000000000000000000000000000000000000000000000000000000
+        image: &scenario-image ghcr.io/hubertmj/self-defending-portfolio/scenario@sha256:abe9585fe91fec1881895ae79418f6b756a4ca094c9e5e7f0b3dd8a1a76cdea0
         command: ["sleep", "120"]
         securityContext:
           allowPrivilegeEscalation: false
