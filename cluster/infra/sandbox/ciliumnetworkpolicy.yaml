@@ -1,0 +1,28 @@
+# Sandbox pods may resolve names and nothing else (plan section 4.3). That one allowed flow is what makes
+# the quarantine observable: tests/runtime/run.sh proves a victim can look up a name, triggers the
+# isolation rule, and then proves the same lookup fails - a pod with no egress at all could not show the
+# difference. The `wget` the test runs is the trigger (Falco sees the exec), not a connection that is
+# expected to succeed.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: sandbox-dns-only
+  namespace: sandbox
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+spec:
+  endpointSelector: {}
+  egress:
+    - toEndpoints:
+        - matchLabels:
+            io.kubernetes.pod.namespace: kube-system
+            k8s-app: kube-dns
+      toPorts:
+        - ports:
+            - port: "53"
+              protocol: UDP
+            - port: "53"
+              protocol: TCP
+          rules:
+            dns:
+              - matchPattern: "*"

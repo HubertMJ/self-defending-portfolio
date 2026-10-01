@@ -1,6 +1,7 @@
-# Falcosidekick accepts alerts from the Falco DaemonSet only (plan section 4.3). Its HTTP API has no
-# authentication, so this policy is what keeps any other pod from injecting a fake alert - which, once
-# Falco Talon is behind it, would be a way to get a pod in `sandbox` killed.
+# Falcosidekick accepts alerts from the Falco DaemonSet only, and Falco Talon accepts them from
+# Falcosidekick only (plan section 4.3). Neither HTTP API has authentication, so these two policies are
+# what keeps any other pod from injecting a fake alert - which would be a way to get a pod in `sandbox`
+# killed or quarantined.
 #
 # Sync wave -1: applied before the Deployment, as in the other phase 4 namespaces.
 apiVersion: cilium.io/v2
@@ -44,3 +45,49 @@ spec:
           rules:
             dns:
               - matchPattern: "*"
+    # Every alert at or above the Talon output's minimum priority, to Falco Talon.
+    - toEndpoints:
+        - matchLabels:
+            app.kubernetes.io/name: falco-talon
+      toPorts:
+        - ports:
+            - port: "2803"
+              protocol: TCP
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: falco-talon
+  namespace: falco-response
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+spec:
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: falco-talon
+  ingress:
+    - fromEndpoints:
+        - matchLabels:
+            app.kubernetes.io/name: falcosidekick
+      toPorts:
+        - ports:
+            - port: "2803"
+              protocol: TCP
+    # The kubelet's probes (GET /healthz on the same port). The embedded NATS port (4222) is not
+    # opened: it is only used inside the pod.
+    - fromEntities:
+        - host
+      toPorts:
+        - ports:
+            - port: "2803"
+              protocol: TCP
+  egress:
+    # The API server, and nothing else: Talon reaches it through the in-cluster service IP from its
+    # environment (no DNS), and its notifier is Kubernetes Events. The `kubernetes` Service is DNAT-ed to
+    # the API server's real port before policy is evaluated.
+    - toEntities:
+        - kube-apiserver
+      toPorts:
+        - ports:
+            - port: "6443"
+              protocol: TCP

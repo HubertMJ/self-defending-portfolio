@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: sandbox
+  labels:
+    # Victims run this project's own signed web image (ADR 0011: verify-portfolio-images and
+    # restrict-image-registries already cover `sandbox`) under the strictest profile. The attack the DoD
+    # simulates is a shell in an ordinary hardened pod, not a privileged one.
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted

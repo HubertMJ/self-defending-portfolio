@@ -1,0 +1,24 @@
+# Falco Talon's configuration (ADR 0013). Mounted at /etc/falco-talon/config.yaml by
+# ../talon-deployment.yaml. No secret values: no notifier with a webhook or credentials is configured,
+# so this is a ConfigMap, not a Secret.
+listen_address: 0.0.0.0
+listen_port: 2803
+# Reload rules.yaml when the ConfigMap volume changes. The configMapGenerator's hash suffix rolls the
+# Deployment on a change anyway; this only shortens the window.
+watch_rules: true
+print_all_events: false
+deduplication:
+  # Leader election cannot be switched off in practice (the upstream chart renders `false` as `true`,
+  # and the event publisher is only set once a leader is known), so it is on and stated. One replica
+  # holds Lease falco-talon in $NAMESPACE (falco-response), renewed every 2 s; the Role in
+  # ../talon-rbac.yaml grants exactly that Lease.
+  leader_election: true
+  time_window_seconds: 5
+# Every action Talon takes is recorded as a Kubernetes Event on the pod it acted on, in the pod's
+# namespace (the RBAC in ../talon-rbac.yaml allows that in `sandbox` only). tests/runtime/run.sh asserts
+# on those Events.
+default_notifiers:
+  - k8sevents
+otel:
+  traces_enabled: false
+  metrics_enabled: false

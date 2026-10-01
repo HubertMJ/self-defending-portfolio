@@ -1,5 +1,6 @@
-# The non-chart half of cluster/apps/falco-response.yaml: the Namespace with its Pod Security labels
-# and the network policy for Falcosidekick (and, from plan commit 7, Falco Talon).
+# The non-chart half of cluster/apps/falco-response.yaml: the Namespace with its Pod Security labels,
+# the network policy, and Falco Talon in full (Deployment, Service, ServiceAccount, RBAC, config and
+# rules - see talon-deployment.yaml for why Talon is not deployed from its chart).
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
@@ -9,3 +10,15 @@ resources:
   - namespace.yaml
   - networkpolicy.yaml
   - ciliumnetworkpolicy.yaml
+  - talon-rbac.yaml
+  - talon-deployment.yaml
+
+configMapGenerator:
+  # Hash-suffixed names: a changed rule or setting is a new ConfigMap and rolls the Deployment, which is
+  # the reviewed path; Talon's own rules watch (watch_rules) only shortens the window.
+  - name: falco-talon-config
+    files:
+      - talon/config.yaml
+  - name: falco-talon-rules
+    files:
+      - talon/rules.yaml

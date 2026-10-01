@@ -1,0 +1,30 @@
+# The quarantine (ADR 0013): any pod carrying sdp.hubertjablon.ski/quarantine=true loses all traffic,
+# both directions, to and from everything - including DNS, the host and the API server.
+#
+# Why a standing policy and a label instead of Talon's own network-policy actionners: both of those
+# (kubernetes:networkpolicy, cilium:networkpolicy) only write egress rules, and the Cilium one denies the
+# event's remote IP, which for a shell or `wget` event says nothing useful. Here Talon only needs
+# `patch` on pods to isolate one, the policy is reviewed in git like any other, and lifting a quarantine
+# is removing the label.
+#
+# Deny rules take precedence over every allow rule in Cilium, so the sandbox CNP's DNS allowance and any
+# future allow do not punch through. Cluster-wide on purpose: the label means the same thing wherever a
+# pod is, though Talon itself can only set it in `sandbox`.
+#
+# Established connections: Cilium evaluates policy per new flow, so a connection that was already open
+# when the label landed may live on until it closes. tests/runtime/run.sh therefore asserts that *new*
+# lookups fail, and the DoD's kill path does not depend on this policy at all.
+apiVersion: cilium.io/v2
+kind: CiliumClusterwideNetworkPolicy
+metadata:
+  name: quarantine
+spec:
+  endpointSelector:
+    matchLabels:
+      sdp.hubertjablon.ski/quarantine: "true"
+  ingressDeny:
+    - fromEntities:
+        - all
+  egressDeny:
+    - toEntities:
+        - all

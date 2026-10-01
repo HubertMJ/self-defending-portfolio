@@ -1,5 +1,6 @@
 # Wave 5: runtime detection, the response half (ADR 0013). Falcosidekick receives Falco's alerts over
-# HTTP (cluster/apps/falco.yaml) and fans them out; Falco Talon (plan commit 7) acts on them.
+# HTTP (cluster/apps/falco.yaml) and forwards them to Falco Talon, which acts on them: an interactive
+# shell in a `sandbox` pod gets the pod deleted, a network tool there gets it quarantined.
 #
 # Kept apart from the `falco` namespace on purpose: the sensor needs a privileged namespace and must
 # not hold anything that talks to the API server, while everything here runs PSS `restricted` and is
@@ -8,8 +9,9 @@
 # No Falcosidekick UI and no Redis: the alerts are read from Falco's and Falcosidekick's logs and,
 # from phase 6 on, from the posture page; a UI with its own store is one more thing to secure.
 #
-# Two sources: the chart, and cluster/infra/falco-response/ for the Namespace (restricted), the
-# default-deny NetworkPolicy and the CiliumNetworkPolicies.
+# Two sources: the Falcosidekick chart, and cluster/infra/falco-response/ for the Namespace
+# (restricted), the default-deny NetworkPolicy, the CiliumNetworkPolicies and Falco Talon, which is
+# plain manifests there rather than its chart (cluster/infra/falco-response/talon-deployment.yaml).
 #
 # Pinned (ADR 0008), resolved from the repository index:
 #   curl -sfL https://falcosecurity.github.io/charts/index.yaml \
@@ -43,6 +45,14 @@ spec:
           replicaCount: 1
           webui:
             enabled: false
+          config:
+            talon:
+              address: http://falco-talon.falco-response.svc.cluster.local:2803
+              # Talon's rules match on rule names, so everything that might match is forwarded; the
+              # cut-off only drops Falco's informational and debug noise. Both DoD rules are WARNING
+              # ("SDP network tool in sandbox") or NOTICE ("Terminal shell in container").
+              minimumpriority: notice
+              checkcert: true
           # The chart default sets runAsUser/fsGroup only; restricted needs the rest.
           podSecurityContext:
             runAsNonRoot: true

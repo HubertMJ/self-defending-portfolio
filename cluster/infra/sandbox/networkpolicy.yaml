@@ -1,0 +1,11 @@
+# Default-deny for the namespace, as in cluster/infra/hello. ciliumnetworkpolicy.yaml opens DNS only.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+  namespace: sandbox
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress

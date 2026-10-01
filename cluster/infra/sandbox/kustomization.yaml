@@ -1,0 +1,14 @@
+# The `sandbox` namespace (ADR 0013): where the phase 4 runtime-response test puts its victim pods
+# (tests/runtime/run.sh) and where the phase 5 attack scenarios will run. Deployed by
+# cluster/apps/sandbox.yaml. No workload is declared here; the test creates and deletes its own pods.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: sandbox
+
+resources:
+  - namespace.yaml
+  - networkpolicy.yaml
+  - ciliumnetworkpolicy.yaml
+  - quarantine-ccnp.yaml
+  - talon-rbac.yaml

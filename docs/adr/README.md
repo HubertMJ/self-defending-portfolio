@@ -17,4 +17,5 @@ Superseded ADRs stay in place with a note pointing at the replacement.
 | [0010](0010-cilium-gateway-api.md) | Cilium's built-in Gateway API instead of ingress-nginx | accepted |
 | [0011](0011-supply-chain.md) | Build, scan, describe and sign our own image; verify it at admission | accepted |
 | [0012](0012-pod-security-and-resource-policy.md) | Pod Security `restricted` and pod resources as Kyverno policies, Audit before Enforce | accepted |
+| [0013](0013-runtime-detection-and-response.md) | Runtime detection and response: Falco modern eBPF least-privileged, Falcosidekick, Falco Talon scoped to `sandbox` | accepted |
 | [0014](0014-posture-scanning.md) | Posture scanning: Trivy Operator client/server with offline scan Jobs, kube-bench CronJob with a k3s config override, Policy Reporter internal only | accepted |

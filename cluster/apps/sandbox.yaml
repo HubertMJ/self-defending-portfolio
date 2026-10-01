@@ -1,0 +1,38 @@
+# Wave 5: the `sandbox` namespace (ADR 0013) - restricted, default-deny with DNS only, the cluster-wide
+# quarantine policy, and the Role that lets Falco Talon act on pods here and nowhere else. The
+# runtime-response test (tests/runtime/run.sh) creates its victim pods in it; phase 5 will put its
+# attack scenarios here.
+#
+# Its own Application, not part of falco-response: what may run in `sandbox` and what Talon may do to it
+# are reviewed together, next to each other, and removing the namespace removes Talon's reach with it.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: sandbox
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "5"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/HubertMJ/self-defending-portfolio.git
+    targetRevision: main
+    path: cluster/infra/sandbox
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: sandbox
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    retry:
+      limit: 5
+      backoff:
+        duration: 10s
+        factor: 2
+        maxDuration: 3m
+    syncOptions:
+      # The Namespace (restricted) is a manifest in cluster/infra/sandbox.
+      - CreateNamespace=false
