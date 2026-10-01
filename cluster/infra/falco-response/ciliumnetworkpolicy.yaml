@@ -53,6 +53,15 @@ spec:
         - ports:
             - port: "2803"
               protocol: TCP
+    # The same alerts to the portfolio API's internal (webhook) port, for its live feed (ADR 0015).
+    - toEndpoints:
+        - matchLabels:
+            io.kubernetes.pod.namespace: portfolio-api
+            app.kubernetes.io/name: portfolio-api
+      toPorts:
+        - ports:
+            - port: "8081"
+              protocol: TCP
 ---
 apiVersion: cilium.io/v2
 kind: CiliumNetworkPolicy
@@ -82,12 +91,37 @@ spec:
             - port: "2803"
               protocol: TCP
   egress:
-    # The API server, and nothing else: Talon reaches it through the in-cluster service IP from its
-    # environment (no DNS), and its notifier is Kubernetes Events. The `kubernetes` Service is DNAT-ed to
-    # the API server's real port before policy is evaluated.
+    # The API server: Talon reaches it through the in-cluster service IP from its environment (no DNS),
+    # and its k8sevents notifier writes Kubernetes Events. The `kubernetes` Service is DNAT-ed to the
+    # API server's real port before policy is evaluated.
     - toEntities:
         - kube-apiserver
       toPorts:
         - ports:
             - port: "6443"
+              protocol: TCP
+    # The webhook notifier (talon/config.yaml): every action is reported to the portfolio API's
+    # internal port (ADR 0015). Resolving that one name is the only DNS Talon gets; the URL is
+    # absolute (trailing dot), so the resolver asks for exactly this name and never for a
+    # search-domain variant that this rule would refuse.
+    - toEndpoints:
+        - matchLabels:
+            io.kubernetes.pod.namespace: kube-system
+            k8s-app: kube-dns
+      toPorts:
+        - ports:
+            - port: "53"
+              protocol: UDP
+            - port: "53"
+              protocol: TCP
+          rules:
+            dns:
+              - matchName: portfolio-api.portfolio-api.svc.cluster.local
+    - toEndpoints:
+        - matchLabels:
+            io.kubernetes.pod.namespace: portfolio-api
+            app.kubernetes.io/name: portfolio-api
+      toPorts:
+        - ports:
+            - port: "8081"
               protocol: TCP

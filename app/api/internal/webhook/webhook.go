@@ -68,10 +68,11 @@ func ParseFalco(body []byte, now time.Time) (FalcoEvent, error) {
 	}, nil
 }
 
-// ParseTalon decodes a Falco Talon webhook notifier body. Talon 0.3.0 posts its log line for each
-// action: action/actionner, status, and `objects` naming what it acted on. The key case of
-// `objects` has differed between Talon versions (Pod / pod), so keys are matched case-insensitively,
-// and the actionner is used when there is no action name.
+// ParseTalon decodes a Falco Talon webhook notifier body. Talon 0.3.0 posts the action's
+// utils.LogLine (notifiers/webhook, notifiers.Notify): `action` (the rule file's action name),
+// `actionner`, `status` ("success" / "failure") and `objects`, whose keys Notify title-cases
+// ("Pod", "Namespace") while the actionners themselves use lower case. Keys are therefore matched
+// case-insensitively, and the actionner stands in when there is no action name.
 func ParseTalon(body []byte, now time.Time) (TalonEvent, error) {
 	var p map[string]any
 	if err := json.Unmarshal(body, &p); err != nil {

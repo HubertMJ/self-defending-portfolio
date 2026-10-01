@@ -1,6 +1,6 @@
 # Falco Talon's configuration (ADR 0013). Mounted at /etc/falco-talon/config.yaml by
-# ../talon-deployment.yaml. No secret values: no notifier with a webhook or credentials is configured,
-# so this is a ConfigMap, not a Secret.
+# ../talon-deployment.yaml. No secret values: the one webhook notifier posts to an in-cluster address
+# without credentials, so this is a ConfigMap, not a Secret.
 listen_address: 0.0.0.0
 listen_port: 2803
 # Reload rules.yaml when the ConfigMap volume changes. The configMapGenerator's hash suffix rolls the
@@ -19,6 +19,15 @@ deduplication:
 # on those Events.
 default_notifiers:
   - k8sevents
+  - webhook
+# ...and every action is also posted to the portfolio API's internal port (ADR 0015), which shows it
+# on the live feed and uses it to mark the visitor's run as "responded". Absolute name (trailing dot):
+# one DNS query, which is the only name ../ciliumnetworkpolicy.yaml lets Talon resolve.
+notifiers:
+  webhook:
+    url: http://portfolio-api.portfolio-api.svc.cluster.local.:8081/internal/talon
+    http_method: POST
+    content_type: application/json
 otel:
   traces_enabled: false
   metrics_enabled: false
