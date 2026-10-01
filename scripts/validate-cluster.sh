@@ -37,6 +37,10 @@ CRDS_CATALOG_SCHEMA="https://raw.githubusercontent.com/datreeio/CRDs-catalog/${C
 # ansible/inventory/group_vars/k3s_nodes.yml, minus the +k3s1 suffix.
 KUBERNETES_VERSION=${KUBERNETES_VERSION:-1.35.8}
 
+# For kustomizations that render a Helm chart (`helmCharts`, see the rendering loop).
+# shellcheck disable=SC1091  # a one-line pin (HELM_IMAGE), sourced from the repository root
+. scripts/lib/helm-image.sh
+
 RENDER_DIR=$(mktemp -d)
 WORK_DIR=$(mktemp -d)
 trap 'rm -rf "$RENDER_DIR" "$WORK_DIR"' EXIT
@@ -91,6 +95,34 @@ for dir in "${KUSTOMIZATIONS[@]}"; do
     source_root=$WORK_DIR/$name
   fi
 
+  # A kustomization with `helmCharts` (cluster/infra/falco) is built by Argo CD with
+  # `kustomize build --enable-helm` (argocd-cm): kustomize pulls the chart, runs `helm template` and
+  # then applies the kustomization's patches - the post-render that a Helm source cannot have
+  # (ADR 0013, amendment). No pinned image carries kustomize and helm together, so the same thing
+  # happens in two steps on a throwaway copy: the pinned Helm image renders each chart with the
+  # entry's values and the arguments kustomize passes, scripts/lib/helm_charts_kustomization.py swaps
+  # the helmCharts block for the rendered files, and the pinned kustomize image applies the patches.
+  # The result is judged by kubeconform, the hostPath check and `kyverno apply` like everything else.
+  if grep -q '^helmCharts:' "$dir/kustomization.yaml"; then
+    [ ! -f "$dir/ksops.yaml" ] || { echo "validate-cluster: $dir combines KSOPS and helmCharts; not supported" >&2; exit 1; }
+    cp -r "$REPO_ROOT/." "$WORK_DIR/$name"
+    charts_dir=$WORK_DIR/$name/$dir
+    chart_list=$(python3 scripts/lib/helm_charts_kustomization.py "$charts_dir")
+    while IFS=$'\t' read -r chart repo version release namespace values include_crds kube_version out; do
+      crd_flag=()
+      [ "$include_crds" != true ] || crd_flag=(--include-crds)
+      $DOCKER run --rm -v "$charts_dir":/kustomization:ro "$HELM_IMAGE" template "$release" "$chart" \
+        --repo "$repo" \
+        --version "$version" \
+        --namespace "$namespace" \
+        --kube-version "${kube_version:-$KUBERNETES_VERSION}" \
+        --values "/kustomization/$values" \
+        "${crd_flag[@]}" > "$charts_dir/$out"
+      info "$dir: helmCharts $chart $version rendered ($(grep -c '^kind:' "$charts_dir/$out") objects)"
+    done <<< "$chart_list"
+    source_root=$WORK_DIR/$name
+  fi
+
   kustomize "$source_root" "$build_target" > "$RENDER_DIR/$name.yaml"
   info "$dir -> $(grep -c '^kind:' "$RENDER_DIR/$name.yaml") objects"
 done
@@ -125,6 +157,14 @@ step "rendering chart Applications (helm template, hooks included)"
 # would apply (observed with CLI v1.19.1: given a directory and further --resource files, it
 # evaluated only the directory's resources and silently ignored the files).
 DOCKER="$DOCKER" KUBERNETES_VERSION="$KUBERNETES_VERSION" scripts/render-charts.sh "$RENDER_DIR"
+
+step "hostPath mounts are read-only (Falco, kube-bench)"
+# The two workloads that are allowed host paths at all (ADR 0012) must not be able to write to them:
+# a writable host path in a privileged namespace is a way back onto the node. Pod Security has no
+# control for "read-only", so it is asserted on the render (ADR 0013, amendment).
+python3 scripts/lib/check_hostpath_readonly.py "$RENDER_DIR" \
+  DaemonSet/falco/falco \
+  CronJob/kube-bench/kube-bench
 
 step "kyverno apply (cluster/infra/kyverno-policies over every rendered workload)"
 # The policies are taken from their kustomize render, i.e. exactly the objects Argo CD applies.

@@ -16,3 +16,5 @@ __pycache__/
 # terraform/tofu (if ever)
 .terraform/
 *.tfstate*
+# charts that kustomize's helmCharts pulls at build time (cluster/infra/falco)
+cluster/infra/*/charts/

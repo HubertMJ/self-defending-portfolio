@@ -1,12 +1,23 @@
 # KSOPS is a kustomize KRM exec plugin, so both alpha plugins and exec must be enabled for
 # `kustomize build` inside the repo-server. Without this the ksops generator is silently a no-op
 # and the Secret never appears.
+#
+# --enable-helm lets a kustomization render a Helm chart (`helmCharts`) with the helm binary Argo CD
+# bundles, so a chart can be patched after rendering - Argo CD has no post-render step for Helm
+# sources. Used by cluster/infra/falco to make the chart's host mounts read-only (ADR 0013, amendment
+# 2026-10-01). The option is global, but it only does anything for a kustomization in this
+# repository that declares helmCharts, i.e. it is reviewed like any other manifest.
+#
+# Bootstrap-owned: a change here is applied by hand, once (ADR 0005 amendment), after checking that
+# the diff is only this ConfigMap:
+#   kubectl diff -k cluster/bootstrap/argocd
+#   kubectl apply -k cluster/bootstrap/argocd --server-side --force-conflicts
 apiVersion: v1
 kind: ConfigMap
 metadata:
   name: argocd-cm
 data:
-  kustomize.buildOptions: --enable-alpha-plugins --enable-exec
+  kustomize.buildOptions: --enable-alpha-plugins --enable-exec --enable-helm
   # Kinds the application controller does not watch, cache or show at all (ADR 0005, amendment
   # 2026-10-01).
   #

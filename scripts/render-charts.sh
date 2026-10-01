@@ -42,7 +42,8 @@ mkdir -p "$OUT_DIR"
 DOCKER=${DOCKER:-docker}
 
 # Pinned by tag and digest. Same Helm release Argo CD v3.5.3 renders charts with.
-HELM_IMAGE=${HELM_IMAGE:-alpine/helm:4.2.1@sha256:8647f126de3578d74f947ba735e4cfa0ea6aea7d6e2f36bceb86f31415944dca}
+# shellcheck disable=SC1091  # a one-line pin (HELM_IMAGE), sourced from the repository root
+. scripts/lib/helm-image.sh
 
 # Matches validate-cluster.sh and k3s_version in ansible/inventory/group_vars/k3s_nodes.yml.
 KUBERNETES_VERSION=${KUBERNETES_VERSION:-1.35.8}

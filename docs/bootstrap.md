@@ -484,6 +484,15 @@ The new Applications, all wave 5 (`cluster/apps/kustomization.yaml`):
 The two privileged namespaces hold one workload each and are judged control by control by Kyverno's
 `pod-security-restricted` policy (ADR 0012), which is still **Audit** until the flip in 6.4.
 
+One bootstrap change comes with this phase. `argocd-cm` gains `--enable-helm` in
+`kustomize.buildOptions`, so that `cluster/infra/falco` can render the Falco chart and patch its host
+mounts read-only (ADR 0013, amendment). Apply it by hand, once, before the falco Application syncs:
+
+```sh
+kubectl diff -k cluster/bootstrap/argocd        # expect only ConfigMap argocd-cm to differ
+kubectl apply -k cluster/bootstrap/argocd --server-side --force-conflicts
+```
+
 After each Application syncs, check the node's memory (plan budget: under 80 %, about 6.2 GiB):
 
 ```sh
@@ -544,6 +553,7 @@ show zero failures for both policies.
 
 | Symptom | Cause |
 |---------|-------|
+| `falco` Application error, `must specify --enable-helm` | the argocd-cm change above was not applied |
 | Falco CrashLoop, BPF / permission errors | AppArmor not `Unconfined`, or a capability missing from `containerSecurityContext` (all four must be listed next to `drop: [ALL]`) |
 | Falco alerts but Talon does nothing | Talon holds no Lease (RBAC for `leases` in `falco-response`), or Falcosidekick's POSTs are dropped (`hubble observe --namespace falco-response`) |
 | Talon logs a 403 | it acted on a pod outside `sandbox`, which is the RBAC working; or its `sandbox` Role is missing |

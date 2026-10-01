@@ -32,10 +32,9 @@ false`: the sensor holds no API token.
 Host access is the chart's modern-eBPF set: `/host/proc`, `/host/etc`, `/host/boot`, `/host/usr` and
 `/sys/kernel` read-only, k3s's containerd socket directory (the container plugin's metadata source).
 `driver.loader.enabled: false` is what makes `/host/proc` read-only - with SYS_PTRACE, a writable host
-`/proc` would let the sensor write any host process's memory. **Known gap:** chart 9.2.0 mounts
-`/host/lib/modules` read-write in that same mode, and no value changes it; a writable module tree plus
-the kernel's module autoload is a host-root path for a compromised sensor. Recorded as an open item:
-fix upstream (a `readOnly` on that mount) or with a post-render step, then remove this paragraph.
+`/proc` would let the sensor write any host process's memory. Chart 9.2.0 mounts `/host/lib/modules`
+read-write in that same mode; that gap is closed by a post-render patch (amendment below), so every
+host path the sensor sees is read-only.
 
 **No falcoctl, no k8smeta, no internet.** The image carries the rules (`/etc/falco/falco_rules.yaml`,
 including "Terminal shell in container") and the container plugin (`libcontainer.so`), which reads pod
@@ -98,7 +97,7 @@ ADR 0011, default-deny with DNS as the only allowed flow, the quarantine policy 
 - Talon can only ever act on pods in `sandbox`. Extending automatic response to another namespace is a
   Role there and a rule here, both reviewed; until then a matching rule elsewhere fails with a 403.
 - The sensor is still close to host-equivalent if compromised (BPF and PERFMON read kernel memory,
-  SYS_PTRACE, the containerd socket, and the writable `/host/lib/modules` above). What this design
+  SYS_PTRACE, and the containerd socket, whose API a read-only mount does not limit). What this design
   limits is everything around it: no API token, no outbound network beyond Falcosidekick, nothing else
   in its namespace, rules only from git.
 - Falcosidekick and Talon are unauthenticated HTTP services; their integrity rests on the Cilium
@@ -106,3 +105,58 @@ ADR 0011, default-deny with DNS as the only allowed flow, the quarantine policy 
 - Leader election costs a Lease update every 2 s.
 - `tests/runtime/run.sh` (plan commit 8) is the proof; the label-patch behaviour and the time-to-kill
   are measured there, on the live cluster.
+
+## Amendment 2026-10-01: every Falco host mount read-only, via a kustomize post-render
+
+**Problem.** In chart 9.2.0, `/host/proc` is read-only only with `driver.loader.enabled: false`, and that
+same setting mounts `/host/lib/modules` read-write. No value changes it. A writable host module tree
+plus the kernel's module autoload (`request_module`, triggered by unprivileged actions such as opening
+a socket of an unloaded protocol family) is a path to host root for a compromised sensor.
+
+**Options considered**, in the order preferred:
+- *Chart values only.* No value sets `readOnly` on that mount. Every switch that removes it (loader
+  enabled, driver disabled) makes `/host/proc` writable instead, which with SYS_PTRACE is worse. A
+  second mount at the same path through `mounts.volumeMounts` is rejected by API validation (mount
+  paths must be unique). A path variant such as a trailing slash passes validation but leaves the
+  outcome to the runtime's bind-mount ordering, which is not a control. Rejected.
+- *Kustomize `helmCharts` plus a patch* (chosen). Argo CD has no post-render step for a Helm source,
+  but it builds kustomizations, and kustomize can render a chart and then patch it. The chart stays
+  the source of truth: same chart, version and values, with a strategic-merge patch on top.
+- *ConfigManagementPlugin.* A sidecar on the repo-server with its own image and tool chain, for one
+  patch. Not needed once the above works.
+
+**Decision.**
+- `cluster/apps/falco.yaml` is a single kustomize source, `cluster/infra/falco/`. It holds the chart
+  as a `helmCharts` entry (chart 9.2.0, the former `valuesObject` verbatim as `valuesInline`,
+  `kubeVersion` 1.35.8), the Namespace, ServiceAccount and network policies as before, and a patch.
+- The patch sets `readOnly: true` on `/host/lib/modules`. It also restates it for `/host/proc`, so a
+  chart bump that changed the loader logic cannot quietly make it writable, and sets it for the
+  containerd socket directory: connecting to a unix socket does not need a writable mount, and that
+  directory also holds the runtime state of every container.
+- `argocd-cm` gains `--enable-helm` in `kustomize.buildOptions`. The option is global, but it only does
+  something for a kustomization in this repository that declares `helmCharts`.
+- Checked offline with the exact pair Argo CD v3.5.3 bundles (`hack/tool-versions.sh`: kustomize 5.8.1,
+  helm 4.2.1): `kustomize build --enable-helm` pulls the chart (also tested against a local chart
+  repository), renders it with the values and applies the patch.
+
+**Validation.**
+- `make validate` renders `helmCharts` kustomizations in two steps with the existing pinned images: the
+  Helm image renders the chart with the arguments kustomize passes, then the kustomize image applies the
+  patches (`scripts/lib/helm_charts_kustomization.py`, with an allowlist of `helmCharts` keys). The output
+  was checked to be identical to a direct kustomize 5.8.1 `--enable-helm` build.
+- kubeconform and `kyverno apply` judge the result as before (`restricted-falco`: 0 fail, 0 warn).
+- A new step, `scripts/lib/check_hostpath_readonly.py`, fails the build if the Falco DaemonSet or the
+  kube-bench CronJob mounts any hostPath writable, or if either workload is missing from the render. It
+  was verified to fail with the patch entry removed.
+
+**Consequences.**
+- One bootstrap change, applied by hand once (ADR 0005 amendment), after `kubectl diff -k
+  cluster/bootstrap/argocd` shows only `argocd-cm`:
+  `kubectl apply -k cluster/bootstrap/argocd --server-side --force-conflicts`. It has to land before
+  the falco Application syncs: without `--enable-helm` the kustomize build fails and the Application
+  stays in an error state, rather than deploying an unpatched chart.
+- The repo-server pulls the chart into the build directory (`charts/`, git-ignored), from the same chart
+  repository the Helm source used.
+- A chart bump is reviewed as before. If the chart stops rendering one of the patched mounts, the patch
+  would add a volumeMount without a name, which kubeconform rejects; a newly added writable host mount
+  fails the hostPath check.

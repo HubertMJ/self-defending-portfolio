@@ -1,5 +1,21 @@
-# The non-chart half of cluster/apps/falco.yaml: the Namespace with its Pod Security labels, Falco's
-# ServiceAccount (no token) and the network policy for the DaemonSet.
+# Falco, rendered from its chart by kustomize (`helmCharts`) and then patched (ADR 0013, amendment
+# 2026-10-01). Deployed by cluster/apps/falco.yaml as a single kustomize source.
+#
+# Why kustomize instead of a Helm source in the Application: chart 9.2.0 mounts the host's /lib/modules
+# writable whenever it mounts /host/proc read-only (driver.loader.enabled: false, see below), and no
+# value can change that. A writable module tree plus the kernel's module autoload is a host-root path
+# for a compromised sensor. Argo CD has no post-render step for Helm sources; kustomize's helmCharts
+# plus a patch is the post-render, and the chart stays the source of truth for everything else. Needs
+# `kustomize.buildOptions: ... --enable-helm` in cluster/bootstrap/argocd/argocd-cm.yaml.
+#
+# Pinned to chart 9.2.0 / Falco 0.45.0 (ADR 0008), resolved from the repository index:
+#   curl -sfL https://falcosecurity.github.io/charts/index.yaml | yq '.entries.falco[0] | .version, .appVersion'
+# kustomize pulls the chart into ./charts/ at build time (git-ignored).
+#
+# Checked offline with the exact pair Argo CD v3.5.3 bundles (kustomize 5.8.1, helm 4.2.1, per
+# hack/tool-versions.sh): `kustomize build --enable-helm` pulls and renders the chart and applies the
+# patch. `make validate` renders it the same way (scripts/lib/helm_charts_kustomization.py) and then
+# asserts that every hostPath mount of the Falco DaemonSet is read-only.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
@@ -10,3 +26,191 @@ resources:
   - serviceaccount.yaml
   - networkpolicy.yaml
   - ciliumnetworkpolicy.yaml
+
+helmCharts:
+  - name: falco
+    repo: https://falcosecurity.github.io/charts
+    version: 9.2.0
+    releaseName: falco
+    namespace: falco
+    # The Kubernetes version the cluster runs, as for the other charts (scripts/render-charts.sh).
+    kubeVersion: "1.35.8"
+    valuesInline:
+      image:
+        registry: docker.io
+        repository: falcosecurity/falco
+        tag: "0.45.0@sha256:788f1129c542171813083d4afc61b16730a47dde8c23d9c39370acef996349b6"
+
+      driver:
+        enabled: true
+        kind: modern_ebpf
+        modernEbpf:
+          leastPrivileged: true
+          # 4 = 8 MiB per CPU buffer, the chart default. Plan section 3: drop to 3 if the node's
+          # memory gate is tight after the first day of real usage.
+          bufSizePreset: 4
+        loader:
+          # modern_ebpf needs no driver loader (the probe is compiled into Falco), so the chart
+          # never runs the privileged loader init container for it either way. Stated `false`
+          # because only then does the chart mount the host's /proc read-only: with the loader
+          # "enabled" (even though skipped), /host/proc is writable, and a writable host /proc
+          # next to SYS_PTRACE means /proc/<pid>/mem of every host process is writable.
+          #
+          # The same switch makes chart 9.2.0 mount /host/lib/modules READ-WRITE, with no value
+          # to change that; the `patches` at the end of this file make it read-only.
+          enabled: false
+
+      # Replaces the chart's computed container context entirely (pod-template.tpl,
+      # falco.securityContext), so the four leastPrivileged capabilities are restated here next
+      # to `drop: [ALL]`. Kyverno's restricted-falco rule accepts exactly these four on the Falco
+      # image and fails a fifth (verified by `kyverno apply` in `make validate`). runAsUser,
+      # runAsNonRoot, allowPrivilegeEscalation and seccomp are left to the image/runtime defaults:
+      # the probe needs root, and those controls are relaxed for the Falco image only.
+      containerSecurityContext:
+        privileged: false
+        capabilities:
+          drop: ["ALL"]
+          add: ["BPF", "PERFMON", "SYS_RESOURCE", "SYS_PTRACE"]
+      # AppArmor as the pod-level field (Kubernetes >= 1.30). Not in containerSecurityContext:
+      # anything there would replace the block above. The chart also adds the legacy
+      # container.apparmor.security.beta.kubernetes.io annotation with the same value, which the
+      # API server accepts because the two agree.
+      podSecurityContext:
+        appArmorProfile:
+          type: Unconfined
+
+      # Plan section 3: 100m/256Mi requested, 768Mi ceiling (the chart's 512Mi/1Gi is sized for
+      # larger nodes). To be tightened to observed peak x 1.5 after the first day.
+      resources:
+        requests:
+          cpu: 100m
+          memory: 256Mi
+        limits:
+          cpu: 1000m
+          memory: 768Mi
+
+      # Pod and namespace names come from the CRI labels the container plugin reads; the k8smeta
+      # collector (a separate Deployment with cluster-wide watch rights) is not needed for that.
+      collectors:
+        enabled: true
+        kubernetes:
+          enabled: false
+        containerEngine:
+          enabled: true
+          # Only k3s's containerd. Every other engine is off so the plugin does not probe
+          # sockets that do not exist here, and only one host socket directory is mounted.
+          engines:
+            docker:
+              enabled: false
+            podman:
+              enabled: false
+            containerd:
+              enabled: false
+            cri:
+              enabled: true
+              sockets: ["/run/k3s/containerd/containerd.sock"]
+            lxc:
+              enabled: false
+            libvirt_lxc:
+              enabled: false
+            bpm:
+              enabled: false
+
+      # Rules and plugin come from the image (see the header); nothing is downloaded.
+      falcoctl:
+        artifact:
+          install:
+            enabled: false
+          follow:
+            enabled: false
+
+      # Falco's own service account needs nothing from the API server. The chart only renders
+      # its Role for driver.kind `auto`; stated so a chart bump cannot add one silently.
+      rbac:
+        create: false
+      # The ServiceAccount is serviceaccount.yaml in this directory instead of the chart's, for
+      # one field the chart has no value for: automountServiceAccountToken: false. A sensor with
+      # BPF and SYS_PTRACE should not also hold an API token, even one without permissions.
+      serviceAccount:
+        create: false
+        name: falco
+
+      # Rules on top of the image's falco_rules.yaml (loaded from /etc/falco/rules.d, after it).
+      # The isolation rule of the DoD (plan section 4.4): a network tool started in `sandbox` is
+      # not killed, it is labelled and cut off by the quarantine policy (Falco Talon, plan commit
+      # 7). `proc.name` is the executable's base name, so busybox applets invoked through their
+      # symlinks (`wget`, `nc`) match as well.
+      customRules:
+        sdp-rules.yaml: |-
+          - rule: SDP network tool in sandbox
+            desc: >
+              A network transfer or connection tool was started in a container in the sandbox
+              namespace. Workloads there have no reason to fetch anything; this is the trigger for
+              the quarantine label (ADR 0013).
+            condition: >
+              spawned_process and container and k8s.ns.name = "sandbox"
+              and proc.name in (wget, nc, curl)
+            output: >
+              Network tool started in sandbox (proc=%proc.name cmdline=%proc.cmdline
+              user=%user.name container=%container.name image=%container.image.repository)
+            priority: WARNING
+            tags: [sdp, network, sandbox]
+
+      falco:
+        json_output: true
+        # Every alert carries the pod and namespace as output fields; Falco Talon's actions and
+        # its rule matching on `k8s.ns.name=sandbox` read them from there.
+        append_output:
+          - suggested_output: true
+          - extra_fields:
+              - k8s.ns.name
+              - k8s.pod.name
+        http_output:
+          enabled: true
+          # The full name: no search-domain walk through four DNS lookups per alert.
+          url: http://falcosidekick.falco-response.svc.cluster.local:2801/
+        # Alerts stay on stdout as well: `kubectl logs ds/falco` is what tests/runtime/run.sh and
+        # an operator read first. There is no syslog daemon in the container.
+        stdout_output:
+          enabled: true
+        syslog_output:
+          enabled: false
+        log_syslog: false
+        # The probes' endpoint (/healthz on 8765). Prometheus metrics stay off.
+        webserver:
+          enabled: true
+          listen_port: 8765
+          prometheus_metrics_enabled: false
+
+# Post-render. Strategic merge keyed on mountPath, so the patch follows the mount wherever the chart
+# puts it in the list, and a mount the chart stopped rendering would show up as an invalid object (a
+# volumeMount without a name) in kubeconform rather than be skipped silently.
+#   /host/lib/modules             - the gap this file exists for;
+#   /host/proc                    - already read-only from the chart, restated so a chart bump that
+#                                   changed the loader logic cannot quietly make it writable;
+#   /host/run/k3s/containerd      - the container runtime's socket directory, which also holds
+#                                   the runtime state of every container. Read-only costs nothing:
+#                                   connecting to a unix socket needs no write access to the mount
+#                                   (the kernel's permission check on connect() ignores a read-only
+#                                   mount). It does not limit what the CRI API itself allows.
+patches:
+  - target:
+      kind: DaemonSet
+      name: falco
+    patch: |-
+      apiVersion: apps/v1
+      kind: DaemonSet
+      metadata:
+        name: falco
+      spec:
+        template:
+          spec:
+            containers:
+              - name: falco
+                volumeMounts:
+                  - mountPath: /host/lib/modules
+                    readOnly: true
+                  - mountPath: /host/proc
+                    readOnly: true
+                  - mountPath: /host/run/k3s/containerd
+                    readOnly: true
