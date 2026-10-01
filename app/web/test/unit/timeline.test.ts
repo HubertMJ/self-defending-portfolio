@@ -108,3 +108,29 @@ describe("formatDuration", () => {
     expect(formatDuration(ms)).toBe(out);
   });
 });
+
+describe("buildTimeline with the extension events", () => {
+  it("takes the pod name from the run event and attributes pod, victim and flow events by run id", () => {
+    const events: StreamEvent[] = [
+      { type: "run", data: { run_id: "r1", scenario: "s", state: "started", at: at(0), pod: "pod-a" } },
+      { type: "pod", data: { run_id: "r1", pod: "pod-a", uid: "uid-1", phase: "Running", reason: "", container_id: "abc123abc123", image: "img@sha256:1", labels_delta: {}, deleted: false, at: at(100) } },
+      { type: "victim", data: { run_id: "r1", pod: "pod-a", at: at(200), status: "up", title: "Shop", banner: "", probe_ms: 3, checksum: "aa" } },
+      { type: "victim", data: { run_id: "r1", pod: "pod-a", at: at(700), status: "up", title: "Shop", banner: "", probe_ms: 4, checksum: "aa" } },
+      { type: "victim", data: { run_id: "r1", pod: "pod-a", at: at(1200), status: "defaced", title: "x", banner: "y", probe_ms: 5, checksum: "bb" } },
+      { type: "flow", data: { run_id: "r1", pod: "pod-a", at: at(1300), direction: "ingress", l4: "TCP/8080", verdict: "DROPPED", drop_reason: "Policy denied" } },
+    ];
+    const r = buildTimeline(events, T0 + 2000).runs[0];
+    expect(r.pod).toBe("pod-a");
+    expect(r.podUid).toBe("uid-1");
+    expect(r.containerId).toBe("abc123abc123");
+    expect(r.victim.map((v) => [v.status, v.count])).toEqual([["up", 2], ["defaced", 1]]);
+    expect(r.victim[0].until).toBe(T0 + 700);
+    expect(r.flows).toHaveLength(1);
+    expect(r.events).toHaveLength(6);
+  });
+
+  it("orders pod_ready between started and detected", () => {
+    const v = buildTimeline([run("r1", "pod_ready", 600), run("r1", "started", 500)], T0 + 1000);
+    expect(v.runs[0].current).toBe("pod_ready");
+  });
+});

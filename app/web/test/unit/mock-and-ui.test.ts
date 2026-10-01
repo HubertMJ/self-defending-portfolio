@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiClient } from "../../src/lib/api";
-import { isFalcoEvent, isPosture, isRunEvent, isScenario, isTalonEvent, parseStreamEvent } from "../../src/lib/contract";
+import { isFalcoEvent, isLimits, isPosture, isRunEvent, isScenario, isTalonEvent, parseRunEvents, parseScenarioDetails, parseStreamEvent } from "../../src/lib/contract";
 import { MockBackend, mockOptionsFromUrl } from "../../src/lib/mock";
 import { attackUrl } from "../../src/ui/common";
 import { renderPostureData } from "../../src/ui/posture";
@@ -144,5 +144,54 @@ describe("rendering untrusted text", () => {
 
   it("parses stream payloads strictly", () => {
     expect(parseStreamEvent("falco", JSON.stringify({ at: "x", rule: 1 }))).toBeNull();
+  });
+});
+
+describe("extension payloads", () => {
+  it("accepts today's API events unchanged and drops malformed optional fields", () => {
+    const old = parseStreamEvent("falco", JSON.stringify({ at: "t", rule: "r", priority: "Notice", namespace: "sandbox", pod: "p", output: "o" }));
+    expect(old?.data).toEqual({ at: "t", rule: "r", priority: "Notice", namespace: "sandbox", pod: "p", output: "o" });
+    const ev = parseStreamEvent("falco", JSON.stringify({ at: "t", rule: "r", priority: "Notice", namespace: "sandbox", pod: "p", output: "o".repeat(5000), fields: { "proc.name": "sh", "user.uid": 10001, "k8s.pod.ip": "10.0.0.1", "proc.cmdline": { x: 1 } }, api_received_at: 5 }));
+    expect(ev?.type).toBe("falco");
+    if (ev?.type !== "falco") throw new Error("unreachable");
+    expect(ev.data.output.length).toBe(1024);
+    expect(ev.data.fields).toEqual({ "proc.name": "sh", "user.uid": "10001" });
+    expect(ev.data.api_received_at).toBeUndefined();
+  });
+
+  it("parses pod, victim and flow events and rejects unknown victim states", () => {
+    expect(parseStreamEvent("pod", JSON.stringify({ run_id: "r", pod: "p", uid: "u", phase: "Running", reason: "", container_id: "0123456789abcdef", image: "i", labels_delta: { a: null, b: "1", c: 3 }, deleted: false, at: "t" }))?.data).toMatchObject({ container_id: "0123456789ab", labels_delta: { a: null, b: "1" } });
+    expect(parseStreamEvent("victim", JSON.stringify({ run_id: "r", pod: "p", at: "t", status: "pwned" }))).toBeNull();
+    const v = parseStreamEvent("victim", JSON.stringify({ run_id: "r", pod: "p", at: "t", status: "defaced", title: "t".repeat(200), banner: "<b>x</b>", probe_ms: 12, checksum: "ZZ" }));
+    expect(v?.data).toMatchObject({ status: "defaced", banner: "<b>x</b>", checksum: "" });
+    expect((v?.data as { title: string }).title.length).toBe(80);
+    expect(parseStreamEvent("flow", JSON.stringify({ run_id: "r", pod: "p", at: "t", verdict: "DROPPED" }))?.type).toBe("flow");
+    expect(parseStreamEvent("run", JSON.stringify({ run_id: "r", scenario: "s", state: "pod_ready", at: "t", pod: "p" }))?.data).toMatchObject({ pod: "p" });
+  });
+
+  it("parses scenario details leniently and refuses link-forging paths", () => {
+    const d = parseScenarioDetails({
+      exec_command: ["sh", "-c", "id", 5],
+      pod_security: { runAsUser: 10001, runAsNonRoot: true, capabilities_drop: ["ALL"] },
+      resources: { limits: { cpu: "100m" }, memory: "32Mi" },
+      image: { ref: "ghcr.io/x@sha256:" + "a".repeat(64), digest: "sha256:" + "a".repeat(64) },
+      falco_rule: { name: "r", file: "cluster/infra/falco/kustomization.yaml", line: 12 },
+      talon_rule: { name: "t", file: "https://evil.example/x", line: 1 },
+      policies: [{ kind: "ClusterPolicy", name: "p", file: "../../etc/passwd" }],
+      commit: "abc1234",
+      victim: true,
+    });
+    expect(d.exec_command).toEqual(["sh", "-c", "id"]);
+    expect(d.resources).toEqual({ "limits.cpu": "100m", memory: "32Mi" });
+    expect(d.falco_rule?.line).toBe(12);
+    expect(d.talon_rule).toBeUndefined();
+    expect(d.policies[0].file).toBe("");
+    expect(parseScenarioDetails({ commit: "javascript:x" }).commit).toBe("");
+  });
+
+  it("checks limits and run event lists", () => {
+    expect(isLimits({ per_visitor: { limit: 3, window_s: 600, remaining: 2, reset_in_s: 30 }, global: { limit: 30, window_s: 3600, remaining: 29 }, active_run: false, stream_slots_remaining: 40 })).toBe(true);
+    expect(isLimits({ per_visitor: {} })).toBe(false);
+    expect(parseRunEvents({ events: [{ type: "run", data: { run_id: "r", scenario: "s", state: "queued", at: "t" } }, { type: "nope", data: {} }] })).toHaveLength(1);
   });
 });

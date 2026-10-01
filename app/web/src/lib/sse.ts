@@ -17,7 +17,7 @@
 // has already shown. They are dropped here by identity (type + payload), which keeps the consumers
 // free of dedup logic.
 
-import { type StreamEvent, parseStreamEvent } from "./contract";
+import { STREAM_EVENT_TYPES, type StreamEvent, parseStreamEvent } from "./contract";
 
 export type ConnectionState = "connecting" | "open" | "reconnecting" | "offline";
 
@@ -70,7 +70,8 @@ export interface StreamOptions {
   probe?: RetryProbe;
 }
 
-const EVENT_TYPES = ["run", "falco", "talon"] as const;
+// Every named event the contract defines; an older API simply never sends the newer ones.
+const EVENT_TYPES = STREAM_EVENT_TYPES;
 const CLOSED = 2;
 /** Upper bound for a server-requested wait, so a broken Retry-After cannot park the feed for an hour. */
 const MAX_RETRY_AFTER_MS = 5 * 60_000;
