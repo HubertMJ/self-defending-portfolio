@@ -92,3 +92,27 @@ the shell `exec`s.
 - The pinned scenario digest in scenarios.yaml must be bumped to a `build-images.yml` build of this
   image (`scripts/bump-image-digest.sh scenario sha256:...`) before the cluster runs the victim; until
   then the pods would run the old image, which has no `/usr/local/bin/victim` and would fail to start.
+
+## Amendment 2026-10-01: shell-in-container defaces in a pre_exec, before the shell
+
+**Problem.** Live, the visitor never saw shell-in-container's "defaced": the interactive shell is
+itself what "Terminal shell in container" detects, Talon deleted the pod about 0.35 s after it
+started, and the defacement written by that same shell landed inside one 500 ms poll interval.
+
+**Decision.** The catalogue gains an optional `pre_exec` ({command}, same container), which the API
+runs to completion *before* `exec`, never with a TTY (validation refuses `tty: true`); its failure does
+not stop the exec. shell-in-container's pre_exec defaces the shop (page and state) and sleeps 1.5 s,
+three polls; its exec is again the plain `sh -c 'id; hostname; sleep 60'` with a TTY, so what Falco
+sees for the detection is exactly what ADR 0018 recorded. The pre_exec's shell has no TTY and runs
+only `echo`, `mv` and `sleep`, which no Talon rule acts on. `/api/scenarios/{id}/details` publishes
+it as `pre_exec_command` (`[]` when absent). The other three scenarios keep their single exec: their
+detected step is a program the shell `exec`s after its pause, so the mark already comes first.
+
+Rejected: a non-shell first program that defaces and then `exec`s the TTY shell (it would work: the shell keeps
+the runtime as its parent and still matches), because the defacement would then be done by the image's own
+server binary rather than by busybox commands a visitor can read; and a sleep inside the TTY shell
+before it does anything, which cannot help - the detection is the shell starting.
+
+`tests/scenarios/offline.sh` checks that a pre_exec has no TTY, runs no network tool, reads no
+sensitive file and runs nothing from `/tmp`, exits 0 after its pause, and has already changed the
+victim when the detected exec starts; `tests/scenarios/run.sh` runs it like the API.

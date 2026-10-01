@@ -94,7 +94,8 @@ Every scenario pod now serves a fake shop that the visitor watches (ADR 0022), a
 it before the detected step: `sh -c 'cd /srv/shop && echo ... > .state && mv .state state.json && sleep 1
 && exec <program>'`. The detected program and its arguments are the ones in the table above, started
 with `exec` so the process Falco sees is unchanged in name, arguments and parent; shell-in-container
-defaces the page from the TTY shell that is itself the detection. No Falco or Talon rule changed. The
+defaces the page in a separate `pre_exec` without a TTY, and its exec is unchanged (ADR 0022,
+amendment). No Falco or Talon rule changed. The
 marking shells have no TTY, so they do not trip "Terminal shell in container", and the sensitive file is
 still opened by `cat`, never by a shell redirect (shells are on that rule's trusted list).
 `tests/scenarios/offline.sh` checks the exec'd program, not argv0, and also checks the mutation.
