@@ -7,11 +7,12 @@
 # and run the attack scenarios, there is exactly one place an image may come from. Together they mean:
 # our registry path only, and signed.
 #
-#   # phase 3 switch: Audit -> Enforce once hello runs the signed image
+#   # phase 3 switch: Audit -> Enforce once hello runs the signed image (done)
 #
-# Audit until then for the same reason as verify-portfolio-images, and more immediately: `hello` runs
-# nginxinc/nginx-unprivileged today, which this rule rejects outright. Enforcing before the image is
-# ours would stop the running site. One grep shows all three policies' current actions:
+# Enforce since hello moved to the signed image. It was Audit before that for the same reason as
+# verify-portfolio-images, and more immediately: `hello` then ran nginxinc/nginx-unprivileged, which
+# this rule rejects outright, so enforcing earlier would have stopped the running site. One grep shows
+# every policy's current action:
 #
 #   grep -n 'failureAction' cluster/infra/kyverno-policies/*.yaml
 apiVersion: kyverno.io/v1

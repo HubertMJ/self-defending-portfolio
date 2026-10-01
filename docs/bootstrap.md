@@ -312,14 +312,17 @@ curl -s https://hubertjablon.ski | grep -i reword
 ## 5. Supply chain (phase 3)
 
 Kyverno arrives with the rest of the cluster (`cluster/apps/kyverno.yaml`, wave 1; chart 3.9.1 /
-Kyverno v1.19.1) and its three ClusterPolicies in wave 2
-(`cluster/apps/kyverno-policies.yaml` -> `cluster/infra/kyverno-policies/`). Nothing below has to be
-done to bring the cluster up; it is the ordered handover from "policies installed and watching" to
-"policies gating", which cannot happen before a signed image exists.
+Kyverno v1.19.1) and its three phase 3 ClusterPolicies in wave 2
+(`cluster/apps/kyverno-policies.yaml` -> `cluster/infra/kyverno-policies/`; phase 4 adds two more,
+section 6).
 
-Two of the three policies are committed as **Audit**: they record violations in PolicyReports and
-admit the Pod. `disallow-latest-tag` is **Enforce** from the start, because nothing in `cluster/`
-uses a floating tag.
+**State of this repository: all three image policies are Enforce.** The handover described in
+5.1-5.4 - from "policies installed and watching" (Audit) to "policies gating" (Enforce), which cannot
+happen before a signed image exists - was done in one commit ("phase 3: Kyverno admission ...; hello
+runs the signed image"). The steps stay here as the procedure and its reasoning. A fork starts from the
+Enforce state, so it must run 5.1 and 5.2 and commit its own signed digest (5.3) *before* the `hello`
+Application syncs, or the site's pods are rejected; flipping the two image policies back to Audit
+(5.4 in reverse, `mutateDigest` included) is the alternative for a first bring-up.
 
 ```sh
 grep -n 'failureAction' cluster/infra/kyverno-policies/*.yaml
@@ -327,9 +330,9 @@ grep -n 'failureAction' cluster/infra/kyverno-policies/*.yaml
 
 | Policy | Committed action | Scope |
 |--------|------------------|-------|
-| `verify-portfolio-images` | Audit → Enforce (below) | Pods in `hello`, `sandbox` |
-| `restrict-image-registries` | Audit → Enforce (below) | Pods in `hello`, `sandbox` |
-| `disallow-latest-tag` | Enforce | Pods everywhere except kube-system, kyverno, argocd, cilium-secrets, cert-manager, gateway, cloudflared |
+| `verify-portfolio-images` | Enforce (was Audit until 5.4) | Pods in `hello`, `sandbox` |
+| `restrict-image-registries` | Enforce (was Audit until 5.4) | Pods in `hello`, `sandbox` |
+| `disallow-latest-tag` | Enforce from the start | Pods everywhere except kube-system, kyverno, argocd, cilium-secrets, cert-manager, gateway, cloudflared |
 
 ### 5.1 The first build must run
 
@@ -371,28 +374,28 @@ spell out the predicate type `https://spdx.dev/Document`.
 
 ### 5.3 Point `hello` at the signed digest
 
-`cluster/infra/hello/deployment.yaml` runs `nginxinc/nginx-unprivileged`, which is not ours and which
-nobody signed. Replace it with our own image, pinned by digest, using a kustomize `images:`
-transformer in `cluster/infra/hello/kustomization.yaml` rather than by editing the Deployment: the
-image reference then has one home, the diff of a rebuild is one line, and nothing else in the
-Deployment moves.
+Before phase 3, `hello` ran `nginxinc/nginx-unprivileged` plus a ConfigMap, which is not ours and
+which nobody signed. It now runs our own image, pinned by digest through a kustomize `images:`
+transformer in `cluster/infra/hello/kustomization.yaml` rather than in the Deployment: the image
+reference has one home, a rebuild is a one-line diff, and nothing else in the Deployment moves. Every
+new build is deployed the same way, by committing the digest that `build-web.yml` prints in its job
+summary:
 
 ```yaml
 # cluster/infra/hello/kustomization.yaml
 images:
-  - name: nginxinc/nginx-unprivileged
-    newName: ghcr.io/hubertmj/self-defending-portfolio/web
-    newTag: <version>
-    digest: <sha256:...>   # use digest OR newTag; digest is what ADR 0008 wants
+  - name: ghcr.io/hubertmj/self-defending-portfolio/web
+    newTag: main                 # informational only
+    digest: sha256:<digest>      # what is actually pulled and verified (ADR 0008)
 ```
 
 The image must listen on 8080 as a non-root uid and run with a read-only root filesystem, because the
 `hello` namespace enforces Pod Security Standards `restricted` and the Deployment's `securityContext`
 already says so. Check `runAsUser` in the Deployment against the uid the new image actually uses.
 
-### 5.4 Flip Audit → Enforce, in the same commit
+### 5.4 Flip Audit → Enforce, in the same commit (done)
 
-This is one commit with 5.3, not a follow-up. Enforce before the image is ours stops the site;
+This was one commit with 5.3, not a follow-up, and that is still the rule for a fork. Enforce before the image is ours stops the site;
 our image without Enforce means phase 3 is not done.
 
 In `cluster/infra/kyverno-policies/verify-portfolio-images.yaml`:
