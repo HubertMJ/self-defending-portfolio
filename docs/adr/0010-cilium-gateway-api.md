@@ -29,6 +29,13 @@ tunnel, ADR 0003). The Gateway API CRDs are installed as their own Argo CD Appli
 wave -2, pinned to the v1.4.1 standard channel, because Cilium's operator only creates the `cilium`
 GatewayClass once those CRDs exist.
 
+Install them *before* Cilium, from the Ansible `cilium` role, not from Argo CD: the operator only
+starts its Gateway controller when the CRDs exist at its own startup, and `gatewayAPI.enabled` is a
+`cilium-config` field, so enabling it on a running cluster drifts the agents' config and costs a
+manual restart of the DaemonSet, `cilium-envoy` and the operator. Ansible therefore installs Cilium
+with the Gateway values already set, and the two Argo CD Applications (`gateway-api-crds` wave -2,
+`cilium` wave -1) only adopt what is already there.
+
 TLS: cert-manager (chart v1.21.2) with `config.gatewayAPI.enabled: true` watches Gateways carrying
 the `cert-manager.io/cluster-issuer` annotation and issues into the listener's `certificateRefs`
 Secret. Validation is **DNS-01** against Cloudflare (zone-scoped API token), not HTTP-01: there is no

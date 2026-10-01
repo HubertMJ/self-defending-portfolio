@@ -215,6 +215,13 @@ step 3 and Argo CD takes it over field by field via server-side apply. See the h
 `cluster/apps/cilium.yaml`. Do not run the Ansible `cilium` role against the cluster again unless
 `scripts/check-cilium-values.sh` is green.
 
+The Gateway API CRDs and Cilium's Gateway support both arrive in step 3, from the Ansible `cilium`
+role, before Argo CD exists: `cilium-operator` only starts its Gateway controller if the CRDs are
+already registered when it starts, and `gatewayAPI.enabled` is part of `cilium-config`, so switching
+it on under running agents means restarting the Cilium DaemonSet and `cilium-envoy` by hand. Argo CD
+re-applies the same CRDs (wave -2) and the same values (wave -1) and therefore changes nothing; no
+restarts are part of this procedure.
+
 ### 4.5 Staging certificate first, then production
 
 `cluster/infra/gateway/gateway.yaml` ships with `cert-manager.io/cluster-issuer: letsencrypt-prod`.

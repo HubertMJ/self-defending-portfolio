@@ -3,10 +3,12 @@
 # network to run on (ADR 0004), and from then on by Argo CD, which adopts the release. Two
 # declarations of the same thing drift. This is the check that they have not.
 #
-# It asserts that every key in `cilium_values` from the Ansible role appears with the same value in
-# `spec.source.helm.valuesObject` of cluster/apps/cilium.yaml, and that the chart version matches.
-# Extra keys are allowed on the Argo CD side only under the paths listed in ALLOWED_EXTRA_PATHS
-# below -- the Gateway API additions from phase 2, which Ansible deliberately does not set.
+# It asserts that `cilium_values` from the Ansible role and `spec.source.helm.valuesObject` of
+# cluster/apps/cilium.yaml are *identical*, and that the chart version matches. Equality is the
+# whole point: the Argo CD takeover has to be a no-op, because any value that only one side sets
+# rewrites cilium-config under the running agents and forces a manual restart of the Cilium
+# DaemonSet, cilium-envoy and cilium-operator (that is what the Gateway API additions cost before
+# they were added to the role).
 #
 # Requires: python3 with PyYAML and Jinja2 (both come with ansible-core, see requirements.txt).
 set -euo pipefail
@@ -24,11 +26,6 @@ root = Path(sys.argv[1])
 role_defaults = root / "ansible/roles/cilium/defaults/main.yml"
 group_vars = root / "ansible/inventory/group_vars/k3s_nodes.yml"
 argo_app = root / "cluster/apps/cilium.yaml"
-
-# Paths (dotted) that may exist in the Argo CD values but not in the Ansible role. Anything else
-# extra is a drift in the other direction and fails too: a value that only Argo CD sets is a value
-# that a re-run of the Ansible role would silently remove.
-ALLOWED_EXTRA_PATHS = ("gatewayAPI", "envoy")
 
 def load(path):
     with path.open() as handle:
@@ -115,11 +112,9 @@ for path, expected in sorted(flat_ansible.items()):
 for path in sorted(flat_argo):
     if path in flat_ansible:
         continue
-    if path.split(".")[0] in ALLOWED_EXTRA_PATHS:
-        continue
     problems.append(
-        f"only in cluster/apps/cilium.yaml: {path} (add it to the Ansible role, or to "
-        f"ALLOWED_EXTRA_PATHS in scripts/check-cilium-values.sh with a reason)"
+        f"only in cluster/apps/cilium.yaml: {path} (add it to cilium_values in the Ansible role; "
+        f"there is no allowance for one-sided values any more)"
     )
 
 if problems:
@@ -129,7 +124,7 @@ if problems:
     sys.exit(1)
 
 print(
-    f"check-cilium-values: ok - {len(flat_ansible)} shared keys match, chart {argo_chart_version}, "
-    f"{len(flat_argo) - len(flat_ansible)} phase-2 additions under {'/'.join(ALLOWED_EXTRA_PATHS)}"
+    f"check-cilium-values: ok - {len(flat_ansible)} keys match exactly, chart {argo_chart_version}, "
+    f"no values on only one side"
 )
 PY

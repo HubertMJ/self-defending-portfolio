@@ -4,6 +4,7 @@ argument_specs:
     short_description: Cilium CNI installation
     description:
       - Installs a pinned helm client and the Cilium chart with kube-proxy replacement.
+      - Applies the pinned Gateway API CRDs first, so Cilium starts with Gateway support working.
     options:
       cilium_helm_version:
         description: Pinned helm client version, e.g. v3.22.0. Falls back to the inventory variable helm_version.
@@ -64,6 +65,26 @@ argument_specs:
         default: 6443
       cilium_cluster_cidr:
         description: Pod CIDR used for native routing. Must match k3s_cluster_cidr.
+        type: str
+      cilium_install_gateway_api_crds:
+        description: Apply the pinned Gateway API standard channel CRDs before the helm install.
+        type: bool
+        default: true
+      cilium_gateway_api_version:
+        description: Pinned Gateway API bundle version. Must match cluster/infra/gateway-api-crds.
+        type: str
+        default: v1.4.1
+      cilium_gateway_api_crds_base_url:
+        description: Base URL for Gateway API release assets.
+        type: str
+      cilium_gateway_api_crds_url:
+        description: URL of the Gateway API standard channel install manifest.
+        type: str
+      cilium_gateway_api_crds_checksum:
+        description: Checksum of the Gateway API install manifest, as algorithm:digest.
+        type: str
+      cilium_gateway_api_crds_path:
+        description: Path the Gateway API install manifest is downloaded to on the node.
         type: str
       cilium_values:
         description: Chart values. Replaces the default map entirely when overridden.

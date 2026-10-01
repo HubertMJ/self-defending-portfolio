@@ -33,6 +33,23 @@ cilium_k8s_service_port: 6443
 # Pod CIDR. Must equal k3s_cluster_cidr, otherwise native routing drops traffic.
 cilium_cluster_cidr: "{{ k3s_cluster_cidr | default('10.42.0.0/16') }}"
 
+# Gateway API CRDs. Applied before the helm install so that Cilium comes up with its Gateway
+# support already functional: the operator only starts its Gateway controller when the CRDs exist
+# at operator start, and the chart only creates the `cilium` GatewayClass when the CRDs are
+# registered at render time (gatewayAPI.gatewayClass.create defaults to `auto`).
+# Pinned to the same version and URL as cluster/infra/gateway-api-crds/kustomization.yaml; Argo CD
+# keeps owning these CRDs afterwards (cluster/apps/gateway-api-crds.yaml, server-side apply).
+cilium_install_gateway_api_crds: true
+cilium_gateway_api_version: v1.4.1
+cilium_gateway_api_crds_base_url: https://github.com/kubernetes-sigs/gateway-api/releases/download
+cilium_gateway_api_crds_url: "{{ cilium_gateway_api_crds_base_url }}/{{ cilium_gateway_api_version }}/standard-install.yaml"
+# sha256 of the pinned standard-install.yaml. Upstream publishes no checksum file for release
+# assets, so this digest was computed from the downloaded artefact and must be recomputed when
+# cilium_gateway_api_version changes:
+#   curl -fsSL <cilium_gateway_api_crds_url> | sha256sum
+cilium_gateway_api_crds_checksum: "sha256:73b91b77f6be023a8c92c969fc664e5bd3b1a28aea59eac9ebc904607354dad2"
+cilium_gateway_api_crds_path: "/tmp/gateway-api-standard-install-{{ cilium_gateway_api_version }}.yaml"
+
 # Chart values. Overriding this variable replaces the map wholesale.
 cilium_values:
   # eBPF replaces kube-proxy entirely; k3s is started with disable-kube-proxy.
@@ -61,6 +78,27 @@ cilium_values:
       enabled: false
   # Default means policy applies only to endpoints selected by a policy.
   policyEnforcementMode: default
+  # Gateway API (ADR 0010). Identical to cluster/apps/cilium.yaml so the Argo CD takeover is a
+  # no-op; scripts/check-cilium-values.sh enforces that.
+  gatewayAPI:
+    # The chart creates the `cilium` GatewayClass only when the Gateway API CRDs are already
+    # registered (gatewayClass.create defaults to `auto`, which inspects the cluster's API
+    # versions at render time), which is why this role applies the CRDs first.
+    enabled: true
+    # Nothing binds a host port: the only path in is the tunnel (ADR 0003).
+    hostNetwork:
+      enabled: false
+    # Copies Secrets referenced by a listener's certificateRefs into cilium-secrets so Envoy's
+    # SDS can read them without cluster-wide Secret access.
+    secretsNamespace:
+      create: true
+      name: cilium-secrets
+      sync: true
+  envoy:
+    # Envoy as its own DaemonSet rather than embedded in the agent. The chart already defaults to
+    # this for new installations, but the default is `null`, so it is stated here: a chart bump
+    # must not be able to move the L7 data plane by changing a default.
+    enabled: true
 
 # helm install/upgrade behaviour.
 cilium_helm_wait: true

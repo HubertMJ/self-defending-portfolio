@@ -53,13 +53,10 @@ step "waiting for argocd-server (timeout $WAIT_TIMEOUT)"
 "$KUBECTL" -n "$ARGOCD_NS" rollout status deployment/argocd-server --timeout="$WAIT_TIMEOUT"
 "$KUBECTL" -n "$ARGOCD_NS" rollout status deployment/argocd-repo-server --timeout="$WAIT_TIMEOUT"
 
-step "cilium operator restart once the Gateway API CRDs exist"
-# The Ansible bootstrap installs Cilium before the Gateway API CRDs reach the cluster (they come
-# from the gateway-api-crds Application). The operator only starts its Gateway controller when the
-# CRDs are present at startup, so GatewayClass stays "Waiting for controller" until one restart.
-"$KUBECTL" wait --for=condition=Established crd/gateways.gateway.networking.k8s.io --timeout="$WAIT_TIMEOUT"
-"$KUBECTL" -n kube-system rollout restart deployment/cilium-operator
-"$KUBECTL" -n kube-system rollout status deployment/cilium-operator --timeout="$WAIT_TIMEOUT"
+# No Cilium restart is needed here. The Ansible cilium role applies the pinned Gateway API CRDs
+# before it installs the chart, and installs it with the same gatewayAPI/envoy values this repo
+# declares, so cilium-operator already had the CRDs at startup and Argo CD's takeover changes no
+# field of cilium-config. That ordering guarantee lives in ansible/roles/cilium/tasks/main.yml.
 
 cat <<'NEXT'
 

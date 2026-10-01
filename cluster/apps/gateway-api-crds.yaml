@@ -3,6 +3,10 @@
 # Cilium's operator creates the `cilium` GatewayClass only if gateway.networking.k8s.io/v1
 # GatewayClass already exists, and cert-manager's gateway-shim only starts if the CRDs are there.
 # Both are in later waves, so this must be first.
+#
+# On a cluster built by this repo the CRDs are already present: the Ansible cilium role applies the
+# same pinned release before installing Cilium (ADR 0010). Server-side apply below makes this an
+# adoption of those objects rather than a conflict.
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:

@@ -46,6 +46,66 @@
         - "/tmp/linux-{{ cilium_helm_arch }}"
         - "/tmp/{{ cilium_helm_tarball_name }}"
 
+# The Gateway API CRDs must exist before Cilium starts, not after: cilium-operator only starts its
+# Gateway controller when the CRDs are present at operator start, and the chart only renders the
+# `cilium` GatewayClass when they are registered at template time (gatewayAPI.gatewayClass.create
+# defaults to `auto`). Applying them afterwards -- for example by leaving them to the
+# gateway-api-crds Argo CD Application -- costs a manual restart of cilium-operator, and because
+# gatewayAPI.enabled also rewrites cilium-config, of the agent DaemonSet and cilium-envoy too.
+- name: Install the Gateway API CRDs
+  when: cilium_install_gateway_api_crds | bool
+  block:
+    # The upstream release stamps every CRD with the bundle version it came from, which is the
+    # cheapest way to ask the cluster whether the pinned release is already installed.
+    - name: Read the installed Gateway API bundle version
+      ansible.builtin.command:
+        cmd: >-
+          {{ cilium_kubectl_binary }} kubectl get crd gateways.gateway.networking.k8s.io
+          -o jsonpath={.metadata.annotations.gateway\.networking\.k8s\.io/bundle-version}
+      environment:
+        KUBECONFIG: "{{ cilium_kubeconfig }}"
+      register: cilium_gateway_api_installed
+      changed_when: false
+      failed_when: false
+
+    - name: Apply the pinned Gateway API standard channel CRDs
+      when: cilium_gateway_api_installed.stdout | default('') != cilium_gateway_api_version
+      block:
+        # Upstream publishes no checksum file next to the release asset, so the digest is pinned in
+        # the role's defaults instead of being looked up by file name.
+        - name: Download the Gateway API CRDs with checksum verification
+          ansible.builtin.get_url:
+            url: "{{ cilium_gateway_api_crds_url }}"
+            dest: "{{ cilium_gateway_api_crds_path }}"
+            checksum: "{{ cilium_gateway_api_crds_checksum }}"
+            owner: root
+            group: root
+            mode: "0600"
+
+        # Server-side apply for two reasons: the CRDs are far larger than the 262 144-byte limit of
+        # the client-side last-applied-configuration annotation, and it is the apply mode the
+        # gateway-api-crds Application uses (ServerSideApply=true), so Argo CD adopts these objects
+        # field by field instead of fighting a different field manager.
+        #
+        # kubectl reports `serverside-applied` per object and does not distinguish a create from an
+        # update, so only the client-side wording is treated as a no-op; the task itself is only
+        # reached when the installed bundle version differs from the pin.
+        - name: Apply the Gateway API CRDs
+          ansible.builtin.command:
+            cmd: >-
+              {{ cilium_kubectl_binary }} kubectl apply --server-side
+              -f {{ cilium_gateway_api_crds_path }}
+          environment:
+            KUBECONFIG: "{{ cilium_kubeconfig }}"
+          register: cilium_gateway_api_crds_apply
+          changed_when: cilium_gateway_api_crds_apply.stdout_lines
+            | reject('search', ' unchanged$') | list | length > 0
+
+        - name: Remove the Gateway API CRD download
+          ansible.builtin.file:
+            path: "{{ cilium_gateway_api_crds_path }}"
+            state: absent
+
 - name: Add the Cilium helm repository
   kubernetes.core.helm_repository:
     name: "{{ cilium_chart_repo_name }}"
