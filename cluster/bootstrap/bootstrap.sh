@@ -26,8 +26,12 @@ command -v "$KUBECTL" >/dev/null || die "kubectl not found; set KUBECTL or expor
 grep -q 'AGE-SECRET-KEY-' "$SOPS_AGE_KEY_FILE" \
   || die "$SOPS_AGE_KEY_FILE does not look like an age identity file (no AGE-SECRET-KEY- line)"
 
-if grep -rq --exclude=bootstrap.sh 'REPLACE-ME-GITHUB-OWNER' "$REPO_ROOT/cluster"; then
-  die "cluster/ still contains REPLACE-ME-GITHUB-OWNER; set the repository owner first (see cluster/bootstrap/README.md)"
+# The real values are committed (cluster/bootstrap/README.md, "Before the first run"); only the
+# .example templates carry REPLACE-ME values. A template copied into place and committed unfilled
+# would sync a Secret or config holding the literal placeholder, so refuse before installing anything.
+if unfilled=$(grep -rlE --exclude='*.example' --exclude='*.md' --exclude=bootstrap.sh \
+                'REPLACE-ME|AGE_PUBLIC_KEY_PLACEHOLDER' "$REPO_ROOT/cluster" "$REPO_ROOT/.sops.yaml"); then
+  die "unfilled placeholders in: $(echo "$unfilled" | tr '\n' ' ')(see cluster/bootstrap/README.md)"
 fi
 
 step "namespace $ARGOCD_NS"
