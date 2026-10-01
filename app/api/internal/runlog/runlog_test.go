@@ -3,6 +3,7 @@ package runlog
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/hubertmj/self-defending-portfolio/app/api/internal/events"
@@ -15,7 +16,7 @@ func feed(h *events.Hub, typ string, v any) {
 }
 
 func TestRecordsARunWithItsAlerts(t *testing.T) {
-	s := New(50, 500)
+	s := New(50, 500, 0, 0)
 	h := events.NewHub(10)
 	h.Tap(s.Record)
 	feed(h, "run", map[string]string{"run_id": "r1", "scenario": "network-tool", "state": "queued"})
@@ -50,7 +51,7 @@ func TestRecordsARunWithItsAlerts(t *testing.T) {
 }
 
 func TestBounds(t *testing.T) {
-	s := New(3, 4)
+	s := New(3, 4, 0, 0)
 	for i := range 5 {
 		s.Record(events.Event{ID: uint64(i), Type: "run",
 			Data: []byte(fmt.Sprintf(`{"run_id":"r%d","pod":"p%d"}`, i, i))})
@@ -73,4 +74,40 @@ func TestBounds(t *testing.T) {
 		t.Fatalf("cap: %d events, truncated=%v", len(run.Events), run.Truncated)
 	}
 	s.Record(events.Event{Type: "run", Data: []byte(`not json`)})
+}
+
+func TestByteBudgets(t *testing.T) {
+	ev := func(id uint64, run string, pad int) events.Event {
+		return events.Event{ID: id, Type: "falco", Data: []byte(fmt.Sprintf(`{"run_id":%q,"x":%q}`, run, strings.Repeat("a", pad)))}
+	}
+	// Per run: 100 bytes. Each event is ~60 bytes, so the second one does not fit.
+	s := New(10, 100, 100, 1000)
+	s.Record(ev(1, "r1", 30))
+	s.Record(ev(2, "r1", 30))
+	run, _ := s.Get("r1")
+	if len(run.Events) != 1 || !run.Truncated {
+		t.Fatalf("per-run budget: %d events, truncated=%v", len(run.Events), run.Truncated)
+	}
+	// Total: 1000 bytes. Ten runs of ~90 bytes fit; more evict the oldest, never exceed the total.
+	s = New(50, 100, 1000, 1000)
+	for i := range 20 {
+		s.Record(ev(uint64(i), fmt.Sprintf("r%02d", i), 60))
+	}
+	if _, ok := s.Get("r00"); ok {
+		t.Fatal("oldest run kept past the total budget")
+	}
+	if run, ok := s.Get("r19"); !ok || run.Truncated || len(run.Events) != 1 {
+		t.Fatalf("newest run: %+v %v", run, ok)
+	}
+	if s.total > 1000 {
+		t.Fatalf("total %d over budget", s.total)
+	}
+	// A single run larger than the total is truncated, not allowed to grow past it.
+	s = New(50, 100, 5000, 300)
+	for i := range 10 {
+		s.Record(ev(uint64(i), "big", 60))
+	}
+	if run, _ := s.Get("big"); !run.Truncated || s.total > 300 {
+		t.Fatalf("lone run: truncated=%v total=%d", run.Truncated, s.total)
+	}
 }

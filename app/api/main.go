@@ -87,7 +87,7 @@ func run(log *slog.Logger) error {
 	// pod and victim evidence publishes a few dozen events (ADR 0021). Complete runs are in the run
 	// store, fed by a tap so it never misses one.
 	hub := events.NewHub(100)
-	runs := runlog.New(runlog.DefaultRuns, runlog.DefaultRunEvents)
+	runs := runlog.New(0, 0, 0, 0) // the defaults: 50 runs, 500 events and 256 KiB each, 8 MiB in all
 	hub.Tap(runs.Record)
 	rules, err := ruleindex.Load()
 	if err != nil {

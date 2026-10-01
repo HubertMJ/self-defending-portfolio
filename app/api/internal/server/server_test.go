@@ -101,7 +101,7 @@ func newEnv(t *testing.T, cfg limits.AttackConfig) *env {
 		return false, nil, nil
 	})
 	hub := events.NewHub(50)
-	runs := runlog.New(50, 500)
+	runs := runlog.New(0, 0, 0, 0)
 	hub.Tap(runs.Record)
 	rules, err := ruleindex.Load()
 	if err != nil {
