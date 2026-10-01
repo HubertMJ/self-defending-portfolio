@@ -4,11 +4,12 @@ How the pieces of this repository fit together, drawn from the manifests rather 
 Every box below names the namespace, port or file it comes from, so a diagram that drifts from the
 code can be caught by reading the file it points at.
 
-Status legend used in every diagram:
+Everything drawn is in the repository (phases 1-6, including the visitor-facing API, the attack
+scenarios and the site). Line legend used in every diagram:
 
-- solid line / solid box: in the repository today (phases 1-4);
-- dashed line / box marked *planned*: phase 5/6 work in progress (the visitor-facing API, the attack
-  scenarios and the new site). Those parts do not exist on `main` yet and may still change.
+- solid line: the main path of a request, a write or an action;
+- dotted line: a side relationship (a mount, a credential or certificate, a lookup by the admission
+  controller, a label selecting a policy, the reverse direction of the tunnel).
 
 The overview below is a hand-drawn SVG (it follows the GitHub light/dark theme of your browser). The
 four sections after it are Mermaid diagrams of one flow each.
@@ -49,8 +50,9 @@ flowchart LR
             ROUTE["HTTPRoute hello<br/>security headers"]
             WEB["Deployment hello x2<br/>web image :8080, uid 101"]
         end
-        subgraph NS_API["ns portfolio-api (planned)"]
-            API["portfolio API :8080<br/>HTTPRoute /api"]
+        subgraph NS_API["ns portfolio-api"]
+            AROUTE["HTTPRoute portfolio-api<br/>/api, /api/events (timeout off)"]
+            API["Deployment portfolio-api x1<br/>Go, distroless :8080<br/>(:8081 internal, not routed)"]
         end
     end
     V -- "HTTPS" --> EDGE
@@ -60,7 +62,7 @@ flowchart LR
     SVC --- ENVOY
     ENVOY --- GW
     GW --> ROUTE --> WEB
-    GW -.-> API
+    GW --> AROUTE --> API
 ```
 
 What the diagram claims, and where it is written down:
@@ -74,36 +76,40 @@ What the diagram claims, and where it is written down:
 | Certificate: cert-manager, Let's Encrypt, DNS-01 against Cloudflare with a zone-scoped token | [`cluster/infra/cert-manager-issuers/`](../../cluster/infra/cert-manager-issuers/), [`cluster/apps/cert-manager.yaml`](../../cluster/apps/cert-manager.yaml) |
 | Only namespaces labelled `portfolio.hubertjablon.ski/gateway-routes: "true"` may attach routes | [`cluster/infra/gateway/gateway.yaml`](../../cluster/infra/gateway/gateway.yaml) |
 | HTTP is redirected to HTTPS twice: the `:80` listener, and `X-Forwarded-Proto: http` on `:443` | [`httproute-https-redirect.yaml`](../../cluster/infra/gateway/httproute-https-redirect.yaml), [`cluster/infra/hello/httproute.yaml`](../../cluster/infra/hello/httproute.yaml) |
-| HSTS, CSP (`script-src 'none'` today), nosniff, Referrer-Policy, Permissions-Policy, COOP are set at the Gateway | [`cluster/infra/hello/httproute.yaml`](../../cluster/infra/hello/httproute.yaml) |
+| HSTS, CSP, nosniff, Referrer-Policy, Permissions-Policy, COOP are set at the Gateway | [`cluster/infra/hello/httproute.yaml`](../../cluster/infra/hello/httproute.yaml) |
+| The route's CSP is exactly the web image's (same-origin scripts/styles/`connect-src`, Trusted Types enforced); CI fails if the two strings differ | [`app/web/security-headers.conf`](../../app/web/security-headers.conf), [`scripts/check-web-csp.sh`](../../scripts/check-web-csp.sh), [ADR 0019](../adr/0019-frontend-stack-and-csp.md) |
+| `/api` wins over hello's `/` (longer prefix), repeats the HTTP-to-HTTPS redirect and sets its own headers, CSP `default-src 'none'` | [`cluster/infra/portfolio-api/httproute.yaml`](../../cluster/infra/portfolio-api/httproute.yaml), [ADR 0015](../adr/0015-portfolio-api.md) |
 | Envoy trusts exactly one `X-Forwarded-For` hop (cloudflared) | [`cluster/apps/cilium.yaml`](../../cluster/apps/cilium.yaml) (`xffNumTrustedHops: 1`) |
 | `hello` is default-deny, ingress only from Cilium's `ingress`/`host` identities on 8080, no egress at all | [`cluster/infra/hello/`](../../cluster/infra/hello/) |
+| `portfolio-api` is default-deny; ingress 8080 from `ingress`/`host`, 8081 only from Falcosidekick and Talon; egress only kube-apiserver:6443 and DNS for `*.cluster.local` | [`cluster/infra/portfolio-api/ciliumnetworkpolicy.yaml`](../../cluster/infra/portfolio-api/ciliumnetworkpolicy.yaml), [`networkpolicy.yaml`](../../cluster/infra/portfolio-api/networkpolicy.yaml) |
+| One Service, two audiences: `http` 80->8080 is the route's backend, `internal` 8081 is never routed | [`cluster/infra/portfolio-api/service.yaml`](../../cluster/infra/portfolio-api/service.yaml) |
 | The Gateway's LoadBalancer address 10.4.1.30 exists only so the Gateway reports `Programmed`; nothing announces it | [`cluster/infra/gateway/lb-ip-pool.yaml`](../../cluster/infra/gateway/lb-ip-pool.yaml), [ADR 0010](../adr/0010-cilium-gateway-api.md) amendment |
 
 Argo CD, Hubble and Policy Reporter are never routed through the Gateway or the tunnel; they are
 reached with `kubectl port-forward` by someone who already holds cluster credentials.
 
-**Planned (phase 5):** an HTTPRoute for `/api` to a Go service in namespace `portfolio-api`, with a
-second, internal-only port 8081 for webhooks from `falco-response`. That namespace will need the
-`gateway-routes` label, and cloudflared's existing "route backends on 8080" egress rule already covers
-it. The CSP in the hello route is expected to loosen for the new frontend (scripts, SSE), as a
-reviewed diff.
+The `portfolio-api` namespace carries the `gateway-routes` label
+([`namespace.yaml`](../../cluster/infra/portfolio-api/namespace.yaml)), which both lets its route attach
+and is what cloudflared's "route backends on 8080" egress rule selects on. The frontend
+([`app/web/`](../../app/web/), TypeScript + esbuild, two-stage Dockerfile on nginx-unprivileged) calls
+`/api` and opens the event stream same-origin, so the CSP needs nothing beyond `'self'`.
 
 ## 2. GitOps flow: commit to running object
 
 ```mermaid
 flowchart TB
     DEV([operator]) -- "git push main" --> GH[("GitHub repo<br/>HubertMJ/self-defending-portfolio")]
-    GH -- "every push / PR" --> CI["lint.yml<br/>yamllint, ansible-lint, shellcheck,<br/>validate, gitleaks, smoke"]
+    GH -- "every push / PR" --> CI["lint.yml<br/>yamllint, ansible-lint, shellcheck,<br/>CSP match, image digests,<br/>validate, gitleaks, smoke"]
     subgraph NS_ARGO["ns argocd (installed once by cluster/bootstrap/bootstrap.sh)"]
         ROOT["Application root<br/>path cluster/apps"]
         RS["repo-server<br/>+ KSOPS init container"]
         AGE[("Secret sops-age<br/>age private key")]
-        APPS["15 child Applications<br/>sync waves -2 .. 5"]
+        APPS["16 child Applications<br/>sync waves -2 .. 6"]
     end
     GH -- "poll (3 min) on main" --> RS
     AGE -. "mounted 0440" .-> RS
     RS --> ROOT --> APPS
-    APPS -- "kustomize: cluster/infra/*" --> K8S[("cluster objects")]
+    APPS -- "kustomize: cluster/infra/*<br/>(falco: helmCharts + patch)" --> K8S[("cluster objects")]
     APPS -- "Helm charts, pinned versions" --> K8S
     ANS["Ansible (once)<br/>k3s + Cilium seed install"] --> K8S
     APPS -. "adopts Cilium release<br/>(server-side apply)" .-> K8S
@@ -116,8 +122,16 @@ flowchart TB
 - `root` points at [`cluster/apps/`](../../cluster/apps/), one file per component. Wave order and the
   list of Applications are in [`cluster/apps/kustomization.yaml`](../../cluster/apps/kustomization.yaml):
   `gateway-api-crds` (-2), `cilium` (-1), `cert-manager` (0), `cert-manager-issuers` and `kyverno` (1),
-  `kyverno-policies` and `cloudflared` (2), `gateway` (3), `hello` (4), and in wave 5 `policy-reporter`,
-  `trivy-operator`, `kube-bench`, `falco`, `falco-response`, `sandbox`.
+  `kyverno-policies` and `cloudflared` (2), `gateway` (3), `hello` (4), in wave 5 `policy-reporter`,
+  `trivy-operator`, `kube-bench`, `falco`, `falco-response`, `sandbox`, and `portfolio-api` (6), which
+  has two sources: [`cluster/infra/portfolio-api/`](../../cluster/infra/portfolio-api/) and the scenario
+  catalogue [`cluster/infra/sandbox/scenarios/`](../../cluster/infra/sandbox/scenarios/) (ConfigMap
+  `scenarios`).
+- Falco is one kustomize source, [`cluster/infra/falco/`](../../cluster/infra/falco/kustomization.yaml):
+  the chart via `helmCharts` plus a post-render patch that makes every host mount read-only
+  ([ADR 0013](../adr/0013-runtime-detection-and-response.md) amendment; needs `--enable-helm` in
+  [`argocd-cm.yaml`](../../cluster/bootstrap/argocd/argocd-cm.yaml)). The other charts, Falcosidekick
+  included, are Helm sources of their Applications.
 - Secrets are committed SOPS-encrypted (only `data`/`stringData`, see [`.sops.yaml`](../../.sops.yaml)) and decrypted
   inside the repo-server by KSOPS ([ADR 0006](../adr/0006-sops-age-for-secrets.md)). Two exist: the
   Cloudflare DNS-01 token and the tunnel credentials. CI refuses any plaintext `kind: Secret` under
@@ -129,29 +143,33 @@ flowchart TB
   reach the cluster only through a manual `kubectl apply -k` (ADR 0005, amendment 2026-10-01).
 - What CI checks before Argo CD sees a commit: [`.github/workflows/lint.yml`](../../.github/workflows/lint.yml) runs
   [`scripts/validate-cluster.sh`](../../scripts/validate-cluster.sh) (kustomize build + kubeconform against
-  Kubernetes 1.35 and CRD schemas, then `helm template` of every chart Application via
+  Kubernetes 1.35 and CRD schemas, Falco's `helmCharts` render with a read-only hostPath assertion,
+  then `helm template` of every chart Application via
   [`scripts/render-charts.sh`](../../scripts/render-charts.sh) and `kyverno apply` of the repository's
-  policies over all of it), plus gitleaks over the full history and an idempotency smoke test of the
+  policies over all of it), [`scripts/check-web-csp.sh`](../../scripts/check-web-csp.sh),
+  [`scripts/check-image-digests.sh`](../../scripts/check-image-digests.sh) (no all-zero placeholder
+  digest on main), plus gitleaks over the full history and an idempotency smoke test of the
   hardening playbook ([`tests/smoke.sh`](../../tests/smoke.sh)).
 
 ## 3. Supply chain: source to admitted pod
 
 ```mermaid
 flowchart LR
-    SRC["app/web/**<br/>push to main"] --> WF
-    subgraph WF["build-web.yml (GitHub Actions, actions pinned by SHA)"]
+    SRC["app/*/** (web, api, scenario)<br/>push to main"] --> WF
+    subgraph WF["build-images.yml (GitHub Actions, one matrix job per app/* image, actions pinned by SHA)"]
+        E2E["Playwright e2e<br/>(images with playwright.config.ts: web)"] --> B
         B["buildx push<br/>provenance/sbom off"] --> T["Trivy gate<br/>fixable CRITICAL/HIGH = fail"]
         T --> S["syft SBOM<br/>SPDX JSON"]
         S --> SIGN["cosign sign (keyless)"]
         SIGN --> ATT["cosign attest<br/>--type spdxjson"]
     end
     OIDC["GitHub OIDC token"] -.-> SIGN
-    SIGN -.-> FUL["Sigstore Fulcio<br/>short-lived cert<br/>SAN = build-web.yml@refs/heads/main"]
+    SIGN -.-> FUL["Sigstore Fulcio<br/>short-lived cert<br/>SAN = build-images.yml@refs/heads/main"]
     SIGN -.-> REK["Rekor<br/>transparency log"]
-    B --> GHCR[("GHCR (public)<br/>ghcr.io/hubertmj/self-defending-portfolio/web<br/>bundles as OCI referrers")]
+    B --> GHCR[("GHCR (public)<br/>ghcr.io/hubertmj/self-defending-portfolio/{web,api,scenario}<br/>bundles as OCI referrers")]
     ATT --> GHCR
-    HUMAN([operator]) -- "commit digest to<br/>cluster/infra/hello/kustomization.yaml" --> ARGO["Argo CD sync"]
-    ARGO --> ADM{"Kyverno admission<br/>ns hello, sandbox"}
+    HUMAN([operator]) -- "commit digest<br/>(scripts/bump-image-digest.sh)" --> ARGO["Argo CD sync"]
+    ARGO --> ADM{"Kyverno admission<br/>ns hello, sandbox, portfolio-api"}
     GHCR -. "referrers, bundles<br/>(anonymous pull)" .-> ADM
     ADM -- "signature + SBOM verified,<br/>registry allowed, no :latest" --> POD["Pod runs<br/>image pinned to verified digest"]
     ADM -- "anything else" --> DENY["rejected"]
@@ -160,83 +178,99 @@ flowchart LR
 
 | Step | File |
 |------|------|
-| Build, scan, SBOM, sign, attest | [`.github/workflows/build-web.yml`](../../.github/workflows/build-web.yml) |
+| Build (e2e gate for web), scan, SBOM, sign, attest, every `app/<name>/Dockerfile` | [`.github/workflows/build-images.yml`](../../.github/workflows/build-images.yml) |
 | Why keyless, why a bundle, why fixable-only | [ADR 0011](../adr/0011-supply-chain.md) (and its 2026-10-01 amendment) |
-| Admission: signature + SBOM by identity, `type: SigstoreBundle`, `mutateDigest`, `failurePolicy: Fail` | [`verify-portfolio-images.yaml`](../../cluster/infra/kyverno-policies/verify-portfolio-images.yaml) |
-| Admission: only `ghcr.io/hubertmj/self-defending-portfolio/*` in `hello` and `sandbox` | [`restrict-image-registries.yaml`](../../cluster/infra/kyverno-policies/restrict-image-registries.yaml) |
+| Why one matrix workflow and not a reusable one (the identity must be one file on main) | [ADR 0016](../adr/0016-one-image-workflow.md) |
+| Admission: signature + SBOM by identity, `type: SigstoreBundle`, `mutateDigest`, `failurePolicy: Fail`; identity regex `build-images.yml` (and, until hello's digest is rebuilt, `build-web.yml`) `@refs/heads/main` | [`verify-portfolio-images.yaml`](../../cluster/infra/kyverno-policies/verify-portfolio-images.yaml) |
+| Admission: only `ghcr.io/hubertmj/self-defending-portfolio/*` in `hello`, `sandbox` and `portfolio-api` | [`restrict-image-registries.yaml`](../../cluster/infra/kyverno-policies/restrict-image-registries.yaml) |
 | Admission: no image without a tag or with `:latest` (cluster-wide minus system namespaces) | [`disallow-latest-tag.yaml`](../../cluster/infra/kyverno-policies/disallow-latest-tag.yaml) |
 | The same verdict without a cluster | [`scripts/verify-image.sh`](../../scripts/verify-image.sh) |
 | The negative test (unsigned, foreign, `:latest` all rejected) | [`tests/admission/run.sh`](../../tests/admission/run.sh) |
+| No all-zero placeholder digest reaches main | [`scripts/check-image-digests.sh`](../../scripts/check-image-digests.sh) |
 
 The deployed digest is bumped by a human commit; nothing auto-promotes a build (ADR 0011, known gap).
 Third-party images (Cilium, Kyverno, Falco, ...) are pinned by tag and digest
 ([ADR 0008](../adr/0008-pinned-versions.md)) but are not signature-verified at admission: only this
 project's own registry path is.
-
-**Planned (phase 5):** more images under the same registry path (the API and the attack-scenario
-image), built by additional workflow files whose identity `verify-portfolio-images` will have to name,
-still pinned to `refs/heads/main`.
+All five Kyverno policies run with `failureAction: Enforce`.
 
 ## 4. Detection and response loop
 
 ```mermaid
 flowchart TB
-    subgraph NS_SB["ns sandbox (restricted, default-deny, DNS only)"]
-        P["pod<br/>label quarantine=false"]
+    V([visitor browser])
+    subgraph NS_API["ns portfolio-api (restricted)"]
+        API["portfolio API<br/>POST /api/attack/{id}, SSE /api/events<br/>:8081 /internal/falco, /internal/talon"]
+    end
+    subgraph NS_SB["ns sandbox (restricted, default-deny, DNS only,<br/>ResourceQuota 3 pods / 500m / 512Mi + LimitRange)"]
+        P["scenario pod (app/scenario image)<br/>label quarantine=false"]
     end
     subgraph NS_FALCO["ns falco (PSA privileged, Kyverno restricted-falco)"]
         F["Falco 0.45 DaemonSet<br/>modern eBPF, 4 capabilities<br/>no API token, rules from image + git"]
     end
     subgraph NS_FR["ns falco-response (restricted)"]
         SK["Falcosidekick :2801<br/>forwards priority >= notice"]
-        TA["Falco Talon 0.3.0 :2803<br/>leader Lease falco-talon"]
+        TA["Falco Talon 0.3.0 :2803<br/>leader Lease falco-talon, JSON log"]
     end
     K8S[("kube-apiserver :6443")]
     Q["CiliumClusterwideNetworkPolicy<br/>quarantine: deny all in/out"]
+    V -- "POST /api/attack/{id}" --> API
+    API -- "create pod from scenario,<br/>pods/exec, delete" --> K8S
+    K8S --> P
     P -- "syscalls (exec, open, connect)" --> F
     F -- "http_output JSON" --> SK
     SK -- "HTTP POST" --> TA
-    TA -- "Terminal shell in container<br/>-> kubernetes:terminate (grace 0)" --> K8S
+    SK -- "webhook :8081 /internal/falco" --> API
+    TA -- "Terminal shell in container,<br/>Read sensitive file untrusted,<br/>Drop and execute new binary in container<br/>-> kubernetes:terminate (grace 0)" --> K8S
     TA -- "SDP network tool in sandbox<br/>-> kubernetes:label quarantine=true" --> K8S
-    TA -- "k8s Event on the pod" --> K8S
+    TA -- "webhook notifier :8081 /internal/talon" --> API
     K8S -. "label selects pod" .-> Q
     P -. "isolated by" .- Q
-    SK -. "planned: webhook to API :8081" .-> API["portfolio API (planned)<br/>SSE /api/events to browser"]
-    TA -. "planned: notifier to API :8081" .-> API
+    API -- "SSE /api/events<br/>(correlated by pod name)" --> V
 ```
 
 | Link | Enforced by |
 |------|-------------|
-| Falco: modern eBPF in least-privileged mode, `drop: [ALL]` + BPF, PERFMON, SYS_RESOURCE, SYS_PTRACE; no falcoctl, no k8smeta; custom rule "SDP network tool in sandbox" | [`cluster/apps/falco.yaml`](../../cluster/apps/falco.yaml), [ADR 0013](../adr/0013-runtime-detection-and-response.md) |
+| Falco: modern eBPF in least-privileged mode, `drop: [ALL]` + BPF, PERFMON, SYS_RESOURCE, SYS_PTRACE; no falcoctl, no k8smeta; custom rule "SDP network tool in sandbox"; every host mount read-only (post-render patch) | [`cluster/infra/falco/kustomization.yaml`](../../cluster/infra/falco/kustomization.yaml), [`cluster/apps/falco.yaml`](../../cluster/apps/falco.yaml), [ADR 0013](../adr/0013-runtime-detection-and-response.md) |
 | Falco may only reach DNS and Falcosidekick:2801 | [`cluster/infra/falco/ciliumnetworkpolicy.yaml`](../../cluster/infra/falco/ciliumnetworkpolicy.yaml) |
-| Falcosidekick accepts only Falco pods; Talon accepts only Falcosidekick; Talon egress only the API server | [`cluster/infra/falco-response/ciliumnetworkpolicy.yaml`](../../cluster/infra/falco-response/ciliumnetworkpolicy.yaml) |
-| Response rules, both matching `k8s.ns.name=sandbox` | [`cluster/infra/falco-response/talon/rules.yaml`](../../cluster/infra/falco-response/talon/rules.yaml) |
-| Talon may get/patch/delete pods and create events in `sandbox` only, plus `get` on Namespace `sandbox` and its own Lease | [`cluster/infra/sandbox/talon-rbac.yaml`](../../cluster/infra/sandbox/talon-rbac.yaml), [`cluster/infra/falco-response/talon-rbac.yaml`](../../cluster/infra/falco-response/talon-rbac.yaml) |
+| Falcosidekick accepts only Falco pods, sends to Talon:2803 and the API:8081; Talon accepts only Falcosidekick, egress only the API server, DNS for exactly `portfolio-api.portfolio-api.svc.cluster.local` and the API:8081 | [`cluster/infra/falco-response/ciliumnetworkpolicy.yaml`](../../cluster/infra/falco-response/ciliumnetworkpolicy.yaml) |
+| The API's :8081 accepts only Falcosidekick and Talon (the webhooks are unauthenticated; this policy is their authentication) | [`cluster/infra/portfolio-api/ciliumnetworkpolicy.yaml`](../../cluster/infra/portfolio-api/ciliumnetworkpolicy.yaml) |
+| Falcosidekick's webhook output to `/internal/falco` | [`cluster/apps/falco-response.yaml`](../../cluster/apps/falco-response.yaml) |
+| Talon's only notifier is the webhook to `/internal/talon`; no Kubernetes Events (k8sevents off in 0.3.0); JSON log | [`cluster/infra/falco-response/talon/config.yaml`](../../cluster/infra/falco-response/talon/config.yaml), ADR 0013 correction |
+| Response rules, all four matching `k8s.ns.name=sandbox` | [`cluster/infra/falco-response/talon/rules.yaml`](../../cluster/infra/falco-response/talon/rules.yaml) |
+| Talon may get/patch/delete pods in `sandbox` only, plus its own Lease in `falco-response`; no events, nothing cluster-scoped | [`cluster/infra/sandbox/talon-rbac.yaml`](../../cluster/infra/sandbox/talon-rbac.yaml), [`cluster/infra/falco-response/talon-rbac.yaml`](../../cluster/infra/falco-response/talon-rbac.yaml) |
 | Quarantine = a label plus a standing deny policy (deny beats allow) | [`cluster/infra/sandbox/quarantine-ccnp.yaml`](../../cluster/infra/sandbox/quarantine-ccnp.yaml) |
+| Scenario catalogue: `shell-in-container`, `sensitive-file-read`, `drop-and-execute` -> terminate; `network-tool` -> quarantine | [`cluster/infra/sandbox/scenarios/scenarios.yaml`](../../cluster/infra/sandbox/scenarios/scenarios.yaml), [ADR 0017](../adr/0017-attack-scenario-safety-model.md), [ADR 0018](../adr/0018-scenario-detection-and-response-mapping.md) |
+| The scenario target image: harmless triggers, no payload | [`app/scenario/Dockerfile`](../../app/scenario/Dockerfile) |
+| What a visitor can make `sandbox` spend: 3 pods, 500m CPU, 512Mi, no Services/PVCs; per-container defaults and caps | [`resourcequota.yaml`](../../cluster/infra/sandbox/resourcequota.yaml), [`limitrange.yaml`](../../cluster/infra/sandbox/limitrange.yaml) |
+| The API may create/get/list/delete pods and create pods/exec in `sandbox`, list pods and get pods/log in `kube-bench`, list three report kinds cluster-wide; nothing else | [`cluster/infra/portfolio-api/rbac.yaml`](../../cluster/infra/portfolio-api/rbac.yaml), [ADR 0015](../adr/0015-portfolio-api.md) |
+| One replica, `Recreate`: run limits, replay buffer and run <-> alert correlation are in-process state | [`cluster/infra/portfolio-api/deployment.yaml`](../../cluster/infra/portfolio-api/deployment.yaml), [`app/api/`](../../app/api/) |
 | End-to-end proof: shell -> alert -> kill, `wget` -> quarantine, RBAC can-i | [`tests/runtime/run.sh`](../../tests/runtime/run.sh) (`make runtime-test`) |
-
-**Planned (phase 5):** a visitor presses a button, the API creates a pod from a fixed scenario
-template in `sandbox`, optionally execs a command into it, correlates Falco and Talon events by pod name
-and streams them to the browser over SSE. Falcosidekick and Talon get an extra webhook output to the
-API's internal port, allowed by a network policy from `falco-response` only.
+| Every scenario produces its alert, its action and the end state | [`tests/scenarios/run.sh`](../../tests/scenarios/run.sh) (`make scenario-test`), [`tests/scenarios/offline.sh`](../../tests/scenarios/offline.sh) |
 
 ## 5. Posture reporting
 
 ```mermaid
 flowchart LR
-    KY["Kyverno<br/>5 ClusterPolicies,<br/>background scan"] --> PR[("PolicyReports<br/>wgpolicyk8s.io")]
+    KY["Kyverno<br/>5 ClusterPolicies (Enforce),<br/>background scan"] --> PR[("PolicyReports<br/>wgpolicyk8s.io")]
     TO["Trivy Operator<br/>client/server, 1 scan Job at a time"] --> TR[("Vulnerability / ConfigAudit /<br/>ExposedSecret / RbacAssessment reports")]
     TR --> AD["trivy-operator-polr-adapter"] --> PR
     PR --> PRUI["Policy Reporter core + UI<br/>ClusterIP only, port-forward"]
     KB["kube-bench CronJob<br/>daily 03:17 UTC, k3s-cis-1.9"] --> LOG[("JSON in the Job log")]
-    PR -. "planned" .-> POST["API: GET /api/posture (planned)"]
-    LOG -. "planned" .-> POST
+    POST["API: GET /api/posture<br/>app/api/internal/posture"]
+    FEED["Falco alerts / Talon actions<br/>received on :8081"] -- "24 h counts" --> POST
+    PR -- "list (Kyverno results only)" --> POST
+    TR -- "list VulnerabilityReports" --> POST
+    LOG -- "pods/log of newest successful Job" --> POST
 ```
 
 Sources: [ADR 0012](../adr/0012-pod-security-and-resource-policy.md),
 [ADR 0014](../adr/0014-posture-scanning.md), [`cluster/apps/trivy-operator.yaml`](../../cluster/apps/trivy-operator.yaml),
 [`cluster/apps/policy-reporter.yaml`](../../cluster/apps/policy-reporter.yaml),
-[`cluster/infra/kube-bench/cronjob.yaml`](../../cluster/infra/kube-bench/cronjob.yaml).
+[`cluster/infra/kube-bench/cronjob.yaml`](../../cluster/infra/kube-bench/cronjob.yaml),
+[`app/api/internal/posture/posture.go`](../../app/api/internal/posture/posture.go) (what is read, and how
+it is summarised), [`cluster/infra/portfolio-api/rbac.yaml`](../../cluster/infra/portfolio-api/rbac.yaml)
+(the read grants).
 
 ## 6. Namespaces at a glance
 
@@ -254,8 +288,8 @@ Sources: [ADR 0012](../adr/0012-pod-security-and-resource-policy.md),
 | `kube-bench` | privileged (audit restricted) | default-deny, nothing opened | daily CIS CronJob | [`cluster/infra/kube-bench/`](../../cluster/infra/kube-bench/) |
 | `falco` | privileged (audit restricted) | default-deny + CNP | Falco DaemonSet only | [`cluster/infra/falco/`](../../cluster/infra/falco/) |
 | `falco-response` | restricted | default-deny + CNPs | Falcosidekick, Talon | [`cluster/infra/falco-response/`](../../cluster/infra/falco-response/) |
-| `sandbox` | restricted | default-deny + DNS only + quarantine CCNP | short-lived victims / scenario pods | [`cluster/infra/sandbox/`](../../cluster/infra/sandbox/) |
-| `portfolio-api` | *planned* | *planned* | phase 5 API | not in the repository yet |
+| `sandbox` | restricted | default-deny + DNS only + quarantine CCNP | short-lived victims / scenario pods (ResourceQuota + LimitRange) | [`cluster/infra/sandbox/`](../../cluster/infra/sandbox/) |
+| `portfolio-api` | restricted | default-deny + CNP | the API, scenario catalogue ConfigMap | [`cluster/infra/portfolio-api/`](../../cluster/infra/portfolio-api/), [`cluster/infra/sandbox/scenarios/`](../../cluster/infra/sandbox/scenarios/) |
 
 Host level (outside Kubernetes): Debian 13 VM `k3s01` on Proxmox, hardened by the roles in
 [`ansible/roles/`](../../ansible/roles/) (SSH key-only from two admin VLANs, nftables input
