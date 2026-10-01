@@ -27,7 +27,7 @@ placeholder instead of a GitHub owner, because the manifests are committed befor
 one:
 
 ```sh
-grep -rl REPLACE-ME-GITHUB-OWNER cluster/ | xargs sed -i 's/REPLACE-ME-GITHUB-OWNER/<your-gh-user>/g'
+grep -rl HubertMJ cluster/ | xargs sed -i 's/HubertMJ/<your-gh-user>/g'
 ```
 
 `bootstrap.sh` refuses to run while that string is still present.
@@ -36,7 +36,7 @@ grep -rl REPLACE-ME-GITHUB-OWNER cluster/ | xargs sed -i 's/REPLACE-ME-GITHUB-OW
 
 | Placeholder | Where | What it is |
 |-------------|-------|------------|
-| `REPLACE-ME-GITHUB-OWNER` | `cluster/apps/*.yaml`, `cluster/bootstrap/argocd/root-application.yaml` | GitHub owner of this repository |
+| `HubertMJ` | `cluster/apps/*.yaml`, `cluster/bootstrap/argocd/root-application.yaml` | GitHub owner of this repository |
 | `REPLACE-ME-ACME-CONTACT-EMAIL` | `cluster/infra/cert-manager-issuers/clusterissuer-*.yaml` | Let's Encrypt account contact |
 | `REPLACE-ME-TUNNEL-UUID` | `cluster/infra/cloudflared/config.yaml` | output of `cloudflared tunnel create portfolio` |
 | `AGE_PUBLIC_KEY_PLACEHOLDER` | `.sops.yaml` | your age public key |

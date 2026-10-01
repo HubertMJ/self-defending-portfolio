@@ -17,7 +17,7 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: https://github.com/REPLACE-ME-GITHUB-OWNER/self-defending-portfolio.git
+    repoURL: https://github.com/HubertMJ/self-defending-portfolio.git
     targetRevision: main
     path: cluster/infra/cert-manager-issuers
   destination:

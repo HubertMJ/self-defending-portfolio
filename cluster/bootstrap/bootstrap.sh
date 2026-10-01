@@ -26,8 +26,8 @@ command -v "$KUBECTL" >/dev/null || die "kubectl not found; set KUBECTL or expor
 grep -q 'AGE-SECRET-KEY-' "$SOPS_AGE_KEY_FILE" \
   || die "$SOPS_AGE_KEY_FILE does not look like an age identity file (no AGE-SECRET-KEY- line)"
 
-if grep -rq 'REPLACE-ME-GITHUB-OWNER' "$REPO_ROOT/cluster"; then
-  die "cluster/ still contains REPLACE-ME-GITHUB-OWNER; set the repository owner first (see cluster/bootstrap/README.md)"
+if grep -rq 'HubertMJ' "$REPO_ROOT/cluster"; then
+  die "cluster/ still contains HubertMJ; set the repository owner first (see cluster/bootstrap/README.md)"
 fi
 
 step "namespace $ARGOCD_NS"

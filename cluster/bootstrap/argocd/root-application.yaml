@@ -2,7 +2,7 @@
 # git commit (ADR 0005).
 #
 # repoURL contains a placeholder. Replace it before the first bootstrap:
-#   grep -rl REPLACE-ME-GITHUB-OWNER cluster/ | xargs sed -i 's/REPLACE-ME-GITHUB-OWNER/<your-gh-user>/g'
+#   grep -rl HubertMJ cluster/ | xargs sed -i 's/HubertMJ/<your-gh-user>/g'
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
@@ -14,7 +14,7 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: https://github.com/REPLACE-ME-GITHUB-OWNER/self-defending-portfolio.git
+    repoURL: https://github.com/HubertMJ/self-defending-portfolio.git
     targetRevision: main
     path: cluster/apps
   destination:

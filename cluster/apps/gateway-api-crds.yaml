@@ -15,7 +15,7 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: https://github.com/REPLACE-ME-GITHUB-OWNER/self-defending-portfolio.git
+    repoURL: https://github.com/HubertMJ/self-defending-portfolio.git
     targetRevision: main
     # A kustomization whose only resource is the pinned upstream standard-install.yaml. Keeping it
     # in the repo rather than pointing Argo at the release URL means the pin is reviewable in a
