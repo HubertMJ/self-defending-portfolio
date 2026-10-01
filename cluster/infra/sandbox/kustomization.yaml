@@ -1,6 +1,10 @@
 # The `sandbox` namespace (ADR 0013): where the phase 4 runtime-response test puts its victim pods
-# (tests/runtime/run.sh) and where the phase 5 attack scenarios will run. Deployed by
-# cluster/apps/sandbox.yaml. No workload is declared here; the test creates and deletes its own pods.
+# (tests/runtime/run.sh) and where the phase 5 attack scenarios run (ADR 0017). Deployed by
+# cluster/apps/sandbox.yaml. No workload is declared here; the tests and the portfolio API create and
+# delete their own pods, inside the quota and LimitRange below.
+#
+# scenarios/ is a separate kustomization (ConfigMap `scenarios` in `portfolio-api`), deployed by the
+# portfolio-api Application, not by this one.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
@@ -12,3 +16,5 @@ resources:
   - ciliumnetworkpolicy.yaml
   - quarantine-ccnp.yaml
   - talon-rbac.yaml
+  - resourcequota.yaml
+  - limitrange.yaml
