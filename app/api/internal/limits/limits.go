@@ -115,6 +115,48 @@ func (a *Attacks) Acquire(key string) (Decision, func()) {
 	}
 }
 
+// AttackStatus is what GET /api/limits reports to one visitor: the attack budgets as they stand,
+// without spending anything.
+type AttackStatus struct {
+	PerKeyLimit     int
+	PerKeyWindow    time.Duration
+	PerKeyRemaining int
+	// PerKeyResetIn is when the visitor's oldest counted run leaves the window (one more attempt
+	// becomes available); zero when nothing is counted.
+	PerKeyResetIn   time.Duration
+	GlobalLimit     int
+	GlobalWindow    time.Duration
+	GlobalRemaining int
+	Active          bool
+}
+
+// Status reports key's budgets. Read-only: the windows are evaluated at now, not pruned.
+func (a *Attacks) Status(key string) AttackStatus {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	now := a.now()
+	mine := inWindow(a.perKey[key], now.Add(-a.cfg.PerKeyWindow))
+	all := inWindow(a.global, now.Add(-a.cfg.GlobalWindow))
+	st := AttackStatus{
+		PerKeyLimit: a.cfg.PerKey, PerKeyWindow: a.cfg.PerKeyWindow, PerKeyRemaining: max(0, a.cfg.PerKey-len(mine)),
+		GlobalLimit: a.cfg.Global, GlobalWindow: a.cfg.GlobalWindow, GlobalRemaining: max(0, a.cfg.Global-len(all)),
+		Active: a.active > 0,
+	}
+	if len(mine) > 0 {
+		st.PerKeyResetIn = mine[0].Add(a.cfg.PerKeyWindow).Sub(now)
+	}
+	return st
+}
+
+// inWindow is the suffix of ts (ascending) after cutoff, without modifying ts.
+func inWindow(ts []time.Time, cutoff time.Time) []time.Time {
+	i := 0
+	for i < len(ts) && !ts[i].After(cutoff) {
+		i++
+	}
+	return ts[i:]
+}
+
 // Active is the number of runs holding a slot.
 func (a *Attacks) Active() int {
 	a.mu.Lock()
@@ -193,6 +235,13 @@ type Conns struct {
 // NewConns allows perKey connections per key and total connections overall.
 func NewConns(perKey, total int) *Conns {
 	return &Conns{perKey: perKey, total: total, open: map[string]int{}}
+}
+
+// Remaining is how many more connections key could open now.
+func (c *Conns) Remaining(key string) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return max(0, min(c.perKey-c.open[key], c.total-c.sum))
 }
 
 // Acquire reserves a connection for key; the returned release is idempotent.

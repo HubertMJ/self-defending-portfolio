@@ -40,6 +40,7 @@ type Hub struct {
 	full    bool
 	subs    map[*Subscription]struct{}
 	bufSize int
+	tap     func(Event)
 }
 
 // subscriberBuffer is how far a client may fall behind before it is dropped. A run produces well under
@@ -52,6 +53,16 @@ func NewHub(replay int) *Hub {
 		replay = 1
 	}
 	return &Hub{ring: make([]Event, replay), subs: map[*Subscription]struct{}{}, bufSize: subscriberBuffer}
+}
+
+// Tap registers fn to be called with every event as it is published, synchronously and in
+// publication order (the run store records runs this way: unlike a subscriber, a tap is never
+// dropped, so it never misses an event). fn runs under the hub's lock and must be quick and must
+// not publish. Call Tap before the first Publish.
+func (h *Hub) Tap(fn func(Event)) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.tap = fn
 }
 
 // Publish encodes v as JSON and delivers it to every subscriber. It never blocks on a subscriber.
@@ -68,6 +79,9 @@ func (h *Hub) Publish(typ string, v any) error {
 	h.next = (h.next + 1) % len(h.ring)
 	if h.next == 0 {
 		h.full = true
+	}
+	if h.tap != nil {
+		h.tap(ev)
 	}
 	for s := range h.subs {
 		select {

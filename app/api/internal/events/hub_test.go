@@ -124,3 +124,17 @@ func TestConcurrentPublish(t *testing.T) {
 		t.Fatalf("last id = %d, want 40", last)
 	}
 }
+
+func TestTapSeesEveryEventInOrder(t *testing.T) {
+	h := NewHub(1)
+	var got []uint64
+	h.Tap(func(ev Event) { got = append(got, ev.ID) })
+	for range 5 {
+		if err := h.Publish("run", map[string]int{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(got) != 5 || got[0] != 1 || got[4] != 5 {
+		t.Fatalf("tap saw %v", got)
+	}
+}

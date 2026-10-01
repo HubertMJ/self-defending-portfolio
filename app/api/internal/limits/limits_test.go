@@ -195,3 +195,54 @@ func TestConns(t *testing.T) {
 		t.Fatalf("leak: sum=%d open=%v", c.sum, c.open)
 	}
 }
+
+func TestAttackStatus(t *testing.T) {
+	c := newClock()
+	a := NewAttacks(DefaultAttackConfig(), c.now)
+	st := a.Status("1.2.3.4")
+	if st.PerKeyRemaining != 3 || st.PerKeyResetIn != 0 || st.GlobalRemaining != 30 || st.Active ||
+		st.PerKeyLimit != 3 || st.PerKeyWindow != 10*time.Minute || st.GlobalLimit != 30 || st.GlobalWindow != time.Hour {
+		t.Fatalf("fresh: %+v", st)
+	}
+	_, release := a.Acquire("1.2.3.4")
+	c.add(2 * time.Minute)
+	st = a.Status("1.2.3.4")
+	if st.PerKeyRemaining != 2 || st.PerKeyResetIn != 8*time.Minute || st.GlobalRemaining != 29 || !st.Active {
+		t.Fatalf("one run: %+v", st)
+	}
+	if other := a.Status("5.6.7.8"); other.PerKeyRemaining != 3 || other.GlobalRemaining != 29 || !other.Active {
+		t.Fatalf("other visitor: %+v", other)
+	}
+	release()
+	c.add(9 * time.Minute)
+	if st = a.Status("1.2.3.4"); st.PerKeyRemaining != 3 || st.PerKeyResetIn != 0 || st.Active {
+		t.Fatalf("after the window: %+v", st)
+	}
+	// Status spends nothing.
+	for range 10 {
+		a.Status("1.2.3.4")
+	}
+	if d, _ := a.Acquire("1.2.3.4"); d.Outcome != Allowed {
+		t.Fatalf("status consumed budget: %v", d.Outcome)
+	}
+}
+
+func TestConnsRemaining(t *testing.T) {
+	c := NewConns(2, 3)
+	if c.Remaining("a") != 2 {
+		t.Fatal("fresh")
+	}
+	_, r1 := c.Acquire("a")
+	_, _ = c.Acquire("b")
+	if c.Remaining("a") != 1 || c.Remaining("c") != 1 {
+		t.Fatalf("a=%d c=%d", c.Remaining("a"), c.Remaining("c"))
+	}
+	_, _ = c.Acquire("c")
+	if c.Remaining("d") != 0 {
+		t.Fatal("total cap")
+	}
+	r1()
+	if c.Remaining("a") != 1 {
+		t.Fatal("after release")
+	}
+}
