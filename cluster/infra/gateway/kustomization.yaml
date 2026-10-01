@@ -4,4 +4,5 @@ kind: Kustomization
 resources:
   - namespace.yaml
   - gateway.yaml
+  - lb-ip-pool.yaml
   - httproute-https-redirect.yaml

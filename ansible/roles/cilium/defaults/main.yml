@@ -85,6 +85,11 @@ cilium_values:
     # registered (gatewayClass.create defaults to `auto`, which inspects the cluster's API
     # versions at render time), which is why this role applies the CRDs first.
     enabled: true
+    # Trust one proxy hop for X-Forwarded-For/X-Forwarded-Proto. The only path to the Gateway
+    # is cloudflared (NetworkPolicy), which relays Cloudflare's headers; with 0 hops Envoy
+    # overwrites X-Forwarded-Proto with its own scheme, so the http->https redirect and any
+    # per-visitor rate limit would see the tunnel instead of the visitor.
+    xffNumTrustedHops: 1
     # Nothing binds a host port: the only path in is the tunnel (ADR 0003).
     hostNetwork:
       enabled: false

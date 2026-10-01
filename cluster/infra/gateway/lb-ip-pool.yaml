@@ -1,0 +1,15 @@
+# Gives the Gateway's LoadBalancer Service an address so the Gateway reports Programmed=True and
+# Argo CD reports Healthy. Nothing announces this address (no L2/BGP), so it is reachable only from
+# inside the node; the public path remains the tunnel -> ClusterIP (ADR 0003, ADR 0010).
+# 10.4.1.30 is outside the UniFi DHCP range of the DMZ (10.4.1.6-254 is the pool, .30 is reserved
+# here by convention and documented in docs/bootstrap.md).
+apiVersion: cilium.io/v2
+kind: CiliumLoadBalancerIPPool
+metadata:
+  name: gateway-internal
+spec:
+  blocks:
+    - cidr: 10.4.1.30/32
+  serviceSelector:
+    matchLabels:
+      io.cilium.gateway/owning-gateway: portfolio
