@@ -3,8 +3,13 @@
 // drift between the two), the same cache headers, and the same text/plain 404 for /api/*. Used by
 // `npm run serve`, the dev loop and the Playwright suite. Not used in the image.
 //
-//   node scripts/serve.mjs [--port 4173]
+//   node scripts/serve.mjs [--port 4173] [--stub-events]
 //   then open http://localhost:4173/?mock=1 for mock mode, or / for the offline state.
+//
+// --stub-events serves GET /api/events the way the API does (same headers, the retry + 2 KiB
+// preamble, a replayed run event, a heartbeat comment every 2 s), so the Playwright suite can drive
+// the browser's real EventSource rather than only the in-page mock: the mock replaces the
+// EventSource factory, so on its own it could never notice that the real one is never created.
 
 import { createServer } from "node:http";
 import { readFile, stat } from "node:fs/promises";
@@ -15,6 +20,18 @@ const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const dist = join(root, "dist");
 const portArg = process.argv.indexOf("--port");
 const port = Number(portArg > 0 ? process.argv[portArg + 1] : process.env.PORT ?? 4173);
+const stubEvents = process.argv.includes("--stub-events");
+
+// One replayed event in the API's exact shape (app/api/internal/runner RunEvent).
+const replayedRun = JSON.stringify({ run_id: "stub0000000000000000", scenario: "shell-in-container", state: "finished", at: "2026-10-01T12:00:00Z", detail: "" });
+
+function eventStream(req, res) {
+  res.writeHead(200, { ...base, "Content-Type": "text/event-stream", "Cache-Control": "no-store, no-transform", "X-Accel-Buffering": "no" });
+  res.write("retry: 5000\n\n:" + " ".repeat(2048) + "\n\n");
+  res.write(`id: 1\nevent: run\ndata: ${replayedRun}\n\n`);
+  const heartbeat = setInterval(() => res.write(": heartbeat\n\n"), 2000);
+  req.on("close", () => clearInterval(heartbeat));
+}
 
 const TYPES = {
   ".html": "text/html; charset=utf-8",
@@ -42,6 +59,7 @@ const server = createServer(async (req, res) => {
     res.end(req.method === "HEAD" ? undefined : body);
   };
   if (req.method !== "GET" && req.method !== "HEAD") return send(405, "method not allowed\n", { "Content-Type": "text/plain" });
+  if (stubEvents && url.pathname === "/api/events") return eventStream(req, res);
   if (url.pathname === "/api" || url.pathname.startsWith("/api/")) {
     return send(404, "not found\n", { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" });
   }

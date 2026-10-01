@@ -129,6 +129,31 @@ test.describe("mock mode", () => {
   });
 });
 
+test.describe("real EventSource against a streaming server", () => {
+  test("opens exactly one long-lived stream, keeps it open and shows the replay", async ({ page }) => {
+    test.skip(!!process.env.BASE_URL, "needs the local --stub-events server");
+    test.setTimeout(60_000);
+    const stub = "http://127.0.0.1:4174";
+    const requests: string[] = [];
+    const failed: string[] = [];
+    page.on("request", (r) => {
+      if (r.url().includes("/api/events")) requests.push(r.resourceType());
+    });
+    page.on("requestfailed", (r) => {
+      if (r.url().includes("/api/events")) failed.push(`${r.resourceType()} ${r.failure()?.errorText}`);
+    });
+    await page.goto(`${stub}/`);
+    await expect(page.locator("#timeline-conn")).toHaveAttribute("data-state", "open");
+    await expect(page.locator(".run").first()).toBeVisible();
+    await page.waitForTimeout(20_000);
+    await expect(page.locator("#timeline-conn")).toHaveAttribute("data-state", "open");
+    // Exactly one request from this page, made by the browser's EventSource (not a fetch), never
+    // aborted. Counted per page: the desktop and phone projects share the stub server.
+    expect(requests).toEqual(["eventsource"]);
+    expect(failed).toEqual([]);
+  });
+});
+
 test.describe("event stream reconnects", () => {
   test("refused and stalled streams: one steady countdown per attempt, Retry-After honoured, then live", async ({ page }) => {
     test.setTimeout(60_000);

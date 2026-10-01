@@ -82,6 +82,10 @@ const defaultClock: Clock = {
   now: () => (typeof performance !== "undefined" ? performance.now() : Date.now()),
 };
 
+function definedOnly<T extends object>(o: T): T {
+  return Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined)) as T;
+}
+
 /** Full-jitter exponential backoff: uniform in [base/2, min(max, base * 2^attempt)]. */
 export function backoffDelay(attempt: number, base: number, max: number, random: () => number): number {
   const ceiling = Math.min(max, base * 2 ** Math.max(0, attempt));
@@ -115,7 +119,10 @@ export class EventStream {
       healthyAfterMs: 5000,
       dedupWindow: 200,
       maxAttempts: 8,
-      ...opts,
+      // Only the options that are actually set: a caller passing `factory: undefined` (main.ts
+      // outside mock mode) must get the default, not a spread that overwrites it with undefined -
+      // which made every connect throw before an EventSource was ever created.
+      ...definedOnly(opts),
     };
   }
 

@@ -678,9 +678,19 @@ Manual, in the Cloudflare dashboard (this repository has no Cloudflare API acces
 The origin already marks every error `no-store` (ADR 0019, amendment); this rule makes the edge
 independent of that, so one origin mistake cannot be served from cache for a year.
 
-1. **Purge what is already wrong.** Caching -> Configuration -> Purge Cache -> Custom Purge -> URL:
-   every `https://hubertjablon.ski/assets/...` URL that answered 404 (or purge everything once; the
-   assets are content-hashed and refill on first request).
+1. **Purge what is already wrong.** Caching -> Configuration -> Purge Cache -> **Purge Everything**.
+   Purge by URL is not enough: the page loads its bundle as a module script, which sends an `Origin`
+   header, and the cached 404 was a variant keyed on it that a URL purge did not reach (observed
+   2026-10-01). Purging everything is harmless here: the assets are content-hashed and refill on
+   their first request.
+
+   With errors marked `no-store` at the origin and the rule below, a purge is no longer part of a
+   normal rollout. When one is needed, it stays a manual dashboard step. The Cloudflare API token in
+   `cluster/infra/cert-manager-issuers` exists for DNS-01 challenges inside the cluster; it should
+   carry Zone:DNS:Edit for this zone and nothing else. A Cache Purge permission on it gives cert-manager
+   (and anything that can read that Secret) the power to flush the site's cache for no benefit, so
+   remove that permission again. Do not reuse the token in CI either: that would copy a zone-wide
+   credential into GitHub secrets for a step that a cache-safe origin makes unnecessary.
 2. **Cache Rule for the assets.** Caching -> Cache Rules -> Create rule:
    - When incoming requests match: URI Path starts with `/assets/`;
    - Cache eligibility: Eligible for cache;

@@ -314,3 +314,24 @@ describe("EventStream retry scheduler", () => {
     expect(seen.at(-1)?.state).toBe("open");
   });
 });
+
+describe("EventStream defaults", () => {
+  it("uses the browser's EventSource when the factory option is present but undefined", () => {
+    const created: string[] = [];
+    class StubEventSource extends FakeSource {
+      constructor(url: string) {
+        super(url);
+        created.push(url);
+      }
+    }
+    vi.stubGlobal("EventSource", StubEventSource);
+    try {
+      const stream = new EventStream({ url: "/api/events", factory: undefined, onEvent: () => {} });
+      stream.start();
+      expect(created).toEqual(["/api/events"]);
+      expect(vi.getTimerCount()).toBe(0); // no retry was scheduled: the connect did not throw
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});

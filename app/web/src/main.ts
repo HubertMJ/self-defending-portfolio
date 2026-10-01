@@ -80,7 +80,8 @@ function main(): void {
 
   const events = new EventStream({
     url: api.url("/events"),
-    factory,
+    // Only in mock mode; otherwise the stream's own default, the browser's EventSource.
+    ...(factory ? { factory } : {}),
     onEvent: (ev) => timeline.push(ev),
     // EventSource cannot read why a connect was refused; this asks once per refusal (Retry-After).
     probe: () => api.streamRetryAfterMs(),

@@ -31,9 +31,17 @@ export default defineConfig({
   ],
   webServer: external
     ? undefined
-    : {
-        command: "node scripts/serve.mjs --port 4173",
-        url: "http://127.0.0.1:4173/",
-        reuseExistingServer: !process.env.CI,
-      },
+    : [
+        {
+          command: "node scripts/serve.mjs --port 4173",
+          url: "http://127.0.0.1:4173/",
+          reuseExistingServer: !process.env.CI,
+        },
+        // The same site with a real streaming /api/events (see serve.mjs --stub-events).
+        {
+          command: "node scripts/serve.mjs --port 4174 --stub-events",
+          url: "http://127.0.0.1:4174/",
+          reuseExistingServer: !process.env.CI,
+        },
+      ],
 });
