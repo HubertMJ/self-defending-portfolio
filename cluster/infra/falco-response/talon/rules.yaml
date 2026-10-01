@@ -1,6 +1,7 @@
-# Falco Talon's response rules (ADR 0013, plan section 4.4). Only `sandbox` is ever acted on: both
-# rules match on the namespace output field, and Talon's RBAC (../talon-rbac.yaml) covers no other
-# namespace, so a rule that matched elsewhere would fail with a 403 rather than act.
+# Falco Talon's response rules (ADR 0013, plan section 4.4; the phase 5 scenarios in ADR 0018). Only
+# `sandbox` is ever acted on: every rule matches on the namespace output field, and Talon's RBAC
+# (../talon-rbac.yaml) covers no other namespace, so a rule that matched elsewhere would fail with a
+# 403 rather than act.
 #
 # Talon checks this file at start-up (`falco-talon rules check` runs the same validation offline).
 
@@ -52,3 +53,36 @@
       - k8s.ns.name=sandbox
   actions:
     - action: Quarantine Pod
+
+# ---- phase 5 attack scenarios (ADR 0018; cluster/infra/sandbox/scenarios/scenarios.yaml) ----
+#
+# "shell-in-container" and "network-tool" are answered by the two rules above. The two below cover the
+# other two scenarios, both with the existing Terminate Pod action, for the same reason as the DoD rule:
+# a credential read and a dropped binary are post-compromise steps, and nothing about the pod is worth
+# keeping once either has happened. Both Falco rules are stock rules of the Falco 0.45.0 image
+# (/etc/falco/falco_rules.yaml), enabled by default; tests/scenarios/offline.sh checks that every rule
+# named here exists in the rules Falco actually loads.
+
+# Scenario "sensitive-file-read": a successful open of /etc/shadow (or sudoers, PAM config) by a
+# program not on Falco's trusted list. WARNING, above Falcosidekick's `notice` cut-off.
+- rule: Kill sensitive file read in sandbox
+  description: A sensitive file such as /etc/shadow was read in a sandbox pod
+  match:
+    rules:
+      - Read sensitive file untrusted
+    output_fields:
+      - k8s.ns.name=sandbox
+  actions:
+    - action: Terminate Pod
+
+# Scenario "drop-and-execute": a process started from a binary in the container's writable overlay
+# layer, i.e. not shipped in the image (container drift). CRITICAL.
+- rule: Kill drifted binary in sandbox
+  description: A binary that is not part of the image was executed in a sandbox pod
+  match:
+    rules:
+      - Drop and execute new binary in container
+    output_fields:
+      - k8s.ns.name=sandbox
+  actions:
+    - action: Terminate Pod

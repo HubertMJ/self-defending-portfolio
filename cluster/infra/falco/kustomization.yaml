@@ -140,6 +140,12 @@ helmCharts:
       # not killed, it is labelled and cut off by the quarantine policy (Falco Talon, plan commit
       # 7). `proc.name` is the executable's base name, so busybox applets invoked through their
       # symlinks (`wget`, `nc`) match as well.
+      #
+      # The phase 5 attack scenarios (ADR 0018) need no further custom rule: "network-tool" is this
+      # one, and the other three are stock rules of the image, enabled by default - "Terminal shell
+      # in container", "Read sensitive file untrusted", "Drop and execute new binary in container".
+      # tests/scenarios/offline.sh validates this block together with the stock file using the
+      # pinned Falco binary.
       customRules:
         sdp-rules.yaml: |-
           - rule: SDP network tool in sandbox
