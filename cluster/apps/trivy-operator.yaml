@@ -113,7 +113,10 @@ spec:
             image:
               registry: mirror.gcr.io
               repository: aquasec/trivy
-              tag: "0.74.0@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969"
+              # 0.75.0, one minor past the chart's default (ADR 0020): 0.74.0 had 9 CRITICAL/HIGH findings
+              # with a fix (libexpat, grpc, openssl), 0.75.0 has none. Same DB schema (v2); the operator
+              # drives server and client through the same CLI flags.
+              tag: "0.75.0@sha256:af6acf9a6b85dfe389a1941505c0ce9efef52a4719635e1a962f022a3d855daa"
             # Embedded checks only: no download of the trivy-checks OCI bundle (pkg/policy/policy.go
             # loads the bundle only when useBuiltinRegoPolicies is true). Both are chart defaults.
             useBuiltinRegoPolicies: "false"

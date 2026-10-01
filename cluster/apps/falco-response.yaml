@@ -16,8 +16,8 @@
 # Pinned (ADR 0008), resolved from the repository index:
 #   curl -sfL https://falcosecurity.github.io/charts/index.yaml \
 #     | yq '.entries.falcosidekick[0] | .version, .appVersion'
-# Chart 0.14.0's Chart.yaml still says appVersion 2.31.1, but its values.yaml defaults to image 2.32.0,
-# which is what is pinned below by digest.
+# Chart 0.14.0's Chart.yaml still says appVersion 2.31.1 and its values.yaml defaults to image 2.32.0;
+# the image pinned below by digest is the newer 2.35.0 (ADR 0020).
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
@@ -39,7 +39,11 @@ spec:
           image:
             registry: docker.io
             repository: falcosecurity/falcosidekick
-            tag: "2.32.0@sha256:1976da72151850aae4436f33a5ed94bdef469f42a9b61c182b4feeb5441fb081"
+            # 2.35.0, newer than the chart's default (ADR 0020): 2.32.0 had 82 CRITICAL/HIGH findings with a
+            # fix (Trivy 0.75.0), 2.35.0 has 15 (10 in rabbitmq/amqp091-go, an output not enabled here).
+            # Outputs and env keys are unchanged in between (CHANGELOG 2.33.0-2.34.1); the chart is the
+            # newest there is.
+            tag: "2.35.0@sha256:216ddb75229dcbf78cf57b1cf2140bd1b9092fcd72e4fd20b4d3057395d6765b"
           # One node; a second replica would only double the alerts forwarded per event if Falco ever
           # retried, and adds nothing to availability here.
           replicaCount: 1
