@@ -1,4 +1,4 @@
-.PHONY: lint gitleaks validate smoke runtime-test abuse-test vm hardening cluster verify bootstrap
+.PHONY: lint gitleaks validate smoke runtime-test abuse-test scenario-offline scenario-test vm hardening cluster verify bootstrap
 DOCKER ?= docker
 
 lint:            ## run yamllint, ansible-lint, shellcheck, syntax-check (in container)
@@ -20,6 +20,12 @@ runtime-test:    ## phase 4 DoD against the live cluster: shell -> Falco -> Talo
 
 abuse-test:      ## phase 5: the API's 404/403/409/429 limits over HTTP (API=..., FAKE_IPS=1 via port-forward)
 	@tests/abuse/run.sh
+
+scenario-offline: ## phase 5 scenarios without a cluster: Falco/Talon rules load and line up, each scenario meets its rule's preconditions
+	@DOCKER="$(DOCKER)" tests/scenarios/offline.sh
+
+scenario-test:   ## phase 5 scenarios against the live cluster: each attack -> Falco alert -> Talon action -> end state (needs KUBECONFIG)
+	@tests/scenarios/run.sh
 
 vm:              ## create the VM on Proxmox (needs PVE_HOST/PVE_TOKEN_ID/PVE_TOKEN)
 	@scripts/pve-create-vm.sh
