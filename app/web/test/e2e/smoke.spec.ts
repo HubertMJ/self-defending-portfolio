@@ -100,7 +100,7 @@ test.describe("mock mode", () => {
     await expect(page.locator('.scenario[data-scenario="shell-in-container"] button')).toHaveAttribute("aria-disabled", "true");
 
     const run = page.locator(".run").first();
-    await expect(run.locator(".run__title")).toHaveText("Network reconnaissance tool");
+    await expect(run.locator(".run__title")).toHaveText("Download tool in a container");
     await expect(run.locator(".stage--detect")).toHaveAttribute("data-reached", "true");
     await expect(run.locator(".stage--detect .stage__delta")).toHaveText(/^\+\d/);
     await expect(run.locator(".stage--respond")).toHaveAttribute("data-reached", "true");
@@ -124,7 +124,111 @@ test.describe("mock mode", () => {
     await expect(page.locator("#launch-status")).toContainText("Rate limit reached");
     await expect(button).toHaveAttribute("aria-disabled", "true");
     await expect(button).toContainText("Rate limited");
-    await expect(page.locator(".launcher__countdown")).toContainText(/Unlocks in \d+:\d\d/);
+    // The copy explains the limit is per network address, and the countdown lives in the same line.
+    await expect(page.locator("#launch-status")).toContainText("per network address");
+    await expect(page.locator("#launch-status .launch-status__countdown")).toContainText(/Unlocks in \d+:\d\d/);
+    expect(problems).toEqual([]);
+  });
+});
+
+test.describe("live run console (mock)", () => {
+  test("a full run lights the pipeline, runs the kill-timer, shows the pod and the victim", async ({ page }) => {
+    const problems = guardConsole(page);
+    await page.goto("/?mock=1");
+    const consoleEl = page.locator("#console");
+    await page.locator('.scenario[data-scenario="shell-in-container"] button').click();
+    await expect(consoleEl).toHaveAttribute("data-state", "live");
+    await expect(consoleEl.locator(".console__who")).toHaveText("Your run");
+    // The victim shop is up first, then defaced by the attack, then gone with its pod.
+    await expect(consoleEl.locator(".browser")).toHaveAttribute("data-status", /fresh|defaced/);
+    await expect(consoleEl.locator(".killtimer")).toHaveAttribute("data-state", "running");
+    await expect(consoleEl.locator(".browser")).toHaveAttribute("data-status", "gone", { timeout: 15_000 });
+    await expect(consoleEl.locator(".hop[data-state=lit]")).toHaveCount(8, { timeout: 15_000 });
+    await expect(consoleEl.locator(".killtimer")).toHaveAttribute("data-state", "stopped");
+    await expect(consoleEl.locator(".killtimer__value")).toHaveText(/^0\.\d{3}$/);
+    // The real latency is stated next to the slowed-down replay.
+    await expect(consoleEl.locator(".replay-badge")).toContainText(/Replayed at 1\/\d+ speed · in reality the whole chain took \d+ ms/);
+    await expect(consoleEl.locator('.hop[data-hop="talon"] .hop__what')).toHaveText("Talon deleted the pod");
+    await expect(consoleEl.locator(".phase")).toHaveCount(5);
+    await expect(consoleEl.locator(".card--pod")).toContainText(/sha256:[0-9a-f]{12}/);
+    await expect(consoleEl.locator(".card--exec .term")).toContainText("sh -c 'id; hostname; sleep 60'");
+    await expect(consoleEl.locator(".card--exec a").first()).toHaveAttribute("href", /^https:\/\/github\.com\/HubertMJ\/self-defending-portfolio\/blob\/[0-9a-f]{7,40}\//);
+    await consoleEl.getByText("Verify it yourself").click();
+    await expect(consoleEl.locator(".verify")).toContainText("cosign verify ghcr.io/hubertmj/self-defending-portfolio/scenario@sha256:");
+    await expect(consoleEl.locator(".verify")).toContainText("build-images.yml@refs/heads/main");
+    await expect(consoleEl.locator(".utc tbody tr")).toHaveCount(8);
+    await noHorizontalScroll(page);
+    expect(problems).toEqual([]);
+  });
+
+  test("a quarantine shows the label, the cut network and the dropped packets", async ({ page }) => {
+    const problems = guardConsole(page);
+    await page.goto("/?mock=1&mock-speed=0.5");
+    await page.locator('.scenario[data-scenario="network-tool"] button').click();
+    const consoleEl = page.locator("#console");
+    await expect(consoleEl.locator(".browser")).toHaveAttribute("data-status", "unreachable");
+    await expect(consoleEl.locator(".card--proof")).toContainText("sdp.hubertjablon.ski/quarantine: false → true");
+    await expect(consoleEl.locator(".card--proof")).toContainText("Packets dropped by Cilium");
+    await expect(consoleEl.locator('.hop[data-hop="effect"] .hop__who')).toContainText("Cilium");
+    await expect(page.locator(".run").first().locator(".run__foot")).toContainText("including the time held in quarantine", { timeout: 15_000 });
+    expect(problems).toEqual([]);
+  });
+
+  test("another visitor's run is shown read-only; missing details fail soft", async ({ page }) => {
+    const problems = guardConsole(page);
+    await page.goto("/?mock=1&mock-visitor=300&mock-details=0");
+    const consoleEl = page.locator("#console");
+    await expect(consoleEl.locator(".console__who")).toContainText("Another visitor’s run");
+    await expect(consoleEl.locator(".browser__ro")).toHaveText("read-only");
+    await expect(consoleEl.locator(".card--exec")).toContainText("does not publish scenario details");
+    expect(problems).toEqual([]);
+  });
+
+  test("the history's Show button puts that run in the console", async ({ page }) => {
+    await page.goto("/?mock=1&mock-speed=0.1");
+    await page.locator('.scenario[data-scenario="sensitive-file-read"] button').click();
+    await expect(page.locator(".run")).toHaveCount(2);
+    await expect(page.locator(".run").first().locator(".chip--state")).toHaveText("Finished");
+    await page.locator('.run[data-run="mock-history-1"] .run__show').click();
+    await expect(page.locator("#console .console__scenario")).toHaveText("Shell in a container");
+    await expect(page.locator("#console-title")).toBeFocused();
+    await page.getByRole("button", { name: "Back to the latest run" }).click();
+    await expect(page.locator("#console .console__scenario")).toHaveText("Read /etc/shadow");
+  });
+
+  test("on a phone, launching takes the visitor to the live run", async ({ page, isMobile }) => {
+    test.skip(!isMobile, "the scroll matters where the console is below the fold");
+    await page.goto("/?mock=1");
+    const button = page.locator('.scenario[data-scenario="drop-and-execute"] button');
+    await button.click();
+    await expect(page.locator("#console-title")).toBeFocused();
+    await expect(page.locator("#console-title")).toBeInViewport();
+    await noHorizontalScroll(page);
+  });
+});
+
+test.describe("technical mode", () => {
+  test("toggles raw detail, is announced as a pressed button and persists", async ({ page }) => {
+    const problems = guardConsole(page);
+    await page.goto("/?mock=1");
+    const toggle = page.locator("#tech-toggle");
+    await expect(toggle).toHaveAttribute("aria-pressed", "false");
+    await expect(page.locator("#console .console__raw")).toBeHidden();
+    await toggle.click();
+    await expect(toggle).toHaveAttribute("aria-pressed", "true");
+    await expect(page.locator("html")).toHaveAttribute("data-tech", "on");
+    await expect(page.locator("#console .console__raw")).toBeVisible();
+    await expect(page.locator("#console .console__raw")).toContainText("Falco output fields");
+    await expect(page.locator("#console .console__raw")).toContainText("kubernetes:terminate");
+    await expect(page.locator("#limits-panel")).toContainText("attacks left per 10 min");
+    await page.reload();
+    await expect(page.locator("html")).toHaveAttribute("data-tech", "on");
+    await expect(page.locator("#tech-toggle")).toHaveAttribute("aria-pressed", "true");
+    await page.locator("#tech-toggle").click();
+    await page.reload();
+    await expect(page.locator("#tech-toggle")).toHaveAttribute("aria-pressed", "false");
+    await expect(page.locator("#console .console__raw")).toBeHidden();
+    await noHorizontalScroll(page);
     expect(problems).toEqual([]);
   });
 });
@@ -145,6 +249,14 @@ test.describe("real EventSource against a streaming server", () => {
     await page.goto(`${stub}/`);
     await expect(page.locator("#timeline-conn")).toHaveAttribute("data-state", "open");
     await expect(page.locator(".run").first()).toBeVisible();
+    // The replayed run carries every extension event; the console renders them from the real stream,
+    // and degrades (no details endpoint behind the stub) instead of breaking.
+    const consoleEl = page.locator("#console");
+    await expect(consoleEl.locator('.hop[data-hop="effect"]')).toHaveAttribute("data-state", "lit");
+    await expect(consoleEl.locator(".phase")).toHaveCount(4);
+    await expect(consoleEl.locator(".browser")).toHaveAttribute("data-status", "gone");
+    await expect(consoleEl.locator(".card--exec")).toContainText("does not publish scenario details");
+    await expect(page.locator("#header-conn")).toContainText("cluster live");
     await page.waitForTimeout(20_000);
     await expect(page.locator("#timeline-conn")).toHaveAttribute("data-state", "open");
     // Exactly one request from this page, made by the browser's EventSource (not a fetch), never
@@ -216,5 +328,16 @@ test.describe("accessibility basics", () => {
     await expect(page.locator("#timeline-conn")).toHaveAttribute("data-state", "open");
     const anim = await page.locator("#timeline-conn .conn__dot").evaluate((el) => getComputedStyle(el).animationName);
     expect(anim).toBe("none");
+  });
+
+  test("reduced motion skips the replay: hops light as their events arrive", async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await page.goto("/?mock=1&mock-speed=0.3");
+    await page.locator('.scenario[data-scenario="shell-in-container"] button').click();
+    const consoleEl = page.locator("#console");
+    // At 0.3x the whole chain is ~0.3 s; a 600 ms dwell per hop would need several seconds.
+    await expect(consoleEl.locator(".hop[data-state=lit]")).toHaveCount(8, { timeout: 2_500 });
+    await expect(consoleEl.locator(".replay-badge")).toContainText("Shown in real time");
+    await expect(consoleEl.getByRole("button", { name: "Replay" })).toBeHidden();
   });
 });
