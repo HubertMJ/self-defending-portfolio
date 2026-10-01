@@ -262,7 +262,8 @@ kubectl -n gateway get certificate portfolio-tls -w
 ### 4.6 Verify
 
 ```sh
-# the Gateway is programmed; its Service has no EXTERNAL-IP and that is correct (ADR 0010)
+# the Gateway is programmed; its Service shows EXTERNAL-IP 10.4.1.30, an address nothing announces
+# (ADR 0010, amendment 2026-10-01)
 kubectl -n gateway get gateway portfolio
 kubectl -n gateway get svc cilium-gateway-portfolio
 

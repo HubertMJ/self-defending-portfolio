@@ -77,7 +77,7 @@ What the diagram claims, and where it is written down:
 | HSTS, CSP (`script-src 'none'` today), nosniff, Referrer-Policy, Permissions-Policy, COOP are set at the Gateway | [`cluster/infra/hello/httproute.yaml`](../../cluster/infra/hello/httproute.yaml) |
 | Envoy trusts exactly one `X-Forwarded-For` hop (cloudflared) | [`cluster/apps/cilium.yaml`](../../cluster/apps/cilium.yaml) (`xffNumTrustedHops: 1`) |
 | `hello` is default-deny, ingress only from Cilium's `ingress`/`host` identities on 8080, no egress at all | [`cluster/infra/hello/`](../../cluster/infra/hello/) |
-| The Gateway's LoadBalancer address 10.4.1.30 exists only so the Gateway reports `Programmed`; nothing announces it | [`cluster/infra/gateway/lb-ip-pool.yaml`](../../cluster/infra/gateway/lb-ip-pool.yaml) |
+| The Gateway's LoadBalancer address 10.4.1.30 exists only so the Gateway reports `Programmed`; nothing announces it | [`cluster/infra/gateway/lb-ip-pool.yaml`](../../cluster/infra/gateway/lb-ip-pool.yaml), [ADR 0010](../adr/0010-cilium-gateway-api.md) amendment |
 
 Argo CD, Hubble and Policy Reporter are never routed through the Gateway or the tunnel; they are
 reached with `kubectl port-forward` by someone who already holds cluster credentials.

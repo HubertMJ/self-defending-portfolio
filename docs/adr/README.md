@@ -15,7 +15,7 @@ decision are appended as dated amendments in the same file.
 | [0007](0007-cloud-init-and-ansible-bootstrap.md) | VM from cloud image via Proxmox API, everything else Ansible | 0 | accepted |
 | [0008](0008-pinned-versions.md) | Pin every version, bump deliberately | 0 | accepted |
 | [0009](0009-nftables-host-firewall.md) | nftables host firewall with default-deny input | 0 | accepted |
-| [0010](0010-cilium-gateway-api.md) | Cilium's built-in Gateway API instead of ingress-nginx | 2 | accepted |
+| [0010](0010-cilium-gateway-api.md) | Cilium's built-in Gateway API instead of ingress-nginx | 2 | accepted, amended 2026-10-01 (internal LoadBalancer address for the Gateway) |
 | [0011](0011-supply-chain.md) | Build, scan, describe and sign our own image; verify it at admission | 3 | accepted, amended 2026-10-01 (Kyverno verifies cosign v3 Sigstore bundles) |
 | [0012](0012-pod-security-and-resource-policy.md) | Pod Security `restricted` and pod resources as Kyverno policies, Audit before Enforce | 4 | accepted |
 | [0013](0013-runtime-detection-and-response.md) | Runtime detection and response: Falco modern eBPF least-privileged, Falcosidekick, Falco Talon scoped to `sandbox` | 4 | accepted |

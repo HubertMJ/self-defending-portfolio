@@ -64,3 +64,30 @@ decoration in front of a plaintext hop.
   dashboards) still assume `Ingress`. Fallback if this becomes painful is ingress-nginx for the
   remaining months of its life, which is a mechanical change: one Gateway + HTTPRoute becomes one
   Ingress, and `cloudflared` points at a different Service name.
+
+## Amendment 2026-10-01: an internal LoadBalancer address for the Gateway
+
+**Context.** The consequence above ("`EXTERNAL-IP` stays `<pending>` forever ... no LB IPAM is
+configured on purpose") did not survive bring-up. With the Service pending, the Gateway never reported
+`Programmed=True`, so the `gateway` Application never reported Healthy and the Gateway's status could
+not be used as a readiness signal.
+
+**Decision.** `cluster/infra/gateway/lb-ip-pool.yaml` adds a `CiliumLoadBalancerIPPool` with exactly
+one address, `10.4.1.30/32`, selected only by the Service of Gateway `portfolio`
+(`io.cilium.gateway/owning-gateway: portfolio`). The address is reserved outside the DMZ's DHCP pool
+and recorded in `docs/bootstrap.md` (section 0). Nothing announces it: Cilium's L2 announcements and
+BGP are not enabled (neither in `cluster/apps/cilium.yaml` nor in the Ansible role), k3s's
+`servicelb` is disabled, and `gatewayAPI.hostNetwork.enabled` stays `false`. cloudflared still
+reaches the Gateway by its ClusterIP Service name; the public path is unchanged.
+
+**Consequences.**
+- The Gateway reports `Programmed=True`, the `gateway` Application can be Healthy, and
+  `kubectl -n gateway get svc cilium-gateway-portfolio` shows `EXTERNAL-IP 10.4.1.30` - that is now
+  the expected output.
+- The no-exposure argument of ADR 0003 now rests on "not announced" instead of "no address". Nothing
+  answers ARP for 10.4.1.30, so no LAN host learns a path to it; a host on the same segment that
+  installs a static route to it via the node could probably reach Envoy, because Cilium's eBPF load
+  balancer handles the address before the host's nftables input chain sees the packet (not verified).
+  It would get the same routes, certificate and headers the tunnel gets, without Cloudflare in front.
+- Turning on L2 announcements or BGP later would publish the Gateway on the LAN; that is a decision
+  for a new ADR, not a values change.
