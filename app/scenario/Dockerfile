@@ -3,7 +3,7 @@
 # Falco detects what the exec does and Falco Talon answers (ADR 0018).
 #
 # Nothing in here is an attack tool. The scenarios use what every Alpine container already has:
-# busybox `sh`, `id`, `cat`, `cp`, `wget`, `sleep`. Their danger is the *behaviour* Falco keys on (a
+# busybox `sh`, `id`, `cat`, `cp`, `wget`, `sleep`, `echo`, `mv`. Their danger is the *behaviour* Falco keys on (a
 # terminal shell, a network tool, a read of /etc/shadow, a binary that was not in the image being
 # executed), not a payload. The image ships no malware, no exploit, no credentials and no target list,
 # and has nowhere to send anything: `sandbox` allows DNS and nothing else.
@@ -12,6 +12,19 @@
 # every other image of this project (ADR 0011), and Trivy only knows what an image contains when it can
 # read an OS package database. busybox's image has none, so it would always scan "clean" without having
 # been looked at. Pinned by tag *and* digest (ADR 0008).
+#
+# Two stages since ADR 0022: the pod is also the *victim* a visitor watches - a fake "SDP Shop" on :8080
+# whose page and /state.json the scenario execs rewrite (victim/main.go). busybox's httpd is not in
+# Alpine's busybox (it is in busybox-extras, with telnet and friends, which is more attack surface than
+# this needs) and could not compute the bounded state the API relays, so the server is a small static
+# Go binary, standard library only. Its tests run in the builder stage: no tests, no image (as app/api).
+#   golang:1.26.8   docker.io, the same pin as app/api
+FROM docker.io/library/golang:1.26.8@sha256:0f063af2d465d8dcae54cce04278ada488b96f77b42449c8d071e47d016cc65a AS victim
+WORKDIR /src
+COPY victim/ ./
+RUN go vet ./... && go test -count=1 ./... \
+ && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w -buildid=" -o /out/victim .
+
 FROM alpine:3.24.2@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6
 
 # Everything the scenarios do not need goes, so the image is busybox + musl + the base layout:
@@ -35,13 +48,21 @@ RUN apk del --no-network --purge \
  && addgroup -g 10001 scenario \
  && adduser -D -H -h /nonexistent -s /sbin/nologin -G scenario -u 10001 scenario
 
+# Root-owned and not writable by the scenario user: the drop-and-execute scenario runs on a writable
+# root filesystem, and must not be able to swap the server out from under the probe.
+COPY --from=victim --chown=0:0 --chmod=0755 /out/victim /usr/local/bin/victim
+
 USER 10001:10001
+# The victim's port. No Service and no route point at it: only the portfolio API may connect
+# (cluster/infra/sandbox/ciliumnetworkpolicy-victim.yaml).
+EXPOSE 8080
 
 LABEL org.opencontainers.image.title="self-defending-portfolio scenario" \
-      org.opencontainers.image.description="Target pod for the controlled attack scenarios in the sandbox namespace (busybox only)" \
+      org.opencontainers.image.description="Target pod for the controlled attack scenarios in the sandbox namespace (busybox and a static fake-shop server)" \
       org.opencontainers.image.source="https://github.com/HubertMJ/self-defending-portfolio" \
       org.opencontainers.image.licenses="MIT"
 
-# The pod specs override this with their own `sleep`; it is here so the image does something bounded
-# when run on its own. 120 s is the longest a scenario pod may live (activeDeadlineSeconds, contract).
-CMD ["sleep", "120"]
+# The pod specs state the same command with its docroot (an emptyDir there); here so the image does
+# something bounded when run on its own: the server exits after 120 s, the longest a scenario pod may
+# live (activeDeadlineSeconds, contract). Run standalone it needs a writable /srv/shop, e.g. a tmpfs.
+CMD ["/usr/local/bin/victim", "-docroot", "/srv/shop"]
