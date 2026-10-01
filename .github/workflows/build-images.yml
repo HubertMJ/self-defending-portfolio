@@ -1,41 +1,100 @@
-# Phase 3: the static site stops being a ConfigMap and becomes an image we build, scan, describe
-# and sign. Kyverno then refuses to admit it unless this workflow signed it (ADR 0011).
+# Every image this project runs is built here: one job per app/<name>/Dockerfile, each published as
+# ghcr.io/hubertmj/self-defending-portfolio/<name>, Trivy-gated, described by an SPDX SBOM and signed
+# keylessly with cosign. Kyverno refuses to admit any of them unless this workflow signed it
+# (ADR 0011 for the pipeline, ADR 0016 for why it is one workflow for all images).
 #
 # The signature is keyless: the identity is *this file on main*, minted by GitHub's OIDC provider
 # and certified by Sigstore Fulcio. There is no private key anywhere, so there is no key to leak,
 # and the thing Kyverno trusts is a workflow path in a public repo that anyone can read.
 #
+# One workflow with a matrix, not a reusable workflow called once per image: Fulcio puts the
+# *called* workflow's path into the certificate of a reusable workflow, so the identity Kyverno pins
+# would be one that any workflow - and, for a public repository, any other repository - can obtain
+# by calling it. A matrix job's identity is this file, and only this file (ADR 0016).
+#
+# Adding an image is adding app/<name>/Dockerfile. Nothing here names an image.
+#
 # Every action is pinned to a full commit SHA with the tag it corresponded to in a comment
 # (ADR 0008); a tag is mutable, a commit is not.
-name: build-web
+name: build-images
 
 on:
   push:
     branches: [main]
     paths:
-      - app/web/**
-      - .github/workflows/build-web.yml
+      - app/**
+      - .github/workflows/build-images.yml
   workflow_dispatch:
 
-# Two pushes to main must not race to publish the `main` tag and leave it pointing at the older
-# digest. Not cancel-in-progress: a build that already signed should finish and be recorded.
+# Two pushes to main must not race to publish the `main` tag of an image and leave it pointing at the
+# older digest. Not cancel-in-progress: a build that already signed should finish and be recorded.
 concurrency:
-  group: build-web
+  group: build-images
   cancel-in-progress: false
 
-permissions:
-  contents: read
-  packages: write        # push to GHCR
-  id-token: write        # OIDC token for cosign keyless signing
-  attestations: write    # the SBOM attestation
-  security-events: write # Trivy SARIF -> code scanning
-
-env:
-  IMAGE: ghcr.io/hubertmj/self-defending-portfolio/web
+# Nothing by default; each job asks for what it uses.
+permissions: {}
 
 jobs:
-  build:
+  # Which images to build: on a push, those whose app/<name>/ changed; everything when this workflow
+  # itself changed, when the push cannot be diffed (first push of the branch, force push), and on a
+  # manual run.
+  discover:
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      images: ${{ steps.list.outputs.images }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: list images
+        id: list
+        env:
+          EVENT: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          mapfile -t all < <(find app -mindepth 2 -maxdepth 2 -name Dockerfile -printf '%h\n' | xargs -rn1 basename | sort)
+          for name in "${all[@]}"; do
+            # The name becomes part of an image reference and a cache scope; refuse anything odd
+            # rather than quote around it.
+            [[ $name =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]] || { echo "::error::invalid image directory app/$name"; exit 1; }
+          done
+
+          selected=("${all[@]}")
+          if [ "$EVENT" = push ] && git cat-file -e "${BEFORE}^{commit}" 2>/dev/null; then
+            changed=$(git diff --name-only "$BEFORE" "$GITHUB_SHA")
+            if ! grep -qx '.github/workflows/build-images.yml' <<<"$changed"; then
+              selected=()
+              for name in "${all[@]}"; do
+                grep -q "^app/$name/" <<<"$changed" && selected+=("$name")
+              done
+            fi
+          fi
+          json=$(printf '%s\n' "${selected[@]}" | jq -R . | jq -cs 'map(select(. != ""))')
+          echo "images=$json" >> "$GITHUB_OUTPUT"
+          echo "building: $json"
+
+  build:
+    needs: discover
+    if: needs.discover.outputs.images != '[]'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write        # push to GHCR
+      id-token: write        # OIDC token for cosign keyless signing
+      security-events: write # Trivy SARIF -> code scanning
+    strategy:
+      # One broken image must not stop the others from being published.
+      fail-fast: false
+      matrix:
+        name: ${{ fromJSON(needs.discover.outputs.images) }}
+    env:
+      IMAGE: ghcr.io/hubertmj/self-defending-portfolio/${{ matrix.name }}
+      CONTEXT: app/${{ matrix.name }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -65,24 +124,29 @@ jobs:
       # provenance/sbom off: buildx would attach its own attestation manifests to the image index,
       # which changes the digest shape and makes `cosign sign <image>@<digest>` ambiguous about what
       # it covered. We produce the SBOM explicitly below and sign the image manifest we pushed.
+      # The GHA cache is scoped per image, so the images do not evict each other's layers.
       - name: build and push
         id: build
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
-          context: app/web
-          file: app/web/Dockerfile
+          context: ${{ env.CONTEXT }}
+          file: ${{ env.CONTEXT }}/Dockerfile
           platforms: linux/amd64
           push: true
           provenance: false
           sbom: false
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.name }}
 
       # The gate, on the digest that was actually pushed rather than on a tag that could have moved
       # between the push and now. ignore-unfixed: a CVE with no upstream patch is not something this
       # pipeline can act on, so failing on it would only teach us to ignore red builds.
+      #
+      # It runs after the push on purpose, as it did for the web image alone: the digest is then
+      # exactly what was scanned, and a failed gate means the digest is never signed, so Kyverno
+      # will never admit it anyway.
       - name: trivy gate (CRITICAL,HIGH)
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
@@ -98,7 +162,7 @@ jobs:
       # rather than silently dropped. exit-code 0 keeps the gate as the only verdict, and `always()`
       # means a failed gate still reports what it found instead of just that it failed.
       - name: trivy sarif
-        if: always()
+        if: always() && steps.build.outputs.digest != ''
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         env:
           # The gate already installed trivy and populated the DB cache in this job.
@@ -117,14 +181,15 @@ jobs:
           skip-setup-trivy: true
 
       # Code scanning is not available on every plan and is not what this pipeline is for, so an
-      # upload problem must not turn a good, signed build red.
+      # upload problem must not turn a good, signed build red. One category per image, or each
+      # upload would replace the previous image's alerts.
       - name: upload sarif
-        if: always()
+        if: always() && steps.build.outputs.digest != ''
         continue-on-error: true
         uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
         with:
           sarif_file: trivy.sarif
-          category: trivy-image-web
+          category: trivy-image-${{ matrix.name }}
 
       - name: sbom (spdx json)
         uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
@@ -138,7 +203,7 @@ jobs:
       - name: upload sbom
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: sbom-spdx-${{ github.sha }}
+          name: sbom-spdx-${{ matrix.name }}-${{ github.sha }}
           path: sbom.spdx.json
           if-no-files-found: error
 
@@ -153,7 +218,6 @@ jobs:
       - name: cosign sign
         run: cosign sign --yes "${IMAGE}@${DIGEST}"
         env:
-          IMAGE: ${{ env.IMAGE }}
           DIGEST: ${{ steps.build.outputs.digest }}
 
       # The SBOM as a signed statement about this digest, not just a build artifact that expires in
@@ -162,24 +226,27 @@ jobs:
       - name: cosign attest sbom
         run: cosign attest --yes --predicate sbom.spdx.json --type spdxjson "${IMAGE}@${DIGEST}"
         env:
-          IMAGE: ${{ env.IMAGE }}
           DIGEST: ${{ steps.build.outputs.digest }}
 
       # Digest bumps in cluster/ are still a manual commit (ADR 0011, known gap), so hand the human
       # the exact lines instead of making them reconstruct them from the log.
       - name: summary
         env:
-          IMAGE: ${{ env.IMAGE }}
           DIGEST: ${{ steps.build.outputs.digest }}
         run: |
-          cat >> "$GITHUB_STEP_SUMMARY" <<EOF
-          ## web image published
+          refs=$(grep -rl --include='*.yaml' "$IMAGE" cluster/ | sort || true)
+          cat >> "$GITHUB_STEP_SUMMARY" <<SUMMARY
+          ## ${IMAGE##*/} image published
 
           \`\`\`
           ${IMAGE}@${DIGEST}
           \`\`\`
 
-          Paste into \`cluster/infra/hello/kustomization.yaml\`:
+          Files under \`cluster/\` that reference this image (pin the digest there):
+
+          \`\`\`
+          ${refs:-(none yet)}
+          \`\`\`
 
           \`\`\`yaml
           images:
@@ -192,4 +259,4 @@ jobs:
           \`\`\`sh
           scripts/verify-image.sh ${IMAGE}@${DIGEST}
           \`\`\`
-          EOF
+          SUMMARY

@@ -11,7 +11,7 @@ resources:
   - networkpolicy.yaml
   - ciliumnetworkpolicy.yaml
 
-# The page lives in the image built by .github/workflows/build-web.yml (ADR 0011). Only the
+# The page lives in the image built by .github/workflows/build-images.yml (ADR 0011, 0016). Only the
 # digest is referenced; the tag is informational. Bump = commit (Renovate later).
 images:
   - name: ghcr.io/hubertmj/self-defending-portfolio/web
