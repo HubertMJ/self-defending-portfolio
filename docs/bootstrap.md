@@ -35,6 +35,13 @@ export PVE_HOST=10.2.1.2 PVE_TOKEN_ID='ansible@pve!portfolio' PVE_TOKEN='...'
 export PVE_INSECURE=1   # only if Proxmox still uses its self-signed certificate
 ```
 
+Addresses reserved in the DMZ (VLAN 41, 10.4.1.0/24):
+
+| Address | Use |
+|---------|-----|
+| 10.4.1.20 | k3s01 node (UniFi DHCP reservation on the VM's fixed MAC, static in cloud-init) |
+| 10.4.1.30 | Cilium LB IPAM address of the Gateway Service; not announced, in-cluster only |
+
 ## 1. Create the VM
 
 ```sh
