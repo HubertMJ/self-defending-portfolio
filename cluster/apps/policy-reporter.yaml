@@ -140,7 +140,7 @@ spec:
                 image:
                   registry: mirror.gcr.io
                   repository: aquasec/trivy
-                  tag: "0.74.0@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969"
+                  tag: "0.75.0@sha256:af6acf9a6b85dfe389a1941505c0ce9efef52a4719635e1a962f022a3d855daa"
               # The DB repository is stated so the init container needs exactly one egress host
               # (mirror.gcr.io, which also serves the blobs itself - verified, no redirect to a
               # storage bucket); Trivy's own default would fall back to ghcr.io.

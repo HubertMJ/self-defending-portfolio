@@ -29,6 +29,20 @@
 #     | yq '.entries["trivy-operator-polr-adapter"][0] | .version, .appVersion'    # 0.11.5 / 0.11.5
 # Images are tag@digest; the charts concatenate `registry/repository:tag`, and the operator builds
 # the scan Job image the same way from trivy.repository + trivy.tag.
+#
+# Trivy is one release ahead of the chart (ADR 0023): operator 0.34.0 was built against Trivy 0.74.0
+# and its chart defaults to it, but 0.74.0's own image carries CRITICAL/HIGH findings (4 in the
+# cluster, 12 with today's DB) and 0.75.0 (2026-10-01) has none. The operator only drives the Trivy
+# CLI - `trivy server` here, `trivy image --server ...` in the scan Jobs, both from this one image -
+# and parses its JSON report, so what has to hold is the CLI: every flag the operator passes
+# (pkg/plugins/trivy/image.go at v0.34.0: --cache-dir --format --scanners --server --skip-db-update
+# --skip-java-db-update --list-all-pkgs --pkg-types/--vuln-type --sbom-sources --config --output
+# --download-db-only --db-repository) is in 0.75.0's `image --help` exactly as in 0.74.0's, and
+# `server --help` is unchanged. 0.75.0's one breaking change (getHostByName removed from report
+# templates) does not touch the JSON format. Scan Job and server are always the same version. If a
+# scan Job fails after this bump, `kubectl -n trivy-system logs job/scan-vulnerabilityreport-...`
+# says why; reverting is this one tag here and in cluster/apps/policy-reporter.yaml.
+#   docker buildx imagetools inspect mirror.gcr.io/aquasec/trivy:0.75.0   # same digest on docker.io
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
@@ -113,7 +127,7 @@ spec:
             image:
               registry: mirror.gcr.io
               repository: aquasec/trivy
-              tag: "0.74.0@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969"
+              tag: "0.75.0@sha256:af6acf9a6b85dfe389a1941505c0ce9efef52a4719635e1a962f022a3d855daa"
             # Embedded checks only: no download of the trivy-checks OCI bundle (pkg/policy/policy.go
             # loads the bundle only when useBuiltinRegoPolicies is true). Both are chart defaults.
             useBuiltinRegoPolicies: "false"
