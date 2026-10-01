@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The other half of .github/workflows/build-web.yml: proves, from outside the cluster, that an image
+# The other half of .github/workflows/build-images.yml: proves, from outside the cluster, that an image
 # was signed by that workflow running on main, and that its SBOM attestation came from the same
 # place. This is the same assertion Kyverno makes at admission (ADR 0011) -- having it as a script
 # means a human can check a digest in ten seconds without a cluster, and a broken policy can be told
@@ -7,7 +7,7 @@
 #
 # Keyless verification has no key to pass, so the *identity* is the whole check and both flags are
 # mandatory: --certificate-oidc-issuer says Sigstore must have minted the certificate from a GitHub
-# Actions OIDC token, and --certificate-identity-regexp says the subject must be exactly this
+# Actions OIDC token, and --certificate-identity-regexp says the subject must be exactly the image
 # workflow file on refs/heads/main. Without them, any valid Fulcio certificate in the world passes.
 #
 # Usage: scripts/verify-image.sh ghcr.io/hubertmj/self-defending-portfolio/web@sha256:<digest>
@@ -33,8 +33,11 @@ COSIGN_IMAGE=${COSIGN_IMAGE:-ghcr.io/sigstore/cosign/cosign:v3.1.3@sha256:9e5c2f
 
 OIDC_ISSUER=${OIDC_ISSUER:-https://token.actions.githubusercontent.com}
 # Anchored at both ends on purpose: an unanchored pattern would also accept
-# .../build-web.yml@refs/heads/main-attacker-branch or a fork's path that merely contains ours.
-IDENTITY_REGEXP=${IDENTITY_REGEXP:-'^https://github.com/HubertMJ/self-defending-portfolio/\.github/workflows/build-web\.yml@refs/heads/main$'}
+# .../build-images.yml@refs/heads/main-attacker-branch or a fork's path that merely contains ours.
+# Character-for-character the regexp in cluster/infra/kyverno-policies/verify-portfolio-images.yaml,
+# including its TRANSITION alternative for the phase 3 build-web.yml (ADR 0016); drop it in both
+# places together.
+IDENTITY_REGEXP=${IDENTITY_REGEXP:-'^https://github\.com/HubertMJ/self-defending-portfolio/\.github/workflows/(build-images|build-web)\.yml@refs/heads/main$'}
 
 if command -v cosign >/dev/null 2>&1; then
   cosign() { command cosign "$@"; }
@@ -56,7 +59,7 @@ if out=$(cosign verify \
   printf 'ok\n'
 else
   printf '\n%s\n' "$out" >&2
-  fail "no signature from build-web.yml@refs/heads/main for $IMAGE"
+  fail "no signature from the image workflow on refs/heads/main for $IMAGE"
 fi
 
 printf '  sbom attestation ... '
@@ -68,7 +71,7 @@ if out=$(cosign verify-attestation \
   printf 'ok\n'
 else
   printf '\n%s\n' "$out" >&2
-  fail "no spdxjson SBOM attestation from build-web.yml@refs/heads/main for $IMAGE"
+  fail "no spdxjson SBOM attestation from the image workflow on refs/heads/main for $IMAGE"
 fi
 
 printf 'OK: %s is signed and has a verified SPDX SBOM attestation\n' "$IMAGE"

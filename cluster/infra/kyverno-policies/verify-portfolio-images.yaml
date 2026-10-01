@@ -30,7 +30,7 @@
 #
 # ---- why both rules say `type: SigstoreBundle` (ADR 0011, amendment 2026-10-01) ----
 #
-# cosign v3 (build-web.yml pins v3.1.3) writes the new Sigstore bundle format by default: the
+# cosign v3 (build-images.yml pins v3.1.3) writes the new Sigstore bundle format by default: the
 # signature and the SPDX attestation are each stored as an OCI 1.1 referrer of the image digest, with
 # artifactType application/vnd.dev.sigstore.bundle.v0.3+json. There are no `sha256-<digest>.sig` or
 # `.att` tags any more. Kyverno's default `type: Cosign` verifier only looks for those tags, so it
@@ -42,9 +42,9 @@
 #
 # Known limitation, accepted: in SigstoreBundle mode the signature rule has no predicate filter. Any
 # bundle that verifies against the identity below satisfies it - including the SBOM attestation
-# bundle on its own. That is acceptable because the identity is pinned to this one workflow file on
-# main, so anything that satisfies it was produced by our own pipeline, and the presence of the SBOM
-# is asserted separately and exactly by verify-sbom-attestation.
+# bundle on its own. That is acceptable because the identity is pinned to this repository's image
+# workflow file(s) on main (ADR 0016), so anything that satisfies it was produced by our own pipeline,
+# and the presence of the SBOM is asserted separately and exactly by verify-sbom-attestation.
 #
 # Long term, ClusterPolicy is deprecated as of Kyverno 1.19 in favour of ImageValidatingPolicy
 # (policies.kyverno.io/v1), which models Sigstore bundles natively. Migrating is a candidate for a
@@ -60,8 +60,9 @@ metadata:
     policies.kyverno.io/subject: Pod
     policies.kyverno.io/description: >-
       Every container image from this project's registry path must carry a cosign keyless signature
-      made by the build-web.yml workflow on refs/heads/main, and an SPDX SBOM attestation signed by
-      the same identity. Unsigned, foreign-signed or SBOM-less images are rejected.
+      made by the build-images.yml workflow on refs/heads/main (or, until hello's digest is rebuilt,
+      the phase 3 build-web.yml), and an SPDX SBOM attestation signed by the same identity.
+      Unsigned, foreign-signed or SBOM-less images are rejected.
 spec:
   # Fail, not Ignore: if the admission controller cannot be reached, a Pod in these namespaces must
   # not be admitted unverified - "we could not check" and "it is signed" are not the same answer.
@@ -90,9 +91,13 @@ spec:
               # excluded: nothing outside this list is in scope, so nothing outside it needs a
               # carve-out, and no global resourceFilter had to be widened in
               # cluster/apps/kyverno.yaml to achieve that.
+              # `portfolio-api` (phase 5, ADR 0015) is the one workload here that holds API
+              # permissions - it creates and execs into pods in `sandbox` - so it is the last
+              # place an unverified image may run.
               namespaces:
                 - hello
                 - sandbox
+                - portfolio-api
       verifyImages:
         # Only this project's images. A rule that matched `*` would demand our signature on
         # every third-party sidecar the cluster ever runs.
@@ -137,8 +142,16 @@ spec:
                     # Broken across two lines with YAML's double-quoted line continuation (a
                     # trailing backslash drops the newline and the indentation that follows),
                     # so the value is one unbroken regex despite the 140-column limit.
+                    #
+                    # Two workflow files, both on refs/heads/main (ADR 0016): build-images.yml
+                    # builds every image under app/ since phase 5; build-web.yml is the phase 3
+                    # workflow that signed the web digest hello still runs.
+                    # TRANSITION: drop `|build-web` once cluster/infra/hello pins a digest built
+                    # by build-images.yml. The alternative grants nothing new meanwhile: the file
+                    # no longer exists on main, and restoring it there takes the same write access
+                    # as editing build-images.yml.
                     subjectRegExp: "^https://github\\.com/HubertMJ/self-defending-portfolio/\
-                      \\.github/workflows/build-web\\.yml@refs/heads/main$"
+                      \\.github/workflows/(build-images|build-web)\\.yml@refs/heads/main$"
                     # Who vouched for that identity: GitHub's OIDC provider. Pinning the issuer is
                     # what stops an identity minted by any other OIDC provider from matching the
                     # subject above.
@@ -164,6 +177,7 @@ spec:
               namespaces:
                 - hello
                 - sandbox
+                - portfolio-api
       verifyImages:
         - imageReferences:
             - "ghcr.io/hubertmj/self-defending-portfolio/*"
@@ -179,7 +193,7 @@ spec:
           attestations:
             # The in-toto predicateType of an SPDX document. In SigstoreBundle mode Kyverno compares
             # this string exactly with the statement's predicateType, so it must be the full URI:
-            # cosign's short name `spdxjson` (what build-web.yml and scripts/verify-image.sh pass on
+            # cosign's short name `spdxjson` (what build-images.yml and scripts/verify-image.sh pass on
             # the command line) is mapped to this URI by the cosign CLI, and Kyverno does not know
             # the short name.
             - type: https://spdx.dev/Document
@@ -187,8 +201,9 @@ spec:
                 - count: 1
                   entries:
                     - keyless:
+                        # Kept identical to verify-signature's (TRANSITION note there).
                         subjectRegExp: "^https://github\\.com/HubertMJ/self-defending-portfolio/\
-                          \\.github/workflows/build-web\\.yml@refs/heads/main$"
+                          \\.github/workflows/(build-images|build-web)\\.yml@refs/heads/main$"
                         issuer: https://token.actions.githubusercontent.com
                         rekor:
                           url: https://rekor.sigstore.dev
