@@ -22,14 +22,15 @@ decision are appended as dated amendments in the same file.
 | [0014](0014-posture-scanning.md) | Posture scanning: Trivy Operator client/server with offline scan Jobs, kube-bench CronJob with a k3s config override, Policy Reporter internal only | 4 | accepted |
 | 0015 | *reserved: phase 5 API* | 5 | reserved |
 | 0016 | *reserved: phase 5 API* | 5 | reserved |
-| 0017 | *reserved: phase 5 attack scenarios* | 5 | reserved |
-| 0018 | *reserved: phase 5 attack scenarios* | 5 | reserved |
-| 0019 | *reserved: phase 6 site* | 6 | reserved |
+| 0017 | Attack scenarios: a safety model for letting anonymous visitors attack the cluster | 5 | in progress (branch `phase-5-scenarios`) |
+| 0018 | Attack scenarios: which Falco rule detects each one, and what Talon does about it | 5 | in progress (branch `phase-5-scenarios`) |
+| 0019 | Frontend stack and Content Security Policy: vanilla TypeScript + esbuild, no third-party origins, Trusted Types | 6 | in progress (branch `phase-6-frontend`) |
 | 0020 | *reserved: phase 6 documentation* | 6 | reserved |
 
-Reserved numbers are held for work in progress on parallel branches. A reserved number that ends up
-unused is released, and later ADRs are renumbered when those branches merge, so the table never
-links to a file that does not exist.
+Rows marked "in progress" are ADRs written on a parallel branch that has not merged yet; they become
+links when it does. Reserved numbers are held for work in progress on parallel branches. A reserved
+number that ends up unused is released, and later ADRs are renumbered when those branches merge, so
+the table never links to a file that does not exist.
 
 ## Open items carried by accepted ADRs
 

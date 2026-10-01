@@ -3,7 +3,8 @@
 A DevOps/security portfolio that is also the thing it describes: a single-node Kubernetes cluster
 in a homelab that serves its own website, refuses software it did not build and sign, watches every
 process it runs, and kills or isolates a compromised pod on its own. The planned finale lets a
-visitor press a button, launch a controlled attack in a sandbox, and watch detection and response
+visitor press a button, launch one of four controlled attacks (shell in a container, download tool,
+read of `/etc/shadow`, drop-and-run a new binary) in a sandbox, and watch detection and response
 happen live.
 
 **Live:** [hubertjablon.ski](https://hubertjablon.ski)
@@ -82,9 +83,16 @@ k3s01: Proxmox VM, Debian 13, hardened by Ansible
 └─ sandbox: restricted, default-deny (DNS only), quarantine policy, Talon's only RBAC
 ```
 
-Planned for phase 5 (not in the repository yet): a Go API in its own namespace behind `/api`,
-four fixed attack scenarios run as pods in `sandbox`, and a live event stream (SSE) from Falco and
-Talon to the browser. Phase 6 replaces the placeholder page with the posture and demo site.
+Planned for phase 5 (not on `main` yet): a Go API in its own namespace behind `/api`, four fixed
+attack scenarios run as pods in `sandbox`, and a live event stream (SSE) from Falco and Talon to the
+browser. The scenarios, each mapped to a Falco rule and a Talon response (ADR 0017/0018, in progress):
+
+| Scenario | Technique | Detected by | Response |
+|----------|-----------|-------------|----------|
+| `shell-in-container` | T1059.004 | Terminal shell in container | pod deleted |
+| `network-tool` | T1071.001 | SDP network tool in sandbox | pod quarantined |
+| `sensitive-file-read` | T1003.008 | Read sensitive file untrusted | pod deleted |
+| `drop-and-execute` | T1105 | Drop and execute new binary in container | pod deleted | Phase 6 replaces the placeholder page with the posture and demo site.
 
 ### Repository map
 
