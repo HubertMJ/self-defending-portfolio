@@ -91,7 +91,9 @@ func TestVictimProbe(t *testing.T) {
 		}
 	}
 
-	a.set(func(a *victimApp) { a.body, a.ctype, a.code, a.delay = `{"status":"up"}`, "application/json; charset=utf-8", 200, 0 })
+	a.set(func(a *victimApp) {
+		a.body, a.ctype, a.code, a.delay = `{"status":"up"}`, "application/json; charset=utf-8", 200, 0
+	})
 	if ev := p.probe(ctx, "127.0.0.1"); ev.Status != VictimUp {
 		t.Fatalf("json with charset: %+v", ev)
 	}
@@ -208,5 +210,37 @@ func TestNoVictimProbeWithoutFlag(t *testing.T) {
 	<-done
 	if n := len(rec.of("victim")); n != 0 {
 		t.Fatalf("%d victim events for a scenario without the app", n)
+	}
+}
+
+// Before the app has answered once it is starting, not unreachable; and a probe failing because
+// Talon's delete got there first is reported as gone, not as a network cut.
+func TestVictimStartingAndDyingAreNotUnreachable(t *testing.T) {
+	app := newVictimApp(t)
+	app.set(func(a *victimApp) { a.code = http.StatusServiceUnavailable })
+	c := fake.NewClientset()
+	readyOnCreate(c)
+	rec := newRecorder()
+	r := New(c, &fakeExec{block: true}, rec, nil, Config{PollInterval: 10 * time.Millisecond, QuarantineLinger: -1,
+		VictimPort: app.port, VictimInterval: 40 * time.Millisecond, VictimTimeout: 200 * time.Millisecond})
+	release, done := released()
+	sc := scenario("terminate", true)
+	sc.Victim, sc.TimeoutSeconds = true, 30
+	id := r.Start(sc, release)
+	pod := podName(sc.ID, id)
+	rec.waitFor(t, StatePodReady)
+	time.Sleep(150 * time.Millisecond)
+	app.set(func(a *victimApp) { a.code = http.StatusOK })
+	waitOrder(t, rec, "victim:up")
+	// The app dies first, the deletion is reported a moment later.
+	app.srv.CloseClientConnections()
+	app.srv.Listener.Close()
+	time.Sleep(10 * time.Millisecond)
+	_ = c.CoreV1().Pods("sandbox").Delete(context.Background(), pod, metav1.DeleteOptions{})
+	waitOrder(t, rec, "victim:gone")
+	r.ObserveTalon(pod, "success")
+	<-done
+	if o := rec.order(); strings.Contains(o, "victim:unreachable") || strings.Count(o, "victim:") != 2 {
+		t.Fatalf("order: %s", o)
 	}
 }

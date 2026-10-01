@@ -381,12 +381,16 @@ func (r *Runner) execute(rn *run, sc scenarios.Scenario) {
 		vdone := make(chan struct{})
 		ip := ready.Status.PodIP
 		first := r.prober.probe(vctx, ip)
-		first.RunID, first.Pod, first.At = rn.id, rn.pod, r.now().UTC()
-		r.emit(rn, "victim", first)
+		if first.Status == VictimUnreachable {
+			first = VictimEvent{} // still starting: nothing to report yet
+		} else {
+			first.RunID, first.Pod, first.At = rn.id, rn.pod, r.now().UTC()
+			r.emit(rn, "victim", first)
+		}
 		go func() {
 			defer close(vdone)
 			r.sleep(vctx, r.cfg.VictimInterval)
-			r.pollVictim(vctx, rn, ip)
+			r.pollVictim(vctx, rn, ip, first)
 		}()
 		victimStarted = true
 		stopVictim = func() { vcancel(); <-vdone }

@@ -186,12 +186,17 @@ func plainText(s string, n int) string {
 }
 
 // pollVictim probes the pod every VictimInterval until ctx ends or the pod is going away, and
-// publishes each change of state. "gone" is published once the pod is being deleted by someone
-// other than the runner (Talon).
-func (r *Runner) pollVictim(ctx context.Context, rn *run, podIP string) {
+// publishes each change of state. last is what was published before (zero: nothing yet). "gone" is
+// published once the pod is being deleted by someone other than the runner (Talon).
+//
+// Two kinds of failure are not reported as "unreachable": one before the app has ever answered
+// (it is still starting - the app answers 503 until its state exists), and one that turns out to be
+// the pod dying - Talon's delete makes the probe fail a moment before the watch reports the
+// deletion, so a failure after a good answer waits one interval for that report and says "gone"
+// instead if it comes.
+func (r *Runner) pollVictim(ctx context.Context, rn *run, podIP string, last VictimEvent) {
 	t := time.NewTicker(r.cfg.VictimInterval)
 	defer t.Stop()
-	var last VictimEvent
 	for {
 		select {
 		case <-rn.gone:
@@ -209,7 +214,23 @@ func (r *Runner) pollVictim(ctx context.Context, rn *run, podIP string) {
 			return
 		default:
 		}
-		if last.Status == "" || !ev.same(last) {
+		if ev.Status == VictimUnreachable && last.Status == "" {
+			ev = last // still starting
+		}
+		if ev.Status == VictimUnreachable && last.Status != VictimUnreachable {
+			grace := time.NewTimer(r.cfg.VictimInterval)
+			select {
+			case <-ctx.Done():
+				grace.Stop()
+				return
+			case <-rn.gone:
+				grace.Stop()
+				r.publishVictimGone(rn)
+				return
+			case <-grace.C:
+			}
+		}
+		if ev.Status != "" && (last.Status == "" || !ev.same(last)) {
 			last = ev
 			ev.RunID, ev.Pod, ev.At = rn.id, rn.pod, r.now().UTC()
 			r.emit(rn, "victim", ev)
