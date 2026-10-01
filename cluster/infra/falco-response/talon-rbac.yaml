@@ -2,7 +2,9 @@
 # permissions to act on pods are a Role in the sandbox namespace (cluster/infra/sandbox/talon-rbac.yaml),
 # so Talon can touch pods there and nowhere else.
 #
-# What Talon 0.3.0 calls, read from its source at that tag:
+# What Talon 0.3.0 calls, read from its source at that tag (and unchanged at d273e352, the commit
+# app/talon builds since ADR 0023: the terminate and label actionners and the Lease code call the
+# same APIs):
 #   * leader election: get/create/update Lease "falco-talon" in $NAMESPACE (internal/kubernetes/client);
 #   * (k8sevents notifier: Namespace get + Event create - not used, see talon/config.yaml);
 #   * webhook notifier (to the portfolio API, ADR 0015): plain HTTP, no Kubernetes API call at all;

@@ -35,9 +35,10 @@ deduplication:
 # title-cases every object key ("namespace" -> "Namespace") before calling a notifier, but k8sevents
 # reads the lowercase key, gets "", and falls back to namespace `default` with an empty pod name.
 # Observed on the cluster: "events is forbidden ... in the namespace \"default\"" (ADR 0013,
-# correction). Fixed on Talon's master (it reads Objects["Namespace"]), but not in any release.
-# Re-enable it, with the namespace-read ClusterRole and the events grant, once a release carries
-# the fix.
+# correction). Fixed upstream in 87dd820 (it reads Objects["Namespace"]) and 5d5808c (it sets the
+# involved object's uid), both on main and both in the commit app/talon builds (ADR 0023) - but not
+# in any release. The notifier stays off anyway: turning it on is its own change (the namespace-read
+# ClusterRole, the events grant, and a look at what it writes), not a side effect of an image swap.
 default_notifiers:
   - webhook
 notifiers:

@@ -90,10 +90,15 @@ spec:
               # `portfolio-api` (phase 5, ADR 0015) is the one workload here that holds API
               # permissions - it creates and execs into pods in `sandbox` - so it is the last
               # place an unverified image may run.
+              # `falco-response` (ADR 0023) since Falco Talon runs this project's own build: Talon
+              # holds the other set of API permissions in the cluster (delete and label pods in
+              # `sandbox`). Falcosidekick, next to it, is still docker.io's image and is not matched
+              # by imageReferences below, so it is out of scope here, not exempted.
               namespaces:
                 - hello
                 - sandbox
                 - portfolio-api
+                - falco-response
       verifyImages:
         # Only this project's images. A rule that matched `*` would demand our signature on
         # every third-party sidecar the cluster ever runs.
@@ -170,10 +175,12 @@ spec:
           - resources:
               kinds:
                 - Pod
+              # Kept identical to verify-signature's list.
               namespaces:
                 - hello
                 - sandbox
                 - portfolio-api
+                - falco-response
       verifyImages:
         - imageReferences:
             - "ghcr.io/hubertmj/self-defending-portfolio/*"

@@ -4,7 +4,8 @@
 #   pods get/delete  - kubernetes:terminate reads the pod (owner checks) and deletes it
 #   pods patch       - kubernetes:label sets the quarantine label (JSON patch)
 #
-# Taken from Talon 0.3.0's source for the two actionners and the notifier in use, which is narrower
+# Taken from Talon 0.3.0's source for the two actionners and the notifier in use (the same calls at
+# d273e352, the commit app/talon builds, ADR 0023), which is narrower
 # than plan section 4.4: no pods `list` (only the drain and sysdig actionners list pods), and no events at
 # all since the k8sevents notifier is off (talon/config.yaml). No `update` on pods, no pods/exec, no
 # secrets.

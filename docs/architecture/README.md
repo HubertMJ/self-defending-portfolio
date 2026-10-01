@@ -166,10 +166,10 @@ flowchart LR
     OIDC["GitHub OIDC token"] -.-> SIGN
     SIGN -.-> FUL["Sigstore Fulcio<br/>short-lived cert<br/>SAN = build-images.yml@refs/heads/main"]
     SIGN -.-> REK["Rekor<br/>transparency log"]
-    B --> GHCR[("GHCR (public)<br/>ghcr.io/hubertmj/self-defending-portfolio/{web,api,scenario}<br/>bundles as OCI referrers")]
+    B --> GHCR[("GHCR (public)<br/>ghcr.io/hubertmj/self-defending-portfolio/{web,api,scenario,talon}<br/>bundles as OCI referrers")]
     ATT --> GHCR
     HUMAN([operator]) -- "commit digest<br/>(scripts/bump-image-digest.sh)" --> ARGO["Argo CD sync"]
-    ARGO --> ADM{"Kyverno admission<br/>ns hello, sandbox, portfolio-api"}
+    ARGO --> ADM{"Kyverno admission<br/>ns hello, sandbox, portfolio-api,<br/>falco-response (Talon)"}
     GHCR -. "referrers, bundles<br/>(anonymous pull)" .-> ADM
     ADM -- "signature + SBOM verified,<br/>registry allowed, no :latest" --> POD["Pod runs<br/>image pinned to verified digest"]
     ADM -- "anything else" --> DENY["rejected"]
@@ -182,7 +182,7 @@ flowchart LR
 | Why keyless, why a bundle, why fixable-only | [ADR 0011](../adr/0011-supply-chain.md) (and its 2026-10-01 amendment) |
 | Why one matrix workflow and not a reusable one (the identity must be one file on main) | [ADR 0016](../adr/0016-one-image-workflow.md) |
 | Admission: signature + SBOM by identity, `type: SigstoreBundle`, `mutateDigest`, `failurePolicy: Fail`; identity regex `build-images.yml` (and, until hello's digest is rebuilt, `build-web.yml`) `@refs/heads/main` | [`verify-portfolio-images.yaml`](../../cluster/infra/kyverno-policies/verify-portfolio-images.yaml) |
-| Admission: only `ghcr.io/hubertmj/self-defending-portfolio/*` in `hello`, `sandbox` and `portfolio-api` | [`restrict-image-registries.yaml`](../../cluster/infra/kyverno-policies/restrict-image-registries.yaml) |
+| Admission: only `ghcr.io/hubertmj/self-defending-portfolio/*` in `hello`, `sandbox` and `portfolio-api`, and for Falco Talon's pods in `falco-response` (ADR 0023) | [`restrict-image-registries.yaml`](../../cluster/infra/kyverno-policies/restrict-image-registries.yaml) |
 | Admission: no image without a tag or with `:latest` (cluster-wide minus system namespaces) | [`disallow-latest-tag.yaml`](../../cluster/infra/kyverno-policies/disallow-latest-tag.yaml) |
 | The same verdict without a cluster | [`scripts/verify-image.sh`](../../scripts/verify-image.sh) |
 | The negative test (unsigned, foreign, `:latest` all rejected) | [`tests/admission/run.sh`](../../tests/admission/run.sh) |
@@ -210,7 +210,7 @@ flowchart TB
     end
     subgraph NS_FR["ns falco-response (restricted)"]
         SK["Falcosidekick :2801<br/>forwards priority >= notice"]
-        TA["Falco Talon 0.3.0 :2803<br/>leader Lease falco-talon, JSON log"]
+        TA["Falco Talon :2803 (built here, app/talon)<br/>leader Lease falco-talon, JSON log"]
     end
     K8S[("kube-apiserver :6443")]
     Q["CiliumClusterwideNetworkPolicy<br/>quarantine: deny all in/out"]

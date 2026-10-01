@@ -41,9 +41,13 @@ cd "$(dirname "$0")"
 REPO_ROOT=$(cd ../.. && pwd)
 
 DOCKER=${DOCKER:-docker}
-# Same digests as cluster/infra/falco/kustomization.yaml and cluster/infra/falco-response/talon-deployment.yaml.
+# Same digest as cluster/infra/falco/kustomization.yaml.
 FALCO_IMAGE=${FALCO_IMAGE:-docker.io/falcosecurity/falco:0.45.0@sha256:788f1129c542171813083d4afc61b16730a47dde8c23d9c39370acef996349b6}
-TALON_IMAGE=${TALON_IMAGE:-docker.io/falcosecurity/falco-talon:0.3.0@sha256:333224a111a0722ff3f418ffe6bc5d8a3be0941f37c67520bc845e62f1234ad3}
+# Talon is this repository's own image (app/talon, ADR 0023), pinned by its kustomize `images:` entry;
+# read from there, so a digest bump (scripts/bump-image-digest.sh talon ...) needs no second edit here.
+TALON_REF=ghcr.io/hubertmj/self-defending-portfolio/talon
+talon_digest=$(sed -n "\|name: $TALON_REF\$|,/digest:/s/^ *digest: *//p" "$REPO_ROOT/cluster/infra/falco-response/kustomization.yaml")
+TALON_IMAGE=${TALON_IMAGE:-$TALON_REF@$talon_digest}
 SCENARIO_TAG=sdp-scenario:offline-test
 SCENARIOS=$REPO_ROOT/cluster/infra/sandbox/scenarios/scenarios.yaml
 

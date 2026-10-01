@@ -13,6 +13,15 @@ resources:
   - talon-rbac.yaml
   - talon-deployment.yaml
 
+# Talon's image, built and signed by .github/workflows/build-images.yml from app/talon (ADR 0023).
+# Pinned by digest (ADR 0008); scripts/bump-image-digest.sh talon <digest> rewrites the line below,
+# and tests/scenarios/offline.sh reads it, so the offline rules check runs the image the cluster runs.
+# A placeholder digest is refused by `make validate` and CI (scripts/check-image-digests.sh).
+images:
+  - name: ghcr.io/hubertmj/self-defending-portfolio/talon
+    newTag: main
+    digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+
 configMapGenerator:
   # Hash-suffixed names: a changed rule or setting is a new ConfigMap and rolls the Deployment, which is
   # the reviewed path; Talon's own rules watch (watch_rules) only shortens the window.

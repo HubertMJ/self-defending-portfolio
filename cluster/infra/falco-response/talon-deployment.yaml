@@ -1,5 +1,13 @@
-# Falco Talon 0.3.0, the response engine (ADR 0013): Falcosidekick POSTs every alert to it, and it runs
+# Falco Talon, the response engine (ADR 0013): Falcosidekick POSTs every alert to it, and it runs
 # the matching actions in talon/rules.yaml through the Kubernetes API.
+#
+# The image is this repository's own build (app/talon, ADR 0023): upstream main at d273e352 (v0.3.0
+# plus bug fixes, same configuration keys) compiled with fixed dependencies, Trivy-gated, SBOM'd and
+# cosign-signed by build-images.yml. Until then this ran docker.io/falcosecurity/falco-talon:0.3.0,
+# whose 24 CRITICAL+HIGH findings no Talon release fixes. Being ours, it is also verified at
+# admission: falco-response is in verify-portfolio-images, and restrict-image-registries pins this
+# Deployment's pods to our registry path - the workload here that holds API permissions now runs
+# only an image our workflow signed. Pinned by digest in kustomization.yaml.
 #
 # Plain manifests modelled on the upstream falco-talon chart 0.5.0 (templates/deployment.yaml,
 # services.yaml), not the chart itself: the chart writes `image.tag` into the app.kubernetes.io/version
@@ -32,14 +40,16 @@ spec:
       automountServiceAccountToken: true
       securityContext:
         runAsNonRoot: true
-        # The image's own user (distroless, ko-built).
+        # The image's own user: distroless nonroot (app/talon/Dockerfile), the same uid as the
+        # upstream ko-built image this replaced.
         runAsUser: 65532
         runAsGroup: 65532
         seccompProfile:
           type: RuntimeDefault
       containers:
         - name: falco-talon
-          image: docker.io/falcosecurity/falco-talon:0.3.0@sha256:333224a111a0722ff3f418ffe6bc5d8a3be0941f37c67520bc845e62f1234ad3
+          # Pinned by digest in kustomization.yaml (ADR 0008, 0011); the tag is informational.
+          image: ghcr.io/hubertmj/self-defending-portfolio/talon:main
           imagePullPolicy: IfNotPresent
           args: ["server", "-c", "/etc/falco-talon/config.yaml", "-r", "/etc/falco-talon/rules.yaml"]
           env:
