@@ -29,8 +29,11 @@ VM_GW="${VM_GW:-10.4.1.1}"
 VM_DNS="${VM_DNS:-10.4.1.1}"       # gateway resolver; keeps the DMZ independent of LAB 1
 VM_USER="${VM_USER:-ansible}"
 SSH_PUBKEY_FILE="${SSH_PUBKEY_FILE:-$HOME/.ssh/id_ed25519.pub}"
-DEBIAN_IMAGE_URL="${DEBIAN_IMAGE_URL:-https://cloud.debian.org/images/cloud/trixie/latest/debian-13-genericcloud-amd64.qcow2}"
-DEBIAN_SUMS_URL="${DEBIAN_SUMS_URL:-https://cloud.debian.org/images/cloud/trixie/latest/SHA512SUMS}"
+# Pinned build (ADR 0008). "latest" is a moving target and a stale file with the same name on the
+# Proxmox import storage would be hashed instead of the download. Bump deliberately.
+DEBIAN_BUILD="${DEBIAN_BUILD:-20260914-2601}"
+DEBIAN_IMAGE_URL="${DEBIAN_IMAGE_URL:-https://cloud.debian.org/images/cloud/trixie/${DEBIAN_BUILD}/debian-13-genericcloud-amd64-${DEBIAN_BUILD}.qcow2}"
+DEBIAN_SUMS_URL="${DEBIAN_SUMS_URL:-https://cloud.debian.org/images/cloud/trixie/${DEBIAN_BUILD}/SHA512SUMS}"
 CURL_OPTS=(-sS --fail-with-body -H "Authorization: PVEAPIToken=${PVE_TOKEN_ID}=${PVE_TOKEN}")
 [[ "${PVE_INSECURE:-0}" == "1" ]] && CURL_OPTS+=(-k)
 API="https://${PVE_HOST}:8006/api2/json"
