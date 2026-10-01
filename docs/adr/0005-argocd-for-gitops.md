@@ -14,3 +14,7 @@ UI is LAN-only, SSO not needed: a single local admin with the initial password r
 ## Consequences
 - Every change to the cluster is a git commit; kubectl is only used during bootstrap and debugging.
 - If RAM becomes tight, Flux is the documented fallback (manifests are plain Kustomize/Helm, so migration is mechanical).
+- The hand-over of bootstrap-installed components (Cilium) from Ansible to Argo CD is one-way:
+  once the `cilium` Application exists, the Ansible role skips the Helm release (Argo CD creates
+  objects without Helm ownership metadata, which `helm upgrade` would refuse to adopt) and only
+  keeps the prerequisites in place. A rebuild from zero has no Application and installs normally.

@@ -57,19 +57,25 @@
   block:
     # The upstream release stamps every CRD with the bundle version it came from, which is the
     # cheapest way to ask the cluster whether the pinned release is already installed.
-    - name: Read the installed Gateway API bundle version
+    # Plain JSON instead of a jsonpath with escaped dots: the command module would mangle the
+    # backslashes and the guard would never match.
+    - name: Read the installed Gateway API CRD
       ansible.builtin.command:
-        cmd: >-
-          {{ cilium_kubectl_binary }} kubectl get crd gateways.gateway.networking.k8s.io
-          -o jsonpath={.metadata.annotations.gateway\.networking\.k8s\.io/bundle-version}
+        cmd: "{{ cilium_kubectl_binary }} kubectl get crd gateways.gateway.networking.k8s.io -o json"
       environment:
         KUBECONFIG: "{{ cilium_kubeconfig }}"
       register: cilium_gateway_api_installed
       changed_when: false
       failed_when: false
 
+    - name: Record the installed Gateway API bundle version
+      ansible.builtin.set_fact:
+        cilium_gateway_api_installed_version: >-
+          {{ (cilium_gateway_api_installed.stdout | from_json).metadata.annotations['gateway.networking.k8s.io/bundle-version']
+             if cilium_gateway_api_installed.rc == 0 else '' }}
+
     - name: Apply the pinned Gateway API standard channel CRDs
-      when: cilium_gateway_api_installed.stdout | default('') != cilium_gateway_api_version
+      when: cilium_gateway_api_installed_version | trim != cilium_gateway_api_version
       block:
         # Upstream publishes no checksum file next to the release asset, so the digest is pinned in
         # the role's defaults instead of being looked up by file name.
@@ -106,13 +112,33 @@
             path: "{{ cilium_gateway_api_crds_path }}"
             state: absent
 
+# After bootstrap, Argo CD (cluster/apps/cilium.yaml) owns the Cilium release: it applies the chart's
+# rendered manifests itself and creates new objects without Helm ownership metadata, which a later
+# `helm upgrade` from here would refuse to adopt. Once the hand-over has happened this role only
+# guarantees the prerequisites (CRDs, sysctl) and leaves the release alone. The hand-over is
+# detected by the presence of the Argo CD Application; a rebuild from zero has none and installs.
+- name: Check whether Argo CD already owns the Cilium release
+  ansible.builtin.command:
+    cmd: "{{ cilium_kubectl_binary }} kubectl get application.argoproj.io {{ cilium_release_name }} -n argocd -o name"
+  environment:
+    KUBECONFIG: "{{ cilium_kubeconfig }}"
+  register: cilium_argocd_app
+  changed_when: false
+  failed_when: false
+
+- name: Record whether the release is GitOps-managed
+  ansible.builtin.set_fact:
+    cilium_managed_by_argocd: "{{ cilium_argocd_app.rc == 0 and (cilium_argocd_app.stdout | trim | length > 0) }}"
+
 - name: Add the Cilium helm repository
+  when: not cilium_managed_by_argocd
   kubernetes.core.helm_repository:
     name: "{{ cilium_chart_repo_name }}"
     repo_url: "{{ cilium_chart_repo_url }}"
     binary_path: "{{ cilium_helm_binary }}"
 
 - name: Install Cilium
+  when: not cilium_managed_by_argocd
   kubernetes.core.helm:
     name: "{{ cilium_release_name }}"
     chart_ref: "{{ cilium_chart_ref }}"
