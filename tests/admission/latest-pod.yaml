@@ -1,15 +1,16 @@
 # A floating tag (ADR 0008). Same restricted-compliant shape as unsigned-pod.yaml, for the same
 # reason: the only thing a policy can object to here is the image reference.
 #
-# docker.io rather than our own registry path so that when all three policies are enforcing, the
-# denial is attributable - this Pod trips disallow-latest-tag (and restrict-image-registries, which is
-# why run.sh asserts that the expected policy name appears in the message rather than that it is the
-# only one).
+# Namespace `default`, explicitly, and for the same reason as workload-policy-pods.yaml: it is outside
+# restrict-image-registries and verify-portfolio-images, which are failurePolicy Fail webhooks that
+# would reject a docker.io image in `hello` before disallow-latest-tag (failurePolicy Ignore, a separate
+# webhook) is evaluated, so the denial would not be attributable. Everything else here is valid, so
+# :latest is the only violation.
 apiVersion: v1
 kind: Pod
 metadata:
   name: admission-test-latest-tag
-  namespace: hello
+  namespace: default
   labels:
     app.kubernetes.io/name: admission-test
   annotations:
