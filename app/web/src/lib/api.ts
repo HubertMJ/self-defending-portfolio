@@ -6,10 +6,14 @@
 
 import {
   type AttackAccepted,
+  type Limits,
   type Posture,
   type Scenario,
+  type ScenarioDetails,
   isAttackAccepted,
+  isLimits,
   isPosture,
+  parseScenarioDetails,
   parseScenarios,
 } from "./contract";
 
@@ -142,6 +146,19 @@ export class ApiClient {
   posture(): Promise<Result<Posture>> {
     return this.getJson("/posture", (v) => {
       if (!isPosture(v)) throw new TypeError("posture: response does not match the contract");
+      return v;
+    });
+  }
+
+  /** Extension endpoint; an API without it answers 404, which the caller treats as "no details". */
+  scenarioDetails(id: string): Promise<Result<ScenarioDetails>> {
+    return this.getJson(`/scenarios/${encodeURIComponent(id)}/details`, parseScenarioDetails);
+  }
+
+  /** Extension endpoint: the rate limits as the server counts them for this visitor. */
+  limits(): Promise<Result<Limits>> {
+    return this.getJson("/limits", (v) => {
+      if (!isLimits(v)) throw new TypeError("limits: response does not match the contract");
       return v;
     });
   }

@@ -10,7 +10,7 @@ import { posture, SCENARIOS } from "../../src/lib/fixtures";
 describe("fixtures match the contract", () => {
   it("scenarios and posture pass the same guards live data does", () => {
     expect(SCENARIOS.every(isScenario)).toBe(true);
-    expect(SCENARIOS.map((s) => s.id)).toEqual(expect.arrayContaining(["shell-in-container", "network-tool", "sensitive-file-read"]));
+    expect(SCENARIOS.map((s) => s.id)).toEqual(expect.arrayContaining(["shell-in-container", "network-tool", "sensitive-file-read", "drop-and-execute"]));
     expect(isPosture(posture())).toBe(true);
   });
 });
@@ -43,7 +43,7 @@ describe("MockBackend", () => {
 
     await settle(3000);
     const states = seen.filter((e) => e.type === "run").map((e) => (e.data as { state: string }).state);
-    expect(states).toEqual(["queued", "started", "detected", "responded", "finished"]);
+    expect(states).toEqual(["queued", "started", "pod_ready", "detected", "responded", "finished"]);
     for (const e of seen) {
       const ok = e.type === "run" ? isRunEvent(e.data) : e.type === "falco" ? isFalcoEvent(e.data) : isTalonEvent(e.data);
       expect(ok, JSON.stringify(e)).toBe(true);
@@ -79,7 +79,7 @@ describe("MockBackend", () => {
     for (const t of ["run", "falco", "talon"]) src.addEventListener(t, () => types.push(t));
     await settle(10);
     expect(types).toContain("falco");
-    expect(types.filter((t) => t === "run")).toHaveLength(5);
+    expect(types.filter((t) => t === "run")).toHaveLength(6);
   });
 });
 
@@ -193,5 +193,47 @@ describe("extension payloads", () => {
     expect(isLimits({ per_visitor: { limit: 3, window_s: 600, remaining: 2, reset_in_s: 30 }, global: { limit: 30, window_s: 3600, remaining: 29 }, active_run: false, stream_slots_remaining: 40 })).toBe(true);
     expect(isLimits({ per_visitor: {} })).toBe(false);
     expect(parseRunEvents({ events: [{ type: "run", data: { run_id: "r", scenario: "s", state: "queued", at: "t" } }, { type: "nope", data: {} }] })).toHaveLength(1);
+  });
+});
+
+describe("MockBackend extension endpoints and events", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it("emits contract-valid pod, victim and flow events for a quarantine run", async () => {
+    const mock = new MockBackend({ speed: 1, history: false });
+    const api = new ApiClient({ fetch: mock.fetch });
+    const src = mock.eventSource("/api/events");
+    const seen: { type: string; raw: string }[] = [];
+    for (const t of ["run", "falco", "talon", "pod", "victim", "flow"]) src.addEventListener(t, (m) => seen.push({ type: t, raw: m.data }));
+    await vi.advanceTimersByTimeAsync(100);
+    const p = api.attack("network-tool");
+    await vi.advanceTimersByTimeAsync(200);
+    expect((await p).kind).toBe("accepted");
+    await vi.advanceTimersByTimeAsync(7000);
+    for (const e of seen) expect(parseStreamEvent(e.type, e.raw), e.raw).not.toBeNull();
+    const types = new Set(seen.map((e) => e.type));
+    expect([...types].sort()).toEqual(["falco", "flow", "pod", "run", "talon", "victim"]);
+    const victims = seen.filter((e) => e.type === "victim").map((e) => JSON.parse(e.raw).status);
+    expect(victims).toEqual(["up", "compromised", "unreachable", "unreachable"]);
+  });
+
+  it("serves details (or a 404 when told to), limits and a run's events", async () => {
+    const mock = new MockBackend({ speed: 0 });
+    const api = new ApiClient({ fetch: mock.fetch });
+    const d = api.scenarioDetails("shell-in-container");
+    const l = api.limits();
+    await vi.advanceTimersByTimeAsync(10);
+    const details = await d;
+    expect(details.ok && details.value.exec_command[0]).toBe("sh");
+    const limits = await l;
+    expect(limits.ok && limits.value.per_visitor.limit).toBe(3);
+    const off = new ApiClient({ fetch: new MockBackend({ speed: 0, noDetails: true }).fetch }).scenarioDetails("shell-in-container");
+    await vi.advanceTimersByTimeAsync(10);
+    expect((await off).ok).toBe(false);
+    const runs = mock.fetch("/api/runs/mock-history-1");
+    await vi.advanceTimersByTimeAsync(10);
+    const body = await (await runs).json();
+    expect(parseRunEvents(body).length).toBeGreaterThan(10);
   });
 });

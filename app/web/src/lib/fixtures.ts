@@ -1,44 +1,119 @@
-// Fixture data for mock mode and tests. Shapes follow the phase 5/6 contract field for field; the
-// values are illustrative, not measurements from the live cluster. Scenario ids match the ones the
-// contract fixes; titles, rules and techniques are what the scenarios session is expected to ship
-// and are only placeholders here -- the live page always renders whatever /api/scenarios returns.
+// Fixture data for mock mode and tests. Shapes follow the phase 5/6 contract and its extension field
+// for field; timings and ids are illustrative, not measurements from the live cluster. The scenario
+// list mirrors the live catalogue (cluster/infra/sandbox/scenarios/scenarios.yaml) -- ids, titles,
+// techniques, rules and responses -- so mock mode shows what the live page shows; the live page always
+// renders whatever /api/scenarios returns.
 
-import type { Posture, Scenario } from "./contract";
+import type { Posture, Scenario, ScenarioDetails, SourceRef, VictimStatus } from "./contract";
 
 export const SCENARIOS: Scenario[] = [
   {
     id: "shell-in-container",
-    title: "Shell in a running container",
-    summary: "Opens an interactive shell inside a sandbox pod, the first move after most container compromises.",
+    title: "Shell in a container",
+    summary:
+      "Opens an interactive shell inside a running, fully hardened pod - the first thing an attacker does after landing remote code execution. Falco sees a shell with a terminal attached; Talon deletes the pod within seconds.",
     technique: "T1059.004",
     detection: "Terminal shell in container",
     response: "terminate",
   },
   {
     id: "network-tool",
-    title: "Network reconnaissance tool",
-    summary: "Runs a network scanner from inside the sandbox to map what the pod can reach.",
-    technique: "T1046",
-    detection: "Launch Suspicious Network Tool in Container",
+    title: "Download tool in a container",
+    summary:
+      "Runs wget inside a pod, the way an attacker fetches a second stage or talks to a command-and-control server. Falco flags the network tool; Talon quarantines the pod - it keeps running, but loses all network access, both ways.",
+    technique: "T1071.001",
+    detection: "SDP network tool in sandbox",
     response: "quarantine",
   },
   {
     id: "sensitive-file-read",
-    title: "Read of a sensitive file",
-    summary: "Reads /etc/shadow from a process that has no business opening credential files.",
+    title: "Read /etc/shadow",
+    summary:
+      "Reads the system password database from inside a pod, as an attacker hunting for credentials would. Falco flags an untrusted program opening a sensitive file; Talon deletes the pod.",
     technique: "T1003.008",
     detection: "Read sensitive file untrusted",
     response: "terminate",
   },
   {
-    id: "package-manager-drift",
-    title: "Package manager at runtime",
-    summary: "Installs software into a running container, drifting it away from the signed image.",
+    id: "drop-and-execute",
+    title: "Drop and run a new binary",
+    summary:
+      "Writes a new executable into a running container and starts it - the classic \"download a payload and run it\" step. Falco sees a process whose binary was not part of the image; Talon deletes the pod.",
     technique: "T1105",
-    detection: "Launch Package Management Process in Container",
+    detection: "Drop and execute new binary in container",
     response: "terminate",
   },
 ];
+
+/** The commit the mock pretends the API was built from; a real one, so the mock's links resolve. */
+export const MOCK_COMMIT = "a7cc041";
+export const SCENARIO_IMAGE =
+  "ghcr.io/hubertmj/self-defending-portfolio/scenario@sha256:abe9585fe91fec1881895ae79418f6b756a4ca094c9e5e7f0b3dd8a1a76cdea0";
+
+const EXEC: Record<string, string[]> = {
+  "shell-in-container": ["sh", "-c", "id; hostname; sleep 60"],
+  "network-tool": ["wget", "-q", "-T", "2", "-O", "/dev/null", "http://127.0.0.1:9/"],
+  "sensitive-file-read": ["cat", "/etc/shadow"],
+  "drop-and-execute": ["sh", "-c", "cp /bin/busybox /tmp/busybox && exec /tmp/busybox sleep 60"],
+};
+
+const FALCO_RULE: Record<string, SourceRef> = {
+  "shell-in-container": { name: "Terminal shell in container", file: "cluster/infra/falco/kustomization.yaml", line: 144 },
+  "network-tool": { name: "SDP network tool in sandbox", file: "cluster/infra/falco/kustomization.yaml", line: 151 },
+  "sensitive-file-read": { name: "Read sensitive file untrusted", file: "cluster/infra/falco/kustomization.yaml", line: 144 },
+  "drop-and-execute": { name: "Drop and execute new binary in container", file: "cluster/infra/falco/kustomization.yaml", line: 144 },
+};
+
+const TALON_RULE: Record<string, SourceRef> = {
+  "shell-in-container": { name: "Kill terminal shell in sandbox", file: "cluster/infra/falco-response/talon/rules.yaml", line: 35 },
+  "network-tool": { name: "Quarantine network tool in sandbox", file: "cluster/infra/falco-response/talon/rules.yaml", line: 47 },
+  "sensitive-file-read": { name: "Kill sensitive file read in sandbox", file: "cluster/infra/falco-response/talon/rules.yaml", line: 68 },
+  "drop-and-execute": { name: "Kill drifted binary in sandbox", file: "cluster/infra/falco-response/talon/rules.yaml", line: 80 },
+};
+
+/** GET /api/scenarios/{id}/details, as the extended API is expected to answer it. */
+export function scenarioDetails(id: string): ScenarioDetails | null {
+  if (!EXEC[id]) return null;
+  return {
+    exec_command: EXEC[id],
+    pod_security: {
+      runAsUser: 10001,
+      runAsNonRoot: true,
+      readOnlyRootFilesystem: id !== "drop-and-execute",
+      capabilities_drop: ["ALL"],
+      seccomp: "RuntimeDefault",
+      automountServiceAccountToken: false,
+    },
+    resources: { "requests.cpu": "10m", "requests.memory": "16Mi", "limits.cpu": "100m", "limits.memory": "32Mi" },
+    image: { ref: SCENARIO_IMAGE, digest: SCENARIO_IMAGE.slice(SCENARIO_IMAGE.indexOf("@") + 1) },
+    falco_rule: FALCO_RULE[id],
+    talon_rule: TALON_RULE[id],
+    policies: [
+      { kind: "ClusterPolicy", name: "pod-security-restricted", file: "cluster/infra/kyverno-policies/pod-security-restricted.yaml" },
+      { kind: "ClusterPolicy", name: "verify-portfolio-images", file: "cluster/infra/kyverno-policies/verify-portfolio-images.yaml" },
+      { kind: "ClusterPolicy", name: "require-pod-resources", file: "cluster/infra/kyverno-policies/require-pod-resources.yaml" },
+      { kind: "CiliumNetworkPolicy", name: "sandbox-dns-only", file: "cluster/infra/sandbox/ciliumnetworkpolicy.yaml" },
+      { kind: "CiliumClusterwideNetworkPolicy", name: "quarantine", file: "cluster/infra/sandbox/quarantine-ccnp.yaml" },
+    ],
+    commit: MOCK_COMMIT,
+    victim: true,
+  };
+}
+
+/** What the victim app reports in each phase of a scenario, as the scenario image is expected to. */
+export function victimScript(id: string): { status: VictimStatus; title: string; banner: string; checksum: string }[] {
+  const shop = { status: "up" as const, title: "SDP Shop", banner: "Autumn sale: hardened containers, 20% off", checksum: "5e0c1a77d3b2f190" };
+  switch (id) {
+    case "shell-in-container":
+      return [shop, { status: "defaced", title: "pwned", banner: "This shop was defaced from a shell inside its own container", checksum: "d3fac3d0badc0de1" }];
+    case "network-tool":
+      return [shop, { status: "compromised", title: "SDP Shop", banner: "Beaconing to a command-and-control server…", checksum: "c2c2b3ac00000001" }];
+    case "sensitive-file-read":
+      return [shop, { status: "compromised", title: "SDP Shop", banner: "Credential file /etc/shadow was read", checksum: "5ad0e5c4ed000002" }];
+    default:
+      return [shop, { status: "compromised", title: "SDP Shop", banner: "Unknown binary /tmp/busybox is running", checksum: "d40bb1a4e5000003" }];
+  }
+}
 
 export function posture(now: number = Date.now()): Posture {
   return {
@@ -61,15 +136,21 @@ export function posture(now: number = Date.now()): Posture {
 
 /** The Falco output line each scenario would produce, abbreviated the way the API truncates it. */
 export function falcoOutput(scenario: Scenario, pod: string): string {
-  const base = `${scenario.detection} (user=scenario user_uid=65532 container_id=4f1c2a9e8b7d k8s.ns=sandbox k8s.pod=${pod}`;
+  const f = falcoFields(scenario, pod);
+  return `${scenario.detection} | evt_type=${f["evt.type"]} user=${f["user.name"]} user_uid=${f["user.uid"]} process=${f["proc.name"]} proc_exepath=/bin/${f["proc.name"]} parent=${f["proc.pname"]} command=${f["proc.cmdline"]} container_id=${f["container.id"]} k8s_ns=sandbox k8s_pod_name=${pod}`;
+}
+
+/** The allow-listed output_fields of the same alert. */
+export function falcoFields(scenario: Scenario, pod: string): Record<string, string> {
+  const common = { "user.name": "<NA>", "user.uid": "10001", "container.id": "4f1c2a9e8b7d", "container.image.repository": "ghcr.io/hubertmj/self-defending-portfolio/scenario", "k8s.pod.name": pod, "k8s.ns.name": "sandbox" };
   switch (scenario.id) {
     case "shell-in-container":
-      return `${base} shell=sh parent=runc cmdline=sh -i terminal=34816)`;
+      return { ...common, "evt.type": "execve", "proc.name": "sh", "proc.cmdline": "sh -c id; hostname; sleep 60", "proc.pname": "runc" };
     case "network-tool":
-      return `${base} proc=nc cmdline=nc -zv 10.43.0.1 443)`;
+      return { ...common, "evt.type": "execve", "proc.name": "wget", "proc.cmdline": "wget -q -T 2 -O /dev/null http://127.0.0.1:9/", "proc.pname": "runc" };
     case "sensitive-file-read":
-      return `${base} file=/etc/shadow proc=cat cmdline=cat /etc/shadow)`;
+      return { ...common, "evt.type": "openat", "proc.name": "cat", "proc.cmdline": "cat /etc/shadow", "proc.pname": "runc", "fd.name": "/etc/shadow" };
     default:
-      return `${base} proc=apk cmdline=apk add curl)`;
+      return { ...common, "evt.type": "execve", "proc.name": "busybox", "proc.cmdline": "busybox sleep 60", "proc.pname": "sh" };
   }
 }

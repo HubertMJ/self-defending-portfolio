@@ -7,9 +7,13 @@
 //   then open http://localhost:4173/?mock=1 for mock mode, or / for the offline state.
 //
 // --stub-events serves GET /api/events the way the API does (same headers, the retry + 2 KiB
-// preamble, a replayed run event, a heartbeat comment every 2 s), so the Playwright suite can drive
-// the browser's real EventSource rather than only the in-page mock: the mock replaces the
-// EventSource factory, so on its own it could never notice that the real one is never created.
+// preamble, a replayed run, a heartbeat comment every 2 s), so the Playwright suite can drive the
+// browser's real EventSource rather than only the in-page mock: the mock replaces the EventSource
+// factory, so on its own it could never notice that the real one is never created. The replayed run
+// carries every event type of the extended contract (pod lifecycle, victim probes, Falco output
+// fields, Talon's actionner), in the API's exact field names, so the real parsing path sees them
+// too. Everything else under /api stays a text/plain 404, which is how the page meets an API without
+// the details/runs/limits endpoints: it must degrade, not break.
 
 import { createServer } from "node:http";
 import { readFile, stat } from "node:fs/promises";
@@ -22,13 +26,39 @@ const portArg = process.argv.indexOf("--port");
 const port = Number(portArg > 0 ? process.argv[portArg + 1] : process.env.PORT ?? 4173);
 const stubEvents = process.argv.includes("--stub-events");
 
-// One replayed event in the API's exact shape (app/api/internal/runner RunEvent).
-const replayedRun = JSON.stringify({ run_id: "stub0000000000000000", scenario: "shell-in-container", state: "finished", at: "2026-10-01T12:00:00Z", detail: "" });
+// One finished "shell-in-container" run, as the extended API replays it: [event name, payload].
+function replayedRun() {
+  const t0 = Date.parse("2026-10-01T12:00:00Z");
+  const at = (ms) => new Date(t0 + ms).toISOString().replace("Z", "123Z"); // RFC 3339 with sub-ms digits
+  const run_id = "stub0000000000000000";
+  const pod = "scenario-shell-in-container-stub0";
+  const scenario = "shell-in-container";
+  const image = "ghcr.io/hubertmj/self-defending-portfolio/scenario@sha256:abe9585fe91fec1881895ae79418f6b756a4ca094c9e5e7f0b3dd8a1a76cdea0";
+  const podEv = (ms, phase, extra = {}) => ["pod", { run_id, pod, uid: "0f6b2d1c-6a8e-4c39-b1f2-6c0d2e9a7b11", phase, reason: "", container_id: "", image, labels_delta: {}, deleted: false, at: at(ms), ...extra }];
+  const cid = "9b2e7c4d1a0f";
+  return [
+    ["run", { run_id, scenario, state: "queued", at: at(0), detail: "" }],
+    ["run", { run_id, scenario, state: "started", at: at(60), detail: "", pod }],
+    podEv(90, "Pending"),
+    podEv(1750, "Running", { container_id: cid }),
+    ["run", { run_id, scenario, state: "pod_ready", at: at(1790), detail: cid, pod }],
+    ["victim", { run_id, pod, at: at(1850), status: "up", title: "SDP Shop", banner: "Autumn sale: hardened containers, 20% off", probe_ms: 4, checksum: "5e0c1a77d3b2f190" }],
+    ["victim", { run_id, pod, at: at(1990), status: "defaced", title: "pwned", banner: "This shop was defaced from a shell inside its own container", probe_ms: 3, checksum: "d3fac3d0badc0de1" }],
+    ["falco", { at: at(1931), rule: "Terminal shell in container", priority: "Notice", namespace: "sandbox", pod, output: `Notice A shell was spawned in a container with an attached terminal | user=<NA> user_uid=10001 process=sh command=sh -c id; hostname; sleep 60 container_id=${cid} k8s_ns=sandbox k8s_pod_name=${pod}`, fields: { "evt.type": "execve", "proc.name": "sh", "proc.cmdline": "sh -c id; hostname; sleep 60", "proc.pname": "runc", "user.name": "<NA>", "user.uid": 10001, "container.id": cid, "container.image.repository": "ghcr.io/hubertmj/self-defending-portfolio/scenario", "k8s.pod.name": pod, "k8s.ns.name": "sandbox" }, api_received_at: at(1957) }],
+    ["run", { run_id, scenario, state: "detected", at: at(1960), detail: "Terminal shell in container", pod }],
+    ["talon", { at: at(1986), action: "Terminate Pod", actionner: "kubernetes:terminate", namespace: "sandbox", pod, status: "success", output: `the pod '${pod}' in the namespace 'sandbox' has been terminated`, api_received_at: at(1999) }],
+    podEv(2004, "Terminating", { container_id: cid }),
+    ["run", { run_id, scenario, state: "responded", at: at(2010), detail: "terminate", pod }],
+    podEv(2051, "Deleted", { container_id: cid, deleted: true }),
+    ["victim", { run_id, pod, at: at(2350), status: "gone", title: "", banner: "", probe_ms: 0, checksum: "" }],
+    ["run", { run_id, scenario, state: "finished", at: at(2600), detail: "", pod }],
+  ];
+}
 
 function eventStream(req, res) {
   res.writeHead(200, { ...base, "Content-Type": "text/event-stream", "Cache-Control": "no-store, no-transform", "X-Accel-Buffering": "no" });
   res.write("retry: 5000\n\n:" + " ".repeat(2048) + "\n\n");
-  res.write(`id: 1\nevent: run\ndata: ${replayedRun}\n\n`);
+  replayedRun().forEach(([event, data], i) => res.write(`id: ${i + 1}\nevent: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
   const heartbeat = setInterval(() => res.write(": heartbeat\n\n"), 2000);
   req.on("close", () => clearInterval(heartbeat));
 }
