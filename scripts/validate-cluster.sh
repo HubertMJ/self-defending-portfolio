@@ -95,6 +95,14 @@ for dir in "${KUSTOMIZATIONS[@]}"; do
   info "$dir -> $(grep -c '^kind:' "$RENDER_DIR/$name.yaml") objects"
 done
 
+step "rendering the attack scenarios' pod specs as Pods (ADR 0017)"
+# The portfolio API creates these pods at run time from ConfigMap `scenarios`, so they exist in git
+# only as data inside that ConfigMap. Rendered here, before kubeconform, so their specs are validated
+# against the Pod schema and judged by the Kyverno gate below like any other workload; the script also
+# checks every entry against the phase 5/6 contract. See its docstring for the image placeholder.
+python3 scripts/lib/scenario_pods.py "$RENDER_DIR/cluster_infra_sandbox_scenarios.yaml" \
+  cluster/infra/hello/kustomization.yaml "$RENDER_DIR/scenario-pods.yaml"
+
 step "kubeconform (kubernetes $KUBERNETES_VERSION, strict)"
 # -strict rejects unknown and duplicated fields, which is where typos hide.
 #
