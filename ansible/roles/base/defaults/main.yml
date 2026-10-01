@@ -36,3 +36,8 @@ base_disable_cloud_init_network: true
 # Persistent journald storage with an upper bound on disk usage.
 base_journald_storage: persistent
 base_journald_max_use: 500M
+
+# Upstream resolvers for systemd-resolved. Empty list = leave the resolver configuration from
+# cloud-init/netplan alone. On the DMZ node this is set to public resolvers so the node never asks
+# the home gateway, whose resolver forwards to the internal DNS and would leak LAN hostnames.
+base_dns_servers: []

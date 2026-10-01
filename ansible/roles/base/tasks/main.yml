@@ -78,3 +78,58 @@
     group: root
     mode: "0644"
   notify: Restart systemd-journald
+
+- name: Ensure the systemd-resolved drop-in directory exists
+  ansible.builtin.file:
+    path: /etc/systemd/resolved.conf.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  when: base_dns_servers | length > 0
+
+- name: Pin upstream DNS servers for every domain
+  ansible.builtin.copy:
+    dest: /etc/systemd/resolved.conf.d/10-upstream.conf
+    content: |
+      # Managed by Ansible (role: base). Domains=~. makes these global servers win over the
+      # per-link servers netplan/cloud-init learned from the gateway.
+      [Resolve]
+      DNS={{ base_dns_servers | join(' ') }}
+      Domains=~.
+    owner: root
+    group: root
+    mode: "0644"
+  when: base_dns_servers | length > 0
+  notify: Restart systemd-resolved
+
+# cloud-init's netplan file carries the gateway as per-link DNS plus a search domain, and
+# systemd-resolved routes queries for that domain to the link's server regardless of the global
+# drop-in above. Netplan merges list values across files (a 60-*.yaml override only appends), so
+# the role takes over the primary interface's netplan file. cloud-init network rendering is
+# disabled above, so nothing rewrites it on reboot.
+- name: Check whether netplan manages the network
+  ansible.builtin.stat:
+    path: /etc/netplan
+  register: base_netplan_dir
+  when: base_dns_servers | length > 0
+
+- name: Render the primary interface netplan file with pinned DNS
+  ansible.builtin.template:
+    src: netplan-primary.yaml.j2
+    dest: /etc/netplan/50-cloud-init.yaml
+    owner: root
+    group: root
+    mode: "0600"
+    backup: true
+  when:
+    - base_dns_servers | length > 0
+    - base_netplan_dir.stat.isdir | default(false)
+  notify: Apply netplan
+
+- name: Remove the obsolete netplan DNS overlay
+  ansible.builtin.file:
+    path: /etc/netplan/60-ansible-dns.yaml
+    state: absent
+  when: base_dns_servers | length > 0
+  notify: Apply netplan

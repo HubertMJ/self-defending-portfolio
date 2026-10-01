@@ -1,6 +1,8 @@
 # --- host identity ---
 base_hostname: k3s01
 base_timezone: Europe/Warsaw
+# Public resolvers only: the DMZ must not learn internal hostnames from the gateway resolver.
+base_dns_servers: [1.1.1.1, 1.0.0.1, 9.9.9.9]
 
 # --- network facts used by firewall / k3s / cilium ---
 k3s_node_ip: 10.4.1.20

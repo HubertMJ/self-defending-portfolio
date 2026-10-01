@@ -1,0 +1,18 @@
+# {{ ansible_managed }}
+# Primary interface, rendered from facts gathered on this host. Static addressing as cloud-init
+# set it; DNS pinned to base_dns_servers with no search domain (see roles/base/defaults).
+network:
+  version: 2
+  ethernets:
+    {{ ansible_default_ipv4.interface }}:
+      match:
+        macaddress: "{{ ansible_default_ipv4.macaddress }}"
+      set-name: "{{ ansible_default_ipv4.interface }}"
+      addresses:
+        - "{{ ansible_default_ipv4.address }}/{{ ansible_default_ipv4.prefix }}"
+      nameservers:
+        addresses: {{ base_dns_servers | to_json }}
+        search: []
+      routes:
+        - to: "default"
+          via: "{{ ansible_default_ipv4.gateway }}"

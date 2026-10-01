@@ -32,3 +32,8 @@ argument_specs:
         description: journald SystemMaxUse= value.
         type: str
         default: 500M
+      base_dns_servers:
+        type: list
+        elements: str
+        default: []
+        description: Upstream DNS servers written to a systemd-resolved drop-in; empty leaves the resolver untouched.

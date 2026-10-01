@@ -9,7 +9,7 @@
 # Optional overrides (defaults match ansible/inventory):
 #   PVE_NODE (auto-detected if the host has a single node), VMID (default 120), VM_NAME (k3s01),
 #   VM_CORES (4), VM_MEMORY_MB (8192), VM_DISK_GB (60), VM_STORAGE (Lexar), VM_BRIDGE (vmbr0),
-#   VM_VLAN (41 = DMZ), VM_IP (10.4.1.20/24), VM_GW (10.4.1.1), VM_DNS (10.4.1.1), VM_MAC,
+#   VM_VLAN (41 = DMZ), VM_IP (10.4.1.20/24), VM_GW (10.4.1.1), VM_DNS (1.1.1.1), VM_MAC,
 #   VM_USER (ansible), SSH_PUBKEY_FILE (~/.ssh/id_ed25519.pub), DEBIAN_IMAGE_URL, PVE_INSECURE (0/1)
 #
 # Idempotent-ish: refuses to run if VMID already exists. Destroy with: qm destroy <VMID> --purge (on the node).
@@ -26,7 +26,7 @@ VM_BRIDGE="${VM_BRIDGE:-vmbr0}"
 VM_VLAN="${VM_VLAN:-41}"          # DMZ
 VM_IP="${VM_IP:-10.4.1.20/24}"
 VM_GW="${VM_GW:-10.4.1.1}"
-VM_DNS="${VM_DNS:-10.4.1.1}"       # gateway resolver; keeps the DMZ independent of LAB 1
+VM_DNS="${VM_DNS:-1.1.1.1}"        # public resolver; the gateway resolver would leak internal names
 VM_USER="${VM_USER:-ansible}"
 SSH_PUBKEY_FILE="${SSH_PUBKEY_FILE:-$HOME/.ssh/id_ed25519.pub}"
 # Pinned build (ADR 0008). "latest" is a moving target and a stale file with the same name on the
