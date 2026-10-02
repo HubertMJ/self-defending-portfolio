@@ -118,3 +118,16 @@ fix needs a test that fails before it. Before you start, read the other two bran
 
 Run gofmt, `go vet`, `go test -race -count=5 ./...` and golangci-lint; report real output and, per item above,
 done or not done and why.
+
+## Added after the web review (the two sides were written without seeing each other)
+30. **`pod_ready` is published before commands are accepted**: the runner publishes `pod_ready`, then runs the
+    synchronous victim probe, then sets `ready=true` (runner.go:520-530), so a command sent on `pod_ready` gets 409
+    for up to ~300 ms. Accept commands from the moment `pod_ready` is on the wire.
+31. `GET /api/scenarios/terminal/details` must include `timeout_seconds` (the page hard-codes "120-second
+    deadline"). A command without an objective is sent as `"objective": ""`: omit the field instead.
+32. The web will decide "killed N ms after your Enter" from the run's `responded` event and the `started` of the
+    command it belongs to. Put `command_seq` on the `run` events `detected` and `responded` of a terminal run as
+    well (same best-effort rule as on falco/talon), and keep `killed` as the command state only when the pod went
+    away under a command that had not exited.
+33. A compare run must publish `finished` only after both pods are gone (item 14), because the page stops the
+    "attacker has held this pod" counter and re-enables the launcher on `finished`, and the slot is released then.
