@@ -5,8 +5,11 @@
 #   from  portfolio-api pods only (namespace *and* app label, as in cluster/infra/portfolio-api): not
 #         the Gateway, not the host - so not the kubelet either, which is why the victim's readiness
 #         probe is an exec probe (scenarios/scenarios.yaml) - and not another sandbox pod
-#   to    scenario pods only: the ones the API created, which carry its run-id label. tests/runtime's
-#         victim and anything else in the namespace stay closed
+#   to    scenario pods only: the ones the API created, which carry its managed-by label. A stable
+#         label, not the per-run run-id: since ADR 0032 the run-id is no longer identity-relevant
+#         (so a quarantine is not a fresh identity), and a Cilium endpointSelector matches identity
+#         labels, so it has to select on a label that is in the identity. tests/runtime's victim and
+#         anything else in the namespace stay closed
 #   port  8080/TCP only
 #
 # No Service and no route point at :8080; the API dials the pod IP from the Pod object it already
@@ -26,9 +29,8 @@ metadata:
     argocd.argoproj.io/sync-wave: "-1"
 spec:
   endpointSelector:
-    matchExpressions:
-      - key: sdp.hubertjablon.ski/run-id
-        operator: Exists
+    matchLabels:
+      app.kubernetes.io/managed-by: portfolio-api
   ingress:
     - fromEndpoints:
         - matchLabels:

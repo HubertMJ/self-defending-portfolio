@@ -10,9 +10,12 @@
 #   out  :53    cluster DNS, *.cluster.local names only. The in-cluster client itself needs none (it
 #               dials the `kubernetes` Service IP from its environment); the rule exists so that a
 #               future lookup fails visibly in Hubble at the name, not as a silent timeout.
-#   out  :8080  the victim shop of scenario pods in `sandbox` (pods carrying the API's run-id label),
-#               to poll /state.json during a run (ADR 0022). The other half of
-#               cluster/infra/sandbox/ciliumnetworkpolicy-victim.yaml; that port and nothing else.
+#   out  :8080  the victim shop of scenario pods the API created (pods carrying its managed-by
+#               label), in `sandbox` and in the unguarded twin `sandbox-unguarded` (ADR 0031), to
+#               poll /state.json during a run (ADR 0022). The other half of
+#               cluster/infra/sandbox/ciliumnetworkpolicy-victim.yaml and its twin; that port and
+#               nothing else. The selector is the stable managed-by label, not the run-id, since the
+#               run-id is no longer identity-relevant (ADR 0032).
 #
 # Nothing to the internet. The scenario pods' execs still go through the API server; the one direct
 # flow into `sandbox` is the read-only state poll above, and it cannot bypass the quarantine: the
@@ -75,9 +78,10 @@ spec:
     - toEndpoints:
         - matchLabels:
             io.kubernetes.pod.namespace: sandbox
-          matchExpressions:
-            - key: sdp.hubertjablon.ski/run-id
-              operator: Exists
+            app.kubernetes.io/managed-by: portfolio-api
+        - matchLabels:
+            io.kubernetes.pod.namespace: sandbox-unguarded
+            app.kubernetes.io/managed-by: portfolio-api
       toPorts:
         - ports:
             - port: "8080"

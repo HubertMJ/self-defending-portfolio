@@ -319,3 +319,21 @@ assumes, and needs looking at.
   identical in the Ansible role (`scripts/check-cilium-values.sh`). It is left at the default: on a
   single node there is no other node to wait for, but changing the CNI's identity handling to tune a
   test is not a trade worth making without measurements.
+
+## Amendment 2026-10-02: isolation under three seconds (ADR 0032)
+
+The correction above left `identityChangeGracePeriod` at the 5 s default and recorded isolation taking tens
+of seconds. With the interactive demo, that delay is no longer acceptable: a visitor has to *see* the cut.
+The measured 22-36 s had two causes, both now addressed in ADR 0032 (the change is in the Cilium values of
+`cluster/apps/cilium.yaml` and the Ansible cilium role, kept identical by `scripts/check-cilium-values.sh`):
+
+- Every scenario pod carried a unique `run-id` (and `scenario`) label that was identity-relevant, so each pod,
+  and each quarantined pod, was a brand-new Cilium identity that had to be allocated and have its policy
+  computed before isolation could apply. Those two labels are now excluded from the identity (Cilium's `labels`
+  option), so all scenario pods share one stable identity and the quarantined identity is computed once and
+  reused. The `quarantine` label itself stays identity-relevant, as it must for the policy to select it.
+- `identityChangeGracePeriod` is now `500ms`, not the default 5 s. The grace period lets *other* nodes
+  whitelist the new identity; on this single node there is none, so the ~4.5 s it added was pure waiting. The
+  reservation written above ("not a trade worth making without measurements") is resolved by the measurements
+  in the FIX 1 record: `tests/scenarios/run.sh` now asserts label-to-isolation under 3 s by polling the
+  victim's :8080 the way the API does. The terminate path still does not depend on Cilium at all.
