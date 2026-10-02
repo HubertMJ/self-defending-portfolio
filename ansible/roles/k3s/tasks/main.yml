@@ -47,9 +47,11 @@
 # CoreDNS from this repository (ADR 0026). On a live cluster the order is the cutover: the manifest
 # goes in while k3s's own coredns is still enabled, k3s's deploy controller (15 s poll) takes the
 # same-named objects over, and the Deployment rolls to the new image surge-first, so a ready DNS
-# server exists throughout. Only then does config.yaml disable k3s's copy; the restart that follows
-# removes k3s's coredns.yaml and deletes what it still owns - nothing, since k3s finds its objects by
-# an owner hash the takeover replaced.
+# server exists throughout. k3s cannot take the kube-dns Service over by itself (its fixed ClusterIP
+# makes the create fail before AlreadyExists), so coredns-handover.yml hands it over and waits until
+# the new Addon owns all objects and applied cleanly. Only then does config.yaml disable k3s's
+# copy; the restart that follows removes k3s's coredns.yaml and deletes what it still owns - nothing,
+# since k3s finds its objects by an owner hash the takeover replaced.
 - name: Check whether k3s is already running
   ansible.builtin.service_facts:
 
@@ -85,28 +87,13 @@
   notify: Restart k3s
   when: not (k3s_coredns_own | bool)
 
-- name: Wait for k3s to take CoreDNS over with the new manifest
-  ansible.builtin.command:
-    cmd: >-
-      {{ k3s_binary_path }} kubectl -n kube-system get deployment coredns -o
-      jsonpath='{.metadata.annotations.objectset\.rio\.cattle\.io/owner-name} {.spec.template.spec.containers[0].image}'
-  register: k3s_coredns_owner
-  changed_when: false
-  retries: "{{ k3s_coredns_rollout_retries }}"
-  delay: "{{ k3s_coredns_rollout_delay }}"
-  until: k3s_coredns_owner.stdout == (k3s_coredns_manifest_path | basename | splitext | first) ~ ' ' ~ k3s_coredns_image
-  when:
-    - k3s_coredns_own | bool
-    - k3s_coredns_manifest is changed
-    - k3s_was_running | bool
-    - not ansible_check_mode
-
-- name: Wait for the CoreDNS rollout before k3s's own copy is disabled
-  ansible.builtin.command:
-    cmd: >-
-      {{ k3s_binary_path }} kubectl -n kube-system rollout status deployment/coredns
-      --timeout={{ k3s_coredns_rollout_retries * k3s_coredns_rollout_delay }}s
-  changed_when: false
+# Before the restart that disables k3s's copy: every object, the kube-dns Service included, must
+# belong to the new manifest (ADR 0026, correction).
+- name: Make the new manifest the complete owner of CoreDNS before k3s's copy is disabled
+  ansible.builtin.include_tasks: coredns-handover.yml
+  vars:
+    k3s_coredns_addon: "{{ k3s_coredns_manifest_path | basename | splitext | first }}"
+    k3s_coredns_addon_manifest: "{{ k3s_coredns_manifest_path }}"
   when:
     - k3s_coredns_own | bool
     - k3s_coredns_manifest is changed
@@ -157,30 +144,18 @@
   delay: "{{ k3s_readyz_delay }}"
   until: k3s_readyz.rc == 0
 
-# Either direction, on a cluster that was already running: the expected manifest owns CoreDNS and
-# the Deployment has rolled. Skipped on a first install, where no CNI exists yet (cilium role).
-- name: Wait for CoreDNS to be owned by the expected manifest
-  ansible.builtin.command:
-    cmd: >-
-      {{ k3s_binary_path }} kubectl -n kube-system get deployment coredns -o
-      jsonpath='{.metadata.annotations.objectset\.rio\.cattle\.io/owner-name}'
-  register: k3s_coredns_owner_after
-  changed_when: false
-  retries: "{{ k3s_coredns_rollout_retries }}"
-  delay: "{{ k3s_coredns_rollout_delay }}"
-  until: >-
-    k3s_coredns_owner_after.stdout ==
-    ((k3s_coredns_manifest_path | basename | splitext | first) if (k3s_coredns_own | bool) else 'coredns')
-  when:
-    - k3s_was_running | bool
-    - not ansible_check_mode
-
-- name: Wait for the CoreDNS Deployment to be rolled out
-  ansible.builtin.command:
-    cmd: >-
-      {{ k3s_binary_path }} kubectl -n kube-system rollout status deployment/coredns
-      --timeout={{ k3s_coredns_rollout_retries * k3s_coredns_rollout_delay }}s
-  changed_when: false
+# Either direction, on a cluster that was already running: the expected manifest owns every CoreDNS
+# object and has applied cleanly, and the Deployment has rolled. On a rollback this is where the
+# kube-dns Service is handed back to k3s's own Addon. Skipped on a first install, where no CNI
+# exists yet (cilium role).
+- name: Make the expected manifest the complete owner of CoreDNS
+  ansible.builtin.include_tasks: coredns-handover.yml
+  vars:
+    k3s_coredns_addon: >-
+      {{ (k3s_coredns_manifest_path | basename | splitext | first) if (k3s_coredns_own | bool) else 'coredns' }}
+    k3s_coredns_addon_manifest: >-
+      {{ k3s_coredns_manifest_path if (k3s_coredns_own | bool)
+         else (k3s_coredns_manifest_path | dirname) ~ '/coredns.yaml' }}
   when:
     - k3s_was_running | bool
     - not ansible_check_mode

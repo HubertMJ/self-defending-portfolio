@@ -984,10 +984,13 @@ bundled `coredns.yaml`; the pin is `k3s_coredns_image` in `ansible/roles/k3s/def
    ansible-playbook playbooks/cluster.yml --tags k3s
    ```
 
-   The role writes the manifest first; k3s applies it within 15 s and takes the six objects over in
-   place; the Deployment rolls surge-first; the role waits for owner `coredns-sdp` with the new image
-   and a finished rollout, and only then disables k3s's copy and restarts k3s (API down under a
-   minute, DNS unaffected - it is served by the running pod). Accept it:
+   The role writes the manifest first; k3s applies it within 15 s and takes five objects over in
+   place; the Deployment rolls surge-first. k3s cannot take Service `kube-dns` over by itself (its
+   fixed ClusterIP makes the create fail with "provided IP is already allocated" before the
+   AlreadyExists that triggers a takeover), so the role hands it over (owner label and annotations)
+   and waits until all six objects belong to `coredns-sdp` and the Addon has recorded the file's
+   checksum (a clean apply), plus a finished rollout. Only then does it disable k3s's copy and restart
+   k3s (API down under a minute, DNS unaffected - it is served by the running pod). Accept it:
 
    ```sh
    kubectl -n kube-system get deploy coredns \
@@ -996,7 +999,10 @@ bundled `coredns.yaml`; the pin is `k3s_coredns_image` in `ansible/roles/k3s/def
    kubectl -n kube-system get svc kube-dns -o jsonpath='{.spec.clusterIP}{"\n"}'   # still 10.43.0.10
    kubectl -n kube-system get pods -l k8s-app=kube-dns -o wide       # one pod, Running, 1/1
    kubectl -n kube-system get addon coredns                           # NotFound (k3s removed it)
-   kubectl -n kube-system get addon coredns-sdp                       # present
+   kubectl -n kube-system get addon coredns-sdp                       # present, CHECKSUM set
+   kubectl -n kube-system get svc kube-dns \
+     -o jsonpath='{.metadata.annotations.objectset\.rio\.cattle\.io/owner-name} {.metadata.creationTimestamp}{"\n"}'
+   # coredns-sdp <the Service's original creation time: it was never re-created>
    kubectl -n kube-system logs deploy/coredns | head                  # CoreDNS-1.14.7, no errors
    ssh k3s01 sudo ls /var/lib/rancher/k3s/server/manifests/            # coredns-sdp.yaml, no coredns.yaml
    ```
@@ -1014,9 +1020,12 @@ bundled `coredns.yaml`; the pin is `k3s_coredns_image` in `ansible/roles/k3s/def
   (a surge-first roll, no k3s restart).
 - *Delivery* - back to k3s's own CoreDNS: `-e k3s_coredns_own=false` (or revert the switch commit
   and set it in the role defaults). The role removes `coredns-sdp.yaml` (which deletes nothing),
-  drops `coredns` from `disable` and restarts k3s; k3s re-stages its manifest and takes the same
-  objects back, and the role waits for owner `coredns` and the rollout. That roll uses k3s's
-  `maxUnavailable: 1`, so expect a few seconds without a ready DNS pod; clients retry. Afterwards
+  drops `coredns` from `disable` and restarts k3s; k3s re-stages its manifest and takes five
+  objects back, the role hands Service `kube-dns` back to Addon `coredns` the same way and waits
+  for all six objects, a clean apply and the rollout. Nothing is deleted, so the Service and its
+  ClusterIP stay; but that roll uses k3s's `maxUnavailable: 1`, so expect a few seconds without a
+  ready DNS pod (the old pod stops, the new one needs about 2-5 s to pass /ready); clients retry.
+  Prefer the binary-only rollback when the delivery itself is not the problem. Afterwards
   `kubectl -n kube-system delete addon coredns-sdp` removes the stale bookkeeping object (its
   objects carry no owner references, so nothing else goes with it).
 

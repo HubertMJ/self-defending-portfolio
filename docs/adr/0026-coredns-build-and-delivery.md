@@ -1,6 +1,6 @@
 # ADR 0026: CoreDNS is built here and deployed by the k3s role in place of k3s's bundled copy
 
-Date: 2026-10-02 · Status: accepted
+Date: 2026-10-02 · Status: accepted, corrected 2026-10-02 (the kube-dns Service is not taken over by k3s; 16 s DNS outage at the first cutover)
 
 ## Context
 The cluster's DNS server is the CoreDNS k3s bundles: k3s v1.35.9+k3s1 writes
@@ -190,3 +190,55 @@ what each must show.
   is no k3s restart, just a surge-first roll.
 - Staged like Talon and KSOPS: the image first, from `main`; then the switch commit with the real
   digest; then the role run. Until the role runs, the cluster keeps k3s's CoreDNS.
+
+## Correction (2026-10-02): the cutover was not gapless - the kube-dns Service was re-created
+
+**What happened.** The first cutover (main 5307d4d, image `sha256:9aafd8a8...`) ran as decided above
+and the role's checks passed, but a DNS probe (`nslookup` every 0.5 s through 10.43.0.10) failed 11
+times from 06:52:13 to 06:52:29: **about 16 s without cluster DNS**. Events, in order: the
+Deployment had already rolled to the new pod (93 s before); at the k3s restart `addon/coredns`
+"DeletingManifest ... coredns.yaml"; `addon/coredns-sdp` "ApplyManifestFailed ... failed to create
+kube-system/kube-dns ... spec.clusterIPs: Invalid value: ["10.43.0.10"]: failed to allocate IP
+10.43.0.10: provided IP is already allocated"; 16 s later (the next 15 s poll) `addon/coredns-sdp`
+"AppliedManifest". Afterwards the ServiceAccount, ConfigMap, Deployment, ClusterRole and
+ClusterRoleBinding still have their creation time of 2026-10-01 - they were taken over as designed
+- and only Service `kube-dns` is new (created 06:52:28).
+
+**Cause.** Decision 3 assumed that k3s's apply takes every existing object over. wrangler does so
+only when its create fails with AlreadyExists (`desiredset_process.go`, `createF`: `if
+errors2.IsAlreadyExists(err)` then patch). For a Service that names its ClusterIP, the apiserver's
+Service storage allocates the IP in its create hook before the store detects the name conflict, so
+the create of the already existing `kube-dns` failed with "provided IP is already allocated", not
+AlreadyExists. The Service therefore kept Addon `coredns`'s owner hash, the apply of `coredns-sdp`
+kept failing on it (k3s retries every 15 s and records no checksum), and the role did not notice:
+it checked the owner of the Deployment only. The restart's removal of the disabled `coredns.yaml`
+then selected exactly that one object by its old hash and deleted it; the ClusterIP was released
+asynchronously, so `coredns-sdp`'s create in the same pass still failed, and the next poll created
+the Service again. Pods kept 10.43.0.10 in resolv.conf throughout; there was simply no Service
+behind it for 16 s. The sort order of the file names did not matter: the takeover the ordering was
+meant to protect never happened for the Service.
+
+**Fix** (`ansible/roles/k3s/tasks/coredns-handover.yml`, used before a cutover's restart and after
+every restart of a live cluster, in both directions):
+1. wait until the Deployment is owned by the expected Addon (`coredns-sdp`, or `coredns` on a
+   rollback) - k3s takes that one over itself;
+2. if the Service's `objectset.rio.cattle.io/hash` differs from the Deployment's, give the Service
+   the expected Addon's owner annotations and then that hash label - exactly what wrangler would
+   have written; its next apply then finds the Service in its own set and patches it in place;
+3. wait until **all six objects** carry the expected owner **and** the Addon has recorded the
+   sha256 of its manifest file as its checksum, which k3s does only after an apply without any
+   error; then `rollout status`.
+Only after step 3 does the role render `disable: [coredns]` and restart k3s, so the removal of
+k3s's manifest has nothing left to delete. The rollback gets the same treatment: k3s re-stages its
+manifest, takes five objects back, and the role hands the Service back to Addon `coredns`, so the
+Service and ClusterIP are never deleted in either direction. The jsonpath queries were run against
+the live cluster and the wait conditions checked against owned, half-owned and not-yet-applied
+states.
+
+**Expectations, corrected.** Cutover and image bumps: no gap - the Service is never re-created and
+the Deployment rolls surge-first. Delivery rollback (`k3s_coredns_own: false`): the Service stays,
+but the Deployment rolls with k3s's `maxUnavailable: 1`, so a gap of a few seconds (pod start to
+`/ready`) remains possible; the binary-only rollback (upstream image through `k3s_coredns_image`)
+has none. The live cluster needs no repair: all six objects belong to `coredns-sdp` and its
+checksum is recorded.
+

@@ -1,0 +1,110 @@
+---
+# Makes the k3s Addon k3s_coredns_addon the complete owner of the CoreDNS objects and waits until
+# k3s has applied its whole manifest (k3s_coredns_addon_manifest) without an error (ADR 0026,
+# correction). Included before a cutover's restart and after any restart of a live cluster.
+#
+# Why the Service needs a hand: k3s's deploy controller (wrangler apply) takes an existing object
+# over only when its create returns AlreadyExists. For Service kube-dns, whose manifest fixes
+# clusterIP 10.43.0.10, the apiserver allocates the ClusterIP before it checks the name, so the
+# create fails with "provided IP is already allocated" instead, and the Service keeps the previous
+# Addon's owner hash. The next k3s restart that removes the previous Addon then deletes it (a 16 s
+# DNS outage at the first cutover). Giving the Service the same owner label and annotations the
+# Deployment already carries makes the next apply treat it as its own and patch it in place.
+
+- name: Wait for the CoreDNS Deployment to be owned by {{ k3s_coredns_addon }}
+  ansible.builtin.command:
+    cmd: >-
+      {{ k3s_binary_path }} kubectl -n kube-system get deployment coredns -o
+      jsonpath='{.metadata.annotations.objectset\.rio\.cattle\.io/owner-name} {.spec.template.spec.containers[0].image}'
+  register: k3s_coredns_owner
+  changed_when: false
+  retries: "{{ k3s_coredns_rollout_retries }}"
+  delay: "{{ k3s_coredns_rollout_delay }}"
+  until: >-
+    k3s_coredns_owner.stdout.split(' ') | first == k3s_coredns_addon
+    and (k3s_coredns_addon != (k3s_coredns_manifest_path | basename | splitext | first)
+         or k3s_coredns_owner.stdout.split(' ') | last == k3s_coredns_image)
+
+- name: Read the owner label of the CoreDNS Deployment and of the kube-dns Service
+  ansible.builtin.command:
+    cmd: >-
+      {{ k3s_binary_path }} kubectl -n kube-system get deployment/coredns service/kube-dns -o
+      jsonpath='{range .items[*]}{.metadata.labels.objectset\.rio\.cattle\.io/hash}{"\n"}{end}'
+  register: k3s_coredns_hashes
+  changed_when: false
+
+# Annotations first, the hash label last: the label is what puts the Service into the set.
+- name: Give the kube-dns Service the owner annotations of {{ k3s_coredns_addon }}
+  ansible.builtin.command:
+    argv:
+      - "{{ k3s_binary_path }}"
+      - kubectl
+      - -n
+      - kube-system
+      - annotate
+      - --overwrite
+      - service/kube-dns
+      - objectset.rio.cattle.io/owner-name={{ k3s_coredns_addon }}
+      - objectset.rio.cattle.io/owner-namespace=kube-system
+      - objectset.rio.cattle.io/owner-gvk=k3s.cattle.io/v1, Kind=Addon
+  changed_when: true
+  when: k3s_coredns_hashes.stdout_lines[0] != k3s_coredns_hashes.stdout_lines[1] | default('')
+
+- name: Give the kube-dns Service the owner hash of {{ k3s_coredns_addon }}
+  ansible.builtin.command:
+    argv:
+      - "{{ k3s_binary_path }}"
+      - kubectl
+      - -n
+      - kube-system
+      - label
+      - --overwrite
+      - service/kube-dns
+      - objectset.rio.cattle.io/hash={{ k3s_coredns_hashes.stdout_lines[0] }}
+  changed_when: true
+  when: k3s_coredns_hashes.stdout_lines[0] != k3s_coredns_hashes.stdout_lines[1] | default('')
+
+# k3s records an Addon's checksum (sha256 of the file) only after every object in it applied
+# without an error; until then it retries on each 15 s poll.
+- name: Read the checksum of the manifest of {{ k3s_coredns_addon }}
+  ansible.builtin.stat:
+    path: "{{ k3s_coredns_addon_manifest }}"
+    checksum_algorithm: sha256
+  register: k3s_coredns_manifest_stat
+
+- name: Wait for a clean apply and every object owned by {{ k3s_coredns_addon }}
+  ansible.builtin.command:
+    argv:
+      - "{{ k3s_binary_path }}"
+      - kubectl
+      - get
+      - -n
+      - kube-system
+      - addon/{{ k3s_coredns_addon }}
+      - serviceaccount/coredns
+      - configmap/coredns
+      - deployment/coredns
+      - service/kube-dns
+      - clusterrole/system:coredns
+      - clusterrolebinding/system:coredns
+      - -o
+      - "jsonpath={range .items[*]}{.kind}/{.metadata.name} {.spec.checksum}\
+        {.metadata.annotations.objectset\\.rio\\.cattle\\.io/owner-name}{\"\\n\"}{end}"
+  register: k3s_coredns_objects
+  changed_when: false
+  retries: "{{ k3s_coredns_rollout_retries }}"
+  delay: "{{ k3s_coredns_rollout_delay }}"
+  # One line per object, "<Kind>/<name> <value>": the Addon's value is its recorded checksum, every
+  # other object's its owner. All seven must be there.
+  until: >-
+    k3s_coredns_objects.stdout_lines | length == 7
+    and ('Addon/' ~ k3s_coredns_addon ~ ' ' ~ k3s_coredns_manifest_stat.stat.checksum) in k3s_coredns_objects.stdout_lines
+    and k3s_coredns_objects.stdout_lines | reject('match', 'Addon/') | map('split', ' ') | map('last') | unique
+        == [k3s_coredns_addon]
+
+- name: Wait for the CoreDNS Deployment to be rolled out
+  ansible.builtin.command:
+    cmd: >-
+      {{ k3s_binary_path }} kubectl -n kube-system rollout status deployment/coredns
+      --timeout={{ k3s_coredns_rollout_retries * k3s_coredns_rollout_delay }}s
+  changed_when: false
