@@ -25,7 +25,11 @@ spec:
         fsGroup: 999
       initContainers:
         - name: install-ksops
-          image: viaductoss/ksops:v4.5.1@sha256:4def9fdd4e2f850265740ebe9592c5455d19b76891e88e602df8b52d74b95334
+          # Our build of KSOPS v4.5.1 (app/ksops, ADR 0020): only the static binary, compiled with a
+          # current Go, signed by build-images.yml. viaductoss/ksops:v4.5.1 carried 109 CRITICAL/HIGH
+          # findings with a fix (Go 1.25.0 stdlib, plus kustomize, git and glibc it ships but we never use).
+          # Pinned by digest in kustomization.yaml (`images:`).
+          image: ghcr.io/hubertmj/self-defending-portfolio/ksops
           command:
             - /usr/local/bin/ksops
             - install
@@ -34,8 +38,7 @@ spec:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
             runAsNonRoot: true
-            # The image's USER is the name "nonroot", which the kubelet cannot resolve to a UID,
-            # so runAsNonRoot alone would fail the container. 65532 is that user.
+            # distroless nonroot (65532), stated so runAsNonRoot can be checked against a number.
             runAsUser: 65532
             runAsGroup: 65532
             capabilities:

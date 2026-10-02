@@ -29,3 +29,8 @@ images:
     newName: docker.io/library/redis
     newTag: 8.2.10-alpine
     digest: sha256:b51665e66f00759be7c3152ad5ac3c66fb2f619c13ef62dea7cc1f9914524635
+  # Our build of KSOPS (app/ksops, ADR 0020), used by argocd-repo-server-ksops.yaml.
+  # PLACEHOLDER DIGEST: the digest of the first build-images.yml run on main that built app/ksops.
+  - name: ghcr.io/hubertmj/self-defending-portfolio/ksops
+    newTag: main
+    digest: sha256:0000000000000000000000000000000000000000000000000000000000000000

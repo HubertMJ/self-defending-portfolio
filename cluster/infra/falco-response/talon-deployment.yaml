@@ -1,5 +1,5 @@
-# Falco Talon 0.3.0, the response engine (ADR 0013): Falcosidekick POSTs every alert to it, and it runs
-# the matching actions in talon/rules.yaml through the Kubernetes API.
+# Falco Talon, the response engine (ADR 0013), built here from upstream main past 0.3.0 (app/talon,
+# ADR 0020): Falcosidekick POSTs every alert to it, and it runs the matching actions in talon/rules.yaml through the Kubernetes API.
 #
 # Plain manifests modelled on the upstream falco-talon chart 0.5.0 (templates/deployment.yaml,
 # services.yaml), not the chart itself: the chart writes `image.tag` into the app.kubernetes.io/version
@@ -32,14 +32,18 @@ spec:
       automountServiceAccountToken: true
       securityContext:
         runAsNonRoot: true
-        # The image's own user (distroless, ko-built).
+        # The image's own user (distroless nonroot, app/talon/Dockerfile).
         runAsUser: 65532
         runAsGroup: 65532
         seccompProfile:
           type: RuntimeDefault
       containers:
         - name: falco-talon
-          image: docker.io/falcosecurity/falco-talon:0.3.0@sha256:333224a111a0722ff3f418ffe6bc5d8a3be0941f37c67520bc845e62f1234ad3
+          # Our build of Talon from upstream main at a pinned commit (app/talon, ADR 0020): 0.3.0 is the
+          # latest release but its image had 57 CRITICAL/HIGH findings with a fix and lacked the
+          # k8sevents namespace fix. Signed by build-images.yml; verify-portfolio-images checks it here.
+          # Pinned by digest in ../kustomization.yaml (`images:`).
+          image: ghcr.io/hubertmj/self-defending-portfolio/talon
           imagePullPolicy: IfNotPresent
           args: ["server", "-c", "/etc/falco-talon/config.yaml", "-r", "/etc/falco-talon/rules.yaml"]
           env:

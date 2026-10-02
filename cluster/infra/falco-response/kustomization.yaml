@@ -22,3 +22,14 @@ configMapGenerator:
   - name: falco-talon-rules
     files:
       - talon/rules.yaml
+
+# Talon is our build (app/talon, ADR 0020), made by .github/workflows/build-images.yml. Only the digest
+# is referenced; the tag is informational. Bump = commit.
+#
+# PLACEHOLDER DIGEST: replace the zeros with the digest from the first build-images.yml run on main
+# that built app/talon. Until then the pod cannot be pulled, and `make validate` reports
+# verify-portfolio-images failing for it - the policy working, not a bug.
+images:
+  - name: ghcr.io/hubertmj/self-defending-portfolio/talon
+    newTag: main
+    digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
