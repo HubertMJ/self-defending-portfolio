@@ -42,20 +42,30 @@ NAMESPACE=sandbox
 ONLY=${ONLY:-}
 SCENARIO_IMAGE=${SCENARIO_IMAGE:-}
 PLACEHOLDER_DIGEST=sha256:0000000000000000000000000000000000000000000000000000000000000000
-# The quarantine label takes effect once Cilium has moved the pod to a new security identity, which
-# takes seconds to tens of seconds (measured 24-33 s on the cluster; ADR 0013, correction). Same bound
-# and the same measured print as tests/runtime/run.sh: 60 s is the failure threshold, not a typical
-# value.
-ISOLATE_TIMEOUT=${ISOLATE_TIMEOUT:-60}
+# Label-to-isolation bound (FIX 1, ADR 0032). Since the per-run labels were taken out of the Cilium
+# identity and the identity-change grace period was dropped to 500 ms, a quarantine is a label flip on
+# an identity Cilium already knows, so the cut lands in well under 3 s instead of the 22-36 s measured
+# before. QUARANTINE_BOUND is the pass/fail threshold for that cut, measured the way the API measures
+# it: an API-identity pod polling the victim's /state.json on :8080 (see probe_victim below), which is
+# exactly what the page shows going "unreachable". DNS egress (the old proof) is still checked as
+# corroboration, with its own looser bound.
+QUARANTINE_BOUND=${QUARANTINE_BOUND:-3}
+ISOLATE_TIMEOUT=${ISOLATE_TIMEOUT:-30}
+# The API lives here; its pods are the only ones the sandbox victim policy admits to :8080. The probe
+# pod runs in this namespace with the API's app label so Cilium gives it the API's identity and its
+# :8080 egress, and the victim policy admits it (cluster/infra/sandbox/ciliumnetworkpolicy-victim.yaml).
+API_NAMESPACE=${API_NAMESPACE:-portfolio-api}
 
 WORK_DIR=$(mktemp -d)
 PODS=()
+PROBE_POD=
 EXEC_PID=
 cleanup() {
   [ -z "$EXEC_PID" ] || kill "$EXEC_PID" 2>/dev/null || true
   for pod in "${PODS[@]}"; do
     $KUBECTL -n "$NAMESPACE" delete pod "$pod" --ignore-not-found --wait=false >/dev/null 2>&1 || true
   done
+  [ -z "$PROBE_POD" ] || $KUBECTL -n "$API_NAMESPACE" delete pod "$PROBE_POD" --ignore-not-found --wait=false >/dev/null 2>&1 || true
   rm -rf "$WORK_DIR"
 }
 trap cleanup EXIT
@@ -77,6 +87,64 @@ poll() {
 }
 
 suffix() { tr -dc 'a-z0-9' </dev/urandom | head -c 5 || true; }
+
+# The API polls the victim by dialling the pod IP on :8080 and reading /state.json (ADR 0021/0022).
+# These two helpers do the same from a throwaway pod that carries the API's identity, so the quarantine
+# is measured where the visitor sees it (the shop going unreachable), not only on the victim's egress.
+ensure_probe_pod() {
+  [ -z "$PROBE_POD" ] || return 0
+  PROBE_POD="sdp-probe-$(suffix)"
+  # A restricted pod in the API namespace with the API's app label: enough identity for the victim
+  # policy to admit it on :8080, and it passes pod-security-restricted and require-pod-resources there.
+  # The scenario image (busybox wget, signed) is the one image that namespace's Kyverno gate accepts.
+  cat <<YAML | $KUBECTL apply -f - >/dev/null || die "probe pod $PROBE_POD was not admitted in $API_NAMESPACE"
+apiVersion: v1
+kind: Pod
+metadata:
+  name: $PROBE_POD
+  namespace: $API_NAMESPACE
+  labels:
+    app.kubernetes.io/name: portfolio-api
+spec:
+  restartPolicy: Never
+  automountServiceAccountToken: false
+  enableServiceLinks: false
+  terminationGracePeriodSeconds: 0
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 10001
+    runAsGroup: 10001
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: probe
+      image: $SCENARIO_PROBE_IMAGE
+      command: ["sleep", "600"]
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: ["ALL"]
+      resources:
+        requests:
+          cpu: 10m
+          memory: 16Mi
+        limits:
+          cpu: 100m
+          memory: 32Mi
+YAML
+  $KUBECTL -n "$API_NAMESPACE" wait --for=condition=Ready "pod/$PROBE_POD" --timeout=60s >/dev/null 2>&1 \
+    || die "probe pod $PROBE_POD did not become Ready in $API_NAMESPACE"
+}
+
+# probe_victim <victim-pod>: GET the victim's /state.json the way the API does. 0 iff it answers.
+probe_victim() {
+  local ip
+  ip=$($KUBECTL -n "$NAMESPACE" get pod "$1" -o jsonpath='{.status.podIP}' 2>/dev/null) || return 1
+  [ -n "$ip" ] || return 1
+  $KUBECTL -n "$API_NAMESPACE" exec "$PROBE_POD" -c probe -- \
+    wget -q -T 1 -O- "http://$ip:8080/state.json" >/dev/null 2>&1
+}
 
 # ---------------------------------------------------------------------------- preflight
 #
@@ -121,6 +189,23 @@ if [ -n "$SCENARIO_IMAGE" ]; then
 elif grep -q "$PLACEHOLDER_DIGEST" "$WORK_DIR/scenarios.yaml"; then
   die "the scenario image digest is still the placeholder; bump it in scenarios.yaml after the first build, or set SCENARIO_IMAGE"
 fi
+
+# The image the :8080 probe pod runs: the override, or the scenario image from the catalogue (its
+# `target` container). The same signed image the scenarios use, so the API namespace's Kyverno gate
+# admits the probe.
+if [ -n "$SCENARIO_IMAGE" ]; then
+  SCENARIO_PROBE_IMAGE=$SCENARIO_IMAGE
+else
+  SCENARIO_PROBE_IMAGE=$(python3 - "$WORK_DIR/scenarios.yaml" <<'PY'
+import sys, yaml
+for s in yaml.safe_load(open(sys.argv[1])):
+    for c in s["pod"]["containers"]:
+        if c.get("name") == "target":
+            print(c["image"]); raise SystemExit
+PY
+)
+fi
+[ -n "$SCENARIO_PROBE_IMAGE" ] || die "could not determine the scenario image for the :8080 probe pod"
 
 # One TSV line per scenario plus a Pod manifest per scenario, built exactly as the API builds it.
 python3 - "$WORK_DIR" "$SCENARIO_IMAGE" "$ONLY" <<'PY' > "$WORK_DIR/plan.tsv"
@@ -199,6 +284,12 @@ while IFS=$'\t' read -r -u 3 id pod detection response timeout tty pre cmd; do
     # Proving the lookup works first is what makes "it fails later" mean "quarantined".
     if poll 30 lookup; then pass "$id: $pod can resolve names before the attack"
     else fail "$id: $pod cannot resolve names even before the attack; check sandbox-dns-only"; continue; fi
+    # The API's view: an API-identity pod polling the victim's shop on :8080. Proving it answers now
+    # is what makes "the probe drops within ${QUARANTINE_BOUND}s of the label" mean the cut landed.
+    ensure_probe_pod
+    probe_ok() { probe_victim "$pod"; }
+    if poll 15 probe_ok; then pass "$id: the API-identity probe reads the shop on :8080 before the attack"
+    else fail "$id: the probe cannot reach $pod:8080 even before the attack; check sandbox-victim-from-api"; continue; fi
   fi
 
   t0=$(date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -226,10 +317,31 @@ while IFS=$'\t' read -r -u 3 id pod detection response timeout tty pre cmd; do
       phase=$($KUBECTL -n "$NAMESPACE" get pod "$pod" -o jsonpath='{.status.phase}' 2>/dev/null || true)
       if [ "$phase" = Running ]; then pass "$id: still Running (isolated, not killed)"
       else fail "$id: pod is ${phase:-gone}, expected Running"; fi
+      # The headline of FIX 1: how long from the label landing until the API's :8080 poll drops - the
+      # exact moment the shop goes "unreachable" on the page. Measured in tenths with a 1 s probe
+      # timeout; asserted against QUARANTINE_BOUND (3 s, ADR 0032). This is the number the old demo
+      # could not show (the pod stayed reachable for tens of seconds).
+      label_seen=$(date +%s.%N)
+      probe_dropped() { ! probe_victim "$pod"; }
+      cut=
+      while :; do
+        if probe_dropped; then cut=$(awk "BEGIN{printf \"%.1f\", $(date +%s.%N) - $label_seen}"); break; fi
+        awk "BEGIN{exit !($(date +%s.%N) - $label_seen > $QUARANTINE_BOUND + 2)}" && break
+        sleep 0.2
+      done
+      if [ -n "$cut" ] && awk "BEGIN{exit !($cut <= $QUARANTINE_BOUND)}"; then
+        pass "$id: the shop on :8080 went unreachable ${cut}s after the label (<= ${QUARANTINE_BOUND}s)"
+      elif [ -n "$cut" ]; then
+        fail "$id: the shop on :8080 took ${cut}s to go unreachable, over the ${QUARANTINE_BOUND}s bound"
+      else
+        fail "$id: the shop on :8080 was still reachable more than $((QUARANTINE_BOUND + 2))s after the label"
+      fi
+      # Corroboration on the other direction (egress), with its looser bound: the victim can no longer
+      # resolve names either.
       lookup_fails() { ! lookup; }
-      label_seen=$SECONDS
+      label_seen_s=$SECONDS
       if poll "$ISOLATE_TIMEOUT" lookup_fails; then
-        pass "$id: can no longer resolve names (quarantine in effect $((SECONDS - label_seen)) s after the label)"
+        pass "$id: can no longer resolve names (egress cut $((SECONDS - label_seen_s)) s after the label)"
       else
         fail "$id: can still resolve names ${ISOLATE_TIMEOUT}s after the label"
       fi
