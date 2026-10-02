@@ -14,6 +14,10 @@
 #   * quarantine-ccnp.yaml - the quarantine policy is cluster-wide (one object, in cluster/infra/sandbox)
 #                        and selects the quarantine label wherever it is set. Nothing sets it here, so
 #                        it never matches a twin pod; there is no second copy to make.
+#   * ciliumnetworkpolicy.yaml (DNS egress) - deliberately absent. `sandbox` allows DNS out so
+#                        tests/runtime can show a lookup failing under quarantine; the twin has no
+#                        quarantine and no command that resolves a name, so it gets no egress at all -
+#                        the one layer where the twin is stricter than `sandbox`, not merely equal.
 #
 # The API's narrow runner Role in this namespace is in cluster/infra/portfolio-api/rbac.yaml, next to
 # its other Roles. `make validate` renders the scenario pods as Pods in this namespace too and runs the
@@ -26,7 +30,6 @@ namespace: sandbox-unguarded
 resources:
   - namespace.yaml
   - networkpolicy.yaml
-  - ciliumnetworkpolicy.yaml
   - ciliumnetworkpolicy-victim.yaml
   - resourcequota.yaml
   - limitrange.yaml

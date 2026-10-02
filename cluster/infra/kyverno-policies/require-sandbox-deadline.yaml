@@ -1,0 +1,48 @@
+# Every pod in a sandbox namespace must die on its own within two minutes (ADR 0031).
+#
+# The portfolio API sets activeDeadlineSeconds on the pods it creates (its buildPod derives it from the
+# scenario's timeout_seconds, <= 120), so a run always ends even if the API crashes mid-run. But that is
+# the API enforcing a bound on itself; nothing in the cluster held attacker-triggered pods to it. This
+# policy makes the kube-apiserver enforce it, for `sandbox` and the unguarded twin `sandbox-unguarded`
+# (where nothing responds, so a pod would otherwise be bounded only by the quota): a Pod there is refused
+# unless it sets a positive activeDeadlineSeconds of at most 120. Combined with the namespace
+# ResourceQuota, that caps both how many attack pods can exist and how long any one of them can live.
+#
+# Scope is exactly the two sandbox namespaces - this is a property of a disposable attack pod, not of
+# workloads in general, so it is not a cluster-wide rule. failurePolicy Fail (not Ignore like the
+# cluster-wide policies): these namespaces are not on the repair path of a Kyverno outage, so failing
+# closed there only pauses new attack pods, which is the safe direction.
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: require-sandbox-deadline
+  annotations:
+    policies.kyverno.io/title: Require an activeDeadlineSeconds bound on sandbox pods
+    policies.kyverno.io/category: Attack scenario safety
+    policies.kyverno.io/severity: medium
+    policies.kyverno.io/subject: Pod
+    policies.kyverno.io/description: >-
+      Every Pod in the sandbox or sandbox-unguarded namespace must set spec.activeDeadlineSeconds to a
+      positive value of at most 120, so a visitor-triggered pod always ends on its own.
+spec:
+  failurePolicy: Fail
+  background: true
+  rules:
+    - name: sandbox-pod-has-deadline
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+              namespaces:
+                - sandbox
+                - sandbox-unguarded
+      validate:
+        failureAction: Enforce
+        message: >-
+          Pod "{{ request.object.metadata.name }}" in "{{ request.object.metadata.namespace }}" must set
+          spec.activeDeadlineSeconds to a positive value of at most 120 (ADR 0031).
+        pattern:
+          spec:
+            # Present (no `=()` anchor, so a missing field fails), positive, and no more than 120.
+            activeDeadlineSeconds: ">0 & <=120"

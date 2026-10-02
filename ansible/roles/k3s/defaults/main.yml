@@ -113,6 +113,7 @@ k3s_audit_log_maxsize: 100
 # request and response bodies, not just metadata.
 k3s_audit_verbose_namespaces:
   - sandbox
+  - sandbox-unguarded
 
 # Extra flags appended verbatim to the rendered config.yaml.
 k3s_kube_apiserver_extra_args: []

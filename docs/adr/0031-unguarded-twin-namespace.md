@@ -21,14 +21,28 @@ hardened pod. So "unguarded" has to mean exactly one thing missing, and everythi
 `cluster/apps/sandbox-unguarded.yaml`, wave 5 alongside `sandbox`), identical to `sandbox` in every preventive
 layer and missing only the automatic response:**
 
-- **Same preventive layers.** Pod Security `restricted` on the namespace; the same default-deny NetworkPolicy
-  and DNS-only CiliumNetworkPolicy; the same victim ingress policy (`sandbox-unguarded-victim-from-api`,
-  selecting the API's `managed-by` label, admitting the API on :8080); the same ResourceQuota (3 pods, 500m
-  CPU, 512 MiB) and LimitRange. The Kyverno gate covers it: `sandbox-unguarded` is added to the namespace lists
-  of `verify-portfolio-images` and `restrict-image-registries`, and `pod-security-restricted` already matches
-  every namespace it does not explicitly exempt, so the twin's pods must be signed, from our registry, and
-  `restricted` exactly as `sandbox`'s are. `make validate` renders every scenario pod in `sandbox-unguarded`
-  too and runs the Kyverno gate over it.
+The twin is **equal to or stricter than `sandbox` in every preventive layer**; it is never looser. The one way
+it differs - besides the missing response - is that it is tighter:
+
+- **Same preventive layers.** Pod Security `restricted` on the namespace; the same default-deny NetworkPolicy;
+  the same victim ingress policy (`sandbox-unguarded-victim-from-api`, selecting the API's `managed-by` label,
+  admitting the API on :8080); the same ResourceQuota (3 pods, 500m CPU, 512 MiB) and LimitRange. The Kyverno
+  gate covers it: `sandbox-unguarded` is added to the namespace lists of `verify-portfolio-images` and
+  `restrict-image-registries`, `pod-security-restricted` already matches every namespace it does not explicitly
+  exempt, and the new `require-sandbox-deadline` policy (below) matches both sandbox namespaces - so the twin's
+  pods must be signed, from our registry, `restricted`, and time-bounded exactly as `sandbox`'s are.
+  `make validate` renders every scenario pod in `sandbox-unguarded` too and runs the Kyverno gate over it.
+- **One layer where the twin is stricter: no egress at all.** `sandbox` opens DNS egress so `tests/runtime`
+  can show a lookup failing once a pod is quarantined; the twin has no quarantine to demonstrate and no
+  catalogue command that resolves a name (the network-tool scenario targets loopback), so it gets **no DNS
+  egress policy** - nothing in a twin pod can reach anything, in either direction. A compromised twin pod that
+  is never answered therefore still cannot even resolve a name, let alone tunnel over DNS.
+- **A time bound the cluster enforces (`require-sandbox-deadline`, a new Kyverno ClusterPolicy).** A Pod in
+  `sandbox` or `sandbox-unguarded` is refused unless it sets a positive `activeDeadlineSeconds` of at most 120.
+  The API already sets it (from `timeout_seconds`), but that was the API bounding itself; now the kube-apiserver
+  bounds it, which matters most in the twin, where nothing kills a pod and the quota was otherwise the only
+  ceiling. `tests/runtime/victim-pod.yaml` sets it to comply; `tests/scenarios` and the API's buildPod already
+  do; `make validate` judges the rendered scenario pods (both namespaces) against it.
 - **The API has the same reach.** A `portfolio-api-runner` Role in `sandbox-unguarded`
   (`cluster/infra/portfolio-api/rbac.yaml`), identical verbs to the one in `sandbox`: the API creates, execs
   and deletes the twin pod exactly as the guarded one, and polls its shop on :8080 (the egress half of its CNP
@@ -56,8 +70,8 @@ the Kyverno gate, so a pod the twin would refuse fails in CI.
   `compare_hold_seconds` after the guarded arm's response (ADR for the API), so "no automatic response" is not
   "runs forever".
 - "Unguarded" is bounded, not open: the twin pod is still a `restricted`, signed, quota-capped,
-  default-deny-networked pod. The lesson is "detection without response is not protection," not "these pods were
-  only ever safe because something was switched off."
+  deadline-bounded pod with no egress at all. The lesson is "detection without response is not protection," not
+  "these pods were only ever safe because something was switched off."
 - The twin doubles the scenario pods `make validate` renders and the Kyverno gate judges; a scenario a policy
   would refuse now fails for both namespaces.
 - The twin is only meaningful for the one-click catalogue scenarios (the API runs `compare` for those, not for

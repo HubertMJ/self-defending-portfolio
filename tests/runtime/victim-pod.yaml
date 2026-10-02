@@ -18,6 +18,9 @@ metadata:
 spec:
   restartPolicy: Never
   automountServiceAccountToken: false
+  # A sandbox pod must end on its own within two minutes (require-sandbox-deadline, ADR 0031); the test
+  # kills or quarantines this victim within seconds, so the deadline never fires here.
+  activeDeadlineSeconds: 120
   # A killed victim should be gone at once, not after 30 s of SIGTERM handling by `sleep`.
   terminationGracePeriodSeconds: 0
   securityContext:

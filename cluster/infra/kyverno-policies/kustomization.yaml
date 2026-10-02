@@ -16,3 +16,5 @@ resources:
   # Phase 4, Enforce since plan commit 9 (see the switch marker in each file).
   - pod-security-restricted.yaml
   - require-pod-resources.yaml
+  # Interactive demo: a disposable attack pod must end on its own (ADR 0031).
+  - require-sandbox-deadline.yaml
