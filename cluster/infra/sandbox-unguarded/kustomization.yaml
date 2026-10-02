@@ -1,0 +1,32 @@
+# The unguarded twin namespace (ADR 0031): a second sandbox where every preventive layer is identical
+# to `sandbox` but Falco Talon has no Role and no rule matches it, so Falco detects and nothing
+# responds. The `compare` runs of the portfolio API (ADR 0031) create one pod here and one in
+# `sandbox` from the same scenario, so the visitor sees the response's worth by contrast.
+#
+# Deployed by cluster/apps/sandbox-unguarded.yaml. No workload is declared here; the portfolio API
+# creates and deletes its own pods, inside the quota and LimitRange below.
+#
+# What is deliberately NOT here, compared with cluster/infra/sandbox:
+#   * talon-rbac.yaml  - Talon gets no permission in this namespace. A Talon rule that matched here
+#                        would fail with a 403, but no rule does: every rule pins k8s.ns.name=sandbox
+#                        (cluster/infra/falco-response/talon/rules.yaml), asserted by
+#                        tests/scenarios/offline.sh.
+#   * quarantine-ccnp.yaml - the quarantine policy is cluster-wide (one object, in cluster/infra/sandbox)
+#                        and selects the quarantine label wherever it is set. Nothing sets it here, so
+#                        it never matches a twin pod; there is no second copy to make.
+#
+# The API's narrow runner Role in this namespace is in cluster/infra/portfolio-api/rbac.yaml, next to
+# its other Roles. `make validate` renders the scenario pods as Pods in this namespace too and runs the
+# Kyverno gate over them (scripts/validate-cluster.sh).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: sandbox-unguarded
+
+resources:
+  - namespace.yaml
+  - networkpolicy.yaml
+  - ciliumnetworkpolicy.yaml
+  - ciliumnetworkpolicy-victim.yaml
+  - resourcequota.yaml
+  - limitrange.yaml

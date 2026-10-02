@@ -1,0 +1,13 @@
+# Default-deny, identical to cluster/infra/sandbox/networkpolicy.yaml (ADR 0031). The twin keeps every
+# preventive layer; only the automatic response is absent. ciliumnetworkpolicy.yaml opens DNS out;
+# ciliumnetworkpolicy-victim.yaml opens :8080 in to scenario pods, from the portfolio API only.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+  namespace: sandbox-unguarded
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress

@@ -104,6 +104,9 @@ spec:
               namespaces:
                 - hello
                 - sandbox
+                # The unguarded twin (ADR 0031): same preventive layers as `sandbox`, so the same
+                # signature and SBOM gate. Only Talon's automatic response is absent there.
+                - sandbox-unguarded
                 - portfolio-api
                 - falco-response
                 - kube-bench
@@ -188,6 +191,9 @@ spec:
               namespaces:
                 - hello
                 - sandbox
+                # The unguarded twin (ADR 0031): same preventive layers as `sandbox`, so the same
+                # signature and SBOM gate. Only Talon's automatic response is absent there.
+                - sandbox-unguarded
                 - portfolio-api
                 - falco-response
                 - kube-bench

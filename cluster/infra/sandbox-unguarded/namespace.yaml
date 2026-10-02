@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: sandbox-unguarded
+  labels:
+    # Identical to `sandbox` (ADR 0031): the twin exists to show what the automatic response is worth,
+    # so every *preventive* layer is the same - Pod Security `restricted`, our signed images only,
+    # default-deny networking, the quota. The one difference is that Falco Talon has no Role here and
+    # no Talon rule matches this namespace, so Falco still detects but nothing answers.
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted

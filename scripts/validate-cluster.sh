@@ -154,6 +154,21 @@ step "rendering the attack scenarios' pod specs as Pods (ADR 0017)"
 python3 scripts/lib/scenario_pods.py "$RENDER_DIR/cluster_infra_sandbox_scenarios.yaml" \
   cluster/infra/hello/kustomization.yaml "$RENDER_DIR/scenario-pods.yaml"
 
+# The same scenario pods as the API would create them in the unguarded twin (ADR 0031). A `compare`
+# run puts one pod in `sandbox-unguarded` and one in `sandbox`; the twin keeps every preventive layer,
+# so the pods must pass the Kyverno gate there too. Rendered by rewriting the namespace (and the name,
+# so the two sets do not collide in the render dir), judged below alongside the sandbox set.
+python3 - "$RENDER_DIR/scenario-pods.yaml" "$RENDER_DIR/scenario-pods-unguarded.yaml" <<'PY'
+import sys, yaml
+pods = list(yaml.safe_load_all(open(sys.argv[1])))
+for pod in pods:
+    pod["metadata"]["namespace"] = "sandbox-unguarded"
+    pod["metadata"]["name"] = pod["metadata"]["name"] + "-unguarded"
+with open(sys.argv[2], "w") as out:
+    yaml.safe_dump_all(pods, out, sort_keys=False)
+print(f"  {len(pods)} scenario Pods rendered in sandbox-unguarded (twin, ADR 0031)")
+PY
+
 step "kubeconform (kubernetes $KUBERNETES_VERSION, strict)"
 # -strict rejects unknown and duplicated fields, which is where typos hide.
 #

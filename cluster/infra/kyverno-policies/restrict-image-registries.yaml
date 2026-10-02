@@ -51,6 +51,9 @@ spec:
               namespaces:
                 - hello
                 - sandbox
+                # The unguarded twin (ADR 0031): same preventive layers as `sandbox` - kept in step
+                # with verify-portfolio-images, which also lists it.
+                - sandbox-unguarded
                 - portfolio-api
                 - falco-response
                 - kube-bench

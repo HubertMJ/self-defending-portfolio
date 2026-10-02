@@ -17,6 +17,7 @@
 #    5  falco                   runtime detection: modern eBPF sensor (privileged namespace, 4 capabilities)
 #    5  falco-response          Falcosidekick (alerts in) -> Falco Talon (kill / quarantine in sandbox)
 #    5  sandbox                 restricted namespace for test victims, quarantine policy, Talon's Role
+#    5  sandbox-unguarded       the twin of sandbox with no Talon reach: Falco detects, nothing responds
 #    6  portfolio-api           /api: scenarios, attack runs in sandbox, live Falco/Talon feed, posture
 #
 # Waves only order the first sync of a fresh cluster loosely: the root Application has no health
@@ -44,4 +45,5 @@ resources:
   - falco.yaml
   - falco-response.yaml
   - sandbox.yaml
+  - sandbox-unguarded.yaml
   - portfolio-api.yaml

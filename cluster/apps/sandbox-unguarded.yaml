@@ -1,0 +1,39 @@
+# Wave 5, alongside sandbox: the unguarded twin namespace (ADR 0031) - restricted, default-deny with
+# DNS only, the victim flow from the API, the quota and LimitRange - everything `sandbox` has except
+# Falco Talon's reach. The portfolio API's `compare` runs (ADR 0031) put one pod here and one in
+# `sandbox` from the same scenario; Falco detects in both, Talon answers only in `sandbox`.
+#
+# Its own Application, next to sandbox.yaml, for the same reason sandbox has one: what may run here and
+# what may act on it are reviewed together, and removing the namespace removes the twin with it. Talon's
+# RBAC is deliberately not part of it (see cluster/infra/sandbox-unguarded/kustomization.yaml).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: sandbox-unguarded
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "5"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/HubertMJ/self-defending-portfolio.git
+    targetRevision: main
+    path: cluster/infra/sandbox-unguarded
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: sandbox-unguarded
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    retry:
+      limit: 5
+      backoff:
+        duration: 10s
+        factor: 2
+        maxDuration: 3m
+    syncOptions:
+      # The Namespace (restricted) is a manifest in cluster/infra/sandbox-unguarded.
+      - CreateNamespace=false

@@ -1,0 +1,30 @@
+# The victim's one inbound flow in the twin (ADR 0031), identical to
+# cluster/infra/sandbox/ciliumnetworkpolicy-victim.yaml: the portfolio API may connect to a scenario
+# pod's shop on :8080 to read /state.json while a run is on, and nothing else may connect to anything
+# here. The API's matching egress half lists this namespace too
+# (cluster/infra/portfolio-api/ciliumnetworkpolicy.yaml).
+#
+# Unlike `sandbox`, there is no quarantine to make a shop go unreachable here: no Talon rule matches
+# this namespace, so a compromised twin pod keeps answering on :8080 for its whole life. That contrast -
+# the guarded shop cut off, the unguarded shop still serving the attacker's defacement - is what the
+# side-by-side view shows (ADR 0031).
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: sandbox-unguarded-victim-from-api
+  namespace: sandbox-unguarded
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+spec:
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/managed-by: portfolio-api
+  ingress:
+    - fromEndpoints:
+        - matchLabels:
+            io.kubernetes.pod.namespace: portfolio-api
+            app.kubernetes.io/name: portfolio-api
+      toPorts:
+        - ports:
+            - port: "8080"
+              protocol: TCP

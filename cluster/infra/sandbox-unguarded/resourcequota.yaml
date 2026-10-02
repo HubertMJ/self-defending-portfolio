@@ -1,0 +1,28 @@
+# The ceiling on everything that can run in `sandbox-unguarded` at once (ADR 0031), identical to
+# cluster/infra/sandbox/resourcequota.yaml. The twin's blast radius is bounded exactly as the guarded
+# sandbox's is - 3 pods, half a CPU and 512 MiB - so "no automatic response" never means "no limit":
+# an attacker who keeps a compromised twin pod (nothing kills it) still cannot grow past this quota,
+# and the API deletes the pod itself when the run ends (compare_hold_seconds, ADR 0031).
+#
+# Requests *and* limits are capped, so every container here must state both; the LimitRange next to
+# this fills in defaults for a container that does not. Nothing but pods belongs here: the object
+# counts are zero.
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: sandbox-unguarded
+  namespace: sandbox-unguarded
+spec:
+  hard:
+    pods: "3"
+    requests.cpu: 500m
+    limits.cpu: 500m
+    requests.memory: 512Mi
+    limits.memory: 512Mi
+    requests.ephemeral-storage: 64Mi
+    limits.ephemeral-storage: 128Mi
+    services: "0"
+    services.loadbalancers: "0"
+    services.nodeports: "0"
+    persistentvolumeclaims: "0"
+    replicationcontrollers: "0"

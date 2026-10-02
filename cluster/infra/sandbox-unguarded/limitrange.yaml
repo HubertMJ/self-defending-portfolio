@@ -1,0 +1,24 @@
+# Per-container defaults and bounds in `sandbox-unguarded` (ADR 0031), identical to
+# cluster/infra/sandbox/limitrange.yaml: defaults so the quota's "requests and limits required" never
+# rejects an otherwise valid pod, and a max so no single scenario pod can take the whole quota. The
+# scenario pods ask for 10m/16Mi and are capped at 100m/32Mi.
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: sandbox-unguarded
+  namespace: sandbox-unguarded
+spec:
+  limits:
+    - type: Container
+      defaultRequest:
+        cpu: 10m
+        memory: 16Mi
+        ephemeral-storage: 1Mi
+      default:
+        cpu: 100m
+        memory: 32Mi
+        ephemeral-storage: 8Mi
+      max:
+        cpu: 200m
+        memory: 128Mi
+        ephemeral-storage: 16Mi
