@@ -260,7 +260,7 @@ test.describe("attacker's terminal (mock, ADR 0033)", () => {
     await expect(term.locator(".term__out")).toContainText("uid=10001");
 
     // Defacing the shop changes the window beside the terminal; no rule fires.
-    await term.getByRole("button", { name: "deface the shop" }).click();
+    await term.getByRole("button", { name: /^echo pwned>/ }).click();
     await expect(term.locator(".term__shop .browser")).toHaveAttribute("data-status", "defaced");
 
     // Reading the flag reaches an objective.

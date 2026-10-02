@@ -5,6 +5,7 @@
 // renders whatever /api/scenarios returns.
 
 import type { CatalogueCommand, Objective, Posture, Scenario, ScenarioDetails, SourceRef, Stats, VictimStatus } from "./contract";
+import catalogue from "./terminal-catalogue.json";
 
 export const SCENARIOS: Scenario[] = [
   {
@@ -191,114 +192,16 @@ export function falcoFields(scenario: Scenario, pod: string): Record<string, str
   }
 }
 
-// ---- Terminal scenario (ADR 0033; CLUSTER writes the real catalogue in scenarios.yaml) ----
+// ---- Terminal scenario (ADR 0033) ----
 //
-// This fixture follows the contract's schema so the page can be built and tested offline. The live
-// page always renders whatever GET /api/scenarios/terminal/details returns; these values only drive
-// `?mock=1`. Objectives are in kill-chain order; the quiet commands come first by design.
+// The catalogue is the real one: terminal-catalogue.json is generated from the `terminal` scenario of
+// cluster/infra/sandbox/scenarios/scenarios.yaml by scripts/terminal-catalogue.mjs (and checked
+// against it by the unit tests when SDP_SCENARIOS_YAML points at that file). Only the output each
+// command prints in `?mock=1` (TERMINAL_OUTPUT below) is written here. The live page always renders
+// whatever GET /api/scenarios/terminal/details returns.
 
-// Mirrors cluster/infra/sandbox/scenarios/scenarios.yaml (scenario `terminal`): same ids, objectives
-// and commands as the real catalogue, so the mock exercises exactly what the live API serves.
-export const TERMINAL_OBJECTIVES: Objective[] = [
-  { id: "recon", title: "Look around" },
-  { id: "tamper", title: "Deface the shop" },
-  { id: "credentials", title: "Steal credentials" },
-  { id: "execution", title: "Run your own code" },
-  { id: "exfiltration", title: "Phone home" },
-];
-
-export const TERMINAL_COMMANDS: CatalogueCommand[] = [
-  {
-    id: "whoami", input: "id", aliases: ["whoami"], objective: "recon", technique: "T1033",
-    command: ["id"], tty: false, outcome: "allowed", layer: "runtime",
-    control: "Falco is watching; plain recon matches no rule",
-    explain: "You are an unprivileged user (uid 10001) in a hardened pod. Falco sees this and lets it pass — looking around is not, by itself, an attack.",
-  },
-  {
-    id: "hostname", input: "hostname", aliases: [], objective: "recon", technique: "T1082",
-    command: ["hostname"], tty: false, outcome: "allowed", layer: "runtime",
-    control: "Falco is watching; plain recon matches no rule",
-    explain: "The pod name, nothing more. No node name, no cluster detail — the pod was built without that information to leak.",
-  },
-  {
-    id: "ps", input: "ps", aliases: ["ps aux"], objective: "recon", technique: "T1057",
-    command: ["ps"], tty: false, outcome: "allowed", layer: "runtime",
-    control: "Falco is watching; plain recon matches no rule",
-    explain: "Only the shop server and your own command run here: one container, one job, nothing else to pivot to.",
-  },
-  {
-    id: "ls-shop", input: "ls -la /srv/shop", aliases: [], objective: "recon", technique: "T1083",
-    command: ["ls", "-la", "/srv/shop"], tty: false, outcome: "allowed", layer: "runtime",
-    control: "Falco is watching; plain recon matches no rule",
-    explain: "The shop's files, writable by you because this directory is the one writable spot in the pod. Note the .flag — that is a goal.",
-  },
-  {
-    id: "caps", input: "grep Cap /proc/self/status", aliases: [], objective: "recon", technique: "T1082",
-    command: ["grep", "Cap", "/proc/self/status"], tty: false, outcome: "allowed", layer: "pod-security",
-    control: "Pod Security: every Linux capability dropped",
-    explain: "CapEff is all zeros: the pod holds no Linux capabilities at all. That is why the next few tricks will not work.",
-  },
-  {
-    id: "deface", input: "deface the shop", aliases: ["deface"], objective: "tamper", technique: "T1491.001",
-    command: ["sh", "-c", "cd /srv/shop && printf '%s' '<h1>SDP Shop has been defaced</h1><p>Owned through the attacker terminal.</p>' > .i && mv .i index.html && printf '%s' '{\"status\":\"defaced\",\"title\":\"H4CK3D - SDP Shop\",\"banner\":\"Defaced from the terminal\"}' > .s && mv .s state.json && echo 'shop defaced'"],
-    tty: false, outcome: "allowed", layer: "runtime",
-    control: "Falco is watching; an app rewriting its own files is not drift",
-    explain: "The shop window next to you just changed — you rewrote its page. Nothing stopped you: writing to your own working directory is normal for an app, so no rule here watches for it.",
-  },
-  {
-    id: "read-flag", input: "cat /srv/shop/.flag", aliases: [], objective: "credentials", technique: "T1552.001",
-    command: ["cat", "/srv/shop/.flag"], tty: false, outcome: "allowed", layer: "runtime",
-    control: "Falco is watching; reading a file you can already open is not flagged",
-    explain: "You found this run's flag. Reading it was allowed — but detection is not prevention, and reading a secret inside the pod is not the same as getting it out past a default-deny network.",
-  },
-  {
-    id: "read-shadow", input: "cat /etc/shadow", aliases: [], objective: "credentials", technique: "T1003.008",
-    command: ["cat", "/etc/shadow"], tty: false, outcome: "detected", layer: "runtime",
-    control: "Falco rule Read sensitive file untrusted → terminate",
-    detection: "Read sensitive file untrusted", response: "terminate",
-    explain: "Falco caught an untrusted program opening the password database and Talon deleted the pod. What you got was worthless anyway: every account in the image is locked, there is no hash in the file.",
-  },
-  {
-    id: "touch-bin", input: "touch /bin/backdoor", aliases: [], technique: "T1543",
-    command: ["touch", "/bin/backdoor"], tty: false, outcome: "prevented", layer: "pod-security",
-    control: "Pod Security: read-only root filesystem",
-    explain: "“Read-only file system.” The root filesystem is immutable, so you cannot plant a backdoor in /bin. Nothing had to kill you — the write simply never happened.",
-  },
-  {
-    id: "read-token", input: "cat /var/run/secrets/kubernetes.io/serviceaccount/token", aliases: [], technique: "T1528",
-    command: ["cat", "/var/run/secrets/kubernetes.io/serviceaccount/token"], tty: false, outcome: "prevented", layer: "pod-security",
-    control: "Pod Security: no ServiceAccount token mounted",
-    explain: "“No such file or directory.” There is no token to steal: the pod was created with none, so it cannot talk to the Kubernetes API no matter what you run.",
-  },
-  {
-    id: "chown-root", input: "chown 0 /srv/shop/index.html", aliases: [], technique: "T1222.002",
-    command: ["chown", "0", "/srv/shop/index.html"], tty: false, outcome: "prevented", layer: "pod-security",
-    control: "Pod Security: no CAP_CHOWN (all capabilities dropped)",
-    explain: "“Operation not permitted.” Changing a file's owner needs a Linux capability the pod does not have; with every capability dropped, a whole class of tricks is off the table before any rule has to fire.",
-  },
-  {
-    id: "beacon", input: "wget -q -T 2 -O- http://127.0.0.1:9/", aliases: ["wget"], objective: "exfiltration", technique: "T1071.001",
-    command: ["wget", "-q", "-T", "2", "-O-", "http://127.0.0.1:9/"], tty: false, outcome: "detected", layer: "network",
-    control: "Falco rule SDP network tool in sandbox → quarantine",
-    detection: "SDP network tool in sandbox", response: "quarantine",
-    explain: "A network tool started: Falco flagged it and Talon quarantined the pod. The run goes on — you still have a shell — but Cilium has cut every connection, both ways, so the shop next to you just went unreachable. You are trapped with nothing to call out to.",
-  },
-  {
-    id: "shell", input: "sh -i", aliases: ["bash -i"], objective: "execution", technique: "T1059.004",
-    command: ["sh", "-i"], tty: true, outcome: "detected", layer: "runtime",
-    control: "Falco rule Terminal shell in container → terminate",
-    detection: "Terminal shell in container", response: "terminate",
-    explain: "A second interactive shell with a terminal attached is exactly the signature Falco watches for; Talon deleted the pod within a second or two. This ends your run.",
-  },
-  {
-    id: "drop-run", input: "cp /bin/busybox /srv/shop/busybox && /srv/shop/busybox echo", aliases: ["drop and execute"], objective: "execution", technique: "T1105",
-    command: ["sh", "-c", "cp /bin/busybox /srv/shop/busybox && exec /srv/shop/busybox echo 'dropped and ran'"],
-    tty: false, outcome: "detected", layer: "runtime",
-    control: "Falco rule SDP execution from shop volume → terminate",
-    detection: "SDP execution from shop volume", response: "terminate",
-    explain: "You copied a binary into the writable shop volume and ran it. The stock drift rule misses this — that volume is not the container's overlay layer — so a custom rule watches for execution from it. Falco caught it and Talon deleted the pod.",
-  },
-];
+export const TERMINAL_OBJECTIVES: Objective[] = catalogue.objectives;
+export const TERMINAL_COMMANDS = catalogue.commands as CatalogueCommand[];
 
 export function terminalDetails(): ScenarioDetails {
   return {
@@ -319,8 +222,8 @@ export function terminalDetails(): ScenarioDetails {
     commit: MOCK_COMMIT,
     victim: true,
     interactive: true,
-    timeout_seconds: 120,
-    idle_seconds: 30,
+    timeout_seconds: catalogue.timeout_seconds,
+    idle_seconds: catalogue.idle_seconds,
     objectives: TERMINAL_OBJECTIVES,
     commands: TERMINAL_COMMANDS,
   };
@@ -340,7 +243,8 @@ export const TERMINAL_OUTPUT: Record<string, MockCommandOutput> = {
   ps: { stdout: ["  PID USER     TIME  COMMAND", "    1 10001     0:00 /usr/local/bin/victim -docroot /srv/shop", "   14 10001     0:00 ps"], exit: 0 },
   "ls-shop": { stdout: ["total 16", "-rw-r--r--    1 10001    10001          412 index.html", "-rw-r--r--    1 10001    10001           96 state.json", "-rw-------    1 10001    10001           25 .flag"], exit: 0 },
   caps: { stdout: ["CapInh:\t0000000000000000", "CapPrm:\t0000000000000000", "CapEff:\t0000000000000000", "CapBnd:\t0000000000000000", "CapAmb:\t0000000000000000"], exit: 0 },
-  deface: { stdout: ["shop defaced"], exit: 0 },
+  // Two redirections and nothing printed: the shop window is the only output.
+  deface: { exit: 0 },
   "read-flag": { stdout: ["${FLAG}"], exit: 0 },
   // cat exits 0 before Talon's delete lands; the kill ends the run, not this command.
   "read-shadow": { stdout: ["root:*:19000:0:::::", "daemon:!:19000::::::", "nobody:!:19000::::::"], exit: 0 },
