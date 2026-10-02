@@ -113,7 +113,7 @@ test.describe("mock mode", () => {
 
     await expect(page.locator("#launch-status")).toContainText("queued as run");
     // While the run is active every launch button is locked.
-    await expect(page.locator('.scenario[data-scenario="shell-in-container"] button')).toHaveAttribute("aria-disabled", "true");
+    await expect(page.locator('.scenario[data-scenario="shell-in-container"] .btn--attack')).toHaveAttribute("aria-disabled", "true");
 
     const run = page.locator(".run").first();
     await expect(run.locator(".run__title")).toHaveText("Download tool in a container");
@@ -132,7 +132,7 @@ test.describe("mock mode", () => {
   test("a 429 locks the launcher with a countdown from Retry-After", async ({ page }) => {
     const problems = guardConsole(page);
     await page.goto("/?mock=1&mock-speed=0.1&mock-limit=1");
-    const button = page.locator('.scenario[data-scenario="shell-in-container"] button');
+    const button = page.locator('.scenario[data-scenario="shell-in-container"] .btn--attack');
     await button.click();
     await expect(page.locator(".run").first().locator(".chip--state")).toHaveText("Finished");
     await expect(button).toHaveAttribute("aria-disabled", "false");
@@ -152,7 +152,7 @@ test.describe("live run console (mock)", () => {
     const problems = guardConsole(page);
     await page.goto("/?mock=1");
     const consoleEl = page.locator("#console");
-    await page.locator('.scenario[data-scenario="shell-in-container"] button').click();
+    await page.locator('.scenario[data-scenario="shell-in-container"] .btn--attack').click();
     await expect(consoleEl).toHaveAttribute("data-state", "live");
     await expect(consoleEl.locator(".console__who")).toHaveText("Your run");
     // Before its first answer the shop is "booting", with the pod's phase from the pod watch.
@@ -198,7 +198,7 @@ test.describe("live run console (mock)", () => {
   test("a quarantine shows the label, the cut network and the dropped packets", async ({ page }) => {
     const problems = guardConsole(page);
     await page.goto("/?mock=1&mock-speed=0.5");
-    await page.locator('.scenario[data-scenario="network-tool"] button').click();
+    await page.locator('.scenario[data-scenario="network-tool"] .btn--attack').click();
     const consoleEl = page.locator("#console");
     await expect(consoleEl.locator(".browser")).toHaveAttribute("data-status", "unreachable");
     await expect(consoleEl.locator(".card--proof")).toContainText("sdp.hubertjablon.ski/quarantine: false → true");
@@ -221,7 +221,7 @@ test.describe("live run console (mock)", () => {
 
   test("the history's Show button puts that run in the console", async ({ page }) => {
     await page.goto("/?mock=1&mock-speed=0.1");
-    await page.locator('.scenario[data-scenario="sensitive-file-read"] button').click();
+    await page.locator('.scenario[data-scenario="sensitive-file-read"] .btn--attack').click();
     await expect(page.locator(".run")).toHaveCount(2);
     await expect(page.locator(".run").first().locator(".chip--state")).toHaveText("Finished");
     await page.locator('.run[data-run="mock-history-1"] .run__show').click();
@@ -234,11 +234,98 @@ test.describe("live run console (mock)", () => {
   test("on a phone, launching takes the visitor to the live run", async ({ page, isMobile }) => {
     test.skip(!isMobile, "the scroll matters where the console is below the fold");
     await page.goto("/?mock=1");
-    const button = page.locator('.scenario[data-scenario="drop-and-execute"] button');
+    const button = page.locator('.scenario[data-scenario="drop-and-execute"] .btn--attack');
     await button.click();
     await expect(page.locator("#console-title")).toBeFocused();
     await expect(page.locator("#console-title")).toBeInViewport();
     await noHorizontalScroll(page);
+  });
+});
+
+test.describe("attacker's terminal (mock, ADR 0033)", () => {
+  test("type, read real output, change the shop, reach an objective, then get killed", async ({ page }) => {
+    const problems = guardConsole(page);
+    await page.goto("/?mock=1&mock-speed=0.3");
+    const term = page.locator("#terminal");
+    await term.getByRole("button", { name: /Open the terminal/ }).click();
+    await expect(term.locator("#term-input")).toBeVisible();
+
+    // An unknown line is answered locally and never sent anywhere.
+    await term.locator("#term-input").fill("rm -rf /");
+    await term.locator(".term__send").click();
+    await expect(term.locator(".term__out")).toContainText("not in this sandbox's catalogue");
+
+    // A real recon command streams real output back.
+    await term.getByRole("button", { name: "id", exact: true }).click();
+    await expect(term.locator(".term__out")).toContainText("uid=10001");
+
+    // Defacing the shop changes the window beside the terminal; no rule fires.
+    await term.getByRole("button", { name: "deface the shop" }).click();
+    await expect(term.locator(".term__shop .browser")).toHaveAttribute("data-status", "defaced");
+
+    // Reading the flag reaches an objective.
+    await term.getByRole("button", { name: "cat /srv/shop/.flag" }).click();
+    await expect(term.locator(".term__out")).toContainText(/SDP\{[0-9a-f]{16}\}/);
+    await expect(term.locator(".term__objhead")).toContainText(/Objectives · [1-9]/);
+
+    // A detected command ends the session; the summary and the defence-map result appear.
+    await term.getByRole("button", { name: "cat /etc/shadow" }).click();
+    await expect(term.locator(".term__summary")).toBeVisible({ timeout: 15_000 });
+    await expect(term.locator(".term__sumtitle")).toHaveText("Session over");
+    await expect(term.locator(".term__summary .deflayer")).toHaveCount(7);
+    await expect(term.locator(".term__summary")).toContainText("Killed after your Enter");
+    await expect(term.locator(".term__summary a", { hasText: "Open an issue" })).toHaveAttribute("href", /\/issues$/);
+    await noHorizontalScroll(page);
+    expect(problems).toEqual([]);
+  });
+
+  test("another visitor's terminal is shown read-only", async ({ page }) => {
+    const problems = guardConsole(page);
+    await page.goto("/?mock=1&mock-speed=0.4&mock-term-visitor=300");
+    const term = page.locator("#terminal");
+    await expect(term.locator(".term__status")).toContainText("read-only", { timeout: 10_000 });
+    await expect(term.locator(".term__out")).toContainText("uid=10001", { timeout: 10_000 });
+    await expect(term.locator("#term-input")).toBeHidden();
+    expect(problems).toEqual([]);
+  });
+});
+
+test.describe("defence map and live stats (mock, ADR 0033)", () => {
+  test("the How-it-works section is a seven-layer map with live posture evidence", async ({ page }) => {
+    const problems = guardConsole(page);
+    await page.goto("/?mock=1");
+    await expect(page.locator("#defence-map .deflayer")).toHaveCount(7);
+    await expect(page.locator('#defence-map .deflayer[data-layer="admission"]')).toContainText("admission checks passing");
+    await expect(page.locator('#defence-map .deflayer[data-layer="runtime"]')).toContainText("Falco");
+    expect(problems).toEqual([]);
+  });
+
+  test("the hero shows live counters and objectives, including ones never reached", async ({ page }) => {
+    await page.goto("/?mock=1");
+    const hero = page.locator("#hero-stats");
+    await expect(hero).toBeVisible();
+    await expect(hero.locator(".herostats__tile")).toHaveCount(4);
+    await expect(hero).toContainText("attacks launched");
+    await expect(hero.locator('.herostats__obj[data-never="true"]')).toContainText("not reached by anyone yet");
+    await expect(hero.locator("a", { hasText: "Open an issue" })).toHaveAttribute("href", /\/issues$/);
+  });
+});
+
+test.describe("unguarded twin (mock, ADR 0033)", () => {
+  test("one click runs with and without the response, side by side", async ({ page }) => {
+    const problems = guardConsole(page);
+    await page.goto("/?mock=1&mock-speed=0.4");
+    await page.locator('.scenario[data-scenario="network-tool"] .scenario__twin').click();
+    const twin = page.locator("#console .twin");
+    await expect(twin).toBeVisible({ timeout: 8_000 });
+    await expect(twin.locator(".twin__arm")).toHaveCount(2);
+    // The guarded pod is cut off; the unguarded one stays compromised, with nothing answering.
+    await expect(twin.locator(".twin__arm--guarded .browser")).toHaveAttribute("data-status", "unreachable", { timeout: 12_000 });
+    await expect(twin.locator(".twin__arm--unguarded .browser")).toHaveAttribute("data-status", "compromised");
+    await expect(twin).toContainText("nothing answered");
+    await expect(twin).toContainText("attacker has held this pod");
+    await noHorizontalScroll(page);
+    expect(problems).toEqual([]);
   });
 });
 
@@ -247,7 +334,7 @@ test.describe("narrow screens", () => {
     await page.setViewportSize({ width: 360, height: 780 });
     await page.goto("/?mock=1&mock-speed=0.2");
     await page.locator("#tech-toggle").click();
-    await page.locator('.scenario[data-scenario="network-tool"] button').click();
+    await page.locator('.scenario[data-scenario="network-tool"] .btn--attack').click();
     await expect(page.locator("#console .browser")).toHaveAttribute("data-status", "unreachable");
     await page.locator("#console .verify > summary").click();
     await page.locator("#console .rawlog > summary").click();
@@ -385,7 +472,7 @@ test.describe("accessibility basics", () => {
   test("reduced motion skips the replay: hops light as their events arrive", async ({ page }) => {
     await page.emulateMedia({ reducedMotion: "reduce" });
     await page.goto("/?mock=1&mock-speed=0.3");
-    await page.locator('.scenario[data-scenario="shell-in-container"] button').click();
+    await page.locator('.scenario[data-scenario="shell-in-container"] .btn--attack').click();
     const consoleEl = page.locator("#console");
     // At 0.3x the whole chain is ~0.3 s; a 600 ms dwell per hop would need several seconds.
     await expect(consoleEl.locator(".hop[data-state=lit]")).toHaveCount(8, { timeout: 2_500 });

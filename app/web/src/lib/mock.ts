@@ -40,6 +40,8 @@ export interface MockOptions {
   noDetails?: boolean;
   /** Start a run "from another visitor" this long after the page loads, to watch it read-only. */
   visitorAfterMs?: number;
+  /** Start a terminal run "from another visitor" this long after load, to watch it read-only. */
+  termVisitorAfterMs?: number;
 }
 
 const REPLAY = 100;
@@ -134,6 +136,20 @@ export class MockBackend {
         this.activeRun = runId;
         this.simulate(runId, "network-tool");
       }, opts.visitorAfterMs);
+    }
+    if (opts.termVisitorAfterMs !== undefined) {
+      setTimeout(() => {
+        if (this.activeRun) return;
+        const runId = this.nextRunId();
+        this.activeRun = runId;
+        this.terminal = { runId, token: this.newToken(), pod: `scenario-terminal-${runId.replace(/[^a-z0-9]/g, "").slice(-5)}`, flag: this.newFlag(), over: false, running: false, count: 0, seq: 0, quarantined: false };
+        this.startTerminal();
+        // The other visitor types a quiet command, which this page sees stream in read-only.
+        setTimeout(() => {
+          const t = this.terminal;
+          if (t && !t.over) this.simulateCommand(t, "whoami", ++t.seq);
+        }, 1400 * this.speed);
+      }, opts.termVisitorAfterMs);
     }
   }
 
@@ -638,5 +654,6 @@ export function mockOptionsFromUrl(search: string): MockOptions | null {
     streamStall: q.get("mock-stream-stall") === "1",
     noDetails: q.get("mock-details") === "0",
     visitorAfterMs: num("mock-visitor"),
+    termVisitorAfterMs: num("mock-term-visitor"),
   };
 }

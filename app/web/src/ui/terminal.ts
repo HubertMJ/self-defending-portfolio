@@ -136,6 +136,7 @@ export function mountTerminal(
     starting = false;
     if (r.kind === "accepted") {
       session = { runId: r.run.run_id, token: r.run.token };
+      watching = undefined; // this run is mine, not one I am watching
       endedShown = false;
       renderedSeq = 0;
       hooks.onStarted?.(r.run.run_id);
@@ -423,8 +424,9 @@ export function mountTerminal(
   const update = (v: TimelineView) => {
     view = v;
     const active = v.activeRun;
-    // Am I watching an active terminal run I did not start?
-    if (!session && active && active.scenario === "terminal") {
+    // Am I watching an active terminal run I did not start? (Not while my own start is in flight —
+    // the run's first events can arrive before attackTerminal() has returned my token.)
+    if (!session && !starting && active && active.scenario === "terminal") {
       if (watching !== active.runId) {
         watching = active.runId;
         renderSessionReadOnly();
