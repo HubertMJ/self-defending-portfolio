@@ -2,11 +2,6 @@ extends: default
 rules:
   line-length:
     max: 140
-    # kube-bench's k3s benchmark, copied from the pinned image and kept line-for-line identical to
-    # upstream apart from the audit source, so it stays diffable against the next kube-bench release
-    # (cluster/infra/kube-bench/kustomization.yaml). Its one-line shell audits run past 140.
-    ignore: |
-      cluster/infra/kube-bench/k3s-cis-1.9/
   truthy:
     allowed-values: ["true", "false", "on"]
   comments:

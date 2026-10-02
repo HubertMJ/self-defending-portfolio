@@ -11,9 +11,16 @@
 #   * policies - those checks query the API server with kubectl, and this pod deliberately has no
 #     credentials. RBAC, Pod Security and network policy posture come from Kyverno's PolicyReports and
 #     the Trivy Operator's RBAC and config audits instead.
-# FAIL and WARN results are findings to read, not a gate (plan section 4.5). Expect FAIL for every flag
-# k3s sets internally rather than through /etc/rancher/k3s/config.yaml: see
-# k3s-cis-1.9/k3s-config-args.sh for why those are not visible here.
+# FAIL and WARN results are findings to read, not a gate (plan section 4.5).
+#
+# The benchmark is upstream's k3s-cis-1.9 as shipped in the image (ADR 0025): its audits read the flags
+# each k3s component really runs with from the line k3s logs at start-up, `journalctl -m -u k3s |
+# grep 'Running kube-apiserver'`, so the node's journal is mounted read-only below and the image
+# carries journalctl. (Until ADR 0025 the audits read /etc/rancher/k3s/config.yaml instead, which
+# cannot show the flags k3s sets itself, and every such check failed falsely.) Those checks see the
+# flags of the last k3s start that is still in the journal: if journald has vacuumed that start's
+# lines (Storage=persistent, SystemMaxUse=500M, ansible/roles/base), they report FAIL with an empty
+# actual value - `journalctl -u k3s | grep -c 'Running kube-apiserver'` on the node tells.
 apiVersion: batch/v1
 kind: CronJob
 metadata:
@@ -61,9 +68,13 @@ spec:
             # as Non-root user" (an explicit runAsUser: 0) is not, so setting it would fail the policy.
           containers:
             - name: kube-bench
-              image: docker.io/aquasec/kube-bench:v0.16.0@sha256:75506f222d1eb6ce2a751a5533bdc0a3b54c898e2e49e7751d0ee22cfb862679
-              # The image's entrypoint is a shell wrapper whose only other mode copies the binary to
-              # the host (`install`); calling the binary directly removes that branch.
+              # This repository's build of kube-bench v0.16.0 (app/kube-bench, ADR 0025): upstream's
+              # release commit compiled with Go 1.26.8, upstream's cfg/, on Alpine with only what the
+              # k3s checks run. Pinned by digest in kustomization.yaml (`images:`).
+              image: ghcr.io/hubertmj/self-defending-portfolio/kube-bench:main
+              # The binary, by name, as before: upstream's image had a shell-wrapper entrypoint whose
+              # only other mode copies the binary to the host (`install`); this image's entrypoint is
+              # the binary itself, and naming it keeps the CronJob independent of either.
               command:
                 - kube-bench
               args:
@@ -91,10 +102,6 @@ spec:
                   cpu: 500m
                   memory: 256Mi
               volumeMounts:
-                # Over the image's own copy of the benchmark (see kustomization.yaml).
-                - name: k3s-cis-1-9
-                  mountPath: /opt/kube-bench/cfg/k3s-cis-1.9
-                  readOnly: true
                 # Host paths, all read-only, and only what the k3s-cis-1.9 checks reference
                 # (narrower than plan section 4.5, which also listed /var/lib/kubelet and
                 # /etc/systemd): /var/lib/kubelet holds every pod's Secret and token volumes and no
@@ -111,12 +118,19 @@ spec:
                 - name: k3s-etc
                   mountPath: /etc/rancher/k3s
                   readOnly: true
+                # The node's persistent journal (Storage=persistent, ansible/roles/base), read by the
+                # flag checks' `journalctl -m -u k3s [-u k3s-agent]`. -m reads every journal under it,
+                # so the node's machine id does not have to be known here. It holds every unit's log,
+                # not only k3s's - the reason it is read-only and the pod has no network and no token:
+                # what leaves the pod is kube-bench's JSON, i.e. the matched `Running ...` lines. No
+                # /run/log/journal: with persistent storage journald writes there only until /var is
+                # writable at boot, and flushes it to /var/log/journal.
+                - name: journal
+                  mountPath: /var/log/journal
+                  readOnly: true
                 - name: tmp
                   mountPath: /tmp
           volumes:
-            - name: k3s-cis-1-9
-              configMap:
-                name: kube-bench-k3s-cis-1.9
             # type: Directory makes a missing path a failed pod instead of an empty directory that
             # the kubelet creates on the host.
             - name: k3s-server
@@ -130,6 +144,10 @@ spec:
             - name: k3s-etc
               hostPath:
                 path: /etc/rancher/k3s
+                type: Directory
+            - name: journal
+              hostPath:
+                path: /var/log/journal
                 type: Directory
             - name: tmp
               emptyDir:

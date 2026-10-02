@@ -1,25 +1,14 @@
 # kube-bench: the CIS Kubernetes Benchmark for k3s, run daily as a CronJob (ADR 0014). Deployed by
 # cluster/apps/kube-bench.yaml. Results are the Job's log (JSON); the phase 6 posture page reads them.
 #
-# k3s-cis-1.9/ is cfg/k3s-cis-1.9 copied from the pinned image
-# (docker.io/aquasec/kube-bench:v0.16.0@sha256:75506f22...) with one mechanical change: the 54 audits
-# that read component flags from `journalctl -m -u k3s [-u k3s-agent]` read them from
-# `sh /opt/kube-bench/cfg/k3s-cis-1.9/k3s-config-args.sh` instead, which builds the same
-# "Running <component> --flags" lines from /etc/rancher/k3s/config.yaml (see the script's header for
-# what that can and cannot see). The image has no journalctl, and the user decision for this phase was
-# a config override rather than an image of our own. Everything else is byte-identical to upstream,
-# which is how a kube-bench bump is reviewed:
+# The benchmark is the image's own cfg/k3s-cis-1.9, i.e. upstream's at the v0.16.0 commit, unchanged
+# (ADR 0025). Until then this directory carried a copy whose 54 journalctl audits read
+# /etc/rancher/k3s/config.yaml instead, because upstream's image has no journalctl; that copy could not
+# see the flags k3s sets itself and made those checks fail falsely. This repository's image
+# (app/kube-bench) carries journalctl, and the CronJob mounts the node's journal read-only.
 #
-#   IMG=docker.io/aquasec/kube-bench:<new tag>@<digest>
-#   for f in config controlplane etcd master node policies; do
-#     docker run --rm --entrypoint cat "$IMG" /opt/kube-bench/cfg/k3s-cis-1.9/$f.yaml \
-#       | sed 's#journalctl -m -u k3s -u k3s-agent#sh /opt/kube-bench/cfg/k3s-cis-1.9/k3s-config-args.sh#g;
-#              s#journalctl -m -u k3s#sh /opt/kube-bench/cfg/k3s-cis-1.9/k3s-config-args.sh#g' \
-#       | diff - k3s-cis-1.9/$f.yaml
-#   done
-#
-# All six files are carried, not only the ones that changed: the ConfigMap is mounted over the
-# image's whole cfg/k3s-cis-1.9 directory.
+# Reviewing a kube-bench bump is reading the upstream diff of cfg/k3s-cis-1.9 between the two release
+# commits; nothing here has to be re-derived from it.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
@@ -30,15 +19,10 @@ resources:
   - networkpolicy.yaml
   - cronjob.yaml
 
-configMapGenerator:
-  # The generated name carries a content hash, so a changed check is a new ConfigMap and the
-  # CronJob's reference follows it; a running Job keeps the version it started with.
-  - name: kube-bench-k3s-cis-1.9
-    files:
-      - k3s-cis-1.9/config.yaml
-      - k3s-cis-1.9/controlplane.yaml
-      - k3s-cis-1.9/etcd.yaml
-      - k3s-cis-1.9/master.yaml
-      - k3s-cis-1.9/node.yaml
-      - k3s-cis-1.9/policies.yaml
-      - k3s-cis-1.9/k3s-config-args.sh
+# This repository's build of kube-bench (app/kube-bench, ADR 0025). Only the digest is referenced; the
+# tag is informational. Bump = commit:
+#   scripts/bump-image-digest.sh kube-bench sha256:<digest from the build-images run summary>
+images:
+  - name: ghcr.io/hubertmj/self-defending-portfolio/kube-bench
+    newTag: main
+    digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
