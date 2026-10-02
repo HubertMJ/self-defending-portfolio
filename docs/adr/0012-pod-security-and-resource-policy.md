@@ -145,3 +145,11 @@ Consequences: a pod that does not meet `restricted` (outside the two relaxed nam
 state its resources is now refused at admission, not just reported - including chart upgrades whose
 new hook Jobs regress, which `make validate` is there to catch first. Rollback is reverting the flip
 (one commit, back to Audit).
+
+## Amendment 2026-10-02: one more read-only host path for kube-bench (ADR 0025)
+The kube-bench CronJob mounts `/var/log/journal` read-only (`type: Directory`), next to k3s's server,
+agent and config directories, so the benchmark's flag checks can read k3s's start-up lines with
+journalctl. No control is relaxed further: `restricted-kube-bench` already allows HostPath Volumes
+for this namespace, and `make validate` still fails on any writable kube-bench hostPath
+(`check_hostpath_readonly.py`). The journal holds every unit's log, not only k3s's; the pod still has
+no network, no service account token and no capability, and what leaves it is kube-bench's JSON.

@@ -152,3 +152,13 @@ exposing the UI through the Gateway.
   reads can only leave as its own log output.
 - The plugin's DB is as old as the plugin pod; restarting the Deployment refreshes it. The server's
   DB refreshes itself.
+
+## Amendment 2026-10-02: kube-bench reads the journal (ADR 0025)
+The k3s config override is gone. kube-bench now runs this repository's image (app/kube-bench), which
+carries journalctl (Wolfi's systemd), and the CronJob mounts the node's `/var/log/journal` read-only,
+so the benchmark is upstream's `cfg/k3s-cis-1.9` unchanged: its flag checks see the flags k3s
+actually runs the components with, including the ones k3s sets itself. The rejected alternative above
+("encoding k3s's defaults in the script") stays rejected; the journal makes it unnecessary. On a
+replay of k3s v1.35.9+k3s1's start-up lines with this node's configuration, 23 of the 27 FAILs of
+the 2026-10-02 run turn PASS; the remaining ones are listed in ADR 0025. `k3s-config-args.sh` and the
+ConfigMap are deleted.

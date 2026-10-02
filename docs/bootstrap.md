@@ -526,9 +526,11 @@ kubectl -n kube-bench create job --from=cronjob/kube-bench kube-bench-manual
 kubectl -n kube-bench logs job/kube-bench-manual | jq '.Totals'
 ```
 
-kube-bench's flags come from `/etc/rancher/k3s/config.yaml`, not from the journal; a FAIL on a flag
-k3s sets internally means "not visible in the configuration" (ADR 0014,
-`cluster/infra/kube-bench/k3s-cis-1.9/k3s-config-args.sh`).
+kube-bench reads the k3s components' flags from the node's journal (`journalctl -m -u k3s`, the
+`Running kube-apiserver ...` line k3s logs at start-up), with upstream's k3s-cis-1.9 as shipped
+(ADR 0025; until then from `/etc/rancher/k3s/config.yaml`, ADR 0014, which made every flag k3s sets
+itself fail). A flag check that FAILs with an empty actual value means the journal no longer holds
+the last start's lines: `journalctl -u k3s | grep -c 'Running kube-apiserver'` on the node.
 
 ### 6.2 Falco is running with the least-privileged probe
 
@@ -749,8 +751,9 @@ CoreDNS and metrics-server are not Argo CD's: k3s deploys them from manifests co
 binary, so their images move only with k3s. v1.35.9+k3s1 (2026-09-30) bundles CoreDNS 1.14.7
 (v1.35.8: 1.14.6, 14 HIGH in the cluster; with today's Trivy DB 1.14.6 scans 26 HIGH, 1.14.7 16)
 and the same metrics-server v0.9.0, which stays: nothing newer is published, and `kubectl top` (6)
-uses it. The release also moves Kubernetes to v1.35.9 and containerd to v2.2.7-k3s1; its Traefik
-warning does not apply (Traefik is disabled, `k3s_disable_components`).
+uses it. (Since ADR 0025 metrics-server is this repository's build, deployed by Argo CD, and k3s no
+longer deploys its own copy: 8.10.) The release also moves Kubernetes to v1.35.9 and containerd to
+v2.2.7-k3s1; its Traefik warning does not apply (Traefik is disabled, `k3s_disable_components`).
 
 `k3s_version` is pinned in `ansible/inventory/group_vars/k3s_nodes.yml` (and the role default). The
 role downloads the binary from the release and checks it against the release's own
@@ -1102,6 +1105,112 @@ Rollback: revert the switch commit and re-apply the bootstrap; upstream's
 `quay.io/argoproj/argocd:v3.5.3` comes back with no other change, because the paths, user and
 configuration are upstream's. If Argo CD cannot start at all (for example the GHCR package is
 private), the same revert-and-apply is the fix - it needs only `kubectl`, not Argo CD.
+
+### 8.10 Falcosidekick, metrics-server, Trivy Operator and kube-bench from this repository (ADR 0025)
+
+Four more images built here (`app/falcosidekick`, `app/metrics-server`, `app/trivy-operator`,
+`app/kube-bench`), staged like Talon in 8.3 - with one addition: metrics-server moves from k3s to
+Argo CD, and k3s has to let go of it first.
+
+1. **Stage 1: the images.** Push everything up to and including the four `app/...` commits (and none
+   of the switch commits). The workflow builds all four (upstream tests, Trivy gate, SBOM, cosign) and
+   prints a digest for each. Nothing in the cluster changes. Make the four new GHCR packages public
+   (5.2), then from a machine that is not logged in to GHCR:
+
+   ```sh
+   for n in falcosidekick metrics-server trivy-operator kube-bench; do
+     scripts/verify-image.sh ghcr.io/hubertmj/self-defending-portfolio/$n@sha256:<digest of $n>
+   done
+   docker run --rm --read-only --user 1234 ghcr.io/hubertmj/self-defending-portfolio/falcosidekick@sha256:<d> --version   # 2.35.0
+   docker run --rm --read-only ghcr.io/hubertmj/self-defending-portfolio/metrics-server@sha256:<d> --version            # v0.9.0
+   docker run --rm --read-only ghcr.io/hubertmj/self-defending-portfolio/kube-bench@sha256:<d> version                  # v0.16.0
+   ```
+
+2. **Stage 2a: Falcosidekick, Trivy Operator, kube-bench.** Two switch commits ("falco-response,
+   trivy-operator: ..." and "kube-bench: ..."; the second also drops the config override and mounts
+   the node's journal). Pin the three digests into them (a fixup per commit, or one pin commit on
+   top) and validate - `make validate` runs Kyverno's signature check for real on Falcosidekick,
+   whose namespace is already in `verify-portfolio-images`:
+
+   ```sh
+   scripts/bump-image-digest.sh falcosidekick sha256:<d>    # cluster/apps/falco-response.yaml (tag line)
+   scripts/bump-image-digest.sh trivy-operator sha256:<d>   # cluster/apps/trivy-operator.yaml (tag line)
+   scripts/bump-image-digest.sh kube-bench sha256:<d>       # cluster/infra/kube-bench/kustomization.yaml
+   make lint validate
+   git commit -am "falcosidekick, trivy-operator, kube-bench: pin the build-images digests" && git push
+   ```
+
+   Accept it:
+
+   ```sh
+   kubectl -n falco-response get deploy falcosidekick -o jsonpath='{.spec.template.spec.containers[0].image}'
+   kubectl -n falco-response logs deploy/falcosidekick | head -3   # version 2.35.0, outputs [Webhook Talon]
+   make runtime-test && make scenario-test                         # alerts still reach Talon and the API
+   kubectl -n trivy-system rollout status deploy/trivy-operator
+   kubectl -n trivy-system logs deploy/trivy-operator | grep -ci error   # no new errors after start-up
+   # a scan cycle later: reports are being written by the new operator
+   kubectl get vulnerabilityreports -A --sort-by=.metadata.creationTimestamp | tail -3
+   kubectl -n kube-bench create job --from=cronjob/kube-bench kube-bench-own-check
+   kubectl -n kube-bench wait --for=condition=complete job/kube-bench-own-check --timeout=300s
+   kubectl -n kube-bench logs job/kube-bench-own-check | jq '.Totals'
+   # was 35 PASS / 27 FAIL with the config override; expect about 58 PASS / 4 FAIL now (ADR 0025) -
+   # the flag checks read the journal. The FAILs left: 1.1.9, 1.1.10, 1.1.20, 1.2.26.
+   kubectl -n kube-bench logs job/kube-bench-own-check \
+     | jq -r '.Controls[].tests[].results[] | select(.status=="FAIL") | .test_number'
+   kubectl -n kube-bench delete job kube-bench-own-check
+   ```
+
+3. **Stage 2b: metrics-server - Ansible first.** `k3s_disable_components` now lists `metrics-server`,
+   and the role sets the k3s server certificates to 0600 (CIS 1.1.20, ADR 0025). Run only the k3s
+   role (as in 8.2); k3s restarts once and, because the add-on is disabled, deletes its own
+   metrics-server objects (Deployment, Service, APIService, RBAC). `kubectl top` stops working until
+   the next step - nothing in this cluster scales on the metrics API.
+
+   ```sh
+   cd ansible
+   ansible-playbook playbooks/cluster.yml --tags k3s --check --diff   # expect: config.yaml gains "metrics-server",
+                                                                       # "Restart k3s", server/tls/*.crt -> 0600
+   ansible-playbook playbooks/cluster.yml --tags k3s
+   ssh k3s01 sudo stat -c '%a %n' /var/lib/rancher/k3s/server/tls/*.crt   # all 600
+   cd .. && kubectl -n kube-system get deploy metrics-server             # NotFound
+   kubectl get apiservice v1beta1.metrics.k8s.io                         # NotFound
+   ```
+
+   Then pin and push the metrics-server switch commit:
+
+   ```sh
+   scripts/bump-image-digest.sh metrics-server sha256:<d>   # cluster/infra/metrics-server/kustomization.yaml
+   make lint validate
+   git commit -am "metrics-server: pin the build-images digest" && git push   # with the k3s CIS commit
+   kubectl -n argocd get application metrics-server                      # Synced, Healthy
+   kubectl -n kube-system rollout status deploy/metrics-server
+   kubectl get apiservice v1beta1.metrics.k8s.io                         # AVAILABLE True
+   kubectl top nodes && kubectl top pods -A | head
+   ```
+
+   Do not push this commit before the Ansible run: Argo CD would adopt k3s's objects (they keep
+   k3s's labels), and the later k3s restart would delete them again by owner - Argo CD recreates them
+   with selfHeal, but that is a second gap and a confusing one.
+
+4. **Stage 3: the policies.** Only after 2a and 2b are live (the PolicyReports of the background
+   scan would otherwise flag the upstream pods still running): `restrict-image-registries` loses the
+   Falcosidekick exception and covers `falco-response` and `kube-bench` whole;
+   `verify-portfolio-images` adds `kube-bench` and `trivy-system`.
+
+   ```sh
+   make lint validate
+   git push
+   kubectl get clusterpolicy restrict-image-registries verify-portfolio-images   # READY True
+   kubectl get policyreports -n falco-response -o json | jq '[.items[].summary.fail] | add'   # 0
+   kubectl -n kube-bench create job --from=cronjob/kube-bench kube-bench-admission-check   # admitted (signed)
+   kubectl -n kube-bench delete job kube-bench-admission-check
+   kubectl -n trivy-system rollout restart deploy/trivy-operator && kubectl -n trivy-system rollout status deploy/trivy-operator
+   ```
+
+Rollback, per stage: revert the policy commit first (it would refuse upstream's Falcosidekick and
+kube-bench images); then revert 2a, and upstream's images come back with the same values. For
+metrics-server: revert the switch commit (Argo CD prunes its objects), then revert the Ansible change
+and run the k3s role again - k3s re-extracts its bundled manifests on start and deploys its own copy.
 
 ## Rebuild from zero
 
