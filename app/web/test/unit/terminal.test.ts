@@ -254,3 +254,50 @@ describe("the session summary (review 2, item 1)", () => {
     expect(text(t.root.querySelector(".term__summary"))).not.toMatch(/\b0 ms/);
   });
 });
+
+const foot = (root: HTMLElement, seq: number) => text(root.querySelector(`.term__cmd[data-seq="${seq}"] .term__cmdfoot`));
+const sideLayer = (root: HTMLElement, layer: string) => root.querySelector(`.term__map .deflayer[data-layer="${layer}"]`)?.getAttribute("data-state");
+
+describe("a command that exited without an exit code (review 2, item 2)", () => {
+  it("cut off by the 5 s limit: finished, explained, its layer lit, the input free again", async () => {
+    const t = await harness();
+    const f = new Feed().open();
+    t.show(f);
+    (t.root.querySelector(".term__chip") as HTMLButtonElement).click(); // `id`
+    await flush();
+    expect(t.calls.filter((c) => c.method === "POST" && c.path.endsWith("/commands"))).toHaveLength(1);
+    expect((t.root.querySelector(".term__send") as HTMLButtonElement).disabled).toBe(true);
+    f.cmd(1, "whoami", "started", 3000);
+    f.cmd(1, "whoami", "exited", 8010); // no exit_code: the API's own timeout
+    t.show(f);
+    expect(foot(t.root, 1)).toContain("timed out");
+    expect(sideLayer(t.root, "runtime")).toBe("allowed");
+    expect((t.root.querySelector(".term__send") as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("stopped by leaving: says so, and the summary says the visitor left", async () => {
+    const t = await harness();
+    const f = new Feed().open();
+    f.cmd(1, "ps", "started", 3000);
+    f.out(1, "ps", 3010, "PID USER TIME COMMAND\n");
+    t.show(f);
+    f.cmd(1, "ps", "exited", 3200);
+    f.run("finished", 3300, "left");
+    t.show(f);
+    expect(foot(t.root, 1)).toContain("the session was left");
+    expect(text(t.root.querySelector(".term__sumlead"))).toContain("You left");
+  });
+
+  it("idle and deadline end the session with their own reason", async () => {
+    for (const [detail, want] of [["idle", "idle timeout"], ["deadline", "120-second deadline"]]) {
+      const t = await harness();
+      const f = new Feed().open();
+      f.ran(1, "whoami", 3000, ["uid=10001"], 0, true);
+      f.run("finished", detail === "idle" ? 33_100 : 120_000, detail);
+      t.show(f, T0 + 200_000);
+      expect(text(t.root.querySelector(".term__sumlead"))).toContain(want);
+      expect(stat(t.root, "Killed after your Enter")).toBeUndefined();
+      expect(ended(t.root)).toEqual([]);
+    }
+  });
+});

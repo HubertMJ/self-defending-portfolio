@@ -388,7 +388,7 @@ export function mountTerminal(
    * reader hears each line once); output whose history changed — a backfill filled in a chunk the
    * live feed had missed — rebuilds that command's block.
    */
-  const rendered = new Map<number, { block: HTMLElement; out: HTMLElement; foot: HTMLElement; chunks: string[]; done: boolean }>();
+  const rendered = new Map<number, { block: HTMLElement; out: HTMLElement; foot: HTMLElement; chunks: string[]; footKey: string }>();
 
   const patchFromView = () => {
     if (!els) return;
@@ -437,7 +437,7 @@ export function mountTerminal(
       const later = [...rendered.entries()].filter(([seq]) => seq > c.seq).sort((a, b) => a[0] - b[0])[0];
       if (later) els.out.insertBefore(block, later[1].block);
       else els.out.appendChild(block);
-      rec = { block, out, foot, chunks: [], done: false };
+      rec = { block, out, foot, chunks: [], footKey: "" };
       rendered.set(c.seq, rec);
     }
     const keys = c.chunks.map((x) => `${x.stream}\u0000${x.text}`);
@@ -445,18 +445,40 @@ export function mountTerminal(
     if (!grew) replace(rec.out, ...c.chunks.map(chunkLine));
     else for (const x of c.chunks.slice(rec.chunks.length)) rec.out.appendChild(chunkLine(x));
     rec.chunks = keys;
-    const ended = c.exitCode !== undefined || c.killed;
-    if (ended && !rec.done) {
-      rec.done = true;
-      const foot: (Node | string)[] = [];
-      if (c.truncated) foot.push(h("p", { class: "term__line term__line--sys" }, "… output truncated"));
-      if (c.killed) foot.push(h("p", { class: "term__line term__line--kill" }, "— the pod was deleted under this command; your session is over —"));
-      else if (c.exitCode !== undefined && c.exitCode !== 0 && !c.stderr) foot.push(h("p", { class: "term__line term__line--sys" }, `exit ${c.exitCode}`));
+    // The footer once the command has ended — `exited` (with or without a code) or `killed` — and
+    // again whenever what it says changes (a run that ends after a code-less exit explains it).
+    if (c.endedAt !== undefined) {
+      const sys = (t: string) => h("p", { class: "term__line term__line--sys" }, t);
+      const foot: HTMLElement[] = [];
+      if (c.truncated) foot.push(sys("… output truncated"));
+      if (c.killed) foot.push(h("p", { class: "term__line term__line--kill" }, "— the pod was deleted under this command; the session is over —"));
+      else if (c.exitCode === undefined) foot.push(sys(noCodeReason(c)));
+      else if (c.exitCode !== 0 && !c.stderr) foot.push(sys(`exit ${c.exitCode}`));
       if (cmd && c.achieved) foot.push(h("p", { class: "term__line term__line--win" }, `✓ objective reached: ${catalogue?.objectives.find((o) => o.id === cmd.objective)?.title ?? cmd.objective}`));
       if (cmd) foot.push(h("p", { class: "term__explain" }, cmd.explain));
-      replace(rec.foot, ...foot);
+      const key = foot.map((p) => p.textContent).join("\u0000");
+      if (key !== rec.footKey) {
+        rec.footKey = key;
+        replace(rec.foot, ...foot);
+      }
     }
     scrollOut();
+  };
+
+  /**
+   * Why a command `exited` with no exit code. The API sends that when it cut the exec short: the
+   * command's 5 s limit, the visitor leaving, or the run's end (idle, the deadline) under a command
+   * that was still running.
+   */
+  const noCodeReason = (c: CommandRun): string => {
+    const run = myRun();
+    const end = run && (run.states.finished ?? run.states.failed ?? run.states.timeout);
+    const endedWithRun = run !== undefined && !run.active && end !== undefined && c.endedAt !== undefined && end - c.endedAt < 3000;
+    if (endedWithRun && run.detail === "left") return "— stopped: the session was left while it ran —";
+    if (endedWithRun) return "— stopped: it ended with the session —";
+    const ranFor = c.startedAt !== undefined && c.endedAt !== undefined ? c.endedAt - c.startedAt : 0;
+    if (ranFor >= 4500) return "— timed out: a command gets 5 seconds —";
+    return "— stopped before it reported an exit code —";
   };
 
   const patchShop = (run: RunView) => {
@@ -491,7 +513,7 @@ export function mountTerminal(
   const litFromRun = (run: RunView) => {
     const enderSeq = enderOf(run)?.cmd?.seq;
     const entries = run.commands
-      .filter((c) => c.exitCode !== undefined || c.killed)
+      .filter((c) => c.endedAt !== undefined)
       .map((c) => {
         const cmd = catalogue!.commands.find((x) => x.id === c.id);
         return cmd ? { layer: cmd.layer, outcome: cmd.outcome, control: cmd.control, input: cmd.input, ended: c.seq === enderSeq } : null;
