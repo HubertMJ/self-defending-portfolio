@@ -12,7 +12,7 @@ import type { ApiClient } from "../lib/api";
 import type { CatalogueCommand, Objective, Posture, ScenarioDetails } from "../lib/contract";
 import { h, prefersReducedMotion, replace } from "../lib/dom";
 import type { CommandRun, RunView, TimelineView } from "../lib/timeline";
-import { formatDuration, guardedFalco, guardedTalon, ts } from "../lib/timeline";
+import { formatDuration, ts } from "../lib/timeline";
 import { litFromCommands, renderDefenceMap } from "./defencemap";
 import { renderVictim } from "./victim";
 
@@ -489,7 +489,7 @@ export function mountTerminal(
 
   /** Lit-layer map from a run's finished commands, marking the one that ended the run. */
   const litFromRun = (run: RunView) => {
-    const enderSeq = enderSeqOf(run);
+    const enderSeq = enderOf(run)?.cmd?.seq;
     const entries = run.commands
       .filter((c) => c.exitCode !== undefined || c.killed)
       .map((c) => {
@@ -500,17 +500,32 @@ export function mountTerminal(
     return litFromCommands(entries);
   };
 
-  /** The seq of the command that ended the run (a terminate), or undefined. */
-  const enderSeqOf = (run: RunView): number | undefined => {
-    if (run.active || run.detail !== "killed") return undefined;
-    // The Talon terminate carries the command_seq it acted on; fall back to the last detected-terminate.
-    const t = guardedTalon(run);
-    if (t?.command_seq) return t.command_seq;
-    for (let i = run.commands.length - 1; i >= 0; i--) {
-      const cmd = catalogue?.commands.find((x) => x.id === run.commands[i].id);
-      if (cmd?.outcome === "detected" && cmd.response === "terminate") return run.commands[i].seq;
-    }
-    return undefined;
+  /**
+   * A response of one kind on a terminal run and the command it answered. A run can be answered more
+   * than once (a quarantine, the shell goes on, a terminate later), so each kind is looked up on its
+   * own: the API's `responded` with that action (the first quarantine, which cut the pod off; the last
+   * terminate, which ended the run), else the guarded Talon action of that kind. The command is the
+   * one the API named (command_seq), else the last command started before the response.
+   */
+  const responseOf = (run: RunView, kind: "terminate" | "quarantine"): { at: number; cmd?: CommandRun } | undefined => {
+    const pick = <T>(xs: T[]) => (kind === "terminate" ? [...xs].reverse() : xs);
+    const r = pick(run.responses).find((x) => x.action === kind);
+    const t = r ? undefined : pick(run.talon).find((x) => x.arm !== "unguarded" && (kind === "terminate" ? /terminate/i : /label|quarantine/i).test(`${x.actionner ?? ""} ${x.action}`));
+    const at = r?.at ?? (t && ts(t.at));
+    if (at === undefined) return undefined;
+    const seq = r ? r.seq : t?.command_seq;
+    const cmd = seq !== undefined ? run.commands.find((c) => c.seq === seq) : [...run.commands].reverse().find((c) => c.startedAt !== undefined && c.startedAt <= at);
+    return { at, cmd };
+  };
+
+  /** The command whose terminate ended the run, or undefined (the run was not killed). */
+  const enderOf = (run: RunView): { at: number; cmd?: CommandRun } | undefined =>
+    !run.active && run.detail === "killed" ? responseOf(run, "terminate") : undefined;
+
+  /** From the visitor's Enter (the command's start) to a response; never a zero or negative time. */
+  const afterEnter = (r: { at: number; cmd?: CommandRun } | undefined): number | undefined => {
+    const start = r?.cmd?.startedAt;
+    return r && start !== undefined && r.at > start ? r.at - start : undefined;
   };
 
   const renderObjectives = (run?: RunView) => {
@@ -545,43 +560,47 @@ export function mountTerminal(
     const start = run.states.started ?? run.states.queued;
     const endT = run.states.finished ?? run.states.failed ?? run.states.timeout;
     const survived = start !== undefined && endT !== undefined ? endT - start : undefined;
-    // The outcome is read from the run (its detail and whether it was quarantined), not from a
-    // command's state: on a terminate the killing command usually `exited` 0 first (review item 1).
+    // The outcome is read from the run (its detail, and each response with the command it answered),
+    // not from a command's state: on a terminate the killing command usually `exited` 0 first.
     const detail = run.detail;
     const killedRun = detail === "killed";
-    const outcome = killedRun
-      ? "The cluster deleted the pod under you — the command that did it is marked below."
+    const ender = enderOf(run);
+    const quarantine = responseOf(run, "quarantine");
+    const input = (c?: CommandRun) => (c ? h("code", {}, catalogue?.commands.find((x) => x.id === c.id)?.input ?? c.id) : null);
+    const outcome: (Node | string | null)[] = killedRun
+      ? quarantine
+        ? ["Quarantined after ", input(quarantine.cmd) ?? "a command", ", you kept the shell; then the cluster deleted the pod under you after ", input(ender?.cmd) ?? "a later command", "."]
+        : ["The cluster deleted the pod under you after ", input(ender?.cmd) ?? "a command", " — marked below."]
       : detail === "idle"
-        ? "You went quiet; the pod was reclaimed after the idle timeout."
+        ? ["You went quiet; the pod was reclaimed after the idle timeout."]
         : detail === "deadline"
-          ? `The pod reached its ${catalogue.timeoutSeconds}-second deadline.`
+          ? [`The pod reached its ${catalogue.timeoutSeconds}-second deadline.`]
           : detail === "left"
-            ? "You left; the pod was cleaned up."
-            : run.quarantinedAt !== undefined
-              ? "You were quarantined, then the session ended."
-              : "The session ended.";
-    // "Killed N ms after your Enter": the response time (the guarded Talon action's time, else the
-    // run's `responded`) minus the start of the command it acted on; Falco-to-response beside it.
-    const enderSeq = enderSeqOf(run);
-    const ender = enderSeq !== undefined ? run.commands.find((c) => c.seq === enderSeq) : undefined;
-    const gt = guardedTalon(run);
-    const gf = guardedFalco(run);
-    const respAt = (gt && ts(gt.at)) ?? run.states.responded;
-    const killMs = killedRun && ender?.startedAt !== undefined && respAt !== undefined ? Math.max(0, respAt - ender.startedAt) : undefined;
-    const falcoToResp = gf && respAt !== undefined ? Math.max(0, respAt - ts(gf.at)) : run.timings.respondMs;
+            ? ["You left; the pod was cleaned up."]
+            : quarantine
+              ? ["You were quarantined, then the session ended."]
+              : ["The session ended."];
+    // "Killed N ms after your Enter": the terminate's response time minus the start of the command it
+    // answered, with Falco-to-response beside it — that command's alert, else the last one before.
+    const killMs = afterEnter(ender);
+    const quarantineMs = afterEnter(quarantine);
+    const alerts = run.falco.filter((f) => f.arm !== "unguarded");
+    const alert = ender ? (alerts.find((f) => f.command_seq !== undefined && f.command_seq === ender.cmd?.seq) ?? [...alerts].reverse().find((f) => ts(f.at) <= ender.at)) : undefined;
+    const falcoToResp = ender && alert && ender.at > ts(alert.at) ? ender.at - ts(alert.at) : undefined;
 
     replace(
       els.summary,
       h("h3", { class: "term__sumtitle" }, "Session over"),
-      h("p", { class: "term__sumlead" }, outcome),
+      h("p", { class: "term__sumlead" }, ...outcome),
       h(
         "dl",
         { class: "term__sumstats" },
         stat("Objectives reached", `${reached.size} of ${catalogue.objectives.length}`),
         stat("Commands run", String(run.commands.length)),
         survived !== undefined ? stat("Survived", formatDuration(survived)) : null,
+        quarantineMs !== undefined ? stat("Quarantined after your Enter", formatDuration(quarantineMs)) : null,
         killMs !== undefined ? stat("Killed after your Enter", formatDuration(killMs)) : null,
-        killedRun && falcoToResp !== undefined ? stat("Falco to response", formatDuration(falcoToResp)) : null,
+        falcoToResp !== undefined ? stat("Falco to response", formatDuration(falcoToResp)) : null,
       ),
       h("h4", { class: "term__sumhead" }, "Which layer answered which move"),
       renderDefenceMap({ posture, lit }),

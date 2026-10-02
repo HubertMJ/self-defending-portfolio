@@ -62,6 +62,11 @@ export interface RunEvent {
   pod?: string;
   /** Extension (phase 8): both pods of a compare run, named together when they are created. */
   pods?: { guarded: string; unguarded: string };
+  /**
+   * Extension (phase 8): on a terminal run's `detected`/`responded`, the command it is about (the one
+   * running, or ended less than 2 s before). Absent when the API could tie it to none.
+   */
+  command_seq?: number;
 }
 
 /**
@@ -491,7 +496,7 @@ function normalise(ev: StreamEvent): StreamEvent {
         isObj(d.pods) && isStr(d.pods.guarded) && isStr(d.pods.unguarded)
           ? { guarded: cap(d.pods.guarded, 253), unguarded: cap(d.pods.unguarded, 253) }
           : undefined;
-      return { type: "run", data: definedOnly({ run_id: d.run_id, scenario: d.scenario, state: d.state, at: d.at, detail: optStr(d.detail, 300), pod: optStr(d.pod, 253) || undefined, pods }) };
+      return { type: "run", data: definedOnly({ run_id: d.run_id, scenario: d.scenario, state: d.state, at: d.at, detail: optStr(d.detail, 300), pod: optStr(d.pod, 253) || undefined, pods, command_seq: optSeq(d.command_seq) }) };
     }
     case "falco": {
       const d = ev.data;

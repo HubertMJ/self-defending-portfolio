@@ -82,6 +82,12 @@ export interface RunView {
   flows: FlowEvent[];
   /** Terminal run: one entry per command the visitor ran, in order of first appearance. */
   commands: CommandRun[];
+  /**
+   * Every `responded` the run reported, oldest first. A terminal run can have several (a quarantine,
+   * then a terminate): each names its action (the run event's detail, "" when the API tied the
+   * response to no command) and, when the API knew it, the command it answered.
+   */
+  responses: { at: number; action: string; seq?: number }[];
   /** Compare run: the two pods created together (the run's states follow the guarded arm). */
   armPods?: { guarded: string; unguarded: string };
   /** Every event attributed to this run, oldest first: the raw view of Technical Mode. */
@@ -160,6 +166,7 @@ export function buildTimeline(events: readonly StreamEvent[], now: number = Date
         victim: [],
         flows: [],
         commands: [],
+        responses: [],
         events: [],
         timings: {},
         active: true,
@@ -172,6 +179,10 @@ export function buildTimeline(events: readonly StreamEvent[], now: number = Date
       run.pod ??= data.pods.guarded;
     }
     const at = ts(data.at);
+    if (data.state === "responded") {
+      run.responses.push({ at, action: data.detail ?? "", seq: data.command_seq });
+      run.responses.sort((a, b) => a.at - b.at);
+    }
     const prev = run.states[data.state];
     if (prev === undefined || at < prev) run.states[data.state] = at;
     if (STATE_ORDER[data.state] >= STATE_ORDER[run.current]) {

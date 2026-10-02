@@ -117,6 +117,12 @@ async function harness(opts: { start?: boolean; commandStatus?: (id: string) => 
   };
 }
 
+const text = (el: Element | null) => (el?.textContent ?? "").replace(/\s+/g, " ").trim();
+const stat = (root: HTMLElement, label: string) => {
+  const dt = [...root.querySelectorAll(".term__sumstats dt")].find((d) => d.textContent === label);
+  return dt?.nextElementSibling?.textContent ?? undefined;
+};
+const ended = (root: HTMLElement) => [...root.querySelectorAll(".term__summary .deflayer__entry")].filter((e) => e.querySelector(".deflayer__ended")).map((e) => e.querySelector("code")?.textContent);
 const lines = (root: HTMLElement, seq: number) => [...root.querySelectorAll(`.term__cmd[data-seq="${seq}"] .term__cmdout .term__line`)].map((p) => p.textContent);
 
 beforeEach(() => {
@@ -165,5 +171,86 @@ describe("terminal output, as the API publishes it (review 2, item 3)", () => {
     t.show(f.events.filter((e) => !missed.includes(e)));
     t.show(f.events);
     expect([...t.root.querySelectorAll(".term__cmd[data-seq]")].map((e) => e.getAttribute("data-seq"))).toEqual(["1", "2", "3"]);
+  });
+});
+
+/** `wget` (exit 1) → Falco → detected → Talon label → responded quarantine, all on command_seq 1. */
+function quarantined(f: Feed, seq: number, ms: number, withSeq = true) {
+  f.ran(seq, "beacon", ms, ["wget: can't connect to remote host (127.0.0.1): Connection refused"], 1, true, "stderr");
+  const s = withSeq ? seq : undefined;
+  f.falco(ms + 60, "SDP network tool in sandbox", s);
+  f.run("detected", ms + 75, "SDP network tool in sandbox", s ? { command_seq: s } : {});
+  f.talon(ms + 210, "label", s);
+  f.run("responded", ms + 220, withSeq ? "quarantine" : "", s ? { command_seq: s } : {});
+  f.victim(ms + 900, "unreachable");
+}
+
+/** `cat /etc/shadow` exits 0 (the read lands first), then Falco, Talon's terminate, the kill. */
+function killedBy(f: Feed, seq: number, ms: number, withSeq = true) {
+  f.ran(seq, "read-shadow", ms, ["root:*:19000:0:::::"], 0, true);
+  const s = withSeq ? seq : undefined;
+  f.falco(ms + 30, "Read sensitive file untrusted", s);
+  f.run("detected", ms + 50, "Read sensitive file untrusted", s ? { command_seq: s } : {});
+  f.talon(ms + 140, "terminate", s);
+  f.run("responded", ms + 150, withSeq ? "terminate" : "", s ? { command_seq: s } : {});
+  f.victim(ms + 400, "gone");
+  f.run("finished", ms + 600, "killed");
+}
+
+describe("the session summary (review 2, item 1)", () => {
+  it("a single terminate: the command that did it, killed N ms after its Enter, Falco to response", async () => {
+    const t = await harness();
+    const f = new Feed().open();
+    f.ran(1, "whoami", 3000, ["uid=10001"], 0, true);
+    killedBy(f, 2, 5000);
+    t.show(f.events);
+    expect(t.root.querySelector(".term__summary")?.hasAttribute("hidden")).toBe(false);
+    expect(ended(t.root)).toEqual(["cat /etc/shadow"]);
+    expect(stat(t.root, "Killed after your Enter")).toBe("150 ms");
+    expect(stat(t.root, "Falco to response")).toBe("120 ms");
+    expect(stat(t.root, "Quarantined after your Enter")).toBeUndefined();
+    expect(text(t.root.querySelector(".term__sumlead"))).toContain("after cat /etc/shadow");
+  });
+
+  it("quarantine then terminate: the terminate ends the session, the quarantine is its own line", async () => {
+    const t = await harness();
+    const f = new Feed().open();
+    quarantined(f, 1, 3000);
+    f.ran(2, "whoami", 6000, ["uid=10001"], 0, true);
+    killedBy(f, 3, 8000);
+    t.show(f.events);
+    // `wget` did not end the session; `cat /etc/shadow` did.
+    expect(ended(t.root)).toEqual(["cat /etc/shadow"]);
+    expect(stat(t.root, "Killed after your Enter")).toBe("150 ms");
+    expect(stat(t.root, "Quarantined after your Enter")).toBe("220 ms");
+    expect(stat(t.root, "Falco to response")).toBe("120 ms");
+    const lead = text(t.root.querySelector(".term__sumlead"));
+    expect(lead).toContain("Quarantined after wget");
+    expect(lead).toContain("after cat /etc/shadow");
+  });
+
+  it("without command_seq, ties each response to the last command started before it", async () => {
+    const t = await harness();
+    const f = new Feed().open();
+    quarantined(f, 1, 3000, false);
+    killedBy(f, 2, 8000, false);
+    t.show(f.events);
+    expect(ended(t.root)).toEqual(["cat /etc/shadow"]);
+    // A `responded` tied to no command carries no action either, so Talon's own terminate is the time.
+    expect(stat(t.root, "Killed after your Enter")).toBe("140 ms");
+    expect(stat(t.root, "Quarantined after your Enter")).toBe("210 ms");
+  });
+
+  it("never prints 0 ms: a response stamped before the command's start is left out", async () => {
+    const t = await harness();
+    const f = new Feed().open();
+    f.ran(1, "read-shadow", 5000, ["root:*:19000:0:::::"], 0, true);
+    f.talon(4990, "terminate", 1);
+    f.run("responded", 5000, "terminate", { command_seq: 1 });
+    f.run("finished", 5600, "killed");
+    t.show(f.events);
+    expect(ended(t.root)).toEqual(["cat /etc/shadow"]);
+    expect(stat(t.root, "Killed after your Enter")).toBeUndefined();
+    expect(text(t.root.querySelector(".term__summary"))).not.toMatch(/\b0 ms/);
   });
 });
