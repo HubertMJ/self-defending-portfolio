@@ -174,15 +174,27 @@ jobs:
           cache-from: type=gha,scope=${{ matrix.name }}
           cache-to: type=gha,mode=max,scope=${{ matrix.name }}
 
-      # An image with its own smoke test (app/<name>/test/image-smoke.sh - today only web) runs it
-      # against the digest just pushed, the way the cluster runs it, before anything signs it: a
-      # failure means the digest is never signed, so Kyverno never admits it. Generic, like the e2e
-      # step: the condition is a file, not an image name.
+      # An image with its own smoke test (app/<name>/test/image-smoke.sh: web and the four Cilium
+      # images) runs it against the digest just pushed, the way the cluster runs it, before anything
+      # signs it: a failure means the digest is never signed, so Kyverno never admits it. Generic, like
+      # the e2e step: the condition is a file, not an image name.
+      #
+      # The scripts report each failed check as an `::error::` annotation, readable from the run's
+      # public annotations without the (login-only) job log. A script that dies before it can say why
+      # still leaves one, from here.
       - name: image smoke test
         if: hashFiles(format('app/{0}/test/image-smoke.sh', matrix.name)) != ''
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
-        run: '"${CONTEXT}/test/image-smoke.sh" "${IMAGE}@${DIGEST}"'
+          NAME: ${{ matrix.name }}
+        run: |
+          rc=0
+          "${CONTEXT}/test/image-smoke.sh" "${IMAGE}@${DIGEST}" || rc=$?
+          if [ "$rc" -ne 0 ]; then
+            msg="${CONTEXT}/test/image-smoke.sh exited ${rc} for ${IMAGE}@${DIGEST}; failed checks are annotated above"
+            echo "::error title=image smoke test (${NAME})::${msg}"
+            exit "$rc"
+          fi
 
       # The gate, on the digest that was actually pushed rather than on a tag that could have moved
       # between the push and now. ignore-unfixed: a CVE with no upstream patch is not something this
@@ -192,6 +204,7 @@ jobs:
       # exactly what was scanned, and a failed gate means the digest is never signed, so Kyverno
       # will never admit it anyway.
       - name: trivy gate (CRITICAL,HIGH)
+        id: gate
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           scan-type: image
@@ -205,8 +218,13 @@ jobs:
       # lets unpatchable CVEs through, and the Security tab is where they should still be visible
       # rather than silently dropped. exit-code 0 keeps the gate as the only verdict, and `always()`
       # means a failed gate still reports what it found instead of just that it failed.
+      #
+      # Only when the gate actually ran: this step reuses the trivy binary and DB the gate installed
+      # (skip-setup-trivy), so after an earlier failure (say the smoke test) the gate is skipped and
+      # this step would only add a second, misleading "trivy: command not found" failure.
       - name: trivy sarif
-        if: always() && steps.build.outputs.digest != ''
+        id: sarif
+        if: always() && steps.build.outputs.digest != '' && (steps.gate.outcome == 'success' || steps.gate.outcome == 'failure')
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         env:
           # The gate already installed trivy and populated the DB cache in this job.
@@ -228,7 +246,7 @@ jobs:
       # upload problem must not turn a good, signed build red. One category per image, or each
       # upload would replace the previous image's alerts.
       - name: upload sarif
-        if: always() && steps.build.outputs.digest != ''
+        if: always() && steps.sarif.outcome == 'success'
         continue-on-error: true
         uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
         with:
