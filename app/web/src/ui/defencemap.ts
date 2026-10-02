@@ -91,12 +91,19 @@ export const LAYERS: LayerMeta[] = [
 
 const byId = new Map(LAYERS.map((l) => [l.id, l]));
 
-/** What lit a layer in the terminal: the strongest verdict seen, and the control that answered. */
-export interface LitLayer {
+/** One command that reached a layer: its own verdict, and whether it ended the session. */
+export interface LitEntry {
+  input: string;
   outcome: CommandOutcome;
   control: string;
-  /** The command inputs that reached this layer, newest last. */
-  inputs: string[];
+  ended: boolean;
+}
+
+/** What lit a layer in the terminal: every command that reached it, each with its own verdict. */
+export interface LitLayer {
+  /** The strongest verdict at this layer, for the card's colour. */
+  outcome: CommandOutcome;
+  entries: LitEntry[];
 }
 
 const OUTCOME_WORD: Record<CommandOutcome, string> = { allowed: "allowed", prevented: "prevented", detected: "detected" };
@@ -130,14 +137,22 @@ function layerCard(meta: LayerMeta, posture: Posture | undefined, lit: LitLayer 
           ? h("span", { class: "deflayer__verdict deflayer__verdict--out" }, "never reached")
           : null,
     ),
-    h("p", { class: "deflayer__blurb" }, lit ? lit.control : meta.blurb),
-    lit && lit.inputs.length
+    h("p", { class: "deflayer__blurb" }, meta.blurb),
+    lit && lit.entries.length
       ? h(
-          "p",
-          { class: "deflayer__inputs" },
-          lit.outcome === "detected" ? "ended the session" : `${lit.inputs.length} command${lit.inputs.length === 1 ? "" : "s"}`,
-          ": ",
-          ...lit.inputs.slice(-3).flatMap((i, n) => [n ? ", " : "", h("code", {}, i)]),
+          "ul",
+          { class: "deflayer__entries", "aria-label": `${meta.title}: what each command met` },
+          // Each command under its own layer with its own verdict; "ended the session" only for the
+          // one that did (a quarantine does not end it).
+          lit.entries.map((e) =>
+            h(
+              "li",
+              { class: `deflayer__entry deflayer__entry--${e.outcome}` },
+              h("code", {}, e.input),
+              h("span", { class: `deflayer__verdict deflayer__verdict--${e.outcome}` }, OUTCOME_WORD[e.outcome]),
+              e.ended ? h("span", { class: "deflayer__ended" }, "ended the session") : null,
+            ),
+          ),
         )
       : h(
           "ul",
@@ -149,19 +164,17 @@ function layerCard(meta: LayerMeta, posture: Posture | undefined, lit: LitLayer 
 }
 
 /** Builds the lit-layer map from a terminal run's finished commands and their catalogue entries. */
-export function litFromCommands(entries: { layer: DefenceLayer; outcome: CommandOutcome; control: string; input: string }[]): Map<DefenceLayer, LitLayer> {
+export function litFromCommands(entries: { layer: DefenceLayer; outcome: CommandOutcome; control: string; input: string; ended?: boolean }[]): Map<DefenceLayer, LitLayer> {
   const rank: Record<CommandOutcome, number> = { allowed: 0, prevented: 1, detected: 2 };
   const map = new Map<DefenceLayer, LitLayer>();
   for (const e of entries) {
+    const entry: LitEntry = { input: e.input, outcome: e.outcome, control: e.control, ended: e.ended === true };
     const cur = map.get(e.layer);
     if (!cur) {
-      map.set(e.layer, { outcome: e.outcome, control: e.control, inputs: [e.input] });
+      map.set(e.layer, { outcome: e.outcome, entries: [entry] });
     } else {
-      cur.inputs.push(e.input);
-      if (rank[e.outcome] >= rank[cur.outcome]) {
-        cur.outcome = e.outcome;
-        cur.control = e.control;
-      }
+      cur.entries.push(entry);
+      if (rank[e.outcome] >= rank[cur.outcome]) cur.outcome = e.outcome;
     }
   }
   return map;

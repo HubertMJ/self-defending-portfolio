@@ -20,7 +20,7 @@ import type { ApiClient, Result } from "../lib/api";
 import type { Scenario, ScenarioDetails } from "../lib/contract";
 import { type Child, clockTime, h, prefersReducedMotion, replace } from "../lib/dom";
 import { type Hop, type Schedule, TIMER_END, TIMER_START, humanAction, runHops, scheduleHops, timerReading } from "../lib/pipeline";
-import { type RunView, type TimelineView, QUARANTINE_LABEL, formatDuration } from "../lib/timeline";
+import { type RunView, type TimelineView, QUARANTINE_LABEL, formatDuration, guardedFalco, guardedTalon, ts } from "../lib/timeline";
 import { copyButton, extLink, sourceUrl } from "./common";
 import { renderTwin } from "./twin";
 import { labelOf, renderVictim, victimState } from "./victim";
@@ -549,10 +549,12 @@ export function mountConsole(root: HTMLElement, api: ApiClient): ConsoleHandle {
 
   const proofPanel = (run: RunView): Kids | null => {
     const sc = scenarios.get(run.scenario);
-    const quarantine = run.quarantinedAt !== undefined || sc?.response === "quarantine" || run.talon.some((t) => /label/i.test(t.actionner ?? t.action));
+    const gt = guardedTalon(run);
+    const quarantine = run.quarantinedAt !== undefined || sc?.response === "quarantine" || (gt !== undefined && /label/i.test(gt.actionner ?? gt.action));
     if (!quarantine) return null;
-    const before = run.victim.find((v) => v.status === "up");
-    const after = run.victim.find((v) => v.status === "unreachable");
+    const before = run.victim.find((v) => v.status === "up" && v.arm !== "unguarded");
+    // The cut is the first probe that failed after the label landed, not any earlier timeout.
+    const after = run.victim.find((v) => v.status === "unreachable" && v.arm !== "unguarded" && (run.quarantinedAt === undefined || ts(v.at) >= run.quarantinedAt));
     const lastPod = run.pods[run.pods.length - 1];
     const stillRunning = run.quarantinedAt !== undefined && run.pods.some((p) => p.labels_delta[QUARANTINE_LABEL] === "true" && /running/i.test(p.phase));
     const check = (ok: boolean, title: string, detail: Child[]) =>
@@ -633,8 +635,8 @@ export function mountConsole(root: HTMLElement, api: ApiClient): ConsoleHandle {
   let openVerify: string | undefined;
 
   const rawPanel = (run: RunView): Kids => {
-    const falco = run.falco[0];
-    const talon = run.talon[0];
+    const falco = guardedFalco(run);
+    const talon = guardedTalon(run);
     return [
       h("h4", { class: "card__title" }, "Technical detail"),
       h(

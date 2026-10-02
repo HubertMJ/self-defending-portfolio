@@ -2804,7 +2804,7 @@ html:not([data-tech="on"]) .tech-only {
   color: var(--detect);
 }
 
-.term {
+.terminal {
   display: grid;
   gap: 1.25rem;
 }
@@ -3352,4 +3352,86 @@ html:not([data-tech="on"]) .tech-only {
   .term__out {
     scroll-behavior: auto;
   }
+}
+
+/* ---------- ADR 0033 review fixes: terminal map/exit/fallback, defence-map entries ---------- */
+
+.term__map {
+  margin-top: 0.25rem;
+}
+
+.term__exit {
+  margin-left: 0.25rem;
+}
+
+.term-fallback {
+  padding: 1.25rem;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text-muted);
+}
+
+.term-fallback a {
+  font-weight: 600;
+}
+
+/* Each command under its own layer with its own verdict (review item 16). */
+.deflayer__entries {
+  display: grid;
+  gap: 0.3rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.deflayer__entry {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.3rem 0.5rem;
+  font-size: 0.82rem;
+}
+
+.deflayer__entry code {
+  overflow-wrap: anywhere;
+}
+
+.deflayer__ended {
+  padding: 0.05rem 0.4rem;
+  border-radius: 999px;
+  background: var(--critical-bg);
+  color: var(--critical);
+  font: 600 0.72rem/1.5 var(--font-mono);
+  white-space: nowrap;
+}
+
+/* Verdict and title must not break mid-word in the narrow cards ("prevente d", review item 16). */
+.deflayer__verdict,
+.deflayer__title {
+  white-space: nowrap;
+}
+
+/* The summary result tiles and layer cards read in both themes (review item 15): they use the
+   shared tokens, so the only hazard is the terminal pane's own dark palette leaking in — the summary
+   lives outside .term__pane, so --text/--surface apply. This block just states the intent and pins
+   the tile text colour explicitly. */
+.term__summary .deflayer,
+.term__map .deflayer {
+  color: var(--text);
+}
+
+.term__sumstats dd,
+.term__sumstats dt {
+  color: var(--text);
+}
+
+.term__sumstats dt {
+  color: var(--text-faint);
+}
+
+/* A right-to-left run in attacker output must not reorder the line (ADR 0021 / review item 24). */
+.term__line,
+.term__explain {
+  unicode-bidi: isolate;
 }

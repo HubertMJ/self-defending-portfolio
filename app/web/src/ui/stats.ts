@@ -1,8 +1,8 @@
-// Stats and objectives (ADR 0033, E+F). A compact band in the hero: the counters across every
-// visitor's runs (with the window they cover), how fast the last real response was, and how many
-// visitors' runs reached each objective — including, honestly, the ones no one has. The numbers come
-// from GET /api/stats; the objective titles from the terminal catalogue. If neither is available the
-// band simply hides and the static hero reads as it always did.
+// Stats and objectives (ADR 0033, E+F). A compact band in the hero: the last real run, the counters
+// across every visitor's runs (with the window they cover), how fast the last response was, and how
+// many runs reached each objective — including, honestly, the ones no one has. Numbers come from
+// GET /api/stats; objective titles from the terminal catalogue; the last run from the live feed. If
+// stats are unavailable the band hides and the static hero reads as it always did.
 
 import type { ApiClient } from "../lib/api";
 import type { Objective, Stats } from "../lib/contract";
@@ -11,31 +11,42 @@ import { humanSpeed } from "./console";
 
 const REPO_ISSUES = "https://github.com/HubertMJ/self-defending-portfolio/issues";
 
-export function renderStats(s: Stats, objectives: Objective[], now: number = Date.now()): HTMLElement {
+/** The last real run the page saw, for the hero's "last run" tile. */
+export interface LastRun {
+  title: string;
+  at: number;
+  respondMs?: number;
+}
+
+const own = (o: Record<string, { attempts: number; achieved: number }>, id: string) =>
+  Object.prototype.hasOwnProperty.call(o, id) ? o[id] : { attempts: 0, achieved: 0 };
+
+export function renderStats(s: Stats, objectives: Objective[], last?: LastRun, now: number = Date.now()): HTMLElement {
   const title = (id: string) => objectives.find((o) => o.id === id)?.title ?? id;
   const detected = Object.values(s.by_scenario).reduce((a, x) => a + x.detected, 0);
   const responded = Object.values(s.by_scenario).reduce((a, x) => a + x.responded, 0);
-  const net = s.by_scenario["network-tool"];
 
   const tiles = h(
     "div",
     { class: "herostats__tiles" },
-    statTile(String(s.runs), "attacks launched", s.since ? `since ${relativeTime(s.since, now)}` : ""),
-    statTile(`${responded}`, "answered by Talon", `${detected} detected · ${s.unanswered} unanswered`),
-    net ? statTile(`${net.runs - net.responded} of ${net.runs}`, "call-homes that got out", "the rest were cut off by Cilium") : null,
+    last
+      ? statTile(relativeTime(new Date(last.at).toISOString(), now), "last run", `${last.title}${last.respondMs !== undefined ? ` · answered in ${last.respondMs} ms` : ""}`)
+      : statTile(String(s.runs), "attacks launched", s.since ? `since ${relativeTime(s.since, now)}` : ""),
+    statTile(String(s.runs), "attacks, all visitors", s.since ? `since ${relativeTime(s.since, now)}` : ""),
+    statTile(`${responded} of ${detected}`, "detections answered", `${s.unanswered} went unanswered`),
     s.response_ms.last > 0 ? statTile(`${s.response_ms.last} ms`, "last response", humanSpeed(s.response_ms.last)) : null,
   );
 
-  // Objectives, in the order the catalogue gives them, with how many runs reached each.
+  // Objectives, in the catalogue's order, with how many runs reached each; the never-reached say so.
   const order = objectives.length ? objectives.map((o) => o.id) : Object.keys(s.objectives);
   const objEls = order.map((id) => {
-    const o = s.objectives[id] ?? { attempts: 0, achieved: 0 };
+    const o = own(s.objectives, id);
     const never = o.achieved === 0;
     return h(
       "li",
       { class: "herostats__obj", "data-never": String(never) },
       h("span", { class: "herostats__objtitle" }, title(id)),
-      h("span", { class: "herostats__objcount" }, never ? "not reached by anyone yet" : `reached by ${o.achieved} of ${o.attempts} runs that tried`),
+      h("span", { class: "herostats__objcount" }, never ? `not reached yet — 0 of ${o.attempts} tries` : `reached in ${o.achieved} of ${o.attempts} tries`),
     );
   });
 
@@ -60,25 +71,58 @@ function statTile(value: string, label: string, foot: string): HTMLElement {
   return h("div", { class: "herostats__tile" }, h("span", { class: "herostats__value" }, value), h("span", { class: "herostats__name" }, label), foot ? h("span", { class: "herostats__foot" }, foot) : null);
 }
 
-export function mountStats(root: HTMLElement, api: ApiClient): { refresh(): void } {
+export interface StatsHandle {
+  refresh(): void;
+  setLastRun(last: LastRun): void;
+}
+
+export function mountStats(root: HTMLElement, api: ApiClient): StatsHandle {
   let timer: ReturnType<typeof setTimeout> | undefined;
   let objectives: Objective[] = [];
+  let snapshot: Stats | undefined;
+  let last: LastRun | undefined;
+  // In the mock the stats label must not claim "live"; the header banner already says it is a mock.
+  const isMock = (() => {
+    try {
+      return document.documentElement.dataset.mock === "true";
+    } catch {
+      return false;
+    }
+  })();
 
-  const draw = (s: Stats) => {
+  const draw = () => {
+    if (!snapshot) return;
     root.hidden = false;
-    replace(root, renderStats(s, objectives));
+    const el = renderStats(snapshot, objectives, last);
+    if (isMock) {
+      const label = el.querySelector(".herostats__label");
+      if (label) label.textContent = "Mock data — across every visitor";
+    }
+    replace(root, el);
   };
 
   const refresh = async () => {
     clearTimeout(timer);
     const [statsRes, detailsRes] = await Promise.all([api.stats(), api.scenarioDetails("terminal")]);
     if (detailsRes.ok && detailsRes.value.objectives) objectives = detailsRes.value.objectives;
-    if (statsRes.ok) draw(statsRes.value);
-    else root.hidden = true; // no /api/stats: the static hero stands on its own
-    timer = setTimeout(() => void refresh(), 60_000);
+    if (statsRes.ok) {
+      snapshot = statsRes.value;
+      draw();
+      timer = setTimeout(() => void refresh(), 60_000);
+    } else {
+      // No /api/stats: hide the band and back off (don't poll a 404 every minute, review item 14).
+      root.hidden = true;
+      timer = setTimeout(() => void refresh(), 10 * 60_000);
+    }
   };
 
   root.hidden = true;
   void refresh();
-  return { refresh: () => void refresh() };
+  return {
+    refresh: () => void refresh(),
+    setLastRun(l) {
+      last = l;
+      draw();
+    },
+  };
 }

@@ -568,10 +568,15 @@ function normalise(ev: StreamEvent): StreamEvent {
   }
 }
 
-/** Removes every C0/C1 control character except tab and newline: output is only ever a text node. */
+/**
+ * Mirrors the API's output scrub (ADR 0029): keep only tab and newline among control characters —
+ * drop every other C0/C1 control (carriage return included, so no ANSI) — and drop invisible format
+ * characters (bidi overrides and isolates, zero-width spaces, BOM). A text node is then all that can
+ * result; `.term__line` additionally isolates bidi so a right-to-left run cannot reorder the line.
+ */
 function stripControl(s: string): string {
   // eslint-disable-next-line no-control-regex
-  return s.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/g, "");
+  return s.replace(/[\u0000-\u0008\u000B-\u001F\u007F-\u009F]/g, "").replace(/\p{Cf}/gu, "");
 }
 
 /** Parses one SSE message into a typed event, or null if it does not match the contract. */

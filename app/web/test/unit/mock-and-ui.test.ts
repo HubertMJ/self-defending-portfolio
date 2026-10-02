@@ -329,17 +329,30 @@ describe("MockBackend terminal (ADR 0033)", () => {
     expect(second.kind).toBe("conflict");
   });
 
-  it("a detected terminate command kills the pod and finishes the run", async () => {
+  it("a non-TTY terminate command exits (achieving its objective), then the pod is killed and the run finishes", async () => {
     const { api, seen, token, runId } = await start();
     await settle(api.runCommand(runId, token, "read-shadow"));
-    await vi.advanceTimersByTimeAsync(1000);
+    await vi.advanceTimersByTimeAsync(1500);
     const cmd = seen.filter((e) => e.type === "command").map((e) => JSON.parse(e.raw));
-    expect(cmd.some((c) => c.state === "killed")).toBe(true);
-    const runs = seen.filter((e) => e.type === "run").map((e) => JSON.parse(e.raw));
-    const finished = runs.find((r) => r.state === "finished");
+    // cat finishes before Talon's delete lands: the command `exited` 0 (objective reached), not `killed`.
+    const exited = cmd.find((c) => c.state === "exited");
+    expect(exited?.achieved).toBe(true);
+    expect(cmd.some((c) => c.state === "killed")).toBe(false);
+    const finished = seen.filter((e) => e.type === "run").map((e) => JSON.parse(e.raw)).find((r) => r.state === "finished");
     expect(finished.detail).toBe("killed");
     // The run is over: a further command is refused.
     expect((await settle(api.runCommand(runId, token, "whoami"))).kind).toBe("conflict");
+  });
+
+  it("a TTY shell is killed outright (no exit code), and the run finishes killed", async () => {
+    const { api, seen, token, runId } = await start();
+    await settle(api.runCommand(runId, token, "shell"));
+    await vi.advanceTimersByTimeAsync(1500);
+    const cmd = seen.filter((e) => e.type === "command").map((e) => JSON.parse(e.raw));
+    expect(cmd.some((c) => c.state === "killed")).toBe(true);
+    expect(cmd.some((c) => c.state === "exited")).toBe(false);
+    const finished = seen.filter((e) => e.type === "run").map((e) => JSON.parse(e.raw)).find((r) => r.state === "finished");
+    expect(finished.detail).toBe("killed");
   });
 
   it("a detected quarantine command keeps the run going; a later command still runs", async () => {

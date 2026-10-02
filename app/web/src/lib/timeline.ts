@@ -64,8 +64,10 @@ export interface RunView {
   pod?: string;
   falco: FalcoEvent[];
   talon: TalonEvent[];
-  /** Pod watch observations, oldest first. */
+  /** Pod watch observations of the run's (guarded) pod, oldest first. */
   pods: PodEvent[];
+  /** Compare run: the unguarded arm's pod observations, kept apart so they never drive the pipeline. */
+  unguardedPods: PodEvent[];
   /** Victim probe results, oldest first, consecutive repeats collapsed. */
   victim: VictimSpan[];
   flows: FlowEvent[];
@@ -145,6 +147,7 @@ export function buildTimeline(events: readonly StreamEvent[], now: number = Date
         falco: [],
         talon: [],
         pods: [],
+        unguardedPods: [],
         victim: [],
         flows: [],
         commands: [],
@@ -230,8 +233,11 @@ export function buildTimeline(events: readonly StreamEvent[], now: number = Date
   for (const r of list) {
     r.active = !TERMINAL_STATES.has(r.current) && now - start(r) < STALE_RUN_MS;
     const started = r.states.started ?? r.states.queued;
-    const detected = minDefined(r.states.detected, r.falco[0] && ts(r.falco[0].at));
-    const responded = minDefined(r.states.responded, r.talon[0] && ts(r.talon[0].at));
+    // The run's states and latencies follow the guarded arm; an unguarded alert never pairs with them.
+    const gf = guardedFalco(r);
+    const gt = guardedTalon(r);
+    const detected = minDefined(r.states.detected, gf && ts(gf.at));
+    const responded = minDefined(r.states.responded, gt && ts(gt.at));
     const finished = minDefined(r.states.finished, r.states.failed, r.states.timeout);
     // Detection is measured from the attack command: "pod_ready" when the API reports it (then
     // "started" is the pod's creation, seconds earlier), else "started", which used to be the exec.
@@ -251,11 +257,26 @@ export function buildTimeline(events: readonly StreamEvent[], now: number = Date
 }
 
 function addPod(run: RunView, p: PodEvent): void {
+  // The run's identity, pipeline and pod panel are the guarded arm's; the unguarded arm's pod
+  // observations are kept apart (they feed only the twin's own window) so they never overwrite the
+  // guarded pod's UID, image, container or quarantine time.
+  if (p.arm === "unguarded") {
+    run.unguardedPods.push(p);
+    return;
+  }
   run.pods.push(p);
   if (p.uid) run.podUid = p.uid;
   if (p.image) run.image = p.image;
   if (p.container_id) run.containerId = p.container_id;
   if (run.quarantinedAt === undefined && p.labels_delta[QUARANTINE_LABEL] === "true") run.quarantinedAt = ts(p.at);
+}
+
+/** The guarded arm's Falco/Talon events (or all, on an ordinary run): what the pipeline may use. */
+export function guardedFalco(run: RunView): FalcoEvent | undefined {
+  return run.falco.find((f) => f.arm !== "unguarded");
+}
+export function guardedTalon(run: RunView): TalonEvent | undefined {
+  return run.talon.find((t) => t.arm !== "unguarded");
 }
 
 function addVictim(run: RunView, v: VictimEvent): void {

@@ -61,7 +61,7 @@ function main(): void {
   }
 
   mountPosture(byId("posture-panel"), api);
-  mountStats(byId("hero-stats"), api);
+  const stats = mountStats(byId("hero-stats"), api);
   mountDefenceMap(byId("defence-map"), api);
 
   const limits = mountLimits(byId("limits-panel"), api);
@@ -76,12 +76,14 @@ function main(): void {
     blocked: () => blockedReason(launcherState, Date.now()),
   });
 
+  let titles = new Map<string, string>();
   const launcher = mountScenarios(
     byId("scenario-panel"),
     byId("launch-status"),
     api,
     (scenarios) => {
-      timeline.setTitles(new Map(scenarios.map((s) => [s.id, s.title])));
+      titles = new Map(scenarios.map((s) => [s.id, s.title]));
+      timeline.setTitles(titles);
       runConsole.setScenarios(scenarios);
     },
     (runId) => {
@@ -96,7 +98,8 @@ function main(): void {
   const headerConn = byId("header-conn");
   const setHeaderConn = (state: ConnectionState) => {
     headerConn.dataset.state = state;
-    replace(headerConn, h("span", { class: "conn__dot", "aria-hidden": "true" }), `cluster ${CONNECTION_WORD[state]}`);
+    // In mock mode the header says so, so "cluster live" is never mistaken for the real cluster (item 26).
+    replace(headerConn, h("span", { class: "conn__dot", "aria-hidden": "true" }), mock ? `mock · ${CONNECTION_WORD[state]}` : `cluster ${CONNECTION_WORD[state]}`);
   };
 
   // Assigned right below; the retry callback can only fire after the stream exists.
@@ -115,6 +118,15 @@ function main(): void {
       launcher.setActiveRun(active);
       runConsole.update(view);
       terminal.update(view);
+      // The hero's "last run" tile follows the newest run the feed has shown.
+      const newest = view.runs[0];
+      if (newest) {
+        stats.setLastRun({
+          title: titles.get(newest.scenario) ?? newest.scenario,
+          at: newest.states.started ?? newest.states.queued ?? Date.now(),
+          respondMs: newest.timings.respondMs,
+        });
+      }
       if (wasActive && !activeId) limits.refresh();
     },
     () => stream?.retryNow(),

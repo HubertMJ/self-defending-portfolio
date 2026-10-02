@@ -5,7 +5,7 @@ import type { StreamEvent } from "../lib/contract";
 import { clockTime, h, replace } from "../lib/dom";
 import { humanAction } from "../lib/pipeline";
 import type { ConnectionState } from "../lib/sse";
-import { type RunView, type TimelineView, buildTimeline, formatDuration, ts } from "../lib/timeline";
+import { type RunView, type TimelineView, buildTimeline, formatDuration, guardedFalco, guardedTalon, ts } from "../lib/timeline";
 import { CONNECTION_LONG } from "./common";
 
 // A run with victim probes every 500 ms produces a few hundred events; keep a handful of runs' worth.
@@ -51,8 +51,9 @@ function stage(opts: {
 }
 
 export function renderRun(run: RunView, title: string, openDetails: Set<string>, onShow?: (runId: string) => void, shown?: string): HTMLElement {
-  const falco = run.falco[0];
-  const talon = run.talon[0];
+  const interactive = run.scenario === "terminal";
+  const falco = guardedFalco(run);
+  const talon = guardedTalon(run);
   const startedAt = run.states.started ?? run.states.queued;
   const detectedAt = falco ? ts(falco.at) : run.states.detected;
   const respondedAt = talon ? ts(talon.at) : run.states.responded;
@@ -97,7 +98,9 @@ export function renderRun(run: RunView, title: string, openDetails: Set<string>,
         title: "Falco detected",
         reached: detectedAt !== undefined,
         at: detectedAt,
-        delta: run.timings.detectMs !== undefined ? `+${formatDuration(run.timings.detectMs)}` : undefined,
+        // On a terminal run the gap to the first detected command is the visitor's dwell time, not a
+        // detection latency, so it is not shown as one.
+        delta: !interactive && run.timings.detectMs !== undefined ? `+${formatDuration(run.timings.detectMs)}` : undefined,
         what: falco ? falco.rule : run.states.detected ? run.detail : undefined,
       }),
       stage({
@@ -105,7 +108,7 @@ export function renderRun(run: RunView, title: string, openDetails: Set<string>,
         title: "Talon responded",
         reached: respondedAt !== undefined,
         at: respondedAt,
-        delta: run.timings.respondMs !== undefined ? `+${formatDuration(run.timings.respondMs)}` : undefined,
+        delta: !interactive && run.timings.respondMs !== undefined ? `+${formatDuration(run.timings.respondMs)}` : undefined,
         what: talon ? `${humanAction(talon.action, talon.actionner)}${talon.status === "success" ? "" : ` (${talon.status})`}` : undefined,
       }),
     ),
@@ -126,7 +129,8 @@ export function renderRun(run: RunView, title: string, openDetails: Set<string>,
       failed && run.detail ? h("span", { class: "run__fail" }, run.detail) : null,
     ),
     details,
-    onShow
+    // The live run panel does not replay a terminal run (it has its own panel), so no "Show" there.
+    onShow && !interactive
       ? (() => {
           const b = h("button", { type: "button", class: "btn btn--ghost btn--small run__show", "data-focus-key": `show:${run.runId}`, "aria-pressed": String(shown === run.runId) }, "Show in the live run panel");
           b.addEventListener("click", () => onShow(run.runId));

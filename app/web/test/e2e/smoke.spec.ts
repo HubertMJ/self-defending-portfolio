@@ -279,13 +279,56 @@ test.describe("attacker's terminal (mock, ADR 0033)", () => {
     expect(problems).toEqual([]);
   });
 
-  test("another visitor's terminal is shown read-only", async ({ page }) => {
+  test("an unknown line is answered locally and never sent to the API", async ({ page }) => {
     const problems = guardConsole(page);
+    const posts: string[] = [];
+    page.on("request", (r) => {
+      if (/\/api\/runs\/.+\/commands/.test(r.url())) posts.push(r.url());
+    });
+    await page.goto("/?mock=1&mock-speed=0.3");
+    const term = page.locator("#terminal");
+    await term.getByRole("button", { name: /Open the terminal/ }).click();
+    await expect(term.locator("#term-input")).toBeEnabled({ timeout: 10_000 }); // enabled only once pod_ready
+    await term.locator("#term-input").fill("sudo rm -rf /");
+    await term.locator(".term__send").click();
+    await expect(term.locator(".term__out")).toContainText("not in this sandbox's catalogue");
+    expect(posts).toEqual([]); // nothing was sent
+    expect(problems).toEqual([]);
+  });
+
+  test("commands are offered only once the pod is ready", async ({ page }) => {
+    await page.goto("/?mock=1&mock-speed=0.6");
+    const term = page.locator("#terminal");
+    await term.getByRole("button", { name: /Open the terminal/ }).click();
+    // Before pod_ready the input is disabled and the status says starting.
+    await expect(term.locator("#term-input")).toBeDisabled();
+    await expect(term.locator(".term__status")).toContainText("starting the pod");
+    await expect(term.locator("#term-input")).toBeEnabled({ timeout: 10_000 });
+  });
+
+  test("another visitor's terminal is read-only: no form, no chips, no POST", async ({ page }) => {
+    const problems = guardConsole(page);
+    const posts: string[] = [];
+    page.on("request", (r) => {
+      if (r.method() === "POST" && /\/api\/(runs|attack)/.test(r.url())) posts.push(r.url());
+    });
     await page.goto("/?mock=1&mock-speed=0.4&mock-term-visitor=300");
     const term = page.locator("#terminal");
     await expect(term.locator(".term__status")).toContainText("read-only", { timeout: 10_000 });
     await expect(term.locator(".term__out")).toContainText("uid=10001", { timeout: 10_000 });
     await expect(term.locator("#term-input")).toBeHidden();
+    await expect(term.locator(".term__chips")).toBeHidden();
+    expect(posts).toEqual([]);
+    expect(problems).toEqual([]);
+  });
+
+  test("falls back to the one-click demo when the API has no terminal catalogue", async ({ page }) => {
+    const problems = guardConsole(page);
+    await page.goto("/?mock=1&mock-details=0");
+    const term = page.locator("#terminal");
+    await expect(term.locator(".term-fallback")).toContainText("one-click attacks");
+    // The one-click scenarios still work as the main attack path.
+    await expect(page.locator(".scenario")).toHaveCount(4);
     expect(problems).toEqual([]);
   });
 });
@@ -305,9 +348,12 @@ test.describe("defence map and live stats (mock, ADR 0033)", () => {
     const hero = page.locator("#hero-stats");
     await expect(hero).toBeVisible();
     await expect(hero.locator(".herostats__tile")).toHaveCount(4);
-    await expect(hero).toContainText("attacks launched");
-    await expect(hero.locator('.herostats__obj[data-never="true"]')).toContainText("not reached by anyone yet");
+    await expect(hero).toContainText("attacks");
+    await expect(hero).toContainText("detections answered");
+    await expect(hero.locator('.herostats__obj[data-never="true"]').first()).toContainText("not reached yet");
     await expect(hero.locator("a", { hasText: "Open an issue" })).toHaveAttribute("href", /\/issues$/);
+    // No escapes/"got out" counter (review item 18).
+    await expect(hero).not.toContainText(/got out|call-home/i);
   });
 });
 

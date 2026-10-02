@@ -296,6 +296,8 @@ export class ApiClient {
       const res = await this.request(`/runs/${encodeURIComponent(runId)}`, {
         method: "DELETE",
         headers: { Authorization: `Bearer ${token}` },
+        // Let the request outlive the page when sent from a pagehide handler.
+        keepalive: true,
       });
       return res.ok || res.status === 404;
     } catch {
