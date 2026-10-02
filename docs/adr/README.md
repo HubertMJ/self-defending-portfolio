@@ -32,10 +32,13 @@ decision are appended as dated amendments in the same file.
 | [0026](0026-coredns-build-and-delivery.md) | CoreDNS built here from the pinned release with fixed dependencies, deployed by the k3s role as a k3s auto-deploy manifest in place of k3s's bundled copy (same objects and ClusterIP, taken over by a rolling update) | 7 | accepted |
 | [0027](0027-argocd-build.md) | Argo CD built here from the pinned release commit, with the helm, kustomize and git-lfs releases it ships, all with fixed dependencies; `argocd` stays outside admission verification | 7 | accepted |
 | [0028](0028-cilium-images-build.md) | Cilium's four images (agent, operator, Hubble Relay, Envoy) are upstream's 1.19.8 release with the Go binaries rebuilt against fixed dependencies and the base OS's OpenSSL updated, on upstream's own layers; rolled out operator/relay, then Envoy, then the agent | 7 | accepted |
+| [0029](0029-terminal-runs-and-command-output.md) | The attacker's terminal: interactive runs where the visitor types command ids and reads the real, scrubbed, capped output; quarantine lingers until the cut is visible (FIX 1) | 5 | accepted |
+| [0030](0030-stats-and-persistence.md) | Cross-visitor stats from a hub tap, persisted in one `portfolio-stats` ConfigMap (get/update only) that survives a rollout | 5 | accepted |
 
 Phases 5 and 6 were built on parallel branches and merged together; the numbers they had reserved
 are all in use except 0020 (phase 6 documentation needed no decision of its own), which is released.
-0020 stays unused. 0025-0028 are in use; the next ADR is 0029.
+0020 stays unused. 0025-0030 are in use; the interactive demo reserves 0029-0033 (0029, 0030 recorded here,
+0031-0033 on the cluster and web branches).
 
 ## Open items carried by accepted ADRs
 
