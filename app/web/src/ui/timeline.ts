@@ -171,6 +171,9 @@ export function mountTimeline(
   onShow?: (runId: string) => void,
 ): TimelineHandle {
   const log: StreamEvent[] = [];
+  // Backfill from /api/runs/{id} replays events the live feed also delivers; identical ones are
+  // dropped here (by type + payload) so an event is never counted twice (review item 8).
+  const seen = new Set<string>();
   const openDetails = new Set<string>();
   let titles = new Map<string, string>();
   let lastAnnounced = "";
@@ -217,8 +220,13 @@ export function mountTimeline(
 
   return {
     push(ev) {
+      const key = `${ev.type}\u0000${JSON.stringify(ev.data)}`;
+      if (seen.has(key)) return;
+      seen.add(key);
       log.push(ev);
-      if (log.length > MAX_LOG) log.splice(0, log.length - MAX_LOG);
+      if (log.length > MAX_LOG) {
+        for (const dropped of log.splice(0, log.length - MAX_LOG)) seen.delete(`${dropped.type}\u0000${JSON.stringify(dropped.data)}`);
+      }
       schedule();
     },
     setConnection(state, retryInMs, gaveUp) {

@@ -105,6 +105,20 @@ function main(): void {
   // Assigned right below; the retry callback can only fire after the stream exists.
   let stream: EventStream | undefined;
   let activeId: string | undefined;
+
+  // Backfill a run's events from /api/runs/{id} when the live feed did not carry its start — a
+  // visitor who joined mid-session, or output lost across a reconnect (review item 8). The timeline
+  // drops events it already has, so a backfill never double-counts.
+  let reconnected = false; // the stream dropped and is coming back, so a backfill is due on "open"
+  const backfilled = new Set<string>();
+  const backfill = (runId: string) => {
+    if (!runId || backfilled.has(runId)) return;
+    backfilled.add(runId);
+    void api.runEvents(runId).then((r) => {
+      if (r.ok) for (const ev of r.value) timeline.push(ev);
+      else backfilled.delete(runId); // let a later trigger try again
+    });
+  };
   const timeline = mountTimeline(
     byId("timeline-panel"),
     byId("timeline-conn"),
@@ -128,6 +142,11 @@ function main(): void {
         });
       }
       if (wasActive && !activeId) limits.refresh();
+      // A run whose events arrived without a start we ever saw (joined mid-session): fetch its history.
+      for (const ev of view.unmatched) {
+        const id = "run_id" in ev.data ? ev.data.run_id : undefined;
+        if (id && !view.runs.some((run) => run.runId === id)) backfill(id);
+      }
     },
     () => stream?.retryNow(),
     (runId) => {
@@ -147,6 +166,14 @@ function main(): void {
     onState: (state, { retryInMs, gaveUp }) => {
       timeline.setConnection(state, retryInMs, gaveUp);
       setHeaderConn(state);
+      // On reconnecting after a drop, re-fetch the active run so output lost across the gap is
+      // recovered (the replay buffer may not reach back to its start).
+      if (state === "open" && reconnected && activeId) {
+        backfilled.delete(activeId);
+        backfill(activeId);
+      }
+      reconnected = state === "offline" || state === "reconnecting" || reconnected;
+      if (state === "open") reconnected = false;
     },
   });
   stream = events;

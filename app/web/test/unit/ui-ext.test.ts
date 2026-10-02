@@ -47,6 +47,27 @@ describe("timeline assembles a terminal run's commands", () => {
   });
 });
 
+describe("timeline backfill dedup (review item 8)", () => {
+  it("drops an event it already has, so a backfill never double-counts output", async () => {
+    const { mountTimeline } = await import("../../src/ui/timeline");
+    const root = document.createElement("div");
+    const conn = document.createElement("div");
+    const live = document.createElement("div");
+    let latest: import("../../src/lib/timeline").TimelineView | undefined;
+    const handle = mountTimeline(root, conn, live, (v) => (latest = v), () => {});
+    const evs = [
+      { type: "run", data: { run_id: "r", scenario: "terminal", state: "started", at: "2026-10-02T00:00:00.000Z", pod: "p" } },
+      { type: "command", data: { run_id: "r", seq: 1, id: "whoami", state: "output", stream: "stdout", chunk: "uid=10001\n", at: "2026-10-02T00:00:01.000Z" } },
+    ].map((e) => parseStreamEvent(e.type, JSON.stringify(e.data))!);
+    for (const e of evs) handle.push(e);
+    // Push the identical command event again (as a backfill from /api/runs/{id} would).
+    handle.push(evs[1]);
+    await new Promise((r) => setTimeout(r, 30));
+    const run = latest?.runs.find((x) => x.runId === "r");
+    expect(run?.commands[0].stdout).toBe("uid=10001\n"); // once, not twice
+  });
+});
+
 describe("parseStats", () => {
   it("ignores inherited properties and fills missing sections", () => {
     const s = parseStats({ objectives: { recon: { attempts: 3, achieved: 2 } } });

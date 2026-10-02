@@ -11,12 +11,14 @@ import {
   type Scenario,
   type ScenarioDetails,
   type Stats,
+  type StreamEvent,
   type TerminalAccepted,
   isAttackAccepted,
   isCommandAccepted,
   isLimits,
   isTerminalAccepted,
   parsePosture,
+  parseRunEvents,
   parseScenarioDetails,
   parseScenarios,
   parseStats,
@@ -188,6 +190,11 @@ export class ApiClient {
   /** Extension endpoint: the counters across every visitor's runs. */
   stats(): Promise<Result<Stats>> {
     return this.getJson("/stats", parseStats);
+  }
+
+  /** GET /api/runs/{id}: the stored events of a run, for backfilling a session joined mid-way. */
+  runEvents(id: string): Promise<Result<StreamEvent[]>> {
+    return this.getJson(`/runs/${encodeURIComponent(id)}`, parseRunEvents);
   }
 
   /** `compare: true` runs the same catalogue attack in two pods at once (?compare=1). */
