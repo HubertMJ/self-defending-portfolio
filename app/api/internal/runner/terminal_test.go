@@ -23,6 +23,8 @@ func terminalScenario() scenarios.Scenario {
 			Outcome: "detected", Layer: "runtime", Control: "Falco", Detection: "Read sensitive file untrusted", Response: "terminate", Explain: "x"},
 		{ID: "beacon", Input: "wget", Command: []string{"wget", "http://127.0.0.1:9/"}, Outcome: "detected", Layer: "network",
 			Control: "Falco", Detection: "SDP network tool in sandbox", Response: "quarantine", Explain: "x"},
+		{ID: "shell", Input: "sh -i", Objective: "credentials", Command: []string{"sh", "-i"}, TTY: true, Outcome: "detected",
+			Layer: "runtime", Control: "Falco", Detection: "Terminal shell in container", Response: "terminate", Explain: "x"},
 	}
 	sc.Template.Spec.Containers = []corev1.Container{{Name: scenarios.TerminalContainer, Image: img}}
 	return sc
@@ -118,17 +120,17 @@ func TestTerminalDetectedTerminateKillsRun(t *testing.T) {
 
 	// command_seq is the running (or just-ran) command.
 	deadline := time.Now().Add(time.Second)
-	for r.CommandSeqFor(pod) != seq && time.Now().Before(deadline) {
+	for r.CommandSeqFor("sandbox", pod) != seq && time.Now().Before(deadline) {
 		time.Sleep(5 * time.Millisecond)
 	}
-	if got := r.CommandSeqFor(pod); got != seq {
+	if got := r.CommandSeqFor("sandbox", pod); got != seq {
 		t.Fatalf("CommandSeqFor = %d, want %d", got, seq)
 	}
-	r.ObserveFalco(pod)
+	r.ObserveFalco("sandbox", pod, "Read sensitive file untrusted")
 	rec.waitFor(t, StateDetected)
 	// Talon terminates: the pod is deleted, which ends the run as killed.
 	_ = c.CoreV1().Pods("sandbox").Delete(context.Background(), pod, metav1.DeleteOptions{})
-	r.ObserveTalon(pod, "success")
+	r.ObserveTalon("sandbox", pod, "success")
 	ev := rec.waitFor(t, StateFinished)
 	if ev.Detail != "killed" {
 		t.Fatalf("finish detail = %q", ev.Detail)
@@ -147,18 +149,140 @@ func TestTerminalIdleEndsRun(t *testing.T) {
 		CommandTimeout: 200 * time.Millisecond})
 	release, done := released()
 	sc := terminalScenario()
-	sc.IdleSeconds = 0 // -> DefaultIdle is too long; override via a tiny timeout path below
-	// Use a short idle by setting IdleSeconds through the scenario's Idle(): 0 -> DefaultIdle (30s),
-	// too long for a test. Instead drive the deadline: set a 1 s active deadline.
-	sc.TimeoutSeconds = 1
+	sc.IdleSeconds, sc.TimeoutSeconds = 1, 60 // idle (1 s) fires well before the deadline (60 s)
 	id, _ := r.StartTerminal(sc, release)
+	_ = id
 	rec.waitFor(t, StatePodReady)
+	start := time.Now()
 	ev := rec.waitFor(t, StateFinished)
-	if ev.Detail != "deadline" && ev.Detail != "idle" {
+	if ev.Detail != "idle" {
+		t.Fatalf("finish detail = %q, want idle", ev.Detail)
+	}
+	if d := time.Since(start); d > 10*time.Second {
+		t.Fatalf("idle took %v; the 60 s deadline, not idle, ended it", d)
+	}
+	<-done
+}
+
+// A command still running when the pod is deleted under it ends as `killed`, not `exited`.
+func TestTerminalCommandKilledState(t *testing.T) {
+	c := fake.NewClientset()
+	readyOnCreate(c)
+	rec := newRecorder()
+	ex := &fakeExec{streamBlock: true} // the exec blocks until its context is cancelled
+	r := terminalRunner(c, ex, rec)
+	release, done := released()
+	sc := terminalScenario()
+	id, token := r.StartTerminal(sc, release)
+	pod := podName(sc.ID, id)
+	rec.waitFor(t, StatePodReady)
+	seq := sendCommand(t, r, id, token, "shell") // a TTY detected command
+	waitCommand(t, rec, seq, CommandStarted)
+	// Talon terminates: the pod goes away under the running command.
+	_ = c.CoreV1().Pods("sandbox").Delete(context.Background(), pod, metav1.DeleteOptions{})
+	r.ObserveTalon("sandbox", pod, "success")
+	waitCommand(t, rec, seq, CommandKilled)
+	rec.waitFor(t, StateFinished)
+	<-done
+}
+
+// DELETE while a command runs ends the run as `left` (not `deadline`), promptly.
+func TestTerminalDeleteDuringCommand(t *testing.T) {
+	c := fake.NewClientset()
+	readyOnCreate(c)
+	rec := newRecorder()
+	r := terminalRunner(c, &fakeExec{streamBlock: true}, rec)
+	release, done := released()
+	sc := terminalScenario()
+	sc.TimeoutSeconds = 120
+	id, token := r.StartTerminal(sc, release)
+	rec.waitFor(t, StatePodReady)
+	seq := sendCommand(t, r, id, token, "shell") // TTY command that never returns on its own
+	waitCommand(t, rec, seq, CommandStarted)
+	start := time.Now()
+	if err := r.Leave(id, token); err != nil {
+		t.Fatal(err)
+	}
+	ev := rec.waitFor(t, StateFinished)
+	if ev.Detail != "left" {
+		t.Fatalf("finish detail = %q, want left", ev.Detail)
+	}
+	if d := time.Since(start); d > 10*time.Second {
+		t.Fatalf("leave took %v; it did not end the running command", d)
+	}
+	<-done
+}
+
+// A non-TTY command that never returns is cut off at CommandTimeout and reported `exited` with no
+// exit code (not a synthetic -1).
+func TestTerminalNonTTYTimeout(t *testing.T) {
+	c := fake.NewClientset()
+	readyOnCreate(c)
+	rec := newRecorder()
+	r := New(c, &fakeExec{streamBlock: true}, rec, nil, Config{PollInterval: 10 * time.Millisecond,
+		QuarantineLinger: -1, CommandTimeout: 100 * time.Millisecond})
+	release, done := released()
+	sc := terminalScenario()
+	id, token := r.StartTerminal(sc, release)
+	rec.waitFor(t, StatePodReady)
+	seq := sendCommand(t, r, id, token, "whoami")
+	waitCommand(t, rec, seq, CommandExited)
+	for _, p := range rec.of("command") {
+		ev := p.v.(CommandEvent)
+		if ev.Seq == seq && ev.State == CommandExited {
+			if ev.ExitCode != nil {
+				t.Fatalf("cut-short command reported exit_code %d; expected none", *ev.ExitCode)
+			}
+		}
+	}
+	if err := r.Leave(id, token); err != nil {
+		t.Fatal(err)
+	}
+	rec.waitFor(t, StateFinished)
+	<-done
+}
+
+// A quarantine command does not end the run; a later terminate command does. Both detected and
+// responded are published more than once, and commands keep working after the quarantine.
+func TestTerminalQuarantineThenTerminate(t *testing.T) {
+	c := fake.NewClientset()
+	readyOnCreate(c)
+	rec := newRecorder()
+	r := terminalRunner(c, &fakeExec{}, rec)
+	release, done := released()
+	sc := terminalScenario()
+	id, token := r.StartTerminal(sc, release)
+	pod := podName(sc.ID, id)
+	rec.waitFor(t, StatePodReady)
+
+	// A quarantine command: detected + responded, run continues.
+	s1 := sendCommand(t, r, id, token, "beacon")
+	waitCommand(t, rec, s1, CommandExited)
+	r.ObserveFalco("sandbox", pod, "SDP network tool in sandbox")
+	r.ObserveTalon("sandbox", pod, "success")
+	rec.waitFor(t, StateResponded)
+
+	// The run is still alive: another command runs.
+	s2 := sendCommand(t, r, id, token, "whoami")
+	waitCommand(t, rec, s2, CommandExited)
+
+	// A terminate command: the pod is deleted, the run ends killed.
+	s3 := sendCommand(t, r, id, token, "read-shadow")
+	waitCommand(t, rec, s3, CommandExited)
+	r.ObserveFalco("sandbox", pod, "Read sensitive file untrusted")
+	_ = c.CoreV1().Pods("sandbox").Delete(context.Background(), pod, metav1.DeleteOptions{})
+	r.ObserveTalon("sandbox", pod, "success")
+	ev := rec.waitFor(t, StateFinished)
+	if ev.Detail != "killed" {
 		t.Fatalf("finish detail = %q", ev.Detail)
 	}
-	_ = id
 	<-done
+	if n := strings.Count(rec.order(), "run:detected"); n < 2 {
+		t.Fatalf("expected detected more than once, got %d: %s", n, rec.order())
+	}
+	if n := strings.Count(rec.order(), "run:responded"); n < 2 {
+		t.Fatalf("expected responded more than once, got %d: %s", n, rec.order())
+	}
 }
 
 func TestTerminalCommandErrors(t *testing.T) {

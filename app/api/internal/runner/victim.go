@@ -238,8 +238,12 @@ func (r *Runner) pollVictim(ctx context.Context, rn *run, podIP string, last Vic
 			ev.RunID, ev.Pod, ev.At = rn.id, rn.pod, r.now().UTC()
 			r.emitVictim(rn, ev)
 			if ev.Status == VictimUnreachable {
-				// The cut is now visible; a quarantine run lingers from here (FIX 1).
-				rn.firstUnreachOnce.Do(func() { close(rn.firstUnreachable) })
+				// Signal the quarantine linger that the cut is visible now (FIX 1); non-blocking,
+				// coalesced to the last one, so the linger waits on a cut after the response.
+				select {
+				case rn.unreachable <- struct{}{}:
+				default:
+				}
 			}
 		}
 		select {

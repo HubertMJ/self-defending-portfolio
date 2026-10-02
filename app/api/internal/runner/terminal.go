@@ -15,6 +15,7 @@ package runner
 // read it.
 
 import (
+	"bytes"
 	"context"
 	"crypto/subtle"
 	"errors"
@@ -77,6 +78,9 @@ type CommandEvent struct {
 func (r *Runner) Command(runID, token, commandID string) (int, error) {
 	rn := r.lookupID(runID)
 	if rn == nil || !rn.terminal {
+		if r.wasTerminal(runID) {
+			return 0, ErrRunBusy // the run existed and is over
+		}
 		return 0, ErrUnknownRun
 	}
 	if subtle.ConstantTimeCompare([]byte(token), []byte(rn.token)) != 1 {
@@ -86,35 +90,49 @@ func (r *Runner) Command(runID, token, commandID string) (int, error) {
 	if !ok {
 		return 0, ErrUnknownCmd
 	}
+	// Reserve the slot under the lock, then hand the command to the loop. The loop takes it only if
+	// it is still accepting; if it has ended first, loopDone unblocks us and the slot is returned,
+	// so a command is never acknowledged (202 + seq) without running, and `running` never sticks.
 	rn.tmu.Lock()
-	defer rn.tmu.Unlock()
 	switch {
 	case rn.over || !rn.ready:
+		rn.tmu.Unlock()
 		return 0, ErrRunBusy
 	case rn.running:
+		rn.tmu.Unlock()
 		return 0, ErrRunBusy
 	case rn.count >= MaxCommandsPerRun:
+		rn.tmu.Unlock()
 		return 0, ErrTooMany
 	}
+	rn.running = true
+	rn.count++
 	rn.seq++
 	seq := rn.seq
+	rn.tmu.Unlock()
+
 	select {
 	case rn.cmds <- commandReq{seq: seq, cmd: cmd}:
-		rn.count++
-		rn.running = true
 		return seq, nil
-	default:
-		// The run goroutine is not receiving (it is ending): treat as over.
+	case <-rn.loopDone:
+		rn.tmu.Lock()
+		rn.running = false
+		rn.count--
 		rn.seq--
+		rn.over = true
+		rn.tmu.Unlock()
 		return 0, ErrRunBusy
 	}
 }
 
-// Leave ends a terminal run early (the visitor pressed "leave"). Same errors as Command for an
-// unknown run or a bad token.
+// Leave ends a terminal run early (the visitor pressed "leave"). 404 for a run that never existed,
+// 409 (ErrRunBusy) for one already over, 401 for a bad token.
 func (r *Runner) Leave(runID, token string) error {
 	rn := r.lookupID(runID)
 	if rn == nil || !rn.terminal {
+		if r.wasTerminal(runID) {
+			return ErrRunBusy
+		}
 		return ErrUnknownRun
 	}
 	if subtle.ConstantTimeCompare([]byte(token), []byte(rn.token)) != 1 {
@@ -126,8 +144,8 @@ func (r *Runner) Leave(runID, token string) error {
 
 // CommandSeqFor returns the command seq to stamp on a Falco/Talon event naming pod: the one running
 // now, or the one that ended less than 2 s ago, else 0 (absent). Best effort (ADR 0029).
-func (r *Runner) CommandSeqFor(pod string) int {
-	rn := r.lookup(pod)
+func (r *Runner) CommandSeqFor(namespace, pod string) int {
+	rn := r.lookup(namespace, pod)
 	if rn == nil || !rn.terminal {
 		return 0
 	}
@@ -149,6 +167,16 @@ func (rn *run) activeSeqLocked() (int, string) {
 	return 0, ""
 }
 
+// isClosed reports whether a signalling channel has been closed, without blocking.
+func isClosed(ch <-chan struct{}) bool {
+	select {
+	case <-ch:
+		return true
+	default:
+		return false
+	}
+}
+
 // runTerminal keeps the pod alive and runs commands until an end condition, returning the final run
 // state and detail (always `finished`, detail one of killed/left/idle/deadline - or `failed` on API
 // shutdown). The scripted exec/select path is not used for an interactive scenario.
@@ -160,10 +188,14 @@ func (r *Runner) runTerminal(ctx context.Context, rn *run, sc scenarios.Scenario
 	rn.tmu.Lock()
 	rn.ready = true
 	rn.tmu.Unlock()
+	// Stop accepting commands the instant the loop ends: set `over` and close loopDone, which
+	// unblocks any Command handing off a request so it returns 409 instead of being acknowledged
+	// and never run.
 	defer func() {
 		rn.tmu.Lock()
 		rn.over = true
 		rn.tmu.Unlock()
+		close(rn.loopDone)
 	}()
 
 	for {
@@ -192,8 +224,10 @@ func (r *Runner) runTerminal(ctx context.Context, rn *run, sc scenarios.Scenario
 	}
 }
 
-// runCommand execs one command and publishes its events. A non-TTY command is cancelled after
-// CommandTimeout; a TTY command runs until the pod is killed or the run ends.
+// runCommand execs one command and publishes its events. The command's context is cancelled when
+// the run's deadline passes (ctx), when the visitor leaves, or when the pod is killed under it, so a
+// command - a TTY shell included, whose empty stdin never yields EOF - never outlives the run or a
+// leave. A non-TTY command is additionally cut off after CommandTimeout.
 func (r *Runner) runCommand(ctx context.Context, rn *run, req commandReq, log *slog.Logger) {
 	seq, cmd := req.seq, req.cmd
 	rn.tmu.Lock()
@@ -202,24 +236,47 @@ func (r *Runner) runCommand(ctx context.Context, rn *run, req commandReq, log *s
 
 	r.emit(rn, "command", r.commandEvent(rn, CommandEvent{Seq: seq, ID: cmd.ID, State: CommandStarted}))
 
-	cctx := ctx
+	cctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	cmdCtx := cctx // the timeout context, a child of cctx, for a non-TTY command
 	if !cmd.TTY {
-		var cancel context.CancelFunc
-		cctx, cancel = context.WithTimeout(ctx, r.cfg.CommandTimeout)
-		defer cancel()
+		var c2 context.CancelFunc
+		cmdCtx, c2 = context.WithTimeout(cctx, r.cfg.CommandTimeout)
+		defer c2()
 	}
+	// Leave and a kill end the command too (ctx already ends it at the run deadline).
+	stop := make(chan struct{})
+	defer close(stop)
+	go func() {
+		select {
+		case <-rn.leave:
+			cancel()
+		case <-rn.gone:
+			cancel()
+		case <-stop:
+		}
+	}()
+
 	sink := &cmdSink{r: r, rn: rn, seq: seq, id: cmd.ID}
-	code, err := r.exec.ExecStream(cctx, rn.namespace, rn.pod, scenarios.TerminalContainer,
+	code, err := r.exec.ExecStream(cmdCtx, rn.namespace, rn.pod, scenarios.TerminalContainer,
 		cmd.Command, cmd.TTY, sink.writer("stdout"), sink.writer("stderr"))
 	sink.flush()
+	truncated := sink.close()
 	if err != nil {
 		log.Info("terminal command exec ended", "seq", seq, "id", cmd.ID, "err", err)
 	}
 
-	// The pod going away under the command is a kill, not an exit: wait briefly for the watch to
-	// confirm the deletion (Talon's terminate deletes the pod a moment before the watch reports it).
+	// Did the command end because of its own non-TTY timeout (cctx still live), or because the
+	// visitor left? Neither is a kill, and neither should wait for a pod deletion.
+	timedOut := !cmd.TTY && cctx.Err() == nil && cmdCtx.Err() != nil
+	left := isClosed(rn.leave)
+
+	// Otherwise the pod going away under the command is a kill, not an exit: if the exec ended
+	// unexpectedly, wait briefly for the watch to confirm a deletion (Talon's terminate deletes the
+	// pod a moment before the watch reports it). Not for our own timeout or a leave, which would
+	// otherwise stall the slot for DeleteWait with no kill coming.
 	killed := rn.isGone()
-	if !killed && err != nil && cctx.Err() == nil {
+	if !killed && err != nil && ctx.Err() == nil && !timedOut && !left {
 		t := time.NewTimer(r.cfg.DeleteWait)
 		select {
 		case <-rn.gone:
@@ -230,13 +287,20 @@ func (r *Runner) runCommand(ctx context.Context, rn *run, req commandReq, log *s
 		t.Stop()
 	}
 
-	end := CommandEvent{Seq: seq, ID: cmd.ID, State: CommandExited, Truncated: sink.truncated}
-	if killed {
+	end := CommandEvent{Seq: seq, ID: cmd.ID, Truncated: truncated}
+	switch {
+	case killed:
 		end.State = CommandKilled
-	} else {
-		ec := exitCode(code, err)
-		end.ExitCode = &ec
-		end.Achieved = cmd.Objective != "" && ec == 0
+	case err == nil:
+		// A clean exit, including a non-zero shell status (wget failing by design): that is the
+		// command's own result, reported as the exit code.
+		end.State = CommandExited
+		end.ExitCode = &code
+		end.Achieved = cmd.Objective != "" && code == 0
+	default:
+		// Cut short (the 5 s non-TTY timeout, a leave, or a transport error) before the shell
+		// reported a status: `exited` with no exit_code rather than a synthetic -1.
+		end.State = CommandExited
 	}
 	r.emit(rn, "command", r.commandEvent(rn, end))
 
@@ -255,23 +319,12 @@ func (r *Runner) commandEvent(rn *run, ev CommandEvent) CommandEvent {
 	return ev
 }
 
-// exitCode is the command's exit status: the shell's code when it exited (even non-zero, which is
-// not an error - wget fails by design), 0 on a clean exit, and -1 when the exec was cut short (the
-// non-TTY timeout) or failed to stream.
-func exitCode(code int, err error) int {
-	if err == nil {
-		return code
-	}
-	if code != 0 {
-		return code
-	}
-	return -1
-}
-
 // terminalDetected publishes a `detected` run event for the command the alert is about, once per
-// command. The detection text is the command's own (the catalogue states it); the real correlation
-// a visitor reads is the Falco event's command_seq.
-func (r *Runner) terminalDetected(rn *run) {
+// command, carrying its seq so the page can tie the detection to the keystroke. The detail is the
+// Falco rule that fired (the honest name, even for an `allowed`/`prevented` command that has no rule
+// of its own in the catalogue); it falls back to the command's catalogue detection if no rule was
+// passed.
+func (r *Runner) terminalDetected(rn *run, rule string) {
 	rn.tmu.Lock()
 	seq, id := rn.activeSeqLocked()
 	if seq == 0 || rn.detectedSeq == seq {
@@ -280,39 +333,77 @@ func (r *Runner) terminalDetected(rn *run) {
 	}
 	rn.detectedSeq = seq
 	rn.tmu.Unlock()
-	cmd, _ := rn.sc.CommandByID(id)
-	r.publish(rn, StateDetected, cmd.Detection)
+	if rule == "" {
+		cmd, _ := rn.sc.CommandByID(id)
+		rule = cmd.Detection
+	}
+	r.publishCmd(rn, StateDetected, rule, seq)
 }
 
-// terminalResponded publishes a `responded` run event once per command. A terminate response then
-// deletes the pod, which ends the run as `killed`; a quarantine leaves the pod running.
+// terminalResponded publishes a `responded` run event once per command, backfilling `detected`
+// first if the response beat the alert (so a terminal run never shows responded before detected). A
+// terminate response then deletes the pod, which ends the run as `killed`; a quarantine leaves the
+// pod running.
 func (r *Runner) terminalResponded(rn *run) {
 	rn.tmu.Lock()
 	seq, id := rn.activeSeqLocked()
-	if seq == 0 || rn.respondedSeq == seq {
-		rn.tmu.Unlock()
-		return
+	if seq != 0 {
+		if rn.respondedSeq == seq {
+			rn.tmu.Unlock()
+			return
+		}
+		rn.respondedSeq = seq
+	} else {
+		// A response that correlated to no command (it arrived more than the 2 s window after the
+		// command ended): still record the run was answered, just without a command_seq. Once only,
+		// so a retrying Talon cannot spam the feed.
+		if rn.respondedZero {
+			rn.tmu.Unlock()
+			return
+		}
+		rn.respondedZero = true
 	}
-	rn.respondedSeq = seq
+	needDetect := seq != 0 && rn.detectedSeq != seq
+	if needDetect {
+		rn.detectedSeq = seq
+	}
 	rn.tmu.Unlock()
-	cmd, _ := rn.sc.CommandByID(id)
-	r.publish(rn, StateResponded, cmd.Response)
+	var detection, response string
+	if seq != 0 {
+		cmd, _ := rn.sc.CommandByID(id)
+		detection, response = cmd.Detection, cmd.Response
+	}
+	if needDetect {
+		r.publishCmd(rn, StateDetected, detection, seq)
+	}
+	r.publishCmd(rn, StateResponded, response, seq)
 }
 
-// cmdSink turns the raw bytes of one command's stdout/stderr into `output` events: cleaned,
-// scrubbed, chunked to commandChunkBytes, and capped per command and per run. It is written to
-// concurrently (remotecommand streams stdout and stderr on separate goroutines), so every method
-// takes the lock.
+// cmdSink turns one command's stdout/stderr into `output` events. The output is attacker-controlled,
+// so it is sanitised and scrubbed one whole line at a time - never across a chunk boundary, so a cut
+// cannot split an IP, URL or `.svc` name and let both halves past the scrubber - and only then split
+// into events of at most commandChunkBytes, with a per-command and a per-run cap. It is written to
+// concurrently (remotecommand streams stdout and stderr on separate goroutines) and may be written
+// to after the command ended (client-go's SPDY path returns on context cancel without waiting for
+// its reader goroutine), so every method takes the lock and writes after close() are dropped.
 type cmdSink struct {
-	r         *Runner
-	rn        *run
-	seq       int
-	id        string
+	r   *Runner
+	rn  *run
+	seq int
+	id  string
+
 	mu        sync.Mutex
-	pending   map[string][]byte // per stream, bytes not yet at a safe boundary
-	cmdUsed   int
+	pending   map[string][]byte // per stream, bytes not yet at a line boundary
+	cmdUsed   int               // bytes published for this command
 	truncated bool
+	capped    bool // a cap was hit; no more output is published for this command
+	done      bool // the command's end event was published; late writes are dropped
 }
+
+// maxLineBytes bounds the pending buffer per stream. A line longer than this (no newline) is
+// processed as one unit, so the buffer never grows without limit and add() always makes progress -
+// even on a run of UTF-8 continuation bytes, where a rune-boundary cut could otherwise be zero.
+const maxLineBytes = 8 << 10
 
 func (s *cmdSink) writer(stream string) io.Writer { return sinkWriter{s: s, stream: stream} }
 
@@ -329,94 +420,98 @@ func (w sinkWriter) Write(p []byte) (int, error) {
 func (s *cmdSink) add(stream string, p []byte) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.done || s.capped {
+		return
+	}
 	if s.pending == nil {
 		s.pending = map[string][]byte{}
 	}
-	s.pending[stream] = append(s.pending[stream], p...)
-	// Emit whole lines, or a full chunk's worth, as they accumulate; keep the tail (a partial line
-	// or a split rune) for the next write or the final flush.
+	buf := append(s.pending[stream], p...)
 	for {
-		buf := s.pending[stream]
-		cut := cutPoint(buf)
+		cut := lineCut(buf)
 		if cut == 0 {
 			break
 		}
-		s.emitLocked(stream, buf[:cut])
-		s.pending[stream] = append(buf[:0:0], buf[cut:]...)
+		s.emitLineLocked(stream, buf[:cut])
+		buf = append(buf[:0:0], buf[cut:]...)
+		if s.capped {
+			buf = nil
+			break
+		}
 	}
+	s.pending[stream] = buf
 }
 
 func (s *cmdSink) flush() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for stream, buf := range s.pending {
-		for len(buf) > 0 {
-			n := len(buf)
-			if n > commandChunkBytes {
-				n = runeBoundary(buf, commandChunkBytes)
-			}
-			s.emitLocked(stream, buf[:n])
-			buf = buf[n:]
+		if len(buf) > 0 && !s.capped {
+			s.emitLineLocked(stream, buf)
 		}
 		s.pending[stream] = nil
 	}
 }
 
-// emitLocked cleans and scrubs raw bytes, applies the per-command and per-run caps, and publishes
-// one `output` event if anything survives. s.mu is held.
-func (s *cmdSink) emitLocked(stream string, raw []byte) {
-	text := sanitizeOutput(string(raw))
-	if text == "" {
-		return
-	}
-	b := []byte(text)
-	// Per-command cap.
-	if room := commandOutBytes - s.cmdUsed; len(b) > room {
-		b = b[:runeBoundary(b, max(room, 0))]
-		s.truncated = true
-	}
-	if len(b) == 0 {
-		return
-	}
-	// Per-run cap (shared across all commands of the run).
-	s.rn.tmu.Lock()
-	room := runOutBytes - s.rn.runOut
-	if room < 0 {
-		room = 0
-	}
-	if len(b) > room {
-		b = b[:runeBoundary(b, room)]
-		s.truncated = true
-	}
-	s.rn.runOut += len(b)
-	s.rn.tmu.Unlock()
-	if len(b) == 0 {
-		return
-	}
-	s.cmdUsed += len(b)
-	s.r.emit(s.rn, "command", s.r.commandEvent(s.rn, CommandEvent{
-		Seq: s.seq, ID: s.id, State: CommandOutput, Stream: stream, Chunk: string(b)}))
+// close stops the sink and reports whether anything was dropped. After it, a late write from a
+// still-draining exec stream is ignored (no `output` after the command's end event).
+func (s *cmdSink) close() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.done = true
+	return s.truncated
 }
 
-// cutPoint is how many bytes of buf are ready to emit: through the last newline, or a full chunk
-// (to a rune boundary) once the buffer is large, else 0 (keep buffering).
-func cutPoint(buf []byte) int {
-	if i := lastIndexByte(buf, '\n'); i >= 0 {
+// lineCut is how many leading bytes of buf form the next unit to emit: through the first newline, or
+// the whole maxLineBytes once the buffer reaches that without one, else 0. It is > 0 whenever a
+// newline exists or the buffer is large, so add() terminates.
+func lineCut(buf []byte) int {
+	if i := bytes.IndexByte(buf, '\n'); i >= 0 {
 		return i + 1
 	}
-	if len(buf) >= commandChunkBytes {
-		return runeBoundary(buf, commandChunkBytes)
+	if len(buf) >= maxLineBytes {
+		return maxLineBytes
 	}
 	return 0
 }
 
-func lastIndexByte(b []byte, c byte) int {
-	for i := len(b) - 1; i >= 0; i-- {
-		if b[i] == c {
-			return i
+// emitLineLocked sanitises and scrubs one line as a unit, then publishes it as one or more `output`
+// events of at most commandChunkBytes on rune boundaries, applying the per-command then per-run cap;
+// either cap sets truncated and stops further output for this command. s.mu is held.
+func (s *cmdSink) emitLineLocked(stream string, raw []byte) {
+	text := sanitizeOutput(string(raw))
+	for len(text) > 0 && !s.capped {
+		n := len(text)
+		if n > commandChunkBytes {
+			n = runeBoundary([]byte(text[:commandChunkBytes+1]), commandChunkBytes)
 		}
+		chunk := []byte(text[:n])
+		text = text[n:]
+		if room := commandOutBytes - s.cmdUsed; len(chunk) > room {
+			chunk = chunk[:runeBoundary(chunk, room)]
+			s.truncated, s.capped = true, true
+		}
+		if len(chunk) == 0 {
+			continue
+		}
+		s.rn.tmu.Lock()
+		room := runOutBytes - s.rn.runOut
+		if room < 0 {
+			room = 0
+		}
+		if len(chunk) > room {
+			chunk = chunk[:runeBoundary(chunk, room)]
+			s.truncated, s.capped = true, true
+		}
+		s.rn.runOut += len(chunk)
+		s.rn.tmu.Unlock()
+		if len(chunk) == 0 {
+			continue
+		}
+		s.cmdUsed += len(chunk)
+		s.r.emit(s.rn, "command", s.r.commandEvent(s.rn, CommandEvent{
+			Seq: s.seq, ID: s.id, State: CommandOutput, Stream: stream, Chunk: string(chunk)}))
 	}
-	return -1
 }
 
 // runeBoundary returns a length <= n that does not split a UTF-8 sequence.

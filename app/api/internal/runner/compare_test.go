@@ -36,17 +36,17 @@ func TestCompareTwoArms(t *testing.T) {
 	if !hasPodsMap(rec) {
 		t.Fatalf("run event missing pods map: %s", rec.order())
 	}
-	if got := r.ArmFor(unguardedPod); got != "unguarded" {
+	if got := r.ArmFor("sandbox-unguarded", unguardedPod); got != "unguarded" {
 		t.Fatalf("ArmFor(unguarded) = %q", got)
 	}
-	if got := r.ArmFor(guardedPod); got != "guarded" {
+	if got := r.ArmFor("sandbox", guardedPod); got != "guarded" {
 		t.Fatalf("ArmFor(guarded) = %q", got)
 	}
 
 	// The guarded arm responds (terminate): its pod is deleted; the unguarded one is held CompareHold,
 	// then the API deletes it - which the watch reports as a `pod` Deleted event for that arm.
 	_ = c.CoreV1().Pods("sandbox").Delete(context.Background(), guardedPod, metav1.DeleteOptions{})
-	r.ObserveTalon(guardedPod, "success")
+	r.ObserveTalon("sandbox", guardedPod, "success")
 	rec.waitFor(t, StateFinished)
 	waitArm(t, rec, "unguarded", true) // the twin was cleaned up
 	<-done
@@ -61,9 +61,11 @@ func TestCompareFallsBackWithoutTwin(t *testing.T) {
 	sc := scenario("terminate", true)
 	sc.TimeoutSeconds = 30
 	id := r.StartCompare(sc, release)
-	rec.waitFor(t, StateStarted)
+	// Wait until the pod is Ready (waitReady's Gets are done) before deleting it, so the delete
+	// cannot race the first Get on the fake clientset (a test-only client-go hazard).
+	rec.waitFor(t, StatePodReady)
 	_ = c.CoreV1().Pods("sandbox").Delete(context.Background(), podName(sc.ID, id), metav1.DeleteOptions{})
-	r.ObserveTalon(podName(sc.ID, id), "success")
+	r.ObserveTalon("sandbox", podName(sc.ID, id), "success")
 	rec.waitFor(t, StateFinished)
 	<-done
 	if hasPodsMap(rec) {

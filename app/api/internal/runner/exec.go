@@ -17,16 +17,17 @@ import (
 
 // KubeExecer runs commands through the API server's pods/exec subresource, the same path as
 // `kubectl exec`: WebSocket first, SPDY as the fallback for an API server or proxy that refuses the
-// upgrade. RBAC: `create` on pods/exec in `sandbox` only (cluster/infra/portfolio-api/
-// rbac-sandbox.yaml); since Kubernetes 1.31 a WebSocket exec is authorised as `create` too.
+// upgrade. RBAC: `create` on pods/exec in `sandbox` and the unguarded twin `sandbox-unguarded`
+// (cluster/infra/portfolio-api/); since Kubernetes 1.31 a WebSocket exec is authorised as `create`.
 //
 // A TTY matters for detection, not for the output: Falco's "Terminal shell in container" rule only
 // fires for a shell whose process has a controlling terminal (proc.tty != 0), which is what a
 // visitor's "someone got a shell" story is about. With a TTY the API server requires stdin to be
-// attached, so an empty stdin is sent; the command is non-interactive (`sh -c ...`) by contract.
+// attached, so an empty stdin is sent.
 //
-// Output is discarded: nothing a scenario prints is shown to visitors, and keeping it would only be
-// an unbounded buffer fed by whatever runs in the sandbox.
+// Exec discards output: a scripted scenario shows nothing it prints. ExecStream is the terminal
+// path (ADR 0029): it streams the command's stdout and stderr back and reports the exit code, so
+// the visitor reads what their command printed (scrubbed and capped by the runner's sink).
 type KubeExecer struct {
 	Config *rest.Config
 	Client kubernetes.Interface

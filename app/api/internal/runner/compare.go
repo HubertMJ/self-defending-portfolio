@@ -7,6 +7,10 @@ package runner
 // the run's states; the unguarded arm only emits its own `pod`/`victim` events (and the Falco
 // events the server stamps) with arm="unguarded", and is kept CompareHold after the guarded arm's
 // response so the visitor sees the contrast, then deleted by the API (which is not a `gone` event).
+//
+// The run's `finished` is published only once both pods are gone: the web stops its "attacker has
+// held this pod" counter and re-enables the launcher on `finished`, and the slot is released then,
+// so a premature `finished` would free the launcher while the twin is still up.
 
 import (
 	"context"
@@ -17,22 +21,24 @@ import (
 	"github.com/hubertmj/self-defending-portfolio/app/api/internal/scenarios"
 )
 
-// StartCompare runs sc in the guarded sandbox and the unguarded twin at once under one run id. When
-// the twin namespace is not configured it falls back to a single guarded run, so the endpoint still
-// works on a cluster without the twin.
+// StartCompare runs sc in the guarded sandbox and the unguarded twin at once under one run id. It
+// falls back to a single guarded run when the twin namespace is not configured, and refuses to put
+// an interactive (terminal) scenario in the twin - a terminal run has no single scripted attack to
+// mirror, and the server already refuses `?compare=1` for it; this is the defence in depth.
 func (r *Runner) StartCompare(sc scenarios.Scenario, release func()) string {
-	if r.cfg.UnguardedNamespace == "" || r.cfg.UnguardedNamespace == r.cfg.Namespace {
+	if sc.Interactive || r.cfg.UnguardedNamespace == "" || r.cfg.UnguardedNamespace == r.cfg.Namespace {
 		return r.Start(sc, release)
 	}
 	id := newRunID()
 	guarded := r.newArm(sc, id, r.cfg.Namespace, "guarded", podName(sc.ID, id))
+	guarded.deferFinal = true
 	unguarded := r.newArm(sc, id, r.cfg.UnguardedNamespace, "unguarded", podName(sc.ID, id)+"-u")
 	pods := map[string]string{"guarded": guarded.pod, "unguarded": unguarded.pod}
 	guarded.pods = pods
 
 	r.mu.Lock()
-	r.byPod[guarded.pod] = guarded
-	r.byPod[unguarded.pod] = unguarded
+	r.byPod[podKey(guarded.namespace, guarded.pod)] = guarded
+	r.byPod[podKey(unguarded.namespace, unguarded.pod)] = unguarded
 	r.byID[id] = guarded
 	r.mu.Unlock()
 
@@ -43,8 +49,8 @@ func (r *Runner) StartCompare(sc scenarios.Scenario, release func()) string {
 		defer release()
 		defer func() {
 			r.mu.Lock()
-			delete(r.byPod, guarded.pod)
-			delete(r.byPod, unguarded.pod)
+			delete(r.byPod, podKey(guarded.namespace, guarded.pod))
+			delete(r.byPod, podKey(unguarded.namespace, unguarded.pod))
 			delete(r.byID, id)
 			r.mu.Unlock()
 		}()
@@ -56,7 +62,7 @@ func (r *Runner) StartCompare(sc scenarios.Scenario, release func()) string {
 func (r *Runner) newArm(sc scenarios.Scenario, id, namespace, arm, pod string) *run {
 	return &run{id: id, scenario: sc.ID, pod: pod, namespace: namespace, arm: arm,
 		detected: make(chan struct{}), responded: make(chan struct{}),
-		gone: make(chan struct{}), deleted: make(chan struct{}), firstUnreachable: make(chan struct{})}
+		gone: make(chan struct{}), deleted: make(chan struct{}), unreachable: make(chan struct{}, 1)}
 }
 
 func (r *Runner) executeCompare(guarded, unguarded *run, sc scenarios.Scenario) {
@@ -80,13 +86,17 @@ func (r *Runner) executeCompare(guarded, unguarded *run, sc scenarios.Scenario) 
 		ucancel()
 	}()
 
+	// Both arms have returned only after each has deleted its pod and seen the deletion, so now both
+	// pods are gone: publish the run's deferred `finished`.
 	wg.Wait()
+	r.publish(guarded, guarded.finalState, guarded.finalDetail)
 }
 
 // executeArm runs the unguarded pod: create, wait ready, probe its victim and run the same exec,
-// then hold until ctx is cancelled (by the coordinator) and clean the pod up. It publishes no
+// then hold until ctx is cancelled (by the coordinator) and clean the pod up, waiting for the
+// deletion to be observed so the twin's final `pod` event (deleted=true) is published. It emits no
 // run-state events - the run's states are the guarded arm's - and its own delete is never reported
-// as the victim being killed.
+// as the victim being killed (deleteAndAwait sets selfDelete).
 func (r *Runner) executeArm(ctx context.Context, rn *run, sc scenarios.Scenario) {
 	actx, cancel := context.WithTimeout(ctx, sc.Timeout())
 	defer cancel()
@@ -110,12 +120,7 @@ func (r *Runner) executeArm(ctx context.Context, rn *run, sc scenarios.Scenario)
 	defer func() {
 		stopVictim()
 		if created {
-			rn.selfDelete.Store(true)
-			cctx, ccancel := context.WithTimeout(context.Background(), r.cfg.CleanupTimeout)
-			if _, err := r.deletePodFound(cctx, rn.namespace, rn.pod); err != nil {
-				log.Warn("unguarded pod cleanup failed; activeDeadlineSeconds will end it", "err", err)
-			}
-			ccancel()
+			r.deleteAndAwait(rn, watchDone, log)
 		}
 		stopWatch()
 		<-watchDone
@@ -156,10 +161,11 @@ func (r *Runner) executeArm(ctx context.Context, rn *run, sc scenarios.Scenario)
 	<-actx.Done() // held until the coordinator (or the deadline) stops this arm
 }
 
-// ArmFor reports which arm of a compare run a pod belongs to ("guarded"/"unguarded"), or "" for an
-// ordinary run or an unknown pod. The server stamps it onto Falco and Talon events.
-func (r *Runner) ArmFor(pod string) string {
-	rn := r.lookup(pod)
+// ArmFor reports which arm of a compare run the pod belongs to ("guarded"/"unguarded"), or "" for an
+// ordinary run or an unknown pod. The server stamps it onto Falco and Talon events, keyed - like
+// every pod lookup - by namespace and name, since the arms live in different namespaces.
+func (r *Runner) ArmFor(namespace, pod string) string {
+	rn := r.lookup(namespace, pod)
 	if rn == nil {
 		return ""
 	}

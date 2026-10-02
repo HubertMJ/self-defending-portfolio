@@ -78,6 +78,9 @@ type RunEvent struct {
 	// Pods names both arms of a compare run (ADR 0031): {"guarded": ..., "unguarded": ...}; absent
 	// on an ordinary run. Pod stays the guarded arm's pod, since the run states follow it.
 	Pods map[string]string `json:"pods,omitempty"`
+	// CommandSeq ties a terminal run's `detected`/`responded` to the command it is about, so the
+	// page can show "killed N ms after your Enter" (ADR 0029); absent otherwise, best effort.
+	CommandSeq int `json:"command_seq,omitempty"`
 }
 
 // Publisher is the event hub as the runner sees it.
@@ -114,8 +117,9 @@ type Config struct {
 	// the run waits for that event and then this long, bounded by QuarantineLingerMax. A negative
 	// value disables the linger entirely (tests: the pod is deleted as soon as Talon responds).
 	QuarantineLinger time.Duration
-	// QuarantineLingerMax caps the whole post-response linger, so a quarantine that never produces
-	// an `unreachable` event (no victim app, or the probe keeps answering) still ends promptly.
+	// QuarantineLingerMax is the hard ceiling on the post-response wait when a poller is running but
+	// the expected `unreachable` never arrives (the probe keeps answering). Without a poller the
+	// linger is a short fixed QuarantineLinger instead, not this cap.
 	QuarantineLingerMax time.Duration
 	// CleanupTimeout bounds the final pod deletion.
 	CleanupTimeout time.Duration
@@ -151,7 +155,15 @@ type Runner struct {
 	mu    sync.Mutex
 	byPod map[string]*run
 	byID  map[string]*run
+	// ended remembers recently finished terminal run ids (a bounded ring), so a command or a
+	// leave on a run that is over gets 409 "already over" rather than 404 (ADR 0029).
+	ended     map[string]bool
+	endedRing []string
 }
+
+// maxEndedTracked bounds the ended-terminal set; older ids fall off and then read as unknown (404),
+// which is harmless once a run is long gone.
+const maxEndedTracked = 256
 
 type run struct {
 	id, scenario, pod string
@@ -171,10 +183,11 @@ type run struct {
 	// not Talon's doing and is not reported as the victim being killed.
 	selfDelete     atomic.Bool
 	victimGoneOnce sync.Once
-	// firstUnreachable is closed by the victim poller the first time it publishes an `unreachable`
-	// event, so a quarantine run can linger exactly until the cut is visible (FIX 1).
-	firstUnreachable chan struct{}
-	firstUnreachOnce sync.Once
+	// unreachable gets a non-blocking send from the victim poller every time it publishes an
+	// `unreachable` event (buffered 1). A quarantine run drains it at the response and then waits
+	// for the next one, so it lingers until the cut that follows the label is visible - not a cut
+	// seen before the response (FIX 1, ADR 0029).
+	unreachable chan struct{}
 
 	// Terminal-run state (ADR 0029), guarded by tmu. A terminal run keeps its pod alive and runs
 	// catalogue commands on request, one at a time; the rest is nil/zero for a scripted run.
@@ -186,29 +199,35 @@ type run struct {
 	namespace string
 	// pods names both arms of a compare run, published on the run events; nil otherwise.
 	pods map[string]string
+	// deferFinal holds the guarded arm's final run event back for the compare coordinator, which
+	// publishes it only once both pods are gone (ADR 0031); finalState/finalDetail carry it.
+	deferFinal              bool
+	finalState, finalDetail string
 
 	terminal  bool
 	sc        scenarios.Scenario
 	token     string
 	flag      string          // SDP_FLAG set on the pod this run
-	cmds      chan commandReq // buffered 1: the server hands a resolved command to the run goroutine
+	cmds      chan commandReq // unbuffered: the loop receives a command only while it can run it
+	loopDone  chan struct{}   // closed when the terminal loop stops accepting commands
 	leave     chan struct{}   // closed by Leave (the visitor pressed "leave")
 	leaveOnce sync.Once
 
-	tmu          sync.Mutex
-	over         bool      // the run has ended; no new command is accepted
-	ready        bool      // the pod is Ready; commands are accepted only between ready and over
-	running      bool      // a command is executing right now
-	seq          int       // last seq handed out
-	count        int       // commands accepted so far (capped per run)
-	curSeq       int       // the running command's seq (0 when none running)
-	curCmdID     string    // the running command's id
-	lastSeq      int       // the last finished command's seq
-	lastCmdID    string    // the last finished command's id
-	lastEnded    time.Time // when the last command finished (for the 2 s command_seq window)
-	detectedSeq  int       // the seq a `detected` run event was last published for
-	respondedSeq int       // the seq a `responded` run event was last published for
-	runOut       int       // bytes of command output published across the run (32 KiB budget)
+	tmu           sync.Mutex
+	over          bool      // the run has ended; no new command is accepted
+	ready         bool      // the pod is Ready; commands are accepted only between ready and over
+	running       bool      // a command is executing right now
+	seq           int       // last seq handed out
+	count         int       // commands accepted so far (capped per run)
+	curSeq        int       // the running command's seq (0 when none running)
+	curCmdID      string    // the running command's id
+	lastSeq       int       // the last finished command's seq
+	lastCmdID     string    // the last finished command's id
+	lastEnded     time.Time // when the last command finished (for the 2 s command_seq window)
+	detectedSeq   int       // the seq a `detected` run event was last published for
+	respondedSeq  int       // the seq a `responded` run event was last published for
+	respondedZero bool      // a response correlated to no command was already published
+	runOut        int       // bytes of command output published across the run (32 KiB budget)
 }
 
 // commandReq is one resolved command the server asked the run goroutine to execute.
@@ -279,7 +298,7 @@ func New(client kubernetes.Interface, exec Execer, pub Publisher, log *slog.Logg
 	return &Runner{client: client, exec: exec, pub: pub, log: log, cfg: cfg, now: time.Now,
 		lingerDisabled: lingerDisabled,
 		prober:         newVictimProber(cfg.VictimPort, cfg.VictimTimeout),
-		base:           ctx, cancel: cancel, byPod: map[string]*run{}, byID: map[string]*run{}}
+		base:           ctx, cancel: cancel, byPod: map[string]*run{}, byID: map[string]*run{}, ended: map[string]bool{}}
 }
 
 // Start publishes `queued` and runs sc in the background. release is called exactly once, after the
@@ -299,7 +318,8 @@ func (r *Runner) StartTerminal(sc scenarios.Scenario, release func()) (string, s
 	rn.sc = sc
 	rn.token = newToken()
 	rn.flag = newFlag()
-	rn.cmds = make(chan commandReq, 1)
+	rn.cmds = make(chan commandReq)
+	rn.loopDone = make(chan struct{})
 	rn.leave = make(chan struct{})
 	r.launch(rn, sc, release)
 	return rn.id, rn.token
@@ -310,12 +330,12 @@ func (r *Runner) newRun(sc scenarios.Scenario) *run {
 	return &run{id: id, scenario: sc.ID, pod: podName(sc.ID, id), namespace: r.cfg.Namespace,
 		detected: make(chan struct{}), responded: make(chan struct{}),
 		gone: make(chan struct{}), deleted: make(chan struct{}),
-		firstUnreachable: make(chan struct{})}
+		unreachable: make(chan struct{}, 1)}
 }
 
 func (r *Runner) launch(rn *run, sc scenarios.Scenario, release func()) {
 	r.mu.Lock()
-	r.byPod[rn.pod] = rn
+	r.byPod[podKey(rn.namespace, rn.pod)] = rn
 	r.byID[rn.id] = rn
 	r.mu.Unlock()
 	r.publish(rn, StateQueued, "")
@@ -325,20 +345,46 @@ func (r *Runner) launch(rn *run, sc scenarios.Scenario, release func()) {
 		defer release()
 		defer func() {
 			r.mu.Lock()
-			delete(r.byPod, rn.pod)
+			delete(r.byPod, podKey(rn.namespace, rn.pod))
 			delete(r.byID, rn.id)
+			if rn.terminal {
+				r.markEndedLocked(rn.id)
+			}
 			r.mu.Unlock()
 		}()
 		r.execute(rn, sc)
 	}()
 }
 
+// markEndedLocked remembers a finished terminal run id, oldest evicted past the cap. r.mu held.
+func (r *Runner) markEndedLocked(id string) {
+	if r.ended[id] {
+		return
+	}
+	r.ended[id] = true
+	r.endedRing = append(r.endedRing, id)
+	if len(r.endedRing) > maxEndedTracked {
+		old := r.endedRing[0]
+		r.endedRing = r.endedRing[1:]
+		delete(r.ended, old)
+	}
+}
+
+// wasTerminal reports whether id was a terminal run that has since ended.
+func (r *Runner) wasTerminal(id string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.ended[id]
+}
+
 // ObserveFalco correlates a Falco alert with the active run whose pod it names. For a scripted run
 // it unblocks the one detection the run is waiting for; for a terminal run it publishes a
 // `detected` run event against the command that is running (or just ran), which may happen more
-// than once in the run (ADR 0029).
-func (r *Runner) ObserveFalco(pod string) {
-	rn := r.lookup(pod)
+// than once in the run (ADR 0029). rule is the Falco rule that fired, used as the terminal
+// `detected` detail (a command whose catalogue outcome is not `detected` carries no rule of its
+// own, so the real rule name is the only honest detail).
+func (r *Runner) ObserveFalco(namespace, pod, rule string) {
+	rn := r.lookup(namespace, pod)
 	if rn == nil {
 		return
 	}
@@ -346,15 +392,15 @@ func (r *Runner) ObserveFalco(pod string) {
 		rn.detectOnce.Do(func() { close(rn.detected) })
 		return
 	}
-	r.terminalDetected(rn)
+	r.terminalDetected(rn, rule)
 }
 
 // ObserveTalon correlates a successful Talon action with the active run whose pod it names.
-func (r *Runner) ObserveTalon(pod, status string) {
+func (r *Runner) ObserveTalon(namespace, pod, status string) {
 	if status != "success" {
 		return
 	}
-	rn := r.lookup(pod)
+	rn := r.lookup(namespace, pod)
 	if rn == nil {
 		return
 	}
@@ -365,13 +411,17 @@ func (r *Runner) ObserveTalon(pod, status string) {
 	r.terminalResponded(rn)
 }
 
-func (r *Runner) lookup(pod string) *run {
+// podKey indexes a run by the pod's namespace and name together: a compare run's guarded and
+// unguarded arms live in different namespaces, so a name alone is no longer a unique key (ADR 0031).
+func podKey(namespace, name string) string { return namespace + "/" + name }
+
+func (r *Runner) lookup(namespace, pod string) *run {
 	if pod == "" {
 		return nil
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return r.byPod[pod]
+	return r.byPod[podKey(namespace, pod)]
 }
 
 func (r *Runner) lookupID(id string) *run {
@@ -417,7 +467,7 @@ func (r *Runner) cleanupOrphansIn(ctx context.Context, namespace string) error {
 		return err
 	}
 	for _, p := range pods.Items {
-		if r.lookup(p.Name) != nil {
+		if r.lookup(namespace, p.Name) != nil {
 			continue
 		}
 		r.log.Info("deleting orphaned scenario pod", "pod", p.Name, "namespace", namespace)
@@ -459,36 +509,20 @@ func (r *Runner) execute(rn *run, sc scenarios.Scenario) {
 		// doing, not the attack's or Talon's, and must not show up as the victim's state.
 		stopVictim()
 		if created {
-			rn.selfDelete.Store(true)
-			cctx, ccancel := context.WithTimeout(context.Background(), r.cfg.CleanupTimeout)
-			alreadyGone, err := r.deletePodFound(cctx, rn.namespace, rn.pod)
-			if err != nil {
-				log.Error("scenario pod cleanup failed; activeDeadlineSeconds will end it", "err", err)
-				if final == StateFinished {
-					detail = "pod cleanup failed"
-				}
-			}
-			ccancel()
-			if alreadyGone {
-				// Talon deleted it before the cleanup got there.
-				rn.goneOnce.Do(func() { close(rn.gone) })
-			}
-			if err == nil {
-				t := time.NewTimer(r.cfg.DeleteWait)
-				select {
-				case <-rn.deleted:
-				case <-watchDone:
-				case <-t.C:
-				}
-				t.Stop()
-			}
+			r.deleteAndAwait(rn, watchDone, log)
 		}
 		stopWatch()
 		<-watchDone
 		if victimStarted && rn.isGone() {
 			r.publishVictimGone(rn)
 		}
-		r.publish(rn, final, detail)
+		// A compare run's guarded arm defers its `finished` to the coordinator, which publishes it
+		// only once both pods are gone (ADR 0031); an ordinary run publishes it here.
+		if rn.deferFinal {
+			rn.finalState, rn.finalDetail = final, detail
+		} else {
+			r.publish(rn, final, detail)
+		}
 		log.Info("run ended", "state", final, "detail", detail)
 	}()
 
@@ -516,6 +550,14 @@ func (r *Runner) execute(rn *run, sc scenarios.Scenario) {
 			final, detail = StateFailed, "API shutting down"
 		}
 		return
+	}
+	if sc.Interactive {
+		// Accept commands from the moment pod_ready is on the wire: a command sent on pod_ready then
+		// waits for the loop (an unbuffered hand-off) instead of racing the victim probe for a 409
+		// (ADR 0029, item 30). The command loop itself starts just below.
+		rn.tmu.Lock()
+		rn.ready = true
+		rn.tmu.Unlock()
 	}
 	r.publish(rn, StatePodReady, viewOf(ready, sc.Container(), false).containerID)
 
@@ -565,7 +607,7 @@ func (r *Runner) execute(rn *run, sc scenarios.Scenario) {
 			}
 			r.publish(rn, StateResponded, sc.Response)
 			if sc.Response == "quarantine" {
-				r.lingerForQuarantine(ctx, rn)
+				r.lingerForQuarantine(ctx, rn, victimStarted)
 			}
 			return
 		case <-ctx.Done():
@@ -660,27 +702,77 @@ func (r *Runner) deletePodFound(ctx context.Context, namespace, name string) (bo
 
 // lingerForQuarantine keeps a quarantined pod alive long enough for the visitor to see the cut
 // (FIX 1, ADR 0029). The old fixed 5 s linger deleted the pod before Cilium had finished isolating
-// it, so the probe was still answering and no `unreachable` event ever reached the page. Now the
-// run waits for the first `unreachable` victim event and then QuarantineLinger (3 s) more, the
-// whole wait bounded by QuarantineLingerMax (40 s) so a run that never goes unreachable still ends.
-// A negative QuarantineLinger (tests) skips the wait entirely.
-func (r *Runner) lingerForQuarantine(ctx context.Context, rn *run) {
+// it, so the probe was still answering and no `unreachable` event ever reached the page.
+//
+// With a victim poller running, it waits for an `unreachable` event *after* the response (it drains
+// any seen before, which belong to a different moment) and then QuarantineLinger (3 s) more; a pod
+// deleted during the wait (rn.gone) or the overall cap QuarantineLingerMax (40 s) end it early.
+// Without a poller - no victim app, or the probe never started - there is nothing to wait for, so a
+// short fixed linger stands in rather than the full cap. A negative QuarantineLinger disables it.
+func (r *Runner) lingerForQuarantine(ctx context.Context, rn *run, pollerRunning bool) {
 	if r.lingerDisabled {
 		return
 	}
 	cap := time.NewTimer(r.cfg.QuarantineLingerMax)
 	defer cap.Stop()
+	if !pollerRunning {
+		fixed := time.NewTimer(r.cfg.QuarantineLinger)
+		defer fixed.Stop()
+		select {
+		case <-fixed.C:
+		case <-rn.gone:
+		case <-cap.C:
+		case <-ctx.Done():
+		}
+		return
+	}
+	// An `unreachable` seen before the response is a different moment; wait for the next one.
 	select {
-	case <-rn.firstUnreachable:
+	case <-rn.unreachable:
+	default:
+	}
+	select {
+	case <-rn.unreachable:
 		grace := time.NewTimer(r.cfg.QuarantineLinger)
 		defer grace.Stop()
 		select {
 		case <-grace.C:
+		case <-rn.gone:
 		case <-cap.C:
 		case <-ctx.Done():
 		}
+	case <-rn.gone:
+		// Already deleted during the wait: no need to linger.
 	case <-cap.C:
 	case <-ctx.Done():
+	}
+}
+
+// deleteAndAwait deletes the run's pod (as the API's own cleanup, so the deletion is not reported
+// as the victim being killed) and waits briefly for the watch to report it, so the pod's
+// `deleted=true` event is published before the run ends. Shared by the scripted/terminal path and
+// the compare twin (ADR 0031: the twin's delete must be observed, not dropped).
+func (r *Runner) deleteAndAwait(rn *run, watchDone <-chan struct{}, log *slog.Logger) {
+	rn.selfDelete.Store(true)
+	cctx, ccancel := context.WithTimeout(context.Background(), r.cfg.CleanupTimeout)
+	alreadyGone, err := r.deletePodFound(cctx, rn.namespace, rn.pod)
+	ccancel()
+	if err != nil {
+		// Logged, not folded into the run's detail: the final `finished` detail is the run's outcome
+		// (for a terminal run, one of killed/left/idle/deadline), not a cleanup note.
+		// activeDeadlineSeconds still ends the pod.
+		log.Error("scenario pod cleanup failed; activeDeadlineSeconds will end it", "err", err)
+		return
+	}
+	if alreadyGone {
+		rn.goneOnce.Do(func() { close(rn.gone) }) // Talon deleted it before the cleanup got there
+	}
+	t := time.NewTimer(r.cfg.DeleteWait)
+	defer t.Stop()
+	select {
+	case <-rn.deleted:
+	case <-watchDone:
+	case <-t.C:
 	}
 }
 
@@ -695,6 +787,16 @@ func (r *Runner) sleep(ctx context.Context, d time.Duration) {
 
 func (r *Runner) publish(rn *run, state, detail string) {
 	ev := RunEvent{RunID: rn.id, Scenario: rn.scenario, State: state, At: r.now().UTC(), Detail: detail, Pods: rn.pods}
+	if rn.podVisible {
+		ev.Pod = rn.pod
+	}
+	r.emit(rn, "run", ev)
+}
+
+// publishCmd is publish with a command seq, for a terminal run's detected/responded events.
+func (r *Runner) publishCmd(rn *run, state, detail string, seq int) {
+	ev := RunEvent{RunID: rn.id, Scenario: rn.scenario, State: state, At: r.now().UTC(), Detail: detail,
+		Pods: rn.pods, CommandSeq: seq}
 	if rn.podVisible {
 		ev.Pod = rn.pod
 	}
@@ -744,9 +846,11 @@ func buildPod(rn *run, sc scenarios.Scenario, namespace string, timeout time.Dur
 	spec.AutomountServiceAccountToken = &no
 	spec.EnableServiceLinks = &no
 	if sc.Interactive {
-		// The run's own flag (ADR 0029): the victim writes it to /srv/shop/.flag (0600) and never
-		// serves it; a visitor who reads the file sees it, which is an objective, but it never
-		// leaves the pod on its own. It is per run, so one visitor cannot read another's.
+		// The run's own flag (ADR 0029): a fresh value per run, so one run's flag is never another's.
+		// The victim writes it to /srv/shop/.flag (0600) and never serves it; a visitor reaches it
+		// only by running a command that reads the file, and once they do, that command's output is
+		// broadcast to every subscriber of this run's feed - as any command output is. The flag is
+		// the run's secret, not a per-viewer one.
 		setEnv(&spec, scenarios.TerminalContainer, "SDP_FLAG", rn.flag)
 	}
 	return &corev1.Pod{
@@ -791,7 +895,7 @@ func setEnv(spec *corev1.PodSpec, container, name, value string) {
 		env := spec.Containers[i].Env
 		for j := range env {
 			if env[j].Name == name {
-				env[j].Value = value
+				env[j].Value, env[j].ValueFrom = value, nil // a literal wins; never leave a dangling valueFrom
 				spec.Containers[i].Env = env
 				return
 			}

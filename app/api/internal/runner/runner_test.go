@@ -246,16 +246,16 @@ func TestTerminateRunLifecycle(t *testing.T) {
 	}
 
 	// Unrelated pods and failed actions do not move the run.
-	r.ObserveFalco("someone-else")
-	r.ObserveTalon(pod, "failure")
-	r.ObserveFalco(pod)
-	r.ObserveFalco(pod) // duplicates are harmless
+	r.ObserveFalco("sandbox", "someone-else", "")
+	r.ObserveTalon("sandbox", pod, "failure")
+	r.ObserveFalco("sandbox", pod, "")
+	r.ObserveFalco("sandbox", pod, "") // duplicates are harmless
 	if ev := rec.waitFor(t, StateDetected); ev.Detail != "Terminal shell in container" {
 		t.Fatalf("detected detail %q", ev.Detail)
 	}
 	// Talon deletes the pod before it reports.
 	_ = c.CoreV1().Pods("sandbox").Delete(context.Background(), pod, metav1.DeleteOptions{})
-	r.ObserveTalon(pod, "success")
+	r.ObserveTalon("sandbox", pod, "success")
 	rec.waitFor(t, StateResponded)
 	rec.waitFor(t, StateFinished)
 	<-done
@@ -266,7 +266,7 @@ func TestTerminateRunLifecycle(t *testing.T) {
 	if ex.count() != 1 || !ex.tty {
 		t.Fatalf("exec calls = %v tty=%v", ex.calls, ex.tty)
 	}
-	if r.lookup(pod) != nil {
+	if r.lookup("sandbox", pod) != nil {
 		t.Fatal("run still registered after it ended")
 	}
 }
@@ -283,7 +283,7 @@ func TestQuarantineRunDeletesPod(t *testing.T) {
 	pod := podName(sc.ID, id)
 	rec.waitFor(t, StateStarted)
 	// The response arrives before the alert: detected is still reported, first.
-	r.ObserveTalon(pod, "success")
+	r.ObserveTalon("sandbox", pod, "success")
 	<-done
 	if got := strings.Join(rec.states(), ","); got != "queued,started,pod_ready,detected,responded,finished" {
 		t.Fatalf("states = %s", got)
@@ -302,7 +302,7 @@ func TestTimeoutCleansUp(t *testing.T) {
 	sc := scenario("terminate", false)
 	id := r.Start(sc, release)
 	rec.waitFor(t, StateStarted)
-	r.ObserveFalco(podName(sc.ID, id))
+	r.ObserveFalco("sandbox", podName(sc.ID, id), "")
 	ev := rec.waitFor(t, StateTimeout)
 	<-done
 	if !strings.Contains(ev.Detail, "detected") {
@@ -420,7 +420,7 @@ func TestPreExecRunsFirstWithoutTTY(t *testing.T) {
 		time.Sleep(5 * time.Millisecond)
 	}
 	_ = c.CoreV1().Pods("sandbox").Delete(context.Background(), pod, metav1.DeleteOptions{})
-	r.ObserveTalon(pod, "success")
+	r.ObserveTalon("sandbox", pod, "success")
 	rec.waitFor(t, StateFinished)
 	<-done
 
