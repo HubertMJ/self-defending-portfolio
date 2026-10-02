@@ -1032,6 +1032,195 @@ bundled `coredns.yaml`; the pin is `k3s_coredns_image` in `ansible/roles/k3s/def
   `kubectl -n kube-system delete addon coredns-sdp` removes the stale bookkeeping object (its
   objects carry no owner references, so nothing else goes with it).
 
+### 8.8 Cilium from this repository (stage 1, then three switch commits, agent last; ADR 0028)
+
+`app/cilium`, `app/cilium-operator-generic`, `app/hubble-relay` and `app/cilium-envoy` are Cilium
+1.19.8 with the Go binaries rebuilt against fixed dependencies (and Ubuntu's OpenSSL updated), on
+upstream's own layers. They are deployed through chart image overrides in `cluster/apps/cilium.yaml`
+(Argo CD) and, identically, in `cilium_values` of the cilium role (which only matters for a rebuild
+from zero: the role leaves a release Argo CD owns alone). This is the one component where a bad
+image takes the whole node off the network, Argo CD included, so the switch is three commits pushed
+one at a time, each image pre-pulled, each step checked before the next, and the rollback rehearsed
+in your head before you start.
+
+1. **Stage 1: the images (done).** The commit that adds `app/cilium*` and `app/hubble-relay` is on
+   `main` (with the smoke-test fix after it). The workflow builds four images
+   (upstream tests, Trivy gate, image smoke test, SBOM, cosign) and prints a digest for each. Nothing
+   in the cluster changes. Make the four GHCR packages public (5.2): containerd pulls them without
+   credentials, and a rebuild from zero needs the agent image before anything else runs. Then, from a
+   machine not logged in to GHCR:
+
+   ```sh
+   R=ghcr.io/hubertmj/self-defending-portfolio
+   for n in cilium cilium-operator-generic hubble-relay cilium-envoy; do
+     read -rp "$n digest: " d; scripts/verify-image.sh "$R/$n@$d" && app/$n/test/image-smoke.sh "$R/$n@$d"
+   done
+   ```
+
+2. **Baseline, before every switch.** Record what "healthy" looks like, so "after" is a diff, not an
+   impression. Keep the DNS probe from 8.7 running in a second terminal through every step.
+
+   ```sh
+   kubectl -n argocd get applications                                        # all Synced/Healthy
+   kubectl -n kube-system get ds,deploy -l app.kubernetes.io/part-of=cilium -o wide
+   kubectl -n kube-system exec ds/cilium -c cilium-agent -- cilium-dbg status --brief   # OK
+   kubectl -n kube-system exec ds/cilium -c cilium-agent -- cilium-dbg version
+   # Client: 1.19.8 5791d208 2026-09-15T18:23:52+00:00 go version go1.26.8 linux/amd64 (Daemon: the same)
+   kubectl -n kube-system exec ds/cilium -c cilium-agent -- cilium-dbg status --verbose \
+     | grep -E 'KubeProxyReplacement|Envoy|Hubble|Controller Status|Proxy Status|Cluster health'
+   RELAY=$(kubectl -n kube-system get svc hubble-relay -o jsonpath='{.spec.clusterIP}')
+   kubectl -n kube-system exec ds/cilium -c cilium-agent -- hubble status --server "$RELAY:80"
+   # Healthcheck (via ...): Ok, Connected Nodes: 1/1
+   kubectl -n kube-system exec ds/cilium -c cilium-agent -- hubble observe --last 5 --server "$RELAY:80"
+   curl -s -o /dev/null -w '%{http_code}\n' https://hubertjablon.ski/              # 200
+   curl -s https://hubertjablon.ski/api/healthz                                   # {"status":"ok"}
+   kubectl -n kube-system logs ds/cilium -c cilium-agent --since=30m | grep -cE 'level=(error|fatal)'
+   kubectl -n kube-system get vulnerabilityreports \
+     -o custom-columns=NAME:.metadata.name,IMAGE:.report.artifact.repository,C:.report.summary.criticalCount,H:.report.summary.highCount \
+     | grep -E 'cilium|hubble'                                                     # the "before"
+   ```
+
+   Pre-pull the step's image on the node, so no rollout waits on a registry after its old pod is
+   gone (`cilium` and `cilium-envoy` are DaemonSets with `maxSurge: 0` on one node: the old pod is
+   deleted before the new one starts). A failed pull here is also the cheapest way to find a package
+   that is still private. Do not prune images on the node during the rollout: upstream's images
+   staying in containerd's store is what makes the rollback instant.
+
+   ```sh
+   ssh k3s01 sudo k3s crictl pull ghcr.io/hubertmj/self-defending-portfolio/<name>@sha256:<digest>
+   ```
+
+   **Each switch commit carries its real digests and is pushed alone**, on top of `main`, with the
+   checks of its step done before the next push. The digests pinned (built from `main` and signed
+   by build-images.yml; `scripts/verify-image.sh` each before the first push):
+
+   | image | digest |
+   |---|---|
+   | cilium | `sha256:5c5dcd9b1a13a333194166dfc94051cd7793ab7b65e9a653bd0d831e0d984e29` |
+   | cilium-operator-generic | `sha256:04f4695b73b283f33b22b2d27b301df8214f35916f4d24129d71ee8f558c5db0` |
+   | hubble-relay | `sha256:23fb1c3769503fd2a322e386d65df2fe0402c3ba4185f338d6de53ae4d5bbf3e` |
+   | cilium-envoy | `sha256:6ad67d1d41da91b9b93b7b42cc16c1f899fefd2e4dfc425438c00017f95c91e0` |
+
+   ```sh
+   git push origin <switch commit>:main      # one switch at a time, oldest first
+   ```
+
+   A later rebuild (new digest) is `scripts/bump-image-digest.sh <name> sha256:<digest>`, which
+   rewrites both `cluster/apps/cilium.yaml` and the role, then `make lint validate`, commit, push -
+   again with the pre-pull and the step's checks.
+
+3. **Switch 1: operator and Hubble Relay** (commit "cilium: run the operator and Hubble Relay from
+   this repository's signed images"). Neither is
+   on the packet path: the agent keeps forwarding without the operator, and Relay is only Hubble's
+   cluster-wide view.
+
+   Argo CD syncs within its poll (3 min), or nudge it:
+   `kubectl -n argocd patch app cilium --type merge -p '{"metadata":{"annotations":{"argocd.argoproj.io/refresh":"normal"}}}'`. Then:
+
+   ```sh
+   kubectl -n kube-system rollout status deploy/cilium-operator --timeout=5m
+   kubectl -n kube-system rollout status deploy/hubble-relay --timeout=5m
+   kubectl -n kube-system get deploy cilium-operator hubble-relay \
+     -o jsonpath='{range .items[*]}{.spec.template.spec.containers[0].image}{"\n"}{end}'   # ghcr.io/... both
+   kubectl -n kube-system logs deploy/cilium-operator --since=10m | grep -E 'level=(error|fatal)'   # nothing new
+   kubectl -n kube-system exec ds/cilium -c cilium-agent -- hubble status --server "$RELAY:80"      # Ok, 1/1
+   kubectl -n kube-system exec ds/cilium -c cilium-agent -- hubble observe --last 5 --server "$RELAY:80"
+   ```
+
+   The operator's own work shows within minutes: its log shows it acquiring the leader lease and
+   starting its controllers (Gateway API among them), and `kubectl get gateway -A` stays Programmed.
+
+4. **Switch 2: cilium-envoy** (commit "cilium: run cilium-envoy from this repository's signed
+   image"). This restarts the Gateway's L7 data plane, so the site blips for the seconds the Envoy
+   pod takes to come back; do it when a blip is acceptable. Pre-pull, push the commit, then:
+
+   ```sh
+   kubectl -n kube-system rollout status ds/cilium-envoy --timeout=5m
+   kubectl -n kube-system logs ds/cilium-envoy --since=10m | grep -iE 'critical|error' | head
+   kubectl -n kube-system exec ds/cilium -c cilium-agent -- cilium-dbg status --verbose | grep -iA2 envoy
+   curl -s -o /dev/null -w '%{http_code}\n' https://hubertjablon.ski/              # 200
+   curl -s -o /dev/null -w '%{http_code} %{redirect_url}\n' http://hubertjablon.ski/   # the https redirect
+   curl -s https://hubertjablon.ski/api/healthz
+   kubectl -n kube-system exec ds/cilium -c cilium-agent -- hubble observe --protocol dns -n cloudflared --last 5
+   ```
+
+   The site checks exercise the Gateway listeners (TLS from the certificate in `cilium-secrets`,
+   the routes, the trusted XFF hop). The last line is a control: L7 DNS visibility is the agent's DNS
+   proxy, not Envoy, and must be unaffected.
+
+5. **Switch 3: the agent** (commit "cilium: run the Cilium agent from this repository's signed
+   image"). Last, and alone. What happens on one node: the agent pod is deleted, its BPF programs and
+   maps stay pinned in the kernel, so established connections and Services keep working; for the
+   30-90 s until the new agent is Ready, *new* pods cannot get an address (CNI ADD fails and the
+   kubelet retries). Pre-pull (the agent image is about 1 GB - pull it before, not during), push
+   the commit, then:
+
+   ```sh
+   kubectl -n kube-system rollout status ds/cilium --timeout=5m
+   kubectl -n kube-system get ds cilium -o jsonpath='{range .spec.template.spec.initContainers[*]}{.image}{"\n"}{end}{.spec.template.spec.containers[0].image}{"\n"}'
+   # seven lines, all ghcr.io/hubertmj/self-defending-portfolio/cilium:main@sha256:<digest>
+   kubectl -n kube-system exec ds/cilium -c cilium-agent -- cilium-dbg status --brief   # OK
+   kubectl -n kube-system exec ds/cilium -c cilium-agent -- cilium-dbg version          # identical to the baseline
+   kubectl -n kube-system exec ds/cilium -c cilium-agent -- cilium-dbg status --verbose \
+     | grep -E 'KubeProxyReplacement|Envoy|Hubble|Controller Status|Proxy Status|Cluster health'
+   kubectl -n kube-system logs ds/cilium -c cilium-agent --since=10m | grep -E 'level=(error|fatal)'
+   kubectl -n kube-system exec ds/cilium -c cilium-agent -- hubble status --server "$RELAY:80"
+   curl -s -o /dev/null -w '%{http_code}\n' https://hubertjablon.ski/              # 200
+   make runtime-test     # new pods (CNI ADD), Falco -> Talon, and the quarantine CiliumClusterwideNetworkPolicy
+   make verify
+   kubectl -n argocd get applications                                        # all Synced/Healthy
+   ```
+
+   `make runtime-test` is the end-to-end proof for the agent: it creates pods (the CNI path), and its
+   second case only passes if the agent enforces a freshly applied CiliumClusterwideNetworkPolicy
+   (DNS works, then the quarantine label cuts it off). A visitor-facing check: start one attack
+   scenario from the site and watch it finish.
+
+   **Stop condition, every step:** a rollout not complete in 5 minutes, `cilium-dbg status --brief`
+   not `OK`, the site not 200, the DNS probe printing FAIL for more than a few seconds, or new
+   `level=error` lines that were not in the baseline - roll back, then investigate.
+
+6. **After.** Trivy Operator rescans kube-system within its cycle: the VulnerabilityReports for the
+   cilium DaemonSet (agent and its six init containers), cilium-envoy, cilium-operator and
+   hubble-relay show the ghcr.io images at 0, and the posture page moves Cilium to the own column.
+
+**Rollback.** Three levels, from the normal one down:
+
+- *Normal: revert the switch commit.* `git revert <commit> && git push`; Argo CD rolls back to the
+  chart's upstream image within its poll (or the refresh nudge above). Upstream's images are still in
+  the node's image store, so the pull is instant. Revert the switches in reverse order if more than
+  one is in. Then repeat the checks of that step.
+- *Argo CD cannot act* (for example the new agent is crash-looping and Argo CD's own pods have lost
+  networking, or GitHub is unreachable). The API server is a k3s host process on 10.4.1.20:6443 and
+  does not need Cilium, so kubectl works from the operator machine (or `ssh k3s01 sudo k3s kubectl`).
+  First stop Argo CD from undoing the fix - the root Application would restore the cilium
+  Application's sync policy, so both - then put the upstream image back directly:
+
+  ```sh
+  kubectl -n argocd patch application root   --type merge -p '{"spec":{"syncPolicy":{"automated":null}}}'
+  kubectl -n argocd patch application cilium --type merge -p '{"spec":{"syncPolicy":{"automated":null}}}'
+  U=quay.io/cilium/cilium:v1.19.8@sha256:e9f7ee1f2f3a41e44339612e3b6b88170bdde7679c9c9461f287bb27702a8ecf
+  kubectl -n kube-system set image ds/cilium cilium-agent=$U config=$U mount-cgroup=$U \
+    apply-sysctl-overwrites=$U mount-bpf-fs=$U clean-cilium-state=$U install-cni-binaries=$U
+  kubectl -n kube-system set image ds/cilium-envoy \
+    cilium-envoy=quay.io/cilium/cilium-envoy:v1.37.6-1789133542-cbec91f666af0bf742da986d43832932dbb26b82@sha256:af7382699576b9e65e9184efa52eeca0b58aea70ad6e511bf260c91d9f740463
+  kubectl -n kube-system set image deploy/cilium-operator \
+    cilium-operator=quay.io/cilium/operator-generic:v1.19.8@sha256:786ec9bb1a9344435e3e3f994bc4ed3a4a85afa6a314e98681af241f8be79833
+  kubectl -n kube-system set image deploy/hubble-relay \
+    hubble-relay=quay.io/cilium/hubble-relay:v1.19.8@sha256:f78768be216b5c00137c7d4da440724d0b49986805d361e7458cc8fe9ff976ff
+  kubectl -n kube-system rollout status ds/cilium --timeout=5m
+  ```
+
+  (Only the lines for the components that were switched are needed.) Then revert the switch commits
+  in git and push, and give Argo CD its sync policy back by re-applying the bootstrap, which restores
+  the root Application, which restores the cilium Application:
+  `kubectl apply -k cluster/bootstrap/argocd --server-side --force-conflicts`. Argo CD then finds the
+  live objects already equal to git.
+- *Ansible is not a rollback tool here.* The cilium role deliberately skips `helm` once the Argo CD
+  Application exists (a `helm upgrade` would trip over objects Argo CD created without Helm's
+  ownership metadata). Its `cilium_values` carry the same overrides only so that a rebuild from zero
+  installs what Argo CD will then adopt unchanged; after a revert they carry upstream's images again,
+  and `make cluster` on a fresh VM installs those.
 ### 8.9 Argo CD from this repository (two stages, then a bootstrap re-apply, ADR 0027)
 
 `app/argocd` is Argo CD v3.5.3 rebuilt from the release commit with fixed dependencies - the same

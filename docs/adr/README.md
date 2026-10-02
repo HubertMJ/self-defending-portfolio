@@ -31,10 +31,11 @@ decision are appended as dated amendments in the same file.
 | [0025](0025-own-builds-of-small-components.md) | Falcosidekick, metrics-server, the Trivy Operator and kube-bench built here from their pinned releases with fixed dependencies; metrics-server moves from k3s to Argo CD | 7 | accepted |
 | [0026](0026-coredns-build-and-delivery.md) | CoreDNS built here from the pinned release with fixed dependencies, deployed by the k3s role as a k3s auto-deploy manifest in place of k3s's bundled copy (same objects and ClusterIP, taken over by a rolling update) | 7 | accepted |
 | [0027](0027-argocd-build.md) | Argo CD built here from the pinned release commit, with the helm, kustomize and git-lfs releases it ships, all with fixed dependencies; `argocd` stays outside admission verification | 7 | accepted |
+| [0028](0028-cilium-images-build.md) | Cilium's four images (agent, operator, Hubble Relay, Envoy) are upstream's 1.19.8 release with the Go binaries rebuilt against fixed dependencies and the base OS's OpenSSL updated, on upstream's own layers; rolled out operator/relay, then Envoy, then the agent | 7 | accepted |
 
 Phases 5 and 6 were built on parallel branches and merged together; the numbers they had reserved
 are all in use except 0020 (phase 6 documentation needed no decision of its own), which is released.
-0020 stays unused. 0025-0027 are in use; 0028 is reserved for the Cilium build.
+0020 stays unused. 0025-0028 are in use; the next ADR is 0029.
 
 ## Open items carried by accepted ADRs
 
@@ -44,8 +45,9 @@ Decisions are accepted with their known costs written down. The ones still open:
 |------|-----|
 | `make validate` renders with kustomize v5.7.1; Argo CD's repo-server runs its own v5.8.1 | [0013](0013-runtime-detection-and-response.md) |
 | Talon 0.3.0's k8sevents notifier cannot work (object keys title-cased); the fix is in the commit app/talon builds, the notifier stays off until enabling it is decided | [0013](0013-runtime-detection-and-response.md), [0023](0023-third-party-vulnerabilities.md) |
-| Third-party images with fixed but unreleased or unadopted findings: Cilium 1.19 (until ADR 0028 lands); the raised dependencies of Talon, KSOPS, Argo CD (with helm, kustomize, git-lfs), Falcosidekick, metrics-server and the Trivy Operator (and kube-bench's Go and Wolfi pins) need re-checking on each upstream release | [0023](0023-third-party-vulnerabilities.md), [0024](0024-argocd-trim-and-ksops-build.md), [0025](0025-own-builds-of-small-components.md), [0027](0027-argocd-build.md) |
+| Third-party images with fixed but unreleased or unadopted findings: the raised dependencies of Talon, KSOPS, Argo CD (with helm, kustomize, git-lfs), Falcosidekick, metrics-server and the Trivy Operator (and kube-bench's Go and Wolfi pins) need re-checking on each upstream release | [0023](0023-third-party-vulnerabilities.md), [0024](0024-argocd-trim-and-ksops-build.md), [0025](0025-own-builds-of-small-components.md), [0027](0027-argocd-build.md) |
 | metrics-server is deployed by Argo CD in `kube-system`, outside Kyverno's signature check by design, and its manifests must be compared with k3s's bundled copy on each k3s bump | [0025](0025-own-builds-of-small-components.md) |
+| Cilium is four images built here until a 1.19 patch release ships clean (1.19.9 should): each release means rebuilding `app/cilium*` and `app/hubble-relay` (new commit, runtime and Envoy digests, modules/, expected version strings) or, once upstream is clean, reverting to the chart's images; the pins are in both `cluster/apps/cilium.yaml` and the cilium role; `kube-system` is outside Kyverno's signature check by design | [0028](0028-cilium-images-build.md) |
 | The KSOPS image pin is in the bootstrap: a digest bump reaches the cluster only through a manual `kubectl apply -k cluster/bootstrap/argocd`; `argocd` is outside Kyverno's signature check by design | [0024](0024-argocd-trim-and-ksops-build.md) |
 | CoreDNS no longer moves with k3s: each k3s bump must diff its bundled `coredns.yaml` against the role's template; the image pin is in the k3s role and reaches the cluster only when the role runs; `kube-system` is outside Kyverno's signature check by design; NodeHosts is static (single node) | [0026](0026-coredns-build-and-delivery.md) |
 | Argo CD has no requests/limits and is excluded from the resources policy | [0012](0012-pod-security-and-resource-policy.md) |

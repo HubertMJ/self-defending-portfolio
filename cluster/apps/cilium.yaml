@@ -16,8 +16,8 @@
 # a second installation; nothing reconciles from it any more. Do not run the Ansible cilium role
 # again against a live cluster unless its values still match this file.
 #
-# The values below MUST stay identical to cilium_values in the Ansible role, plus the Gateway API
-# additions marked below. scripts/check-cilium-values.sh enforces this in CI.
+# The values below MUST stay identical to cilium_values in the Ansible role, image overrides
+# included (ADR 0028). scripts/check-cilium-values.sh enforces this in CI.
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
@@ -52,10 +52,20 @@ spec:
           replicas: 1
           prometheus:
             enabled: false
+          # Built here from the chart's release with fixed dependencies (ADR 0028). `override` is the
+          # whole reference, the chart's repository/tag/digest are not used. Pinned by digest; bumped
+          # with scripts/bump-image-digest.sh, which rewrites this file and the Ansible role together.
+          image:
+            # yamllint disable-line rule:line-length
+            override: ghcr.io/hubertmj/self-defending-portfolio/cilium-operator-generic:main@sha256:04f4695b73b283f33b22b2d27b301df8214f35916f4d24129d71ee8f558c5db0
         hubble:
           enabled: true
           relay:
             enabled: true
+            # ADR 0028, as operator.image above.
+            image:
+              # yamllint disable-line rule:line-length
+              override: ghcr.io/hubertmj/self-defending-portfolio/hubble-relay:main@sha256:23fb1c3769503fd2a322e386d65df2fe0402c3ba4185f338d6de53ae4d5bbf3e
           ui:
             enabled: false
         policyEnforcementMode: default

@@ -5,7 +5,7 @@
 #   scripts/bump-image-digest.sh api sha256:3f1c...      # from the build-images run summary
 #
 # <name> is the app/<name>/ directory the image is built from (web, api, scenario, talon, ksops,
-# coredns, argocd, falcosidekick, ...); the image is ghcr.io/hubertmj/self-defending-portfolio/<name>.
+# coredns, argocd, falcosidekick, cilium, ...); the image is ghcr.io/hubertmj/self-defending-portfolio/<name>.
 # Three reference forms are rewritten, and nothing else:
 #   * a kustomize `images:` entry whose `name:` is the image, or whose `newName:` is (an upstream
 #     image replaced by ours under its upstream name, e.g. Argo CD's in cluster/bootstrap/argocd) -
@@ -25,7 +25,10 @@
 #
 # ansible/ is searched too, for the one image deployed by Ansible rather than Argo CD: coredns, whose
 # pin is k3s_coredns_image in ansible/roles/k3s/defaults/main.yml (ADR 0026). It reaches the cluster
-# only when the k3s role runs, and the script says so.
+# only when the k3s role runs, and the script says so. The four Cilium images (ADR 0028) are pinned
+# twice, as inline image overrides in cluster/apps/cilium.yaml and in cilium_values of the cilium role
+# (scripts/check-cilium-values.sh requires both to be identical); both are rewritten. Argo CD rolls
+# out the first; the role's copy only seeds a rebuild from zero, and the script says that too.
 #
 # The digest is not checked against the registry here; verify it before committing:
 #   scripts/verify-image.sh ghcr.io/hubertmj/self-defending-portfolio/<name>@<digest>
@@ -89,7 +92,7 @@ def helm_tag_lines(lines):
             found.add(siblings["tag"][0])
     return found
 
-changed, bootstrap, ansible = 0, set(), False
+changed, bootstrap, roles = 0, set(), set()
 for path in files:
     lines = open(path).read().split("\n")
     helm_tags = helm_tag_lines(lines)
@@ -112,8 +115,8 @@ for path in files:
             changed += 1
             if path.startswith("cluster/bootstrap/"):
                 bootstrap.add(path.split("/")[2])
-            if path.startswith("ansible/"):
-                ansible = True
+            if path.startswith("ansible/roles/"):
+                roles.add(path.split("/")[2])
             print(f"  {path}: {line.strip()}\n  {' ' * len(path)}  -> {new.strip()}")
         out.append(new)
     open(path, "w").write("\n".join(out))
@@ -124,8 +127,12 @@ for d in sorted(bootstrap):
     print(f"note: cluster/bootstrap/{d} changed - Argo CD does not apply it; after the push, review and apply:\n"
           f"  kubectl diff -k cluster/bootstrap/{d} --server-side --force-conflicts\n"
           f"  kubectl apply -k cluster/bootstrap/{d} --server-side --force-conflicts")
-if ansible:
+if "k3s" in roles:
     print("note: ansible/ changed - neither Argo CD nor CI applies it; after the push, run the role (docs/bootstrap.md 8.7):\n"
           "  cd ansible && ansible-playbook playbooks/cluster.yml --tags k3s --check --diff\n"
           "  ansible-playbook playbooks/cluster.yml --tags k3s")
+if "cilium" in roles:
+    print("note: ansible/roles/cilium changed - nothing to run: the role leaves a release Argo CD owns alone,\n"
+          "  so this copy only seeds a rebuild from zero; Argo CD rolls out cluster/apps/cilium.yaml\n"
+          "  (docs/bootstrap.md 8.8 for the staged rollout and the checks)")
 PY

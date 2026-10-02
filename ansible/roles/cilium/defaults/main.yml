@@ -14,7 +14,8 @@ cilium_helm_tarball_url: "{{ cilium_helm_base_url }}/{{ cilium_helm_tarball_name
 # k3s ships kubectl through an argv[0] symlink on the binary itself.
 cilium_kubectl_binary: /usr/local/bin/k3s
 
-# Pinned Cilium chart version (chart and image versions match upstream).
+# Pinned Cilium chart version (chart and image versions match upstream; the images overridden in
+# cilium_values are this release rebuilt here, ADR 0028).
 cilium_version: 1.19.8
 cilium_chart_repo_name: cilium
 cilium_chart_repo_url: https://helm.cilium.io
@@ -68,12 +69,21 @@ cilium_values:
     replicas: 1
     prometheus:
       enabled: false
+    # Built here from the chart's release with fixed dependencies (ADR 0028); identical to
+    # cluster/apps/cilium.yaml, bumped together by scripts/bump-image-digest.sh.
+    image:
+      # yamllint disable-line rule:line-length
+      override: ghcr.io/hubertmj/self-defending-portfolio/cilium-operator-generic:main@sha256:04f4695b73b283f33b22b2d27b301df8214f35916f4d24129d71ee8f558c5db0
   # Hubble gives flow visibility, which is the point of a self-defending
   # deployment. The UI stays off until it is fronted by the tunnel.
   hubble:
     enabled: true
     relay:
       enabled: true
+      # ADR 0028, as operator.image above.
+      image:
+        # yamllint disable-line rule:line-length
+        override: ghcr.io/hubertmj/self-defending-portfolio/hubble-relay:main@sha256:23fb1c3769503fd2a322e386d65df2fe0402c3ba4185f338d6de53ae4d5bbf3e
     ui:
       enabled: false
   # Default means policy applies only to endpoints selected by a policy.
