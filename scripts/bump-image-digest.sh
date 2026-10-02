@@ -5,12 +5,17 @@
 #   scripts/bump-image-digest.sh api sha256:3f1c...      # from the build-images run summary
 #
 # <name> is the app/<name>/ directory the image is built from (web, api, scenario, talon, ksops,
-# coredns, argocd); the image is ghcr.io/hubertmj/self-defending-portfolio/<name>. Two reference
-# forms are rewritten, and nothing else:
+# coredns, argocd, falcosidekick, ...); the image is ghcr.io/hubertmj/self-defending-portfolio/<name>.
+# Three reference forms are rewritten, and nothing else:
 #   * a kustomize `images:` entry whose `name:` is the image, or whose `newName:` is (an upstream
 #     image replaced by ours under its upstream name, e.g. Argo CD's in cluster/bootstrap/argocd) -
 #     its `digest:` line;
-#   * an inline reference <image>[:tag]@sha256:<hex> (the scenario pod specs, the Ansible var).
+#   * an inline reference <image>[:tag]@sha256:<hex> (the scenario pod specs, the Ansible var);
+#   * Helm chart values that split the image into sibling keys `registry: ghcr.io`,
+#     `repository: hubertmj/self-defending-portfolio/<name>` and `tag: "<tag>@sha256:<hex>"` (the
+#     Falcosidekick and Trivy Operator charts in cluster/apps, ADR 0025) - the `tag:` line's digest.
+#     All three keys must sit in the same mapping, at the same indentation; a `repository:` without
+#     the `registry: ghcr.io` sibling is some other registry's image and is left alone.
 # Comments, layout and every other image are left as they are, so the diff is one line per reference.
 #
 # cluster/bootstrap/ is under cluster/, so a pin there (ksops, in cluster/bootstrap/argocd) is
@@ -46,7 +51,9 @@ if [ "$digest" = "sha256:$(printf '0%.0s' {1..64})" ]; then
 fi
 
 image=ghcr.io/hubertmj/self-defending-portfolio/$name
-mapfile -t files < <(git grep -l -F "$image" -- cluster/ ansible/ | sort)
+# The repository path without the registry, so the split Helm form is found too; the Python below
+# decides which lines are really this image.
+mapfile -t files < <(git grep -l -F "hubertmj/self-defending-portfolio/$name" -- cluster/ ansible/ | sort)
 [ "${#files[@]}" -gt 0 ] || { echo "bump-image-digest: nothing under cluster/ or ansible/ references $image" >&2; exit 1; }
 
 python3 - "$image" "$digest" "${files[@]}" <<'PY'
@@ -56,11 +63,38 @@ image, digest, files = sys.argv[1], sys.argv[2], sys.argv[3:]
 inline = re.compile(re.escape(image) + r"((?::[\w.-]+)?)@sha256:[0-9a-f]{64}")
 entry = re.compile(r"^(\s*)-\s+name:\s*(\S+)\s*$")
 new_name = re.compile(r"^\s*newName:\s*" + re.escape(image) + r"\s*$")
+registry, _, repository = image.partition("/")
+key = re.compile(r"^(\s*)(registry|repository|tag):\s*[\"']?([^\"'#\s]*)[\"']?\s*(?:#.*)?$")
+
+def helm_tag_lines(lines):
+    """Indexes of `tag:` lines whose mapping also says registry: <registry>, repository: <repository>."""
+    found = set()
+    for i, line in enumerate(lines):
+        m = key.match(line)
+        if not (m and m.group(2) == "repository" and m.group(3) == repository):
+            continue
+        indent = m.group(1)
+        siblings = {}
+        for step in (-1, 1):  # walk the mapping up and down until the indentation drops below it
+            j = i + step
+            while 0 <= j < len(lines):
+                l = lines[j]
+                if l.strip() and len(l) - len(l.lstrip()) < len(indent):
+                    break
+                k = key.match(l)
+                if k and k.group(1) == indent:
+                    siblings[k.group(2)] = (j, k.group(3))
+                j += step
+        if siblings.get("registry", (None, ""))[1] == registry and "tag" in siblings:
+            found.add(siblings["tag"][0])
+    return found
+
 changed, bootstrap, ansible = 0, set(), False
 for path in files:
     lines = open(path).read().split("\n")
+    helm_tags = helm_tag_lines(lines)
     out, in_list_entry, in_entry, indent = [], False, False, ""
-    for line in lines:
+    for n, line in enumerate(lines):
         m = entry.match(line)
         if m:
             in_list_entry, in_entry, indent = True, m.group(2) == image, m.group(1)
@@ -72,6 +106,8 @@ for path in files:
         if in_entry:
             new = re.sub(r"^(\s*digest:\s*)sha256:[0-9a-f]{64}", lambda d: d.group(1) + digest, new)
         new = inline.sub(lambda r: image + r.group(1) + "@" + digest, new)
+        if n in helm_tags:
+            new = re.sub(r"@sha256:[0-9a-f]{64}", "@" + digest, new)
         if new != line:
             changed += 1
             if path.startswith("cluster/bootstrap/"):

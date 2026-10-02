@@ -92,8 +92,8 @@ spec:
               # place an unverified image may run.
               # `falco-response` (ADR 0023) since Falco Talon runs this project's own build: Talon
               # holds the other set of API permissions in the cluster (delete and label pods in
-              # `sandbox`). Falcosidekick, next to it, is still docker.io's image and is not matched
-              # by imageReferences below, so it is out of scope here, not exempted.
+              # `sandbox`). Falcosidekick, next to it, is this project's build too since ADR 0025
+              # (app/falcosidekick), so it is matched by imageReferences below like Talon.
               namespaces:
                 - hello
                 - sandbox

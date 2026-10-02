@@ -17,15 +17,18 @@
 #   curl -sfL https://falcosecurity.github.io/charts/index.yaml \
 #     | yq '.entries.falcosidekick[0] | .version, .appVersion'
 # Chart 0.14.0's Chart.yaml still says appVersion 2.31.1, and its values.yaml defaults to image 2.32.0.
-# 0.14.0 is still the newest chart, but Falcosidekick itself is at 2.35.0 (2026-08-31), so the image
-# is set past the chart default (ADR 0023): 2.32.0 carried 43 CRITICAL+HIGH findings in the cluster,
-# 2.35.0 has 3 CRITICAL + 11 HIGH with today's Trivy DB (8 + 62 for 2.32.0 with the same DB). What is
-# left is in dependencies Falcosidekick has not raised yet (amqp091-go, grpc, x/crypto, the Alpine
-# OpenSSL); all of them have fixes, so the next release, or building it here like Talon
-# (app/talon), is what removes them. The releases in between change other outputs (OTLP TLS, Telegram,
-# Azure Event Hubs, PolicyReport timestamps); the HTTP outputs used here (talon, webhook) and every
-# value below are unchanged. Release notes: https://github.com/falcosecurity/falcosidekick/releases
-#   docker buildx imagetools inspect docker.io/falcosecurity/falcosidekick:2.35.0
+# 0.14.0 is still the newest chart; Falcosidekick itself is at 2.35.0 (2026-08-31), and the image is
+# set past the chart default (ADR 0023). Since ADR 0025 it is this repository's build of 2.35.0
+# (app/falcosidekick): the same release commit, compiled with the dependencies 2.35.0 had not raised
+# yet (amqp091-go, grpc, x/crypto) on distroless instead of Alpine - 0 CRITICAL+HIGH, where upstream's
+# 2.35.0 image has 3 CRITICAL + 12 HIGH with Trivy 0.75.0 (2026-10-02). Not one line of upstream's Go
+# source is changed, so every value below means what it meant for upstream's image; the HTTP outputs
+# used here (talon, webhook) were checked side by side against it (ADR 0025, "Verified").
+#
+# The image is split into the chart's registry/repository/tag keys, and the tag carries the digest:
+# the chart concatenates `registry/repository:tag`. scripts/bump-image-digest.sh falcosidekick
+# <digest> rewrites the tag line. It is this project's registry path, so verify-portfolio-images (the
+# namespace is in its list) demands our signature and SBOM attestation for it.
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
@@ -45,9 +48,9 @@ spec:
         releaseName: falcosidekick
         valuesObject:
           image:
-            registry: docker.io
-            repository: falcosecurity/falcosidekick
-            tag: "2.35.0@sha256:216ddb75229dcbf78cf57b1cf2140bd1b9092fcd72e4fd20b4d3057395d6765b"
+            registry: ghcr.io
+            repository: hubertmj/self-defending-portfolio/falcosidekick
+            tag: "main@sha256:0000000000000000000000000000000000000000000000000000000000000000"
           # One node; a second replica would only double the alerts forwarded per event if Falco ever
           # retried, and adds nothing to availability here.
           replicaCount: 1
@@ -70,7 +73,8 @@ spec:
             webhook:
               address: http://portfolio-api.portfolio-api.svc.cluster.local.:8081/internal/falco  # gitleaks:allow
               minimumpriority: notice
-          # The chart default sets runAsUser/fsGroup only; restricted needs the rest.
+          # The chart default sets runAsUser/fsGroup only; restricted needs the rest. 1234 is upstream's
+          # image user; the distroless image needs no passwd entry for it.
           podSecurityContext:
             runAsNonRoot: true
             runAsUser: 1234

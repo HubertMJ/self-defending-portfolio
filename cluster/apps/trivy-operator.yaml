@@ -30,6 +30,12 @@
 # Images are tag@digest; the charts concatenate `registry/repository:tag`, and the operator builds
 # the scan Job image the same way from trivy.repository + trivy.tag.
 #
+# The operator itself is this repository's build of 0.34.0 since ADR 0025 (app/trivy-operator): the
+# same release commit with grpc raised, on distroless instead of Alpine - 0 CRITICAL+HIGH, where
+# upstream's image has 4 HIGH with Trivy 0.75.0 (2026-10-02). No Go source is changed, so every value
+# below means what it meant for upstream's image. scripts/bump-image-digest.sh trivy-operator
+# <digest> rewrites its tag line. The scan Jobs and the Trivy server stay on aquasec/trivy (below).
+#
 # Trivy is one release ahead of the chart (ADR 0023): operator 0.34.0 was built against Trivy 0.74.0
 # and its chart defaults to it, but 0.74.0's own image carries CRITICAL/HIGH findings (4 in the
 # cluster, 12 with today's DB) and 0.75.0 (2026-10-01) has none. The operator only drives the Trivy
@@ -62,9 +68,9 @@ spec:
         releaseName: trivy-operator
         valuesObject:
           image:
-            registry: mirror.gcr.io
-            repository: aquasec/trivy-operator
-            tag: "0.34.0@sha256:0e4f11e9632f34097f259f3a59d34bab4eea8cee9aef510d15cdfc7481d5e49c"
+            registry: ghcr.io
+            repository: hubertmj/self-defending-portfolio/trivy-operator
+            tag: "main@sha256:0000000000000000000000000000000000000000000000000000000000000000"
 
           operator:
             # Empty = the release namespace. A non-empty value makes the chart render its own
