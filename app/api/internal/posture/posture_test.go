@@ -3,6 +3,7 @@ package posture
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -74,7 +75,10 @@ func TestAggregate(t *testing.T) {
 		vuln("hello", "rs-hello-2", "hubertmj/self-defending-portfolio/web", "sha256:aa", 0, 1, 2, 3), // same image
 		vuln("falco", "ds-falco", "falcosecurity/falco", "sha256:bb", 1, 0, 0, 0),
 	)
-	kube := fake.NewClientset()
+	kube := fake.NewClientset(
+		runningPod("hello", "hello-1", "ghcr.io/hubertmj/self-defending-portfolio/web@sha256:aa"),
+		runningPod("falco", "falco-x", "docker.io/falcosecurity/falco@sha256:bb"),
+	)
 	clk := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
 	a := New(Config{Dynamic: dyn, Kube: kube, FalcoAlerts: fixedCounter(7), TalonActions: fixedCounter(2),
 		Now: func() time.Time { return clk }})
@@ -156,7 +160,15 @@ func TestTrivyBreakdown(t *testing.T) {
 		// Not ours, despite the owner: only the build-images.yml path counts as own.
 		vulnReport("x", "rs-other", "ghcr.io", "hubertmj/other", "", "sha256:6666666666666666ffff", finding("CRITICAL", "")),
 	)
-	a := New(Config{Dynamic: dyn, Kube: fake.NewClientset()})
+	a := New(Config{Dynamic: dyn, Kube: fake.NewClientset(
+		runningPod("argocd", "repo-server", "docker.io/viaductoss/ksops@sha256:1111111111111111aaaa"),
+		runningPod("argocd", "redis", "public.ecr.aws/docker/library/redis@sha256:2222222222222222bbbb"),
+		// Mid-rollout: both api digests run.
+		runningPod("portfolio-api", "api-old", "ghcr.io/hubertmj/self-defending-portfolio/api@sha256:3333333333333333cccc"),
+		runningPod("portfolio-api", "api-new", "ghcr.io/hubertmj/self-defending-portfolio/api@sha256:4444444444444444dddd"),
+		runningPod("hello", "web", "ghcr.io/hubertmj/self-defending-portfolio/web@sha256:5555555555555555eeee"),
+		runningPod("x", "other", "ghcr.io/hubertmj/other@sha256:6666666666666666ffff"),
+	)})
 	tr, err := a.trivy(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -187,6 +199,98 @@ func TestTrivyBreakdown(t *testing.T) {
 	for i := range want {
 		if tr.ByImage[i] != want[i] {
 			t.Errorf("by_image[%d] = %+v, want %+v", i, tr.ByImage[i], want[i])
+		}
+	}
+}
+
+// runningPod is a started pod whose containers the runtime resolved to the given imageIDs.
+func runningPod(ns, name string, imageIDs ...string) *corev1.Pod {
+	p := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name}, Status: corev1.PodStatus{Phase: corev1.PodRunning}}
+	for i, id := range imageIDs {
+		c := "c" + string(rune('0'+i))
+		p.Spec.Containers = append(p.Spec.Containers, corev1.Container{Name: c, Image: "ignored:tag"})
+		p.Status.ContainerStatuses = append(p.Status.ContainerStatuses, corev1.ContainerStatus{Name: c, ImageID: id})
+	}
+	return p
+}
+
+// Only images a pod runs count. A Deployment's old ReplicaSet, scaled to 0, keeps its report until
+// Trivy Operator garbage-collects the ReplicaSet; its findings must not reach the totals. Nothing
+// that runs is ever dropped: init containers, completed Job pods, pods still pulling their image
+// (matched by tag), and reports that cannot be matched at all.
+func TestTrivyCountsOnlyRunningImages(t *testing.T) {
+	dyn := newDyn(
+		vulnReport("trivy-system", "rs-new", "ghcr.io", "hubertmj/self-defending-portfolio/trivy-operator", "main", "sha256:new",
+			finding("HIGH", "1")),
+		// Old ReplicaSet (0 replicas), upstream image: no pod runs it.
+		vulnReport("trivy-system", "rs-old", "mirror.gcr.io", "aquasec/trivy-operator", "0.30.0", "sha256:old",
+			finding("HIGH", "1"), finding("HIGH", "1")),
+		// Init container of a running pod.
+		vulnReport("kube-system", "ds-cilium-init", "ghcr.io", "hubertmj/self-defending-portfolio/cilium", "main", "sha256:init",
+			finding("CRITICAL", "")),
+		// The last completed run of a CronJob.
+		vulnReport("kube-bench", "cj-kube-bench", "ghcr.io", "hubertmj/self-defending-portfolio/kube-bench", "main", "sha256:bench"),
+		// A pod still pulling: no imageID yet, matched by its tag (Docker Hub spelled two ways).
+		vulnReport("cloudflared", "rs-cloudflared", "index.docker.io", "cloudflare/cloudflared", "cloudflare/cloudflared:2026.9.3", "sha256:cf",
+			finding("HIGH", "")),
+		// The same tag at a different digest, and no pod resolved to it: still running by tag, so kept.
+		// (A pull in progress cannot say which digest it will get.)
+		vulnReport("cloudflared", "rs-cloudflared-old", "index.docker.io", "cloudflare/cloudflared", "cloudflare/cloudflared:2026.9.3", "sha256:cf-old"),
+		// No repository: cannot be matched, kept rather than risk hiding it.
+		vulnReport("x", "odd", "", "", "", "", finding("CRITICAL", "")),
+	)
+	cilium := runningPod("kube-system", "cilium-abc", "ghcr.io/hubertmj/self-defending-portfolio/cilium@sha256:agent")
+	cilium.Spec.InitContainers = []corev1.Container{{Name: "mount-cgroup", Image: "ghcr.io/hubertmj/self-defending-portfolio/cilium:main"}}
+	cilium.Status.InitContainerStatuses = []corev1.ContainerStatus{{Name: "mount-cgroup", ImageID: "ghcr.io/hubertmj/self-defending-portfolio/cilium@sha256:init"}}
+	bench := runningPod("kube-bench", "kube-bench-1", "ghcr.io/hubertmj/self-defending-portfolio/kube-bench@sha256:bench")
+	bench.Status.Phase = corev1.PodSucceeded
+	pulling := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "cloudflared", Name: "cloudflared-1"},
+		Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "cloudflared", Image: "cloudflare/cloudflared:2026.9.3"}}},
+		Status:     corev1.PodStatus{Phase: corev1.PodPending},
+	}
+	kube := fake.NewClientset(
+		runningPod("trivy-system", "trivy-operator-1", "ghcr.io/hubertmj/self-defending-portfolio/trivy-operator@sha256:new"),
+		cilium, bench, pulling,
+	)
+	tr, err := New(Config{Dynamic: dyn, Kube: kube}).trivy(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tr.Images != 6 || tr.Critical != 2 || tr.High != 2 {
+		t.Fatalf("totals = %+v (by_image %+v)", tr, tr.ByImage)
+	}
+	for _, r := range tr.ByImage {
+		if strings.Contains(r.Image, "aquasec/trivy-operator") {
+			t.Fatalf("the scaled-to-0 ReplicaSet's image was counted: %+v", r)
+		}
+	}
+}
+
+func TestTrivyFailsWhenPodsCannotBeListed(t *testing.T) {
+	kube := fake.NewClientset()
+	kube.PrependReactor("list", "pods", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, errors.New("forbidden")
+	})
+	dyn := newDyn(vulnReport("hello", "rs", "ghcr.io", "a/b", "1", "sha256:x", finding("HIGH", "")))
+	if _, err := New(Config{Dynamic: dyn, Kube: kube}).trivy(context.Background()); err == nil {
+		t.Fatal("trivy succeeded without the pod list; it would have reported zero images")
+	}
+}
+
+func TestNormalizeRef(t *testing.T) {
+	for in, want := range map[string]string{
+		"nginx":                           "docker.io/library/nginx:latest",
+		"nginx:1.29":                      "docker.io/library/nginx:1.29",
+		"cloudflare/cloudflared:2026.9.3": "docker.io/cloudflare/cloudflared:2026.9.3",
+		"index.docker.io/cloudflare/x:1":  "docker.io/cloudflare/x:1",
+		"docker.io/library/redis:8":       "docker.io/library/redis:8",
+		"ghcr.io/a/b:main":                "ghcr.io/a/b:main",
+		"localhost:5000/a:1":              "localhost:5000/a:1",
+		"registry.local:5000/team/app":    "registry.local:5000/team/app:latest",
+	} {
+		if got := normalizeRef(in); got != want {
+			t.Errorf("normalizeRef(%q) = %q, want %q", in, got, want)
 		}
 	}
 }

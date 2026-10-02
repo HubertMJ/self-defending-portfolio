@@ -6,11 +6,13 @@
 #                           crash
 #   Role in kube-bench      pods list, pods/log get - read the newest benchmark Job's output
 #   ClusterRole (read)      list PolicyReports, ClusterPolicyReports, VulnerabilityReports - they are
-#                           written into every namespace that has workloads
+#                           written into every namespace that has workloads; list pods - which
+#                           images run now, so reports of scaled-to-0 ReplicaSets are not counted
+#                           (ADR 0015, amendment 2026-10-02)
 #
 # Narrower than the contract's maximum on purpose: no `get` on the reports (only listed), no Jobs
 # (the pods carry the result), no secrets, no ConfigMaps (the scenarios are a mounted volume),
-# nothing in any other namespace. `watch` on pods is sandbox-only and used on one pod at a time: the
+# nothing written or exec'd in any other namespace. `watch` on pods is sandbox-only and used on one pod at a time: the
 # runner opens it with a field selector on the run's pod name and publishes what it sees as `event:
 # pod` (ADR 0021) - the same pods it can already get and list, so it reveals nothing new.
 #
@@ -22,6 +24,7 @@
 #   kubectl auth can-i create pods -n hello   --as=system:serviceaccount:portfolio-api:portfolio-api  # no
 #   kubectl auth can-i create pods/exec -n sandbox --as=system:serviceaccount:portfolio-api:portfolio-api  # yes
 #   kubectl auth can-i get secrets -A         --as=system:serviceaccount:portfolio-api:portfolio-api  # no
+#   kubectl auth can-i get pods -n hello      --as=system:serviceaccount:portfolio-api:portfolio-api  # no (list only)
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -86,9 +89,13 @@ subjects:
     name: portfolio-api
     namespace: portfolio-api
 ---
-# The one cluster-scoped grant: list on three report kinds. Reports are summaries (policy, result,
-# CVE counts), not secrets; the Trivy reports' details are already public in the Security tab and
-# the images are public.
+# The one cluster-scoped grant: list on three report kinds and on pods. Reports are summaries
+# (policy, result, CVE counts), not secrets; the Trivy reports' details are already public in the
+# Security tab and the images are public. Pods are listed only to learn which image digests run
+# (status.containerStatuses[].imageID): a VulnerabilityReport outlives its pods while its ReplicaSet
+# is kept at 0 replicas, and without this the page counted images nothing runs. `list` only - no
+# get/watch, no pods/log, pods/exec or any subresource outside kube-bench and sandbox; pod specs
+# carry no secret values here (Secrets are mounted or referenced, and Secrets stay unreadable).
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -99,6 +106,9 @@ rules:
     verbs: ["list"]
   - apiGroups: ["aquasecurity.github.io"]
     resources: ["vulnerabilityreports"]
+    verbs: ["list"]
+  - apiGroups: [""]
+    resources: ["pods"]
     verbs: ["list"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1

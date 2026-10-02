@@ -260,7 +260,7 @@ flowchart LR
     POST["API: GET /api/posture<br/>app/api/internal/posture"]
     FEED["Falco alerts / Talon actions<br/>received on :8081"] -- "24 h counts" --> POST
     PR -- "list (Kyverno results only)" --> POST
-    TR -- "list VulnerabilityReports" --> POST
+    TR -- "list VulnerabilityReports<br/>(only images pods run)" --> POST
     LOG -- "pods/log of newest successful Job" --> POST
 ```
 

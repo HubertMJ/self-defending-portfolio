@@ -3,9 +3,10 @@
 //
 //	kyverno    PolicyReports + ClusterPolicyReports (wgpolicyk8s.io/v1alpha2), results whose
 //	           source is "kyverno", counted per policy
-//	trivy      VulnerabilityReports (aquasecurity.github.io/v1alpha1), severity totals per distinct
-//	           image (one image in three workloads is one image, not three), the same totals split
-//	           into this project's own images and third-party ones, and a per-image breakdown
+//	trivy      VulnerabilityReports (aquasecurity.github.io/v1alpha1) of the images pods run now,
+//	           severity totals per distinct image (one image in three workloads is one image, not
+//	           three), the same totals split into this project's own images and third-party ones,
+//	           and a per-image breakdown
 //	kube_bench the newest successful kube-bench Job's log, which is the benchmark's JSON (ADR 0014)
 //	falco      alerts Falcosidekick delivered in the last 24 h  } counted by this API as the webhooks
 //	talon      actions Talon reported in the last 24 h         } arrive (internal/webhook.Window)
@@ -16,8 +17,8 @@
 // (zeros before the first success) and is logged; the endpoint still answers, because a partly stale
 // posture page is better than none.
 //
-// Only reads, and only what the RBAC in cluster/infra/portfolio-api allows: list on the two report
-// kinds cluster-wide (they live in every namespace), list pods and get pods/log in kube-bench.
+// Only reads, and only what the RBAC in cluster/infra/portfolio-api allows: list on the report kinds
+// and on pods cluster-wide (they live in every namespace), get pods/log in kube-bench.
 package posture
 
 import (
@@ -69,8 +70,9 @@ type PolicyCount struct {
 }
 
 // Trivy is the image-scanning section. The five top-level counts are the original contract and stay
-// the true totals over every distinct running image: nothing is filtered, ignored or suppressed here,
-// ever (ADR 0023). Own, ThirdParty and ByImage were added later to say *whose* findings those are;
+// the true totals over every distinct running image: no finding of an image a pod runs is filtered,
+// ignored or suppressed here, ever (ADR 0023). What is left out is reports of images nothing runs -
+// a Deployment's old ReplicaSets keep their reports while scaled to 0 (ADR 0015, amendment). Own, ThirdParty and ByImage were added later to say *whose* findings those are;
 // they partition the same set of reports, so Own + ThirdParty always add up to the totals and the
 // ByImage rows always add up to Own + ThirdParty. An older page that reads only the five counts
 // renders exactly what it rendered before.
@@ -96,8 +98,8 @@ type TrivyGroup struct {
 }
 
 // ImageVulns is one row of the per-image breakdown. Image is registry/repository:tag as the scanner
-// recorded it (several digests of one tag - an old ReplicaSet still scanned next to the new one -
-// are one row, their counts added, exactly as the totals add them). Own is true for the images this
+// recorded it (several digests of one tag - both sides of a rollout in progress, or a DaemonSet not
+// yet updated on every node - are one row, their counts added, exactly as the totals add them). Own is true for the images this
 // repository builds and signs (OwnImagePrefix). Fixable counts the row's CRITICAL+HIGH findings that
 // have a fixedVersion, i.e. the ones a version bump of that image would remove.
 type ImageVulns struct {
@@ -287,13 +289,20 @@ func (a *Aggregator) trivy(ctx context.Context) (Trivy, error) {
 		own               bool
 		c, h, m, l, fixed int
 	}
+	running, err := a.runningImages(ctx)
+	if err != nil {
+		return Trivy{}, err
+	}
 	// Keyed by digest, so one image in three workloads (three reports) is counted once.
 	images := map[string]sev{}
-	err := a.list(ctx, VulnerabilityReports, func(u *unstructured.Unstructured) {
+	err = a.list(ctx, VulnerabilityReports, func(u *unstructured.Unstructured) {
 		server, _, _ := unstructured.NestedString(u.Object, "report", "registry", "server")
 		repo, _, _ := unstructured.NestedString(u.Object, "report", "artifact", "repository")
 		digest, _, _ := unstructured.NestedString(u.Object, "report", "artifact", "digest")
 		tag, _, _ := unstructured.NestedString(u.Object, "report", "artifact", "tag")
+		if !running.has(server, repo, tag, digest) {
+			return
+		}
 		key := server + "/" + repo
 		if digest != "" {
 			key += "@" + digest
@@ -356,6 +365,114 @@ func (a *Aggregator) trivy(ctx context.Context) (Trivy, error) {
 		return a.Image < b.Image
 	})
 	return out, nil
+}
+
+// running is what the cluster's pods run: the digests their container runtimes resolved, and, for
+// containers not started yet (no imageID while the image is pulled), the references they asked for.
+type running struct {
+	digests map[string]bool // "sha256:..."
+	pending map[string]bool // normalised registry/repository:tag
+}
+
+// runningImages lists every pod in the cluster, in any phase: a pod object exists while its
+// workload wants it, so a scaled-to-0 ReplicaSet has none, while a CronJob's last completed run
+// (kube-bench) still does and keeps its image in the totals between runs. Containers, init
+// containers and ephemeral containers all count: each is an image the node ran.
+func (a *Aggregator) runningImages(ctx context.Context) (running, error) {
+	r := running{digests: map[string]bool{}, pending: map[string]bool{}}
+	opts := metav1.ListOptions{Limit: 250}
+	for {
+		l, err := a.cfg.Kube.CoreV1().Pods("").List(ctx, opts)
+		if err != nil {
+			return running{}, err
+		}
+		for i := range l.Items {
+			st := &l.Items[i].Status
+			for _, list := range [][]corev1.ContainerStatus{st.InitContainerStatuses, st.ContainerStatuses, st.EphemeralContainerStatuses} {
+				for _, cs := range list {
+					// The runtime's imageID is repo@sha256:... (containerd); the digest alone is
+					// compared, so registry spelling (docker.io vs index.docker.io) never matters.
+					if d := digestOf(cs.ImageID); d != "" {
+						r.digests[d] = true
+						continue
+					}
+					if d := digestOf(cs.Image); d != "" {
+						r.digests[d] = true
+					} else if cs.Image != "" {
+						r.pending[normalizeRef(cs.Image)] = true
+					}
+				}
+			}
+			// A container that has no status yet (just scheduled) is known only by its spec.
+			sp := &l.Items[i].Spec
+			for _, list := range [][]corev1.Container{sp.InitContainers, sp.Containers} {
+				for _, c := range list {
+					if d := digestOf(c.Image); d != "" {
+						r.digests[d] = true
+					} else if !hasStatus(st, c.Name) {
+						r.pending[normalizeRef(c.Image)] = true
+					}
+				}
+			}
+		}
+		if opts.Continue = l.GetContinue(); opts.Continue == "" {
+			return r, nil
+		}
+	}
+}
+
+// has says whether a report's image is one a pod runs. A report that names no repository cannot
+// be matched and is kept: dropping it could hide something that runs.
+func (r running) has(server, repo, tag, digest string) bool {
+	if repo == "" || r.digests[digest] {
+		return true
+	}
+	if i := strings.LastIndex(tag, ":"); i >= 0 {
+		tag = tag[i+1:]
+	}
+	if tag == "" {
+		return false
+	}
+	return r.pending[normalizeRef(server+"/"+repo+":"+tag)]
+}
+
+func hasStatus(st *corev1.PodStatus, name string) bool {
+	for _, list := range [][]corev1.ContainerStatus{st.InitContainerStatuses, st.ContainerStatuses} {
+		for _, cs := range list {
+			if cs.Name == name {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// digestOf returns the sha256:... part of a repo@sha256:... reference, or "".
+func digestOf(ref string) string {
+	if i := strings.LastIndex(ref, "@"); i >= 0 && strings.HasPrefix(ref[i+1:], "sha256:") {
+		return ref[i+1:]
+	}
+	return ""
+}
+
+// normalizeRef spells a registry/repository:tag reference the way containerd does: Docker Hub as
+// docker.io (with library/ for official images), and :latest when no tag is given.
+func normalizeRef(ref string) string {
+	name, tag := ref, "latest"
+	if i := strings.LastIndex(ref, ":"); i > strings.LastIndex(ref, "/") {
+		name, tag = ref[:i], ref[i+1:]
+	}
+	first, rest, found := strings.Cut(name, "/")
+	if !found || (!strings.ContainsAny(first, ".:") && first != "localhost") {
+		first, rest = "docker.io", name
+	}
+	if first == "index.docker.io" {
+		first = "docker.io"
+	}
+	if first == "docker.io" && !strings.Contains(rest, "/") {
+		rest = "library/" + rest
+	}
+	return first + "/" + rest + ":" + tag
 }
 
 func summaryCount(u *unstructured.Unstructured, field string) int {

@@ -106,8 +106,9 @@ no-referrer`, a `default-src 'none'` CSP and `Cross-Origin-Resource-Policy: same
 `pods/exec create` (no `watch`; a WebSocket exec is authorised as `create` since 1.31). Role in
 `kube-bench`: pods `list`, `pods/log get` (the benchmark's result is the Job log, ADR 0014).
 ClusterRole: `list` on `policyreports`, `clusterpolicyreports` and `vulnerabilityreports` - the only
-cluster-wide grant, because those reports live in every namespace. Nothing else: no secrets, no
-ConfigMaps, no Jobs, no other namespace's pods. `portfolio-api` joins `hello` and `sandbox` in
+cluster-wide grant, because those reports live in every namespace (and, since the 2026-10-02
+amendment, `list` on pods). Nothing else: no secrets, no ConfigMaps, no Jobs, nothing written or
+exec'd in any other namespace. `portfolio-api` joins `hello` and `sandbox` in
 `verify-portfolio-images` and `restrict-image-registries` (ADR 0016).
 
 **Posture.** Kyverno results (source `kyverno`) per policy from PolicyReports and
@@ -137,3 +138,46 @@ that fails keeps its last value rather than failing the page.
 - Known gaps, recorded: the 24 h counters are not persistent; the posture page reflects only what the
   reports say, so it is as current as the last Trivy scan and kube-bench run. The scenario catalogue is
   the Application's second source, `cluster/infra/sandbox/scenarios` (owned with the scenarios).
+
+## Amendment 2026-10-02: Trivy counts only images a pod runs
+
+**Context.** The image tile said "Trivy, 37 running images" while far fewer ran. `posture` counted
+every VulnerabilityReport, and Trivy Operator keeps a report for as long as its owner exists: a
+Deployment keeps its old ReplicaSets (`revisionHistoryLimit`, 10 by default) at 0 replicas, so every
+earlier revision's image stayed in the totals. One stale report, for a scaled-to-0 `trivy-operator`
+ReplicaSet still on the upstream image, contributed 2 HIGH to a cluster whose running images had
+none, until the ReplicaSet was deleted by hand. The word "running" on the page was not true.
+
+**Decision.**
+- **A report counts when a pod runs its image.** Each refresh lists every pod in the cluster (paged,
+  250 at a time, inside the same 60 s cache) and collects the digests of
+  `status.{initContainer,container,ephemeralContainer}Statuses[].imageID`. A report is kept when its
+  `artifact.digest` is one of them. The digest alone is compared, so `docker.io` vs
+  `index.docker.io` spellings never matter; on this cluster every report digest equals the
+  containerd imageID digest of the pods it describes (checked live, 2026-10-02).
+- **Never drop something that runs (ADR 0023).** Pods in any phase count: a pod object exists while
+  its workload wants it, so a scaled-to-0 ReplicaSet has none, but the last completed kube-bench run
+  keeps its image counted between CronJob runs. A container with no imageID yet (pod pending, image
+  being pulled) is matched by its normalised `registry/repository:tag`, so a report of the same tag is
+  kept until the digest is known. A report without a repository cannot be matched and is kept. If the
+  pod list fails, the Trivy section keeps its previous value, as every failing source does - it is
+  never computed against an empty pod list.
+- **Why pods and not owners.** Resolving `trivy-operator.resource.kind/name` to a workload's
+  replicas needs `list` on ReplicaSets, DaemonSets, StatefulSets, Jobs and CronJobs (five grants
+  instead of one), and a ReplicaSet's replica count is not the same as "running": during a rollout a
+  DaemonSet runs two digests under one owner. The pods' imageIDs are what the nodes actually run.
+- **RBAC.** The ClusterRole `portfolio-api-posture-read` gains `list` on `pods` - no `get`,
+  `watch` or subresource. What it reveals that was not visible before: other namespaces' pod specs
+  and statuses. Pod specs here carry no secret values (Secrets are referenced or mounted, and remain
+  unreadable to this ServiceAccount; the only literal `*KEY*` env is a file path), and the images are
+  public. The `kube-bench` Role's `pods list` is now redundant but kept, so that Role still says on
+  its own what the benchmark read needs.
+
+**Consequences.**
+- `trivy.images` and every total and split are over images pods run. Live on 2026-10-02 that took the
+  tile from 36 to 32 images (own 18 to 14: four old `portfolio-api` ReplicaSets at 0 replicas); the
+  severity totals were unchanged, because those old api digests had no findings. Third-party: 18.
+- The API's blast radius (threat model AB10) grows by read access to pod specs cluster-wide.
+- Unit tests: a scaled-to-0 ReplicaSet's report is excluded; init containers, a completed Job pod, a
+  pod still pulling its image (matched by tag) and an unmatched report are kept; a failing pod list
+  fails the section instead of reporting zero images.
