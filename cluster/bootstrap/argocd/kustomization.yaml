@@ -34,7 +34,7 @@ images:
   # the cluster only through `kubectl apply -k cluster/bootstrap/argocd` (docs/bootstrap.md 8.6).
   - name: ghcr.io/hubertmj/self-defending-portfolio/ksops
     newTag: main
-    digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+    digest: sha256:4946421eb86eecebab52a1bc151090c069b6221eb2503ad65a419b54019db542
 
 patches:
   - path: argocd-cm.yaml
