@@ -96,3 +96,25 @@ the alert, the Talon action and the end state.
 - Deploying the ConfigMap is the portfolio-api Application's job (an extra source,
   `cluster/infra/sandbox/scenarios`), because the namespace is that Application's; the sandbox
   Application does not render it.
+
+## Amendment 2026-10-02: an interactive terminal and an unguarded twin (ADR 0031, 0032)
+
+The safety model now covers two additions, each inside the same envelope this ADR set:
+
+**The interactive terminal (ADR 0032).** A fifth scenario, `terminal`, lets the visitor run commands by hand
+against a hardened pod instead of pressing one button. It does not widen the attack surface:
+- the API accepts **command ids only**, never free text, so a visitor's typing never reaches the cluster as a
+  command (contract hard rule); an unknown line is answered by the web, locally, and never sent;
+- every command is a behaviour under the same `restricted`, signed, token-less, quota-bound, default-deny pod
+  as the one-click scenarios; none prints the environment, names a host outside the pod, or resolves a name;
+- the two relaxations it uses are the ones this ADR already documents - `supplementalGroups: [42]` (as
+  `sensitive-file-read`) and a writable volume for a dropped binary - plus a per-run flag the API injects and
+  the pod never serves. No new capability, no token, no weakened policy;
+- the pod lives at most `timeout_seconds` (120) and ends on idle, on the visitor leaving, on a kill, or at the
+  deadline; the single-run slot and the sandbox quota bound it exactly as before.
+Every command's claimed outcome is proven offline under the pod's own security context (`tests/scenarios/offline.sh`).
+
+**The unguarded twin (ADR 0031).** `sandbox-unguarded` is a second sandbox with every preventive layer of this
+ADR intact - `restricted`, signed images only, the quota and LimitRange, default-deny networking - and only the
+automatic response absent (no Talon Role, no Talon rule matches it). It does not relax the safety model; it
+removes the response so the response's worth is visible by contrast, while the pod stays just as contained.

@@ -18,12 +18,12 @@ decision are appended as dated amendments in the same file.
 | [0010](0010-cilium-gateway-api.md) | Cilium's built-in Gateway API instead of ingress-nginx | 2 | accepted, amended 2026-10-01 (internal LoadBalancer address for the Gateway) |
 | [0011](0011-supply-chain.md) | Build, scan, describe and sign our own image; verify it at admission | 3 | accepted, amended 2026-10-01 (Kyverno verifies cosign v3 Sigstore bundles) |
 | [0012](0012-pod-security-and-resource-policy.md) | Pod Security `restricted` and pod resources as Kyverno policies, Audit before Enforce | 4 | accepted, amended 2026-10-01 (both policies Enforce) |
-| [0013](0013-runtime-detection-and-response.md) | Runtime detection and response: Falco modern eBPF least-privileged, Falcosidekick, Falco Talon scoped to `sandbox` | 4 | accepted, amended 2026-10-01 (read-only host mounts via a kustomize post-render; corrections: Argo CD's own kustomize, `perf_event_paranoid=2`, no Talon Events, Talon JSON log) |
+| [0013](0013-runtime-detection-and-response.md) | Runtime detection and response: Falco modern eBPF least-privileged, Falcosidekick, Falco Talon scoped to `sandbox` | 4 | accepted, amended 2026-10-01 (read-only host mounts via a kustomize post-render; corrections: Argo CD's own kustomize, `perf_event_paranoid=2`, no Talon Events, Talon JSON log), 2026-10-02 (isolation under 3 s, ADR 0032) |
 | [0014](0014-posture-scanning.md) | Posture scanning: Trivy Operator client/server with offline scan Jobs, kube-bench CronJob with a k3s config override, Policy Reporter internal only | 4 | accepted |
 | [0015](0015-portfolio-api.md) | The portfolio API: one Go process runs visitor-triggered attacks in `sandbox`, streams detection and response over SSE, and rations itself | 5 | accepted, amended 2026-10-02 (Trivy counts only images a pod runs; cluster-wide pods list) |
 | [0016](0016-one-image-workflow.md) | One matrix workflow builds and signs every image; the admission identity stays one file on main | 5 | accepted |
-| [0017](0017-attack-scenario-safety-model.md) | Attack scenarios: a safety model for letting anonymous visitors attack the cluster | 5 | accepted |
-| [0018](0018-scenario-detection-and-response-mapping.md) | Attack scenarios: which Falco rule detects each one, and what Talon does about it | 5 | accepted |
+| [0017](0017-attack-scenario-safety-model.md) | Attack scenarios: a safety model for letting anonymous visitors attack the cluster | 5 | accepted, amended 2026-10-02 (interactive terminal, unguarded twin) |
+| [0018](0018-scenario-detection-and-response-mapping.md) | Attack scenarios: which Falco rule detects each one, and what Talon does about it | 5 | accepted, amended 2026-10-01 (execs mark the victim first), 2026-10-02 (terminal detections; execution-from-shop-volume rule) |
 | [0019](0019-frontend-stack-and-csp.md) | Frontend stack and Content Security Policy: vanilla TypeScript + esbuild, no third-party origins, Trusted Types | 6 | accepted, amended 2026-10-01 (errors never cacheable; rollout skew accepted) |
 | [0021](0021-evidence-events-and-victim-poller.md) | Evidence events (pod, enriched falco/talon, victim) and a hardened reader for the attacked pod's victim app | 7 | accepted |
 | [0023](0023-third-party-vulnerabilities.md) | Third-party vulnerabilities go down only by removing or replacing images (Dex removed, newest releases, Talon built here), never by hiding them; posture shows own vs third-party | 7 | accepted |
@@ -32,10 +32,15 @@ decision are appended as dated amendments in the same file.
 | [0026](0026-coredns-build-and-delivery.md) | CoreDNS built here from the pinned release with fixed dependencies, deployed by the k3s role as a k3s auto-deploy manifest in place of k3s's bundled copy (same objects and ClusterIP, taken over by a rolling update) | 7 | accepted |
 | [0027](0027-argocd-build.md) | Argo CD built here from the pinned release commit, with the helm, kustomize and git-lfs releases it ships, all with fixed dependencies; `argocd` stays outside admission verification | 7 | accepted |
 | [0028](0028-cilium-images-build.md) | Cilium's four images (agent, operator, Hubble Relay, Envoy) are upstream's 1.19.8 release with the Go binaries rebuilt against fixed dependencies and the base OS's OpenSSL updated, on upstream's own layers; rolled out operator/relay, then Envoy, then the agent | 7 | accepted |
+| [0031](0031-unguarded-twin-namespace.md) | The unguarded twin namespace (`sandbox-unguarded`): every preventive layer of `sandbox`, no automatic response, so the response's worth is visible by contrast | 5 | accepted |
+| [0032](0032-terminal-scenario-and-quarantine-latency.md) | The attacker's terminal (a fifth, interactive scenario run by command id) and bringing quarantine isolation under 3 s (per-run labels out of the Cilium identity, 500 ms grace period) | 5 | accepted |
 
 Phases 5 and 6 were built on parallel branches and merged together; the numbers they had reserved
 are all in use except 0020 (phase 6 documentation needed no decision of its own), which is released.
-0020 stays unused. 0025-0028 are in use; the next ADR is 0029.
+0020 stays unused. 0025-0028 are in use. The interactive-demo work reserves 0029-0033 across three parallel
+branches (0029 terminal runs and command output, 0030 stats and persistence - API; 0031 unguarded twin, 0032
+terminal catalogue and quarantine latency - cluster; 0033 terminal, defence map, twin view - web); this branch
+adds 0031 and 0032. The next free ADR after those is 0034.
 
 ## Open items carried by accepted ADRs
 
