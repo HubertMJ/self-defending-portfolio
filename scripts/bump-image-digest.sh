@@ -5,10 +5,12 @@
 #   scripts/bump-image-digest.sh api sha256:3f1c...      # from the build-images run summary
 #
 # <name> is the app/<name>/ directory the image is built from (web, api, scenario, talon, ksops,
-# coredns); the image is ghcr.io/hubertmj/self-defending-portfolio/<name>. Two reference forms are
-# rewritten, and nothing else:
-#   * a kustomize `images:` entry whose `name:` is the image - its `digest:` line;
-#   * an inline reference <image>[:tag]@sha256:<hex> (the scenario pod specs).
+# coredns, argocd); the image is ghcr.io/hubertmj/self-defending-portfolio/<name>. Two reference
+# forms are rewritten, and nothing else:
+#   * a kustomize `images:` entry whose `name:` is the image, or whose `newName:` is (an upstream
+#     image replaced by ours under its upstream name, e.g. Argo CD's in cluster/bootstrap/argocd) -
+#     its `digest:` line;
+#   * an inline reference <image>[:tag]@sha256:<hex> (the scenario pod specs, the Ansible var).
 # Comments, layout and every other image are left as they are, so the diff is one line per reference.
 #
 # cluster/bootstrap/ is under cluster/, so a pin there (ksops, in cluster/bootstrap/argocd) is
@@ -52,17 +54,20 @@ import re, sys
 
 image, digest, files = sys.argv[1], sys.argv[2], sys.argv[3:]
 inline = re.compile(re.escape(image) + r"((?::[\w.-]+)?)@sha256:[0-9a-f]{64}")
-entry = re.compile(r"^(\s*)-\s+name:\s*" + re.escape(image) + r"\s*$")
+entry = re.compile(r"^(\s*)-\s+name:\s*(\S+)\s*$")
+new_name = re.compile(r"^\s*newName:\s*" + re.escape(image) + r"\s*$")
 changed, bootstrap, ansible = 0, set(), False
 for path in files:
     lines = open(path).read().split("\n")
-    out, in_entry, indent = [], False, ""
+    out, in_list_entry, in_entry, indent = [], False, False, ""
     for line in lines:
         m = entry.match(line)
         if m:
-            in_entry, indent = True, m.group(1)
-        elif in_entry and line.strip() and len(line) - len(line.lstrip()) <= len(indent):
-            in_entry = False  # the next entry or the end of the list
+            in_list_entry, in_entry, indent = True, m.group(2) == image, m.group(1)
+        elif in_list_entry and line.strip() and len(line) - len(line.lstrip()) <= len(indent):
+            in_list_entry = in_entry = False  # the next entry or the end of the list
+        elif in_list_entry and new_name.match(line):
+            in_entry = True  # `name:` is the upstream image, `newName:` ours
         new = line
         if in_entry:
             new = re.sub(r"^(\s*digest:\s*)sha256:[0-9a-f]{64}", lambda d: d.group(1) + digest, new)
