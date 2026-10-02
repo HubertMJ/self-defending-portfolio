@@ -160,6 +160,28 @@
     - k3s_was_running | bool
     - not ansible_check_mode
 
+# CIS k3s 1.1.20 (kube-bench k3s-cis-1.9): k3s writes the certificates in server/tls world-readable
+# (0644); the benchmark wants 0600, and the check's own remediation is a manual
+# `chmod 600 /var/lib/rancher/k3s/server/tls/*.crt`. Only the k3s process (root) reads them on this
+# node - no pod mounts server/tls except kube-bench, read-only and as root, to stat them. Top level
+# only, the files the check looks at. Runs after the API server is ready, i.e. after a restart has
+# written any missing or renewed certificate: k3s creates those 0644 again, and the next run of this
+# role (or the next kube-bench FAIL) brings them back.
+- name: Find the k3s server certificates
+  ansible.builtin.find:
+    paths: /var/lib/rancher/k3s/server/tls
+    patterns: "*.crt"
+    file_type: file
+  register: k3s_server_certs
+
+- name: Restrict the k3s server certificates to root (CIS 1.1.20)
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    mode: "0600"
+  loop: "{{ k3s_server_certs.files }}"
+  loop_control:
+    label: "{{ item.path }}"
+
 # no_log on both tasks below: the kubeconfig embeds the cluster CA plus the
 # admin client certificate and key, and without it Ansible prints the whole
 # base64 blob (and the decoded content) on -v or on failure.
