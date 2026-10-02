@@ -41,10 +41,10 @@ type Runner interface {
 	StartCompare(sc scenarios.Scenario, release func()) string
 	Command(runID, token, commandID string) (int, error)
 	Leave(runID, token string) error
-	CommandSeqFor(pod string) int
-	ArmFor(pod string) string
-	ObserveFalco(pod string)
-	ObserveTalon(pod, status string)
+	CommandSeqFor(namespace, pod string) int
+	ArmFor(namespace, pod string) string
+	ObserveFalco(namespace, pod, rule string)
+	ObserveTalon(namespace, pod, status string)
 }
 
 // Poster is what the server needs from internal/posture.
@@ -292,12 +292,12 @@ func (s *Server) falco(w http.ResponseWriter, r *http.Request) {
 	// Falcosidekick forwards every alert in the cluster at notice or above; only the sandbox and
 	// its unguarded twin are the visitors' business. Alerts elsewhere still count towards alerts_24h.
 	if s.watched(ev.Namespace) {
-		ev.CommandSeq = s.cfg.Runner.CommandSeqFor(ev.Pod)
-		ev.Arm = s.cfg.Runner.ArmFor(ev.Pod)
+		ev.CommandSeq = s.cfg.Runner.CommandSeqFor(ev.Namespace, ev.Pod)
+		ev.Arm = s.cfg.Runner.ArmFor(ev.Namespace, ev.Pod)
 		if err := s.cfg.Hub.Publish("falco", ev); err != nil {
 			s.cfg.Log.Error("publish falco", "err", err)
 		}
-		s.cfg.Runner.ObserveFalco(ev.Pod)
+		s.cfg.Runner.ObserveFalco(ev.Namespace, ev.Pod, ev.Rule)
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -323,12 +323,12 @@ func (s *Server) talon(w http.ResponseWriter, r *http.Request) {
 		s.cfg.TalonActions.Add()
 	}
 	if s.watched(ev.Namespace) {
-		ev.CommandSeq = s.cfg.Runner.CommandSeqFor(ev.Pod)
-		ev.Arm = s.cfg.Runner.ArmFor(ev.Pod)
+		ev.CommandSeq = s.cfg.Runner.CommandSeqFor(ev.Namespace, ev.Pod)
+		ev.Arm = s.cfg.Runner.ArmFor(ev.Namespace, ev.Pod)
 		if err := s.cfg.Hub.Publish("talon", ev); err != nil {
 			s.cfg.Log.Error("publish talon", "err", err)
 		}
-		s.cfg.Runner.ObserveTalon(ev.Pod, ev.Status)
+		s.cfg.Runner.ObserveTalon(ev.Namespace, ev.Pod, ev.Status)
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

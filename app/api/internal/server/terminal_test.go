@@ -255,3 +255,93 @@ func waitPods(t *testing.T, kube *fake.Clientset, ns string) bool {
 	}
 	return false
 }
+
+// A 413 for an oversized command body, a 429 past the per-run command cap, and the token never
+// appearing in any event or in GET /api/runs/{id} (items 26).
+func TestTerminalCommandLimitsAndTokenSecrecy(t *testing.T) {
+	e, _ := newTerminalEnv(t)
+	resp := e.post(t, "/api/attack/terminal", "198.51.100.10", nil)
+	var ar struct {
+		RunID string `json:"run_id"`
+		Token string `json:"token"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&ar)
+
+	// 413: a body over the 256-byte cap.
+	big := `{"id":"` + strings.Repeat("a", 300) + `"}`
+	if code, _ := e.command(t, ar.RunID, ar.Token, big); code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("oversized body: %d", code)
+	}
+
+	// Drive 30 accepted commands, then the 31st is 429. Each must settle before the next (409 while
+	// one runs), so retry past 409/also the initial not-ready window.
+	ok := 0
+	deadline := time.Now().Add(10 * time.Second)
+	for ok < 30 && time.Now().Before(deadline) {
+		code, _ := e.command(t, ar.RunID, ar.Token, `{"id":"whoami"}`)
+		switch code {
+		case http.StatusAccepted:
+			ok++
+		case http.StatusConflict:
+			time.Sleep(5 * time.Millisecond)
+		default:
+			t.Fatalf("command %d: %d", ok, code)
+		}
+	}
+	if ok != 30 {
+		t.Fatalf("only %d commands accepted", ok)
+	}
+	// The 31st, once no command is running, is 429.
+	for time.Now().Before(deadline) {
+		code, _ := e.command(t, ar.RunID, ar.Token, `{"id":"whoami"}`)
+		if code == http.StatusTooManyRequests {
+			break
+		}
+		if code != http.StatusConflict {
+			t.Fatalf("31st command: %d", code)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	// The token is in neither the run's events nor the run record.
+	runResp, err := http.Get(e.public.URL + "/api/runs/" + ar.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(runResp.Body)
+	_ = runResp.Body.Close()
+	if strings.Contains(string(body), ar.Token) {
+		t.Fatal("token leaked into GET /api/runs/{id}")
+	}
+}
+
+// A command and a leave on a run that has ended get 409 (not 404): the run existed and is over.
+func TestTerminalEndedRunIs409(t *testing.T) {
+	e, _ := newTerminalEnv(t)
+	resp := e.post(t, "/api/attack/terminal", "198.51.100.11", nil)
+	var ar struct {
+		RunID string `json:"run_id"`
+		Token string `json:"token"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&ar)
+	// Leave to end the run.
+	req, _ := http.NewRequest("DELETE", e.public.URL+"/api/runs/"+ar.RunID, nil)
+	req.Header.Set("Authorization", "Bearer "+ar.Token)
+	dr, _ := http.DefaultClient.Do(req)
+	_ = dr.Body.Close()
+	// Wait for it to actually finish, then a command is 409, and an unknown run is 404.
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		code, _ := e.command(t, ar.RunID, ar.Token, `{"id":"whoami"}`)
+		if code == http.StatusConflict {
+			break
+		}
+		if code != http.StatusAccepted && code != http.StatusConflict {
+			t.Fatalf("ended run command: %d", code)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if code, _ := e.command(t, "ffffffffffffffff", ar.Token, `{"id":"whoami"}`); code != http.StatusNotFound {
+		t.Fatalf("unknown run: %d", code)
+	}
+}

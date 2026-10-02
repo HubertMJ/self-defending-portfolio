@@ -46,10 +46,11 @@ type Details struct {
 	// Terminal fields (ADR 0029), present for an interactive scenario; absent otherwise. Commands
 	// carries every catalogue field, the argv included - it is public in the repository anyway, and
 	// the web terminal needs the spellings for completion.
-	Interactive bool                  `json:"interactive"`
-	IdleSeconds int                   `json:"idle_seconds,omitempty"`
-	Objectives  []scenarios.Objective `json:"objectives,omitempty"`
-	Commands    []scenarios.Command   `json:"commands,omitempty"`
+	Interactive    bool                  `json:"interactive"`
+	TimeoutSeconds int                   `json:"timeout_seconds,omitempty"`
+	IdleSeconds    int                   `json:"idle_seconds,omitempty"`
+	Objectives     []scenarios.Objective `json:"objectives,omitempty"`
+	Commands       []scenarios.Command   `json:"commands,omitempty"`
 }
 
 // PodSecurity is the effective security context of the container the command runs in: a container
@@ -93,6 +94,7 @@ func buildDetails(sc scenarios.Scenario, rules *ruleindex.Index, commit string) 
 	d := Details{ID: sc.ID, ExecCommand: []string{}, PreExecCommand: []string{}, Commit: commit, Victim: sc.Victim,
 		Policies: []ruleindex.Policy{}, FalcoRule: ruleindex.Rule{Name: sc.Detection}, Interactive: sc.Interactive}
 	if sc.Interactive {
+		d.TimeoutSeconds = int(sc.Timeout().Seconds())
 		d.IdleSeconds = int(sc.Idle().Seconds())
 		d.Objectives = sc.Objectives
 		d.Commands = sc.Commands
