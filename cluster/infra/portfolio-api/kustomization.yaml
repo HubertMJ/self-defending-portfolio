@@ -16,6 +16,7 @@ resources:
   - networkpolicy.yaml
   - ciliumnetworkpolicy.yaml
   - rbac.yaml
+  - configmap-stats.yaml
   - deployment.yaml
   - service.yaml
   - httproute.yaml

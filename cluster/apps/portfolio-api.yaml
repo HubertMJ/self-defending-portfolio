@@ -30,6 +30,16 @@ spec:
   destination:
     server: https://kubernetes.default.svc
     namespace: portfolio-api
+  ignoreDifferences:
+    # The stats ConfigMap ships empty and the API fills it at runtime (ADR 0030). Its data is live
+    # state, not a declaration, so Argo must not flag it as drift or revert the counters on self-heal -
+    # the same treatment the Cilium Application gives its operator-written Secrets.
+    - group: ""
+      kind: ConfigMap
+      name: portfolio-stats
+      namespace: portfolio-api
+      jsonPointers:
+        - /data
   syncPolicy:
     automated:
       prune: true

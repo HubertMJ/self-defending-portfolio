@@ -1,0 +1,18 @@
+# The public counters' home (ADR 0030): one ConfigMap the API reads at start and writes back at most
+# once a minute and on shutdown, so "call home: 0 of 412 attempts" survives a restart. It ships empty -
+# the API fills it - and Argo CD must not fight those writes, so cluster/apps/portfolio-api.yaml marks
+# its /data as ignored (ignoreDifferences), the same way the Cilium Application ignores its runtime
+# Secrets. It holds counters only: run and command tallies, objective tallies, response-time summaries -
+# no visitor data, no IPs (ADR 0021/0030).
+#
+# A plain manifest with a fixed name, not a configMapGenerator: the API reads it by name and the name
+# must not carry a content hash. The RBAC to write it is the `portfolio-api-stats` Role in rbac.yaml
+# (get/update on this one object; no create, because this file is what creates it).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: portfolio-stats
+  namespace: portfolio-api
+  labels:
+    app.kubernetes.io/name: portfolio-api
+    app.kubernetes.io/component: stats

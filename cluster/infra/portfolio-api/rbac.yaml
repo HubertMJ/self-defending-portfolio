@@ -1,18 +1,25 @@
-# The API's identity and every permission it has (ADR 0015). Three grants, each where the objects
+# The API's identity and every permission it has (ADR 0015). Five grants, each where the objects
 # live, and cluster-scoped only where the objects are spread across every namespace:
 #
-#   Role in sandbox         pods create/get/list/watch/delete, pods/exec create - run a scenario,
-#                           wait for it, follow it, exec its command, delete it, find orphans after a
-#                           crash
-#   Role in kube-bench      pods list, pods/log get - read the newest benchmark Job's output
+#   Role in sandbox            pods create/get/list/watch/delete, pods/exec create - run a scenario,
+#                              wait for it, follow it, exec its command, delete it, find orphans after a
+#                              crash
+#   Role in sandbox-unguarded  the same, for the twin half of a `compare` run (ADR 0031): the API
+#                              creates one pod here and one in sandbox from the same scenario. The twin
+#                              gives Talon no reach, but the API still runs and polls its pods here.
+#   Role in kube-bench         pods list, pods/log get - read the newest benchmark Job's output
+#   Role in portfolio-api      configmaps get/update on `portfolio-stats` only - persist the public
+#                              counters across restarts (ADR 0030). No create (the empty ConfigMap is in
+#                              git), no other ConfigMap (resourceNames pins the one).
 #   ClusterRole (read)      list PolicyReports, ClusterPolicyReports, VulnerabilityReports - they are
 #                           written into every namespace that has workloads; list pods - which
 #                           images run now, so reports of scaled-to-0 ReplicaSets are not counted
 #                           (ADR 0015, amendment 2026-10-02)
 #
 # Narrower than the contract's maximum on purpose: no `get` on the reports (only listed), no Jobs
-# (the pods carry the result), no secrets, no ConfigMaps (the scenarios are a mounted volume),
-# nothing written or exec'd in any other namespace. `watch` on pods is sandbox-only and used on one pod at a time: the
+# (the pods carry the result), no secrets, no ConfigMaps beyond the one stats counter
+# (the scenarios are a mounted volume), nothing written or exec'd in any other namespace. `watch` on
+# pods is sandbox-only and used on one pod at a time: the
 # runner opens it with a field selector on the run's pod name and publishes what it sees as `event:
 # pod` (ADR 0021) - the same pods it can already get and list, so it reveals nothing new.
 #
@@ -60,6 +67,36 @@ subjects:
     name: portfolio-api
     namespace: portfolio-api
 ---
+# The same runner grant in the unguarded twin (ADR 0031). Identical verbs: a `compare` run creates and
+# execs a pod here exactly as in `sandbox`. What differs is not the API's reach but Talon's - Talon has
+# no Role in this namespace, so nothing responds to what Falco detects here.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: portfolio-api-runner
+  namespace: sandbox-unguarded
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["create", "get", "list", "watch", "delete"]
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: portfolio-api-runner
+  namespace: sandbox-unguarded
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: portfolio-api-runner
+subjects:
+  - kind: ServiceAccount
+    name: portfolio-api
+    namespace: portfolio-api
+---
 # kube-bench writes its results to the Job's log only (ADR 0014: no report CRD, no sidecar), so the
 # log is what the posture page reads. Pods, not Jobs: the newest Succeeded pod is the newest result.
 apiVersion: rbac.authorization.k8s.io/v1
@@ -84,6 +121,36 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
   name: portfolio-api-kube-bench-read
+subjects:
+  - kind: ServiceAccount
+    name: portfolio-api
+    namespace: portfolio-api
+---
+# The public counters' persistence (ADR 0030): one ConfigMap, portfolio-stats, in this namespace. get
+# to read it at start, update to write it back (at most once a minute and on shutdown). resourceNames
+# pins it to that single object, so this is not "ConfigMaps in portfolio-api" - it is this one counter.
+# No create: the empty ConfigMap is in git (configmap-stats.yaml), so it always exists; Argo ignores its
+# data (cluster/apps/portfolio-api.yaml) so the API's writes are not reverted. No delete, no others.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: portfolio-api-stats
+  namespace: portfolio-api
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames: ["portfolio-stats"]
+    verbs: ["get", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: portfolio-api-stats
+  namespace: portfolio-api
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: portfolio-api-stats
 subjects:
   - kind: ServiceAccount
     name: portfolio-api
