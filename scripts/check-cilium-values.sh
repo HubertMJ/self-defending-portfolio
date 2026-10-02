@@ -10,6 +10,9 @@
 # DaemonSet, cilium-envoy and cilium-operator (that is what the Gateway API additions cost before
 # they were added to the role).
 #
+# It also asserts that the three Cilium images built here (app/cilium, app/cilium-operator-generic,
+# app/hubble-relay; ADR 0028) carry byte-identical modules/go.mod and go.sum.
+#
 # Requires: python3 with PyYAML and Jinja2 (both come with ansible-core, see requirements.txt).
 set -euo pipefail
 
@@ -117,14 +120,28 @@ for path in sorted(flat_argo):
         f"there is no allowance for one-sided values any more)"
     )
 
+# --- the Cilium images built here (ADR 0028) are one source tree -----------------------------------
+# app/cilium, app/cilium-operator-generic and app/hubble-relay compile the same Cilium commit, each
+# with its own copy of the raised go.mod/go.sum (CI builds every app/<name> from its own directory).
+# Different dependencies in the agent and the operator would be a combination upstream never shipped.
+module_dirs = [root / "app" / name / "modules" for name in ("cilium", "cilium-operator-generic", "hubble-relay")]
+for name in ("go.mod", "go.sum"):
+    reference = (module_dirs[0] / name).read_bytes()
+    for other in module_dirs[1:]:
+        if (other / name).read_bytes() != reference:
+            problems.append(
+                f"{other.relative_to(root)}/{name} differs from {module_dirs[0].relative_to(root)}/{name} "
+                f"(the three Cilium images must build with the same dependencies)"
+            )
+
 if problems:
-    print("check-cilium-values: Ansible and Argo CD disagree about Cilium", file=sys.stderr)
+    print("check-cilium-values: the declarations of Cilium disagree", file=sys.stderr)
     for problem in problems:
         print(f"  - {problem}", file=sys.stderr)
     sys.exit(1)
 
 print(
     f"check-cilium-values: ok - {len(flat_ansible)} keys match exactly, chart {argo_chart_version}, "
-    f"no values on only one side"
+    f"no values on only one side; the Cilium images build from identical modules"
 )
 PY
