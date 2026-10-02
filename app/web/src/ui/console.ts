@@ -22,6 +22,7 @@ import { type Child, clockTime, h, prefersReducedMotion, replace } from "../lib/
 import { type Hop, type Schedule, TIMER_END, TIMER_START, humanAction, runHops, scheduleHops, timerReading } from "../lib/pipeline";
 import { type RunView, type TimelineView, QUARANTINE_LABEL, formatDuration } from "../lib/timeline";
 import { copyButton, extLink, sourceUrl } from "./common";
+import { renderTwin } from "./twin";
 import { labelOf, renderVictim, victimState } from "./victim";
 
 /** The workflow identity that signs the scenario image (ADR 0011, build-images.yml). */
@@ -182,8 +183,14 @@ export function mountConsole(root: HTMLElement, api: ApiClient): ConsoleHandle {
   const body = h("div", { class: "console__body" });
   replace(root, h("div", { class: "console__top" }, heading), body);
 
-  const current = (): RunView | undefined =>
-    (selected ? view.runs.find((r) => r.runId === selected) : undefined) ?? view.activeRun ?? view.runs[0];
+  // The terminal has its own panel (ui/terminal.ts); the console never shows a terminal run.
+  const showable = (r: RunView | undefined): r is RunView => r !== undefined && r.scenario !== "terminal";
+  const current = (): RunView | undefined => {
+    const picked = selected ? view.runs.find((r) => r.runId === selected) : undefined;
+    if (showable(picked)) return picked;
+    if (showable(view.activeRun)) return view.activeRun;
+    return view.runs.find(showable);
+  };
 
   const timings = (run: RunView, hops: Hop[]) => {
     const replayAt = replays.get(run.runId);
@@ -696,8 +703,9 @@ export function mountConsole(root: HTMLElement, api: ApiClient): ConsoleHandle {
     const d = details.get(run.scenario);
     const dKey = d === undefined || d === "loading" ? "l" : d.ok ? "ok" : "no";
     patch(p, "head", `${run.current}|${run.active}|${own.has(run.runId)}|${run.pod}|${selected}|${scenarios.size}|${view.activeRun?.runId}`, () => headPanel(run));
-    const vKey = run.victim.map((v) => `${v.status}${v.checksum}${v.until}`).join(",");
-    patch(p, "victim", `${vKey}|${run.active}|${run.pod}|${run.pods[run.pods.length - 1]?.phase}`, () => renderVictim(run, run.active && !own.has(run.runId)));
+    const vKey = run.victim.map((v) => `${v.arm ?? ""}${v.status}${v.checksum}${v.until}`).join(",");
+    const twin = run.armPods !== undefined;
+    patch(p, "victim", `${twin ? "twin|" : ""}${vKey}|${run.active}|${run.pod}|${run.pods[run.pods.length - 1]?.phase}`, () => (twin ? renderTwin(run) : renderVictim(run, run.active && !own.has(run.runId))));
     patch(p, "pod", `${run.pods.length}|${run.pod}`, () => podPanel(run));
     patch(p, "executed", `${dKey}|${scenarios.size}`, () => executedPanel(run));
     patch(p, "proof", `${run.pods.length}|${vKey}|${run.flows.length}|${run.talon.length}|${scenarios.size}`, () => proofPanel(run));

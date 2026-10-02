@@ -7,10 +7,14 @@ import { MockBackend, mockOptionsFromUrl } from "./lib/mock";
 import { type ConnectionState, type EventSourceFactory, EventStream } from "./lib/sse";
 import { CONNECTION_WORD } from "./ui/common";
 import { mountConsole } from "./ui/console";
+import { mountDefenceMap } from "./ui/defencemap";
 import { mountPosture } from "./ui/posture";
 import { mountScenarios } from "./ui/scenarios";
+import { mountStats } from "./ui/stats";
+import { mountTerminal } from "./ui/terminal";
 import { mountLimits, setupTechMode } from "./ui/tech";
 import { mountTimeline } from "./ui/timeline";
+import { blockedReason } from "./ui/scenarios";
 
 const HIDDEN_DISCONNECT_MS = 60_000;
 
@@ -57,11 +61,20 @@ function main(): void {
   }
 
   mountPosture(byId("posture-panel"), api);
+  mountStats(byId("hero-stats"), api);
+  mountDefenceMap(byId("defence-map"), api);
 
   const limits = mountLimits(byId("limits-panel"), api);
   setupTechMode(byId("tech-toggle"), (on) => limits.setEnabled(on));
 
   const runConsole = mountConsole(byId("console"), api);
+
+  // What blocks a fresh run right now (another run active, or a cooldown) — shown on the terminal's
+  // own start button. The server is the authority (409/429); this is only the up-front label.
+  let launcherState: { activeRun?: { runId: string; scenario: string; since: number }; cooldownUntil?: number } = {};
+  const terminal = mountTerminal(byId("terminal"), api, {
+    blocked: () => blockedReason(launcherState, Date.now()),
+  });
 
   const launcher = mountScenarios(
     byId("scenario-panel"),
@@ -97,8 +110,11 @@ function main(): void {
       const r = view.activeRun;
       const wasActive = activeId;
       activeId = r?.runId;
-      launcher.setActiveRun(r ? { runId: r.runId, scenario: r.scenario, since: r.states.started ?? r.states.queued ?? Date.now() } : undefined);
+      const active = r ? { runId: r.runId, scenario: r.scenario, since: r.states.started ?? r.states.queued ?? Date.now() } : undefined;
+      launcherState = { ...launcherState, activeRun: active };
+      launcher.setActiveRun(active);
       runConsole.update(view);
+      terminal.update(view);
       if (wasActive && !activeId) limits.refresh();
     },
     () => stream?.retryNow(),

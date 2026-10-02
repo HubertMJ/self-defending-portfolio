@@ -91,6 +91,7 @@ export function mountScenarios(
       btn.dataset.running = String(running);
       replace(btn.querySelector(".btn__label") as HTMLElement, running ? "Running…" : blocked ? reason : "Launch attack");
     }
+    for (const t of root.querySelectorAll<HTMLButtonElement>(".scenario__twin")) t.setAttribute("aria-disabled", String(reason !== null));
     if (state.cooldownUntil && state.cooldownUntil > now) {
       replace(countdown, `Unlocks in ${formatCountdown((state.cooldownUntil - now) / 1000)}`);
       if (!countdown.isConnected) statusEl.append(countdown);
@@ -108,11 +109,11 @@ export function mountScenarios(
     }
   };
 
-  const launch = async (s: Scenario) => {
+  const launch = async (s: Scenario, opts: { compare?: boolean } = {}) => {
     if (blockedReason(state, Date.now())) return;
     state.pending = s.id;
     sync();
-    const result = await api.attack(s.id);
+    const result = await api.attack(s.id, opts);
     state.pending = undefined;
     const msg = describeAttackResult(result, s.title);
     if (result.kind === "accepted") {
@@ -138,6 +139,9 @@ export function mountScenarios(
     );
     btn.addEventListener("click", () => void launch(s));
     buttons.set(s.id, btn);
+    // "Run it with and without the response": the same attack in sandbox and in sandbox-unguarded (C).
+    const twin = h("button", { type: "button", class: "btn btn--ghost btn--small scenario__twin" }, "With & without the response");
+    twin.addEventListener("click", () => void launch(s, { compare: true }));
     const response = RESPONSE_LABEL[s.response] ?? s.response;
     return h(
       "li",
@@ -157,7 +161,7 @@ export function mountScenarios(
         h("div", {}, h("dt", {}, "Detected by"), h("dd", {}, h("code", {}, s.detection))),
         h("div", {}, h("dt", {}, "Response"), h("dd", { class: `response response--${s.response}` }, response)),
       ),
-      btn,
+      h("div", { class: "scenario__actions" }, btn, twin),
     );
   };
 
@@ -181,11 +185,14 @@ export function mountScenarios(
     }
     scenarios = res.value;
     onLoaded?.(scenarios);
-    root.dataset.state = scenarios.length ? "live" : "empty";
+    // The interactive scenario (the terminal) has its own panel above; the launcher is the one-click
+    // demo — "Just show me" — so it shows only the non-interactive scenarios.
+    const cards = scenarios.filter((s) => !s.interactive);
+    root.dataset.state = cards.length ? "live" : "empty";
     replace(
       root,
-      scenarios.length
-        ? h("ul", { class: "scenarios", role: "list" }, scenarios.map(card))
+      cards.length
+        ? h("ul", { class: "scenarios", role: "list" }, cards.map(card))
         : h("p", { class: "empty" }, "No scenarios are configured on the server."),
     );
     sync();
