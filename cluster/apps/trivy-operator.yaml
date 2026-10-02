@@ -70,7 +70,7 @@ spec:
           image:
             registry: ghcr.io
             repository: hubertmj/self-defending-portfolio/trivy-operator
-            tag: "main@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+            tag: "main@sha256:de26a169f0c7f9d7f9b97894166355bbf08b45be1591762047a8be267cfa5f3c"
 
           operator:
             # Empty = the release namespace. A non-empty value makes the chart render its own
