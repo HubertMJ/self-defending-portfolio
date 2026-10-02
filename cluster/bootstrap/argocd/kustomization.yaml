@@ -1,5 +1,6 @@
 # Argo CD install, patched for KSOPS and for a LAN-only (no public) UI, without Dex (no SSO), the
-# ApplicationSet controller or the notifications controller (none of them used; ADR 0023, ADR 0024).
+# ApplicationSet controller or the notifications controller (none of them used; ADR 0023, ADR 0024),
+# running this repository's build of the same release (ADR 0027).
 # Pinned by version in the resource URL (ADR 0008). Bumping Argo CD is a one-line diff here.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
@@ -35,6 +36,21 @@ images:
   - name: ghcr.io/hubertmj/self-defending-portfolio/ksops
     newTag: main
     digest: sha256:4946421eb86eecebab52a1bc151090c069b6221eb2503ad65a419b54019db542
+  # Argo CD itself - argocd-server, the repo-server and its copyutil init container, the application
+  # controller and Redis's secret-init init container all run install.yaml's
+  # quay.io/argoproj/argocd:v3.5.3 - replaced by this repository's build of the same release,
+  # app/argocd (ADR 0027): argo-cd at the v3.5.3 commit with the helm, kustomize and git-lfs releases
+  # it ships, all with fixed dependencies, on upstream's own base, user and paths. This one entry
+  # rewrites all five references, so no Deployment is patched for it. The image's ARGOCD_COMMIT and
+  # the install.yaml URL above must name the same release: an Argo CD bump changes both together.
+  # Pinned by digest (ADR 0008); `scripts/bump-image-digest.sh argocd <digest>` rewrites the line
+  # below, a placeholder is refused by `make validate` and CI, and a new digest reaches the cluster
+  # only through `kubectl apply -k cluster/bootstrap/argocd` (docs/bootstrap.md 8.9). Not checked by
+  # Kyverno at admission, by design (ADR 0027).
+  - name: quay.io/argoproj/argocd
+    newName: ghcr.io/hubertmj/self-defending-portfolio/argocd
+    newTag: main
+    digest: sha256:c6fce0b42d3e0cf360edc1f383b0777c1f0680137e6daed9169e34025976305b
 
 patches:
   - path: argocd-cm.yaml

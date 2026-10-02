@@ -13,7 +13,7 @@ landed, and the only credential in play is Argo CD's own service account.
 | Path | What it is |
 |------|------------|
 | `bootstrap.sh` | idempotent installer: namespace, age key Secret, `kubectl apply -k argocd/`, wait, print next steps |
-| `argocd/kustomization.yaml` | pinned upstream `install.yaml` + the patches below + a newer Redis patch release (ADR 0023) + the KSOPS image digest (ADR 0024) |
+| `argocd/kustomization.yaml` | pinned upstream `install.yaml` + the patches below + a newer Redis patch release (ADR 0023) + the KSOPS image digest (ADR 0024) + Argo CD's own image, this repository's build of the same release (`app/argocd`, ADR 0027) |
 | `argocd/namespace.yaml` | `argocd` namespace with Pod Security Standards `restricted` |
 | `argocd/argocd-cm.yaml` | `kustomize.buildOptions` so the KSOPS exec plugin runs |
 | `argocd/argocd-cmd-params-cm.yaml` | `server.insecure: "true"` — the UI is LAN-only, never published |
@@ -32,7 +32,7 @@ A fork has to replace each of them before its first sync:
 
 | Value | Where | What it is |
 |-------|-------|------------|
-| `HubertMJ` / `hubertmj` | `cluster/apps/*.yaml`, `cluster/bootstrap/argocd/root-application.yaml`, the image paths in `cluster/bootstrap/argocd/` (KSOPS), `cluster/infra/hello/`, `cluster/infra/portfolio-api/` and `cluster/infra/sandbox/scenarios/`, both image policies in `cluster/infra/kyverno-policies/`, `.github/workflows/build-images.yml`, `scripts/verify-image.sh`, `scripts/bump-image-digest.sh`, `scripts/validate-cluster.sh`, `scripts/lib/scenario_pods.py`, `app/` (Go module path, image labels, scenario image checks), `tests/` | GitHub owner; the registry path is its lower-case form |
+| `HubertMJ` / `hubertmj` | `cluster/apps/*.yaml`, `cluster/bootstrap/argocd/root-application.yaml`, the image paths in `cluster/bootstrap/argocd/` (KSOPS, Argo CD), `cluster/infra/hello/`, `cluster/infra/portfolio-api/` and `cluster/infra/sandbox/scenarios/`, both image policies in `cluster/infra/kyverno-policies/`, `.github/workflows/build-images.yml`, `scripts/verify-image.sh`, `scripts/bump-image-digest.sh`, `scripts/validate-cluster.sh`, `scripts/lib/scenario_pods.py`, `app/` (Go module path, image labels, scenario image checks), `tests/` | GitHub owner; the registry path is its lower-case form |
 | `hubertjablon.ski` | `cluster/infra/gateway/`, `cluster/infra/hello/`, `cluster/infra/portfolio-api/`, `cluster/infra/cloudflared/config.yaml`, `cluster/infra/cert-manager-issuers/`, `app/` (API same-origin check, site content), `tests/` | the site's hostname and DNS zone |
 | ACME contact email | `cluster/infra/cert-manager-issuers/clusterissuer-*.yaml` | Let's Encrypt account contact |
 | tunnel UUID | `tunnel:` in `cluster/infra/cloudflared/config.yaml` | output of `cloudflared tunnel create portfolio` |
@@ -134,6 +134,16 @@ fresh bootstrap needs the `self-defending-portfolio/ksops` package to be public,
 (`docs/bootstrap.md`, 5.2). It is deliberately not checked by Kyverno's `verify-portfolio-images`:
 that policy fails closed, Kyverno is itself deployed by Argo CD, and a repo-server that cannot start
 while Kyverno is down could never redeploy Kyverno (ADR 0024).
+
+### Argo CD's own image is built here too
+
+Every Argo CD container (server, repo-server and `copyutil`, application controller, Redis's
+`secret-init`) runs `ghcr.io/hubertmj/self-defending-portfolio/argocd`, this repository's build of the
+v3.5.3 release that `install.yaml` names (`app/argocd`, ADR 0027), swapped in by one `images:` entry
+in `argocd/kustomization.yaml`. It is upstream's Dockerfile rebuilt with fixed dependencies - same
+base, user 999, paths, tools and entrypoint - so nothing else in this directory changed for it. Like
+KSOPS, it is pulled from GHCR (the `self-defending-portfolio/argocd` package must be public before a
+fresh bootstrap, or Argo CD itself cannot start) and is not checked by Kyverno at admission.
 
 ### A missing secret fails the sync instead of half-working
 

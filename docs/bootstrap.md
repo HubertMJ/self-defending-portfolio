@@ -1029,6 +1029,80 @@ bundled `coredns.yaml`; the pin is `k3s_coredns_image` in `ansible/roles/k3s/def
   `kubectl -n kube-system delete addon coredns-sdp` removes the stale bookkeeping object (its
   objects carry no owner references, so nothing else goes with it).
 
+### 8.9 Argo CD from this repository (two stages, then a bootstrap re-apply, ADR 0027)
+
+`app/argocd` is Argo CD v3.5.3 rebuilt from the release commit with fixed dependencies - the same
+release `install.yaml` names, with the helm, kustomize and git-lfs it ships - and it arrives like
+KSOPS in 8.6: the pin lives in the bootstrap kustomization, so the last step is a manual apply. This
+one replaces the image of every Argo CD container, so it is the one bootstrap change where Argo CD
+itself restarts.
+
+1. **Stage 1: the image.** Push everything up to and including the commit that adds `app/argocd/`
+   (and none of the commit "argocd: run Argo CD from this repository's signed image"). The workflow
+   builds `argocd` (helm, kustomize, git-lfs and argocd upstream tests, the UI, Trivy gate, SBOM,
+   cosign; the heaviest image here, expect 15-25 minutes) and prints `.../argocd@sha256:...`.
+   Nothing in the cluster changes. Make the new GHCR package `self-defending-portfolio/argocd`
+   public (5.2) - a fresh bootstrap cannot start Argo CD otherwise - then from a machine that is not
+   logged in to GHCR:
+
+   ```sh
+   scripts/verify-image.sh ghcr.io/hubertmj/self-defending-portfolio/argocd@sha256:<digest>
+   img=ghcr.io/hubertmj/self-defending-portfolio/argocd@sha256:<digest>
+   docker run --rm "$img" argocd version --client     # argocd: v3.5.3+c9c369e.dirty, go1.26.8
+   docker run --rm "$img" sh -c 'helm version --short; kustomize version; git-lfs version; id'
+   # v4.2.1+gd591a19 / v5.8.1 / git-lfs/3.7.1 (GitHub; ...) / uid=999(argocd) gid=999(argocd)
+   docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:0.75.0 image \
+     --severity CRITICAL,HIGH --quiet "$img"      # 0 everywhere
+   ```
+
+2. **Stage 2: the switch.** On the switch commit, replace the placeholder and validate (`make
+   validate` refuses the placeholder):
+
+   ```sh
+   scripts/bump-image-digest.sh argocd sha256:<digest>   # cluster/bootstrap/argocd/kustomization.yaml
+   make lint validate
+   git commit --amend --no-edit && git push
+   ```
+
+3. **The bootstrap re-apply.** The diff must be the image of five containers and nothing else -
+   `argocd-server`, `argocd-repo-server` and its `copyutil` init container,
+   `argocd-application-controller` and the Redis `secret-init` init container - each going from
+   `quay.io/argoproj/argocd:v3.5.3` to `ghcr.io/hubertmj/self-defending-portfolio/argocd:main@sha256:<digest>`
+   (plus the managed-fields noise a server-side diff shows). No ConfigMap, RBAC, Service or
+   NetworkPolicy may appear in it:
+
+   ```sh
+   kubectl diff -k cluster/bootstrap/argocd --server-side --force-conflicts | grep -E '^[-+] .*image:'
+   kubectl apply -k cluster/bootstrap/argocd --server-side --force-conflicts
+   kubectl -n argocd rollout status deploy/argocd-redis
+   kubectl -n argocd rollout status deploy/argocd-repo-server
+   kubectl -n argocd rollout status deploy/argocd-server
+   kubectl -n argocd rollout status statefulset/argocd-application-controller
+   kubectl -n argocd get pods -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{range .spec.initContainers[*]}{.image}{" "}{end}{range .spec.containers[*]}{.image}{" "}{end}{"\n"}{end}'
+   # every argocd container on .../argocd:main@sha256:<digest>; redis on 8.2.10-alpine; ksops on .../ksops
+   ```
+
+   Accept it by making Argo CD do everything it does, with the new binaries:
+
+   ```sh
+   argocd version                               # server: v3.5.3+c9c369e.dirty, Kustomize v5.8.1, Helm v4.2.1
+   argocd app get falco --hard-refresh | grep -E 'Sync Status|Health Status'                 # helmCharts render
+   argocd app get cert-manager-issuers --hard-refresh | grep -E 'Sync Status|Health Status'  # KSOPS decrypt
+   argocd app get cloudflared --hard-refresh | grep -E 'Sync Status|Health Status'
+   argocd app list                              # every Application Synced/Healthy as before, no ComparisonError
+   kubectl -n argocd logs deploy/argocd-repo-server | grep -iE 'level.:.(error|fatal)|kustomize version'
+   ```
+
+   and open the UI over the LAN as before (it is embedded in the binary, built from the same
+   release). The rollout restarts all of Argo CD: for a minute or two nothing syncs and the UI may
+   drop; workloads Argo CD manages keep running untouched. The application controller resumes from
+   the cluster's state, nothing is lost with Redis (a cache).
+
+Rollback: revert the switch commit and re-apply the bootstrap; upstream's
+`quay.io/argoproj/argocd:v3.5.3` comes back with no other change, because the paths, user and
+configuration are upstream's. If Argo CD cannot start at all (for example the GHCR package is
+private), the same revert-and-apply is the fix - it needs only `kubectl`, not Argo CD.
+
 ## Rebuild from zero
 
 ```sh

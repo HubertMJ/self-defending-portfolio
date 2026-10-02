@@ -121,6 +121,15 @@ without adding that coupling. The image is signed, SBOM'd and Trivy-gated in CI,
 cluster-admin can change the pin. An `Audit`-mode verification for `argocd` (reports, never blocks)
 would add visibility without coupling; it is not part of this decision.
 
+**3. Argo CD runs it.** The bootstrap kustomization maps `quay.io/argoproj/argocd` to
+`ghcr.io/hubertmj/self-defending-portfolio/argocd`, pinned by digest, in its `images:` list - one
+entry that rewrites all five references install.yaml v3.5.3 makes (server, repo-server and
+`copyutil`, application controller, Redis `secret-init`), without patching any Deployment.
+`scripts/bump-image-digest.sh argocd <digest>` rewrites it (the script now also recognises an entry
+whose `newName:` is ours), `scripts/check-image-digests.sh` refuses its placeholder like every other,
+and it reaches the cluster only through `kubectl apply -k cluster/bootstrap/argocd`
+(`docs/bootstrap.md`, 8.9).
+
 ## Consequences
 - Once applied, Argo CD leaves the third-party column of the posture page: five containers at 2
   CRITICAL + 29 HIGH each in the cluster today become an own image at 0. The whole `argocd` namespace
