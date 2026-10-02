@@ -3,6 +3,7 @@ package runner
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"strings"
 	"sync"
 	"testing"
@@ -118,6 +119,12 @@ type fakeExec struct {
 	tty   bool
 	ttys  []bool
 	block bool
+
+	// Terminal (ExecStream) behaviour, optional: stdout/stderr written and the code returned.
+	stdout, stderr string
+	code           int
+	streamErr      error
+	streamBlock    bool
 }
 
 func (f *fakeExec) Exec(ctx context.Context, ns, pod, container string, cmd []string, tty bool) error {
@@ -131,6 +138,25 @@ func (f *fakeExec) Exec(ctx context.Context, ns, pod, container string, cmd []st
 		return ctx.Err()
 	}
 	return nil
+}
+
+func (f *fakeExec) ExecStream(ctx context.Context, ns, pod, container string, cmd []string, tty bool, stdout, stderr io.Writer) (int, error) {
+	f.mu.Lock()
+	f.calls = append(f.calls, ns+"/"+pod+"/"+container+":"+strings.Join(cmd, " "))
+	f.ttys = append(f.ttys, tty)
+	out, errOut, code, serr, block := f.stdout, f.stderr, f.code, f.streamErr, f.streamBlock
+	f.mu.Unlock()
+	if out != "" {
+		_, _ = io.WriteString(stdout, out)
+	}
+	if errOut != "" {
+		_, _ = io.WriteString(stderr, errOut)
+	}
+	if block {
+		<-ctx.Done()
+		return -1, ctx.Err()
+	}
+	return code, serr
 }
 
 func (f *fakeExec) count() int { f.mu.Lock(); defer f.mu.Unlock(); return len(f.calls) }

@@ -2,6 +2,7 @@ package runner
 
 import (
 	"context"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -133,6 +134,12 @@ func (d defacer) Exec(ctx context.Context, _, _, _ string, _ []string, _ bool) e
 	return ctx.Err()
 }
 
+func (d defacer) ExecStream(ctx context.Context, _, _, _ string, _ []string, _ bool, _, _ io.Writer) (int, error) {
+	d.app.set(func(a *victimApp) { a.body = `{"status":"defaced","title":"pwned","banner":"owned","checksum":"beef"}` })
+	<-ctx.Done()
+	return -1, ctx.Err()
+}
+
 func victimRunner(c *fake.Clientset, app *victimApp, rec *recorder) *Runner {
 	return New(c, defacer{app}, rec, nil, Config{PollInterval: 10 * time.Millisecond, QuarantineLinger: -1,
 		VictimPort: app.port, VictimInterval: 20 * time.Millisecond, VictimTimeout: 200 * time.Millisecond})
@@ -188,7 +195,7 @@ func TestVictimQuarantinedIsUnreachableNotGone(t *testing.T) {
 	waitOrder(t, rec, "victim:defaced")
 	// The quarantine policy: the app stops answering.
 	app.srv.CloseClientConnections()
-	app.srv.Listener.Close()
+	_ = app.srv.Listener.Close()
 	waitOrder(t, rec, "victim:unreachable")
 	r.ObserveTalon(podName(sc.ID, id), "success")
 	<-done
@@ -237,7 +244,7 @@ func TestVictimStartingAndDyingAreNotUnreachable(t *testing.T) {
 	waitOrder(t, rec, "victim:up")
 	// The app dies first, the deletion is reported a moment later.
 	app.srv.CloseClientConnections()
-	app.srv.Listener.Close()
+	_ = app.srv.Listener.Close()
 	time.Sleep(10 * time.Millisecond)
 	_ = c.CoreV1().Pods("sandbox").Delete(context.Background(), pod, metav1.DeleteOptions{})
 	waitOrder(t, rec, "victim:gone")
