@@ -37,11 +37,38 @@ const (
 	MaxTimeout = 120 * time.Second
 	// DefaultTimeout applies when a scenario sets no timeout_seconds.
 	DefaultTimeout = 60 * time.Second
+	// DefaultIdle ends an interactive run that goes this long without a command (ADR 0029). The
+	// catalogue sets idle_seconds; this is the fallback when it does not.
+	DefaultIdle = 30 * time.Second
+	// MaxCommandInput caps the printable-ASCII `input` (and each alias) a terminal command may
+	// show: these are display strings for the web terminal, never sent to the cluster.
+	MaxCommandInput = 80
+	// MaxCommands is the catalogue ceiling on a terminal scenario's command list; the per-run cap
+	// on how many a visitor may send is a separate, smaller limit enforced by the server.
+	MaxCommands = 64
 )
 
 // An id ends up in a pod name and a label value: DNS-1123 label, short enough to leave room for
 // the run suffix.
 var idPattern = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]{0,38}[a-z0-9])?$`)
+
+// A terminal command id or objective id: [a-z0-9-]{1,32}, the only thing POST
+// /api/runs/{id}/commands accepts (the contract's hard rule: no visitor free text reaches the
+// cluster, command ids only).
+var shortIDPattern = regexp.MustCompile(`^[a-z0-9-]{1,32}$`)
+
+// TerminalContainer is the container a terminal scenario's commands run in.
+const TerminalContainer = "target"
+
+// Command outcomes and the defence-map layers a command may report (ADR 0029). The API only
+// records what the catalogue states; it does not infer either from the Falco/Talon events.
+var (
+	commandOutcomes = map[string]bool{"allowed": true, "prevented": true, "detected": true}
+	commandLayers   = map[string]bool{
+		"edge": true, "host": true, "network": true, "supply-chain": true,
+		"admission": true, "pod-security": true, "runtime": true,
+	}
+)
 
 // Exec is the command run in the scenario pod once it is Ready.
 type Exec struct {
@@ -72,25 +99,97 @@ type Scenario struct {
 	// scenario image without the app never shows a spurious "unreachable".
 	Victim bool `json:"victim"`
 
+	// Interactive marks a terminal scenario (ADR 0029): the pod is created and kept alive, and the
+	// visitor runs catalogue commands into it one at a time, instead of a single scripted exec. An
+	// interactive scenario has no exec/pre_exec and its own detection/response are empty; each
+	// command carries its own. Validation enforces that split.
+	Interactive bool `json:"interactive"`
+	// IdleSeconds ends an interactive run after this long without a command (0: DefaultIdle). Only
+	// meaningful when Interactive.
+	IdleSeconds int `json:"idle_seconds"`
+	// Objectives are what the visitor tries to reach, in kill-chain order; a command may count
+	// towards one by its id. Only meaningful when Interactive.
+	Objectives []Objective `json:"objectives"`
+	// Commands is the terminal catalogue: every command the visitor may run, by stable id. Only
+	// meaningful when Interactive; the one thing POST /api/runs/{id}/commands accepts is a
+	// command's id.
+	Commands []Command `json:"commands"`
+
 	// Template is Pod decoded: either a PodTemplateSpec ({metadata, spec}) or a bare PodSpec.
 	Template corev1.PodTemplateSpec `json:"-"`
 }
 
-// Public is the shape GET /api/scenarios returns: no pod spec, no command.
-type Public struct {
-	ID        string `json:"id"`
-	Title     string `json:"title"`
-	Summary   string `json:"summary"`
-	Technique string `json:"technique"`
+// Objective is one goal a terminal visitor works towards, shown in kill-chain order.
+type Objective struct {
+	ID    string `json:"id"`
+	Title string `json:"title"`
+}
+
+// Command is one entry of a terminal scenario's catalogue (ADR 0029). The visitor sends its ID and
+// nothing else; Input and Aliases are the spellings the web terminal offers for completion and are
+// never matched by the API. Command is the argv run in container `target`.
+type Command struct {
+	ID        string   `json:"id"`
+	Input     string   `json:"input"`
+	Aliases   []string `json:"aliases"`
+	Objective string   `json:"objective"`
+	Technique string   `json:"technique"`
+	Command   []string `json:"command"`
+	TTY       bool     `json:"tty"`
+	// Outcome is allowed | prevented | detected: what the command does against the cluster, as the
+	// catalogue states it (not inferred from events).
+	Outcome string `json:"outcome"`
+	// Layer is the defence-map layer this command exercises (edge, host, network, supply-chain,
+	// admission, pod-security, runtime).
+	Layer string `json:"layer"`
+	// Control is the one-line name of what answers (a Falco rule, a kernel refusal, nothing).
+	Control string `json:"control"`
+	// Detection and Response are set only when Outcome == detected: the Falco rule that fires and
+	// what Talon does (terminate | quarantine).
 	Detection string `json:"detection"`
 	Response  string `json:"response"`
-	Victim    bool   `json:"victim"`
+	// Explain is the one or two sentences shown after the command ran.
+	Explain string `json:"explain"`
+}
+
+// Public is the shape GET /api/scenarios returns: no pod spec, no command.
+type Public struct {
+	ID          string `json:"id"`
+	Title       string `json:"title"`
+	Summary     string `json:"summary"`
+	Technique   string `json:"technique"`
+	Detection   string `json:"detection"`
+	Response    string `json:"response"`
+	Victim      bool   `json:"victim"`
+	Interactive bool   `json:"interactive"`
 }
 
 // Public returns the visitor-facing fields.
 func (s Scenario) Public() Public {
 	return Public{ID: s.ID, Title: s.Title, Summary: s.Summary, Technique: s.Technique, Detection: s.Detection,
-		Response: s.Response, Victim: s.Victim}
+		Response: s.Response, Victim: s.Victim, Interactive: s.Interactive}
+}
+
+// Idle is an interactive scenario's idle timeout, defaulted; zero for a non-interactive one.
+func (s Scenario) Idle() time.Duration {
+	if !s.Interactive {
+		return 0
+	}
+	if s.IdleSeconds <= 0 {
+		return DefaultIdle
+	}
+	return time.Duration(s.IdleSeconds) * time.Second
+}
+
+// CommandByID returns the catalogue command with the given id. The API matches by id only; a
+// visitor's typed text never reaches here.
+func (s Scenario) CommandByID(id string) (Command, bool) {
+	for _, c := range s.Commands {
+		if c.ID == id {
+			return c, true
+		}
+	}
+	return Command{}, false
 }
 
 // Timeout is the scenario's run time limit, defaulted and capped.
@@ -157,11 +256,28 @@ func (s *Scenario) validate() error {
 	if strings.TrimSpace(s.Title) == "" {
 		return errors.New("title is empty")
 	}
-	if s.Response != "terminate" && s.Response != "quarantine" {
-		return fmt.Errorf("response %q is not terminate or quarantine", s.Response)
+	if s.Interactive {
+		// A terminal scenario carries no scripted attack of its own: its detection/response are
+		// empty (each command has its own), and it runs no exec/pre_exec.
+		if s.Response != "" || s.Detection != "" {
+			return errors.New("an interactive scenario's detection and response must be empty (each command carries its own)")
+		}
+		if s.Exec != nil || s.PreExec != nil {
+			return errors.New("an interactive scenario must not declare exec or pre_exec (commands are run on request)")
+		}
+	} else {
+		if s.Response != "terminate" && s.Response != "quarantine" {
+			return fmt.Errorf("response %q is not terminate or quarantine", s.Response)
+		}
+		if len(s.Commands) > 0 || len(s.Objectives) > 0 || s.IdleSeconds != 0 {
+			return errors.New("commands, objectives and idle_seconds are for interactive scenarios only")
+		}
 	}
 	if s.TimeoutSeconds < 0 {
 		return errors.New("timeout_seconds is negative")
+	}
+	if s.IdleSeconds < 0 {
+		return errors.New("idle_seconds is negative")
 	}
 	if len(s.Pod) == 0 || string(s.Pod) == "null" {
 		return errors.New("pod is missing")
@@ -213,7 +329,113 @@ func (s *Scenario) validate() error {
 			return fmt.Errorf("exec.container %q is not a container of the pod", s.Container())
 		}
 	}
+	if s.Interactive {
+		if err := s.validateInteractive(spec); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+// validateInteractive checks the terminal-only shape: a container named `target` for the commands
+// to run in, well-formed objectives, and a command catalogue whose ids, inputs and detected-outcome
+// fields are all consistent. The visitor only ever sends a command id, so the ids must be unique;
+// inputs and aliases are display text and are kept short printable ASCII, not because the API
+// matches them but so the catalogue cannot smuggle control characters into the terminal.
+func (s *Scenario) validateInteractive(spec *corev1.PodSpec) error {
+	hasTarget := false
+	for _, c := range spec.Containers {
+		hasTarget = hasTarget || c.Name == TerminalContainer
+	}
+	if !hasTarget {
+		return fmt.Errorf("an interactive scenario needs a container named %q for its commands", TerminalContainer)
+	}
+	objIDs := map[string]bool{}
+	for i, o := range s.Objectives {
+		if !shortIDPattern.MatchString(o.ID) {
+			return fmt.Errorf("objective #%d: id must match [a-z0-9-]{1,32}", i)
+		}
+		if objIDs[o.ID] {
+			return fmt.Errorf("objective #%d: duplicate id %q", i, o.ID)
+		}
+		if strings.TrimSpace(o.Title) == "" {
+			return fmt.Errorf("objective %q: title is empty", o.ID)
+		}
+		objIDs[o.ID] = true
+	}
+	if len(s.Commands) == 0 {
+		return errors.New("an interactive scenario has no commands")
+	}
+	if len(s.Commands) > MaxCommands {
+		return fmt.Errorf("an interactive scenario has %d commands, more than %d", len(s.Commands), MaxCommands)
+	}
+	ids := map[string]bool{}
+	inputs := map[string]bool{}
+	for i, c := range s.Commands {
+		if !shortIDPattern.MatchString(c.ID) {
+			return fmt.Errorf("command #%d: id must match [a-z0-9-]{1,32}", i)
+		}
+		if ids[c.ID] {
+			return fmt.Errorf("command #%d: duplicate id %q", i, c.ID)
+		}
+		ids[c.ID] = true
+		if err := c.validate(objIDs, inputs); err != nil {
+			return fmt.Errorf("command %q: %w", c.ID, err)
+		}
+	}
+	return nil
+}
+
+// validate checks one catalogue command. inputs accumulates the inputs and aliases already seen, so
+// a spelling is never ambiguous across the catalogue.
+func (c Command) validate(objectives, inputs map[string]bool) error {
+	if len(c.Command) == 0 {
+		return errors.New("command argv is empty")
+	}
+	for _, spelling := range append([]string{c.Input}, c.Aliases...) {
+		if !printableASCII(spelling, MaxCommandInput) {
+			return fmt.Errorf("input/alias %q must be 1-%d printable ASCII characters", spelling, MaxCommandInput)
+		}
+		if inputs[spelling] {
+			return fmt.Errorf("input/alias %q is used by more than one command", spelling)
+		}
+		inputs[spelling] = true
+	}
+	if c.Objective != "" && !objectives[c.Objective] {
+		return fmt.Errorf("objective %q is not one of the scenario's objectives", c.Objective)
+	}
+	if !commandOutcomes[c.Outcome] {
+		return fmt.Errorf("outcome %q is not allowed, prevented or detected", c.Outcome)
+	}
+	if !commandLayers[c.Layer] {
+		return fmt.Errorf("layer %q is not a defence-map layer", c.Layer)
+	}
+	if c.Outcome == "detected" {
+		if strings.TrimSpace(c.Detection) == "" {
+			return errors.New("a detected command needs a detection (the Falco rule)")
+		}
+		if c.Response != "terminate" && c.Response != "quarantine" {
+			return fmt.Errorf("a detected command's response %q is not terminate or quarantine", c.Response)
+		}
+	} else if c.Detection != "" || c.Response != "" {
+		return errors.New("detection and response are set only for a detected command")
+	}
+	return nil
+}
+
+// printableASCII reports whether s is 1..n characters, each a printable ASCII byte (0x20-0x7e). A
+// terminal command's display text is held to this so the catalogue cannot put control characters,
+// invisible format characters or multi-byte runes into what the terminal echoes.
+func printableASCII(s string, n int) bool {
+	if len(s) == 0 || len(s) > n {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if s[i] < 0x20 || s[i] > 0x7e {
+			return false
+		}
+	}
+	return true
 }
 
 // strictUnmarshal rejects unknown fields: a typo in a PodSpec should fail here, loudly, rather than

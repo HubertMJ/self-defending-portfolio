@@ -155,3 +155,181 @@ func TestStoreReloadsOnChange(t *testing.T) {
 		t.Fatal("removed scenario still served")
 	}
 }
+
+// terminalSample is a valid interactive scenario the way CLUSTER will write it: a `target`
+// container, objectives in kill-chain order, and one command of each outcome.
+const terminalSample = `
+- id: terminal
+  title: Attacker's terminal
+  summary: Type commands into a hardened pod.
+  interactive: true
+  timeout_seconds: 120
+  idle_seconds: 30
+  victim: true
+  objectives:
+    - {id: recon, title: "Look around"}
+    - {id: credentials, title: "Find credentials"}
+  commands:
+    - id: whoami
+      input: "id"
+      aliases: ["whoami"]
+      objective: recon
+      technique: T1033
+      command: ["id"]
+      tty: false
+      outcome: allowed
+      layer: runtime
+      control: "Nothing: id is a normal process"
+      explain: "You are a non-root user in a hardened pod."
+    - id: write-bin
+      input: "touch /bin/backdoor"
+      command: ["touch", "/bin/backdoor"]
+      outcome: prevented
+      layer: pod-security
+      control: "read-only root filesystem"
+      explain: "The root filesystem is read-only, so the write fails."
+    - id: read-shadow
+      input: "cat /etc/shadow"
+      objective: credentials
+      technique: T1003.008
+      command: ["cat", "/etc/shadow"]
+      outcome: detected
+      layer: runtime
+      control: "Falco rule Read sensitive file untrusted"
+      detection: Read sensitive file untrusted
+      response: terminate
+      explain: "Falco sees the read; Talon deletes the pod."
+  pod:
+    securityContext: {runAsNonRoot: true, runAsUser: 10001, seccompProfile: {type: RuntimeDefault}}
+    containers:
+      - name: target
+        image: ` + img + `
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities: {drop: [ALL]}
+        resources: {requests: {cpu: 10m, memory: 16Mi}, limits: {cpu: 100m, memory: 32Mi}}
+`
+
+func TestParseTerminal(t *testing.T) {
+	list, errs := Parse([]byte(terminalSample))
+	if len(errs) != 0 || len(list) != 1 {
+		t.Fatalf("list=%d errs=%v", len(list), errs)
+	}
+	sc := list[0]
+	if !sc.Interactive || sc.Idle() != 30*time.Second || sc.Timeout() != 120*time.Second {
+		t.Fatalf("flags: interactive=%v idle=%v timeout=%v", sc.Interactive, sc.Idle(), sc.Timeout())
+	}
+	if !sc.Public().Interactive {
+		t.Fatal("Public().Interactive is false")
+	}
+	if len(sc.Objectives) != 2 || sc.Objectives[0].ID != "recon" {
+		t.Fatalf("objectives: %+v", sc.Objectives)
+	}
+	c, ok := sc.CommandByID("read-shadow")
+	if !ok || c.Outcome != "detected" || c.Response != "terminate" || c.Objective != "credentials" {
+		t.Fatalf("read-shadow: %+v ok=%v", c, ok)
+	}
+	if _, ok := sc.CommandByID("no-such"); ok {
+		t.Fatal("CommandByID returned an unknown id")
+	}
+	if sc.Container() != "target" { // no exec, so the first (only) container
+		t.Fatalf("container = %q", sc.Container())
+	}
+}
+
+func TestTerminalValidation(t *testing.T) {
+	base := func(mut func(*Scenario)) string {
+		// Start from the valid terminal scenario and mutate the decoded form into YAML-ish by
+		// editing the source string; simpler here to assert on hand-written bad snippets.
+		return ""
+	}
+	_ = base
+	bad := []struct {
+		name, yaml string
+	}{
+		{"interactive with exec", `
+- id: terminal
+  title: t
+  interactive: true
+  commands: [{id: a, input: "id", command: [id], outcome: allowed, layer: runtime}]
+  exec: {command: [sh], tty: false}
+  pod: {containers: [{name: target, image: ` + img + `}]}`},
+		{"interactive with response", `
+- id: terminal
+  title: t
+  interactive: true
+  response: terminate
+  commands: [{id: a, input: "id", command: [id], outcome: allowed, layer: runtime}]
+  pod: {containers: [{name: target, image: ` + img + `}]}`},
+		{"no target container", `
+- id: terminal
+  title: t
+  interactive: true
+  commands: [{id: a, input: "id", command: [id], outcome: allowed, layer: runtime}]
+  pod: {containers: [{name: victim, image: ` + img + `}]}`},
+		{"no commands", `
+- id: terminal
+  title: t
+  interactive: true
+  pod: {containers: [{name: target, image: ` + img + `}]}`},
+		{"bad outcome", `
+- id: terminal
+  title: t
+  interactive: true
+  commands: [{id: a, input: "id", command: [id], outcome: nope, layer: runtime}]
+  pod: {containers: [{name: target, image: ` + img + `}]}`},
+		{"bad layer", `
+- id: terminal
+  title: t
+  interactive: true
+  commands: [{id: a, input: "id", command: [id], outcome: allowed, layer: moon}]
+  pod: {containers: [{name: target, image: ` + img + `}]}`},
+		{"detected without detection", `
+- id: terminal
+  title: t
+  interactive: true
+  commands: [{id: a, input: "id", command: [id], outcome: detected, layer: runtime, response: terminate}]
+  pod: {containers: [{name: target, image: ` + img + `}]}`},
+		{"allowed with response", `
+- id: terminal
+  title: t
+  interactive: true
+  commands: [{id: a, input: "id", command: [id], outcome: allowed, layer: runtime, response: terminate}]
+  pod: {containers: [{name: target, image: ` + img + `}]}`},
+		{"duplicate command id", `
+- id: terminal
+  title: t
+  interactive: true
+  commands:
+    - {id: a, input: "id", command: [id], outcome: allowed, layer: runtime}
+    - {id: a, input: "ls", command: [ls], outcome: allowed, layer: runtime}
+  pod: {containers: [{name: target, image: ` + img + `}]}`},
+		{"ambiguous input", `
+- id: terminal
+  title: t
+  interactive: true
+  commands:
+    - {id: a, input: "id", command: [id], outcome: allowed, layer: runtime}
+    - {id: b, input: "id", command: [ls], outcome: allowed, layer: runtime}
+  pod: {containers: [{name: target, image: ` + img + `}]}`},
+		{"objective not declared", `
+- id: terminal
+  title: t
+  interactive: true
+  commands: [{id: a, input: "id", command: [id], objective: ghost, outcome: allowed, layer: runtime}]
+  pod: {containers: [{name: target, image: ` + img + `}]}`},
+		{"commands on non-interactive", `
+- id: x
+  title: t
+  response: terminate
+  commands: [{id: a, input: "id", command: [id], outcome: allowed, layer: runtime}]
+  pod: {containers: [{name: target, image: ` + img + `}]}`},
+	}
+	for _, b := range bad {
+		list, errs := Parse([]byte(b.yaml))
+		if len(errs) != 1 || len(list) != 0 {
+			t.Errorf("%s: expected one error, got list=%d errs=%v", b.name, len(list), errs)
+		}
+	}
+}
