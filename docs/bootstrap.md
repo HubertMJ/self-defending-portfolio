@@ -822,6 +822,52 @@ kubectl get vulnerabilityreports -A -o json | jq '[.items[] | {k: (.report.regis
 curl -s https://hubertjablon.ski/api/posture | jq '.trivy | {critical, high, own, third_party}'
 ```
 
+### 8.5 Argo CD: ApplicationSet and notifications controllers removed (bootstrap re-apply, ADR 0024)
+
+Two more upstream components that nothing uses leave the bootstrap kustomization:
+`argocd/argocd-applicationset-controller-delete.yaml` and
+`argocd/argocd-notifications-controller-delete.yaml` (15 objects; the rendered bootstrap goes from 55
+to 40). The CRD `applicationsets.argoproj.io` and the empty `argocd-notifications-secret` stay - the
+patch files say why. This does not move the posture number: both controllers ran the same
+`quay.io/argoproj/argocd:v3.5.3` image as the rest of Argo CD, which is still running. What goes is
+two processes, a ClusterRole, and their memory on an 8 GB node.
+
+First confirm the reasons still hold, then re-apply. The diff is empty: the removed objects are
+*absent* from the rendered set, not marked for deletion, and every object that stays is unchanged:
+
+```sh
+kubectl get applicationsets -A                                         # No resources found
+kubectl -n argocd get cm argocd-notifications-cm -o jsonpath='{.data}'   # empty
+kubectl get applications,appprojects -A -o json \
+  | jq -r '.items[].metadata.annotations // {} | keys[]' | grep -c notifications.argoproj.io   # 0
+kubectl diff -k cluster/bootstrap/argocd --server-side --force-conflicts   # no output, exit 0
+kubectl apply -k cluster/bootstrap/argocd --server-side --force-conflicts
+```
+
+#### Removing the live objects
+
+`kubectl apply` does not prune, so the two controllers keep running until they are deleted once.
+Every object is listed by kind and name, with nothing selected by label, in
+`cluster/bootstrap/prune-removed-argocd-components.sh`. It checks the same preconditions again,
+refuses to run while the checked-out kustomization still declares any of the components, and
+deletes nothing without `--delete`:
+
+```sh
+cluster/bootstrap/prune-removed-argocd-components.sh            # server-side dry run: lists what would go
+cluster/bootstrap/prune-removed-argocd-components.sh --delete
+kubectl -n argocd get deploy                 # argocd-redis, argocd-repo-server, argocd-server
+kubectl -n argocd get sts                    # argocd-application-controller
+kubectl get clusterrole argocd-applicationset-controller   # NotFound
+argocd login localhost:8080 --username admin --plaintext   # through the usual port-forward: still works
+argocd app list                              # every Application still Synced/Healthy
+```
+
+The Dex block in the script is a no-op on this cluster (8.1 already removed it, `--ignore-not-found`);
+it is there so one file covers every component the bootstrap has dropped.
+
+Rollback: remove the two patch entries from `cluster/bootstrap/argocd/kustomization.yaml` and
+re-apply; `apply -k` recreates every object from install.yaml.
+
 ## Rebuild from zero
 
 ```sh

@@ -1,0 +1,70 @@
+# No notifications controller (ADR 0024). Argo CD notifications are configured entirely in
+# argocd-notifications-cm (triggers, templates, services) plus `notifications.argoproj.io/subscribe*`
+# annotations on Applications or AppProjects. This repository sets none of them (`git grep -i
+# notifications.argoproj` finds nothing), and the live argocd-notifications-cm and
+# argocd-notifications-secret both have no data at all. The controller evaluated zero triggers for
+# zero subscribers - with the full argocd image, its own Role, a metrics Service and a NetworkPolicy.
+# Alerting in this project is Falco -> Falcosidekick (ADR 0013), not Argo CD.
+#
+# How: kustomize `$patch: delete` on every object install.yaml (v3.5.3) creates for the controller,
+# matched by kind and name, as argocd-dex-server-delete.yaml does for Dex.
+#
+# The configuration objects:
+#   * ConfigMap argocd-notifications-cm: deleted. It is the controller's configuration and it is
+#     empty. argocd-server also reads it, for the notifications API (the UI's subscription picker),
+#     through notifications-engine, which treats a missing ConfigMap as an empty one
+#     (pkg/api/factory.go, getConfigMapAndSecretWithListers: IsNotFound -> &ConfigMap{}), so the
+#     server behaves exactly as with the empty upstream object.
+#   * Secret argocd-notifications-secret: kept. It is empty, nothing but argocd-server reads it (and
+#     that read tolerates its absence the same way), and deleting it here would need a `kind: Secret`
+#     document in git - which scripts/check-secrets-encrypted.sh (ADR 0006) rightly refuses unless it
+#     is SOPS-encrypted. Weakening that guard to remove an empty object is the wrong trade, so the
+#     Secret stays declared by install.yaml and stays in the cluster.
+#
+# Bringing it back: remove this file from kustomization.yaml, configure argocd-notifications-cm
+# (a patch here) and re-apply the bootstrap.
+#
+# `kubectl apply -k` does not prune: re-applying the bootstrap stops *declaring* these objects but
+# does not delete the live ones. cluster/bootstrap/prune-removed-argocd-components.sh lists the
+# one-off deletes (docs/bootstrap.md, 8.5).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: argocd-notifications-controller
+$patch: delete
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: argocd-notifications-controller-metrics
+$patch: delete
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: argocd-notifications-controller
+$patch: delete
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: argocd-notifications-controller
+$patch: delete
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: argocd-notifications-controller
+$patch: delete
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: argocd-notifications-controller-network-policy
+$patch: delete
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: argocd-notifications-cm
+$patch: delete

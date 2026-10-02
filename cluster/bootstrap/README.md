@@ -19,7 +19,10 @@ landed, and the only credential in play is Argo CD's own service account.
 | `argocd/argocd-cmd-params-cm.yaml` | `server.insecure: "true"` — the UI is LAN-only, never published |
 | `argocd/argocd-repo-server-ksops.yaml` | KSOPS init container + the age key mount |
 | `argocd/argocd-dex-server-delete.yaml` | deletes every Dex object: there is no SSO, so Dex served nobody (ADR 0023) |
+| `argocd/argocd-applicationset-controller-delete.yaml` | deletes the ApplicationSet controller: nothing here is an ApplicationSet; the CRD stays (ADR 0024) |
+| `argocd/argocd-notifications-controller-delete.yaml` | deletes the notifications controller and its empty ConfigMap: no triggers, no subscriptions (ADR 0024) |
 | `argocd/root-application.yaml` | the app-of-apps root, pointing at `cluster/apps` |
+| `prune-removed-argocd-components.sh` | the one-off `kubectl delete` of everything the three delete patches removed, for a cluster bootstrapped before them (`apply -k` does not prune) |
 
 ## Before the first run
 
@@ -82,6 +85,19 @@ Service, ServiceAccount, Role, RoleBinding and NetworkPolicy with kustomize `$pa
 `kubectl apply` does not prune, so on a cluster that already runs Dex the live objects are deleted
 once by hand (`docs/bootstrap.md`, "Removing Dex"). SSO later is either `oidc.config` against an
 external IdP (no Dex needed) or dropping that patch.
+
+### Only the controllers that are used
+
+The same reasoning removes two more upstream components (ADR 0024). Nothing in this repository is
+an `ApplicationSet` - `cluster/apps` is plain `Application` objects - so the ApplicationSet
+controller, with its ClusterRole, watched an empty kind. Nothing configures Argo CD notifications
+(no triggers or services in `argocd-notifications-cm`, no `notifications.argoproj.io/subscribe*`
+annotation), so the notifications controller evaluated nothing. Both ran the full argocd image.
+Kept: the `applicationsets.argoproj.io` CRD, because argocd-server v3.5.3 always runs an
+ApplicationSet informer and would otherwise fail its watch forever; and the empty
+`argocd-notifications-secret`, because deleting it would need a plaintext `kind: Secret` document in
+git. On an existing cluster the live objects are deleted once with
+`prune-removed-argocd-components.sh` (`docs/bootstrap.md`, 8.5).
 
 ### The UI is not exposed, so it does not terminate TLS
 

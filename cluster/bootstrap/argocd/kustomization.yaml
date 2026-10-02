@@ -1,4 +1,5 @@
-# Argo CD install, patched for KSOPS and for a LAN-only (no public) UI, without Dex (no SSO).
+# Argo CD install, patched for KSOPS and for a LAN-only (no public) UI, without Dex (no SSO), the
+# ApplicationSet controller or the notifications controller (none of them used; ADR 0023, ADR 0024).
 # Pinned by version in the resource URL (ADR 0008). Bumping Argo CD is a one-line diff here.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
@@ -31,3 +32,7 @@ patches:
   - path: argocd-repo-server-ksops.yaml
   # No SSO, so no Dex: every Dex object in install.yaml is deleted (ADR 0023).
   - path: argocd-dex-server-delete.yaml
+  # No ApplicationSets and no notification triggers anywhere, so neither controller runs (ADR 0024).
+  # The ApplicationSet CRD and the empty argocd-notifications-secret stay; each file says why.
+  - path: argocd-applicationset-controller-delete.yaml
+  - path: argocd-notifications-controller-delete.yaml

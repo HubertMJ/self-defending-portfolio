@@ -1,0 +1,77 @@
+# No ApplicationSet controller (ADR 0024). The app-of-apps in cluster/apps is plain `Application`
+# objects, written out one per file and reviewed one per file; nothing in this repository is an
+# `ApplicationSet` (`git grep -i applicationset` finds only this file and the ADR) and the live
+# cluster has none (`kubectl get applicationsets -A`: no resources). The controller therefore watched
+# an empty kind - with a ClusterRole of its own and a Deployment running the full argocd image.
+#
+# How: kustomize `$patch: delete` on every object install.yaml (v3.5.3) creates for the controller,
+# matched by kind and name, exactly as argocd-dex-server-delete.yaml does for Dex. install.yaml has
+# no switch for the controller; deleting its objects is the kustomize-native way.
+#
+# Kept on purpose:
+#   * CRD applicationsets.argoproj.io. argocd-server v3.5.3 starts an ApplicationSet informer
+#     unconditionally (server/server.go: appFactory...ApplicationSets().Informer(), run in Run()) and
+#     serves the ApplicationSet API and UI pages from it. Without the CRD that informer fails its
+#     list/watch forever (log noise every backoff, the UI's ApplicationSet view errors); with the CRD
+#     and no controller it is an empty, harmless list. The CRD is also what makes an accidental
+#     ApplicationSet visible (`kubectl get applicationsets -A`) rather than an unknown kind.
+#   * argocd-server's own RBAC on applicationsets and the `applicationsetcontroller.*` keys of
+#     argocd-cmd-params-cm: upstream's, inert without the controller, and patching them would only
+#     widen the diff against install.yaml for no change in what can happen.
+#   * upstream's argocd-repo-server-network-policy still lists the controller's pod label as an
+#     allowed client on 8081. With no such pod it matches nothing; a pod that claimed the label would
+#     need create rights in `argocd`, which is already full control of Argo CD.
+#
+# Bringing it back: remove this file from kustomization.yaml and re-apply the bootstrap.
+#
+# `kubectl apply -k` does not prune: re-applying the bootstrap stops *declaring* these objects but
+# does not delete the live ones. cluster/bootstrap/prune-removed-argocd-components.sh lists the
+# one-off deletes (docs/bootstrap.md, 8.5).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: argocd-applicationset-controller
+$patch: delete
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: argocd-applicationset-controller
+$patch: delete
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: argocd-applicationset-controller
+$patch: delete
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: argocd-applicationset-controller
+$patch: delete
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: argocd-applicationset-controller
+$patch: delete
+---
+# Cluster-scoped, so kustomize's `namespace: argocd` does not apply to it; matched by name alone.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: argocd-applicationset-controller
+$patch: delete
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: argocd-applicationset-controller
+$patch: delete
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: argocd-applicationset-controller-network-policy
+$patch: delete

@@ -32,7 +32,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: >-
-          shellcheck scripts/*.sh cluster/bootstrap/bootstrap.sh tests/*.sh tests/admission/*.sh tests/runtime/*.sh tests/abuse/*.sh
+          shellcheck scripts/*.sh cluster/bootstrap/*.sh tests/*.sh tests/admission/*.sh tests/runtime/*.sh tests/abuse/*.sh
           tests/scenarios/*.sh app/*/test/*.sh cluster/infra/kube-bench/k3s-cis-1.9/*.sh
 
   validate:
