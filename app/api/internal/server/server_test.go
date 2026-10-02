@@ -74,6 +74,11 @@ func (noopExec) Exec(ctx context.Context, _, _, _ string, _ []string, _ bool) er
 	return ctx.Err()
 }
 
+func (noopExec) ExecStream(ctx context.Context, _, _, _ string, _ []string, _ bool, _, _ io.Writer) (int, error) {
+	<-ctx.Done()
+	return -1, ctx.Err()
+}
+
 type stubPosture struct{}
 
 func (stubPosture) Get(context.Context) posture.Snapshot {

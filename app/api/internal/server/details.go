@@ -18,6 +18,7 @@ import (
 	"github.com/hubertmj/self-defending-portfolio/app/api/internal/clientip"
 	"github.com/hubertmj/self-defending-portfolio/app/api/internal/ruleindex"
 	"github.com/hubertmj/self-defending-portfolio/app/api/internal/scenarios"
+	"github.com/hubertmj/self-defending-portfolio/app/api/internal/stats"
 )
 
 // commitPattern: the build's commit, as GitHub Actions passes it (github.sha), or a short form.
@@ -42,6 +43,13 @@ type Details struct {
 	Policies       []ruleindex.Policy `json:"policies"`
 	Commit         string             `json:"commit"`
 	Victim         bool               `json:"victim"`
+	// Terminal fields (ADR 0029), present for an interactive scenario; absent otherwise. Commands
+	// carries every catalogue field, the argv included - it is public in the repository anyway, and
+	// the web terminal needs the spellings for completion.
+	Interactive bool                  `json:"interactive"`
+	IdleSeconds int                   `json:"idle_seconds,omitempty"`
+	Objectives  []scenarios.Objective `json:"objectives,omitempty"`
+	Commands    []scenarios.Command   `json:"commands,omitempty"`
 }
 
 // PodSecurity is the effective security context of the container the command runs in: a container
@@ -83,7 +91,18 @@ func (s *Server) details(w http.ResponseWriter, r *http.Request) {
 
 func buildDetails(sc scenarios.Scenario, rules *ruleindex.Index, commit string) Details {
 	d := Details{ID: sc.ID, ExecCommand: []string{}, PreExecCommand: []string{}, Commit: commit, Victim: sc.Victim,
-		Policies: []ruleindex.Policy{}, FalcoRule: ruleindex.Rule{Name: sc.Detection}}
+		Policies: []ruleindex.Policy{}, FalcoRule: ruleindex.Rule{Name: sc.Detection}, Interactive: sc.Interactive}
+	if sc.Interactive {
+		d.IdleSeconds = int(sc.Idle().Seconds())
+		d.Objectives = sc.Objectives
+		d.Commands = sc.Commands
+		if d.Objectives == nil {
+			d.Objectives = []scenarios.Objective{}
+		}
+		if d.Commands == nil {
+			d.Commands = []scenarios.Command{}
+		}
+	}
 	if sc.Exec != nil {
 		d.ExecCommand = append(d.ExecCommand, sc.Exec.Command...)
 		d.ExecTTY = sc.Exec.TTY
@@ -144,6 +163,18 @@ func quantities(rl corev1.ResourceList) map[string]string {
 		out[string(k)] = q.String()
 	}
 	return out
+}
+
+// stats returns the cross-visitor counters (ADR 0030). A nil collector (not wired, e.g. in a test)
+// is an empty-but-well-formed snapshot, so the page never has to special-case a missing field.
+func (s *Server) stats(w http.ResponseWriter, _ *http.Request) {
+	if s.cfg.Stats == nil {
+		writeJSON(w, http.StatusOK, stats.Snapshot{
+			Since: s.cfg.Now().UTC(), ByScenario: map[string]stats.ScenarioStat{},
+			Commands: map[string]stats.CommandStat{}, Objectives: map[string]stats.ObjectiveStat{}})
+		return
+	}
+	writeJSON(w, http.StatusOK, s.cfg.Stats.Snapshot())
 }
 
 func (s *Server) run(w http.ResponseWriter, r *http.Request) {

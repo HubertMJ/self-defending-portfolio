@@ -30,12 +30,19 @@ import (
 	"github.com/hubertmj/self-defending-portfolio/app/api/internal/runlog"
 	"github.com/hubertmj/self-defending-portfolio/app/api/internal/runner"
 	"github.com/hubertmj/self-defending-portfolio/app/api/internal/scenarios"
+	"github.com/hubertmj/self-defending-portfolio/app/api/internal/stats"
 	"github.com/hubertmj/self-defending-portfolio/app/api/internal/webhook"
 )
 
 // Runner is what the server needs from internal/runner.
 type Runner interface {
 	Start(sc scenarios.Scenario, release func()) string
+	StartTerminal(sc scenarios.Scenario, release func()) (runID, token string)
+	StartCompare(sc scenarios.Scenario, release func()) string
+	Command(runID, token, commandID string) (int, error)
+	Leave(runID, token string) error
+	CommandSeqFor(pod string) int
+	ArmFor(pod string) string
 	ObserveFalco(pod string)
 	ObserveTalon(pod, status string)
 }
@@ -43,6 +50,11 @@ type Runner interface {
 // Poster is what the server needs from internal/posture.
 type Poster interface {
 	Get(ctx context.Context) posture.Snapshot
+}
+
+// StatsReader is what GET /api/stats needs from internal/stats.
+type StatsReader interface {
+	Snapshot() stats.Snapshot
 }
 
 // Counter is a 24 h counter the webhooks feed.
@@ -66,11 +78,15 @@ type Config struct {
 	Runs   *runlog.Store
 	Rules  *ruleindex.Index
 	Commit string
+	Stats  StatsReader
 
 	// AllowedOrigin is the only Origin a browser may POST from (the site itself).
 	AllowedOrigin string
-	// Namespace is the only namespace whose Falco and Talon events are published (and correlated).
+	// Namespace is the guarded sandbox; its Falco and Talon events are published and correlated.
 	Namespace string
+	// UnguardedNamespace is the compare twin (ADR 0031): Falco still fires there (no Talon), so its
+	// alerts are published and correlated too. Empty: only Namespace is watched.
+	UnguardedNamespace string
 
 	Heartbeat         time.Duration // SSE comment interval (contract: 15 s)
 	StreamMaxLifetime time.Duration // an SSE connection is closed after this; EventSource reconnects
@@ -118,11 +134,14 @@ func (s *Server) Public() http.Handler {
 	mux.HandleFunc("GET /api/posture", s.posture)
 	mux.HandleFunc("GET /api/scenarios/{id}/details", s.details)
 	mux.HandleFunc("GET /api/runs/{id}", s.run)
+	mux.HandleFunc("POST /api/runs/{id}/commands", s.command)
+	mux.HandleFunc("DELETE /api/runs/{id}", s.leave)
+	mux.HandleFunc("GET /api/stats", s.stats)
 	mux.HandleFunc("GET /api/limits", s.limits)
 	// The same paths without a method: a wrong method gets a JSON 405 instead of net/http's plain
 	// text one, so every /api answer is JSON (the page parses errors too).
 	for _, p := range []string{"/api/healthz", "/api/scenarios", "/api/attack/{id}", "/api/events", "/api/posture",
-		"/api/scenarios/{id}/details", "/api/runs/{id}", "/api/limits"} {
+		"/api/scenarios/{id}/details", "/api/runs/{id}", "/api/runs/{id}/commands", "/api/stats", "/api/limits"} {
 		mux.HandleFunc(p, methodNotAllowed)
 	}
 	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
@@ -201,10 +220,15 @@ type attackResponse struct {
 	RunID    string `json:"run_id"`
 	Scenario string `json:"scenario"`
 	State    string `json:"state"`
+	// Token is returned only for a terminal run, only here (ADR 0029): the bearer token every
+	// command and the leave request must present. Omitted for a scripted or compare run.
+	Token string `json:"token,omitempty"`
 }
 
 // attack: 404 unknown id, 429 over the visitor's or the global budget, 409 a run is in progress,
-// 202 accepted. The body is ignored (the contract says empty) but bounded.
+// 202 accepted. The body is ignored (the contract says empty) but bounded. `?compare=1` runs the
+// scenario in the guarded sandbox and the unguarded twin at once (ADR 0031); it is refused for a
+// terminal scenario, which has no single scripted attack to mirror.
 func (s *Server) attack(w http.ResponseWriter, r *http.Request) {
 	if r.ContentLength > 1024 {
 		writeError(w, http.StatusRequestEntityTooLarge, "the request body must be empty")
@@ -217,6 +241,11 @@ func (s *Server) attack(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "unknown scenario")
 		return
 	}
+	compare := r.URL.Query().Get("compare") == "1"
+	if compare && sc.Interactive {
+		writeError(w, http.StatusBadRequest, "the terminal scenario cannot be compared")
+		return
+	}
 	d, release := s.cfg.Attacks.Acquire(clientip.Key(r))
 	switch d.Outcome {
 	case limits.RateLimited:
@@ -226,9 +255,17 @@ func (s *Server) attack(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "another attack is running; watch it on the live feed")
 		return
 	}
-	id := s.cfg.Runner.Start(sc, release)
-	s.cfg.Log.Info("attack accepted", "run_id", id, "scenario", sc.ID)
-	writeJSON(w, http.StatusAccepted, attackResponse{RunID: id, Scenario: sc.ID, State: runner.StateQueued})
+	resp := attackResponse{Scenario: sc.ID, State: runner.StateQueued}
+	switch {
+	case sc.Interactive:
+		resp.RunID, resp.Token = s.cfg.Runner.StartTerminal(sc, release)
+	case compare:
+		resp.RunID = s.cfg.Runner.StartCompare(sc, release)
+	default:
+		resp.RunID = s.cfg.Runner.Start(sc, release)
+	}
+	s.cfg.Log.Info("attack accepted", "run_id", resp.RunID, "scenario", sc.ID, "interactive", sc.Interactive, "compare", compare)
+	writeJSON(w, http.StatusAccepted, resp)
 }
 
 func (s *Server) posture(w http.ResponseWriter, r *http.Request) {
@@ -252,15 +289,23 @@ func (s *Server) falco(w http.ResponseWriter, r *http.Request) {
 	if s.cfg.FalcoAlerts != nil {
 		s.cfg.FalcoAlerts.Add()
 	}
-	// Falcosidekick forwards every alert in the cluster at notice or above; only the sandbox is
-	// the visitors' business. Alerts elsewhere still count towards alerts_24h.
-	if ev.Namespace == s.cfg.Namespace {
+	// Falcosidekick forwards every alert in the cluster at notice or above; only the sandbox and
+	// its unguarded twin are the visitors' business. Alerts elsewhere still count towards alerts_24h.
+	if s.watched(ev.Namespace) {
+		ev.CommandSeq = s.cfg.Runner.CommandSeqFor(ev.Pod)
+		ev.Arm = s.cfg.Runner.ArmFor(ev.Pod)
 		if err := s.cfg.Hub.Publish("falco", ev); err != nil {
 			s.cfg.Log.Error("publish falco", "err", err)
 		}
 		s.cfg.Runner.ObserveFalco(ev.Pod)
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// watched reports whether a namespace's Falco/Talon events reach the live feed: the guarded sandbox
+// always, the unguarded twin when compare is configured.
+func (s *Server) watched(ns string) bool {
+	return ns == s.cfg.Namespace || (s.cfg.UnguardedNamespace != "" && ns == s.cfg.UnguardedNamespace)
 }
 
 func (s *Server) talon(w http.ResponseWriter, r *http.Request) {
@@ -277,7 +322,9 @@ func (s *Server) talon(w http.ResponseWriter, r *http.Request) {
 	if s.cfg.TalonActions != nil {
 		s.cfg.TalonActions.Add()
 	}
-	if ev.Namespace == s.cfg.Namespace {
+	if s.watched(ev.Namespace) {
+		ev.CommandSeq = s.cfg.Runner.CommandSeqFor(ev.Pod)
+		ev.Arm = s.cfg.Runner.ArmFor(ev.Pod)
 		if err := s.cfg.Hub.Publish("talon", ev); err != nil {
 			s.cfg.Log.Error("publish talon", "err", err)
 		}
