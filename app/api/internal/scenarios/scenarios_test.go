@@ -333,3 +333,92 @@ func TestTerminalValidation(t *testing.T) {
 		}
 	}
 }
+
+// A catalogue shaped like the real cluster-branch `terminal` entry: a tty:true detected command, a
+// prevented command with no objective, a multi-line deface, SDP_FLAG not declared. It must validate.
+const realisticTerminal = `
+- id: terminal
+  title: Attacker's terminal
+  summary: Type commands into a hardened pod.
+  interactive: true
+  timeout_seconds: 120
+  idle_seconds: 30
+  victim: true
+  objectives:
+    - {id: recon, title: "Look around"}
+    - {id: execution, title: "Run your own code"}
+    - {id: exfiltration, title: "Phone home"}
+  commands:
+    - {id: whoami, input: "id", aliases: ["whoami"], objective: recon, technique: T1033, command: [id], tty: false, outcome: allowed, layer: runtime, control: "Falco watching", explain: "unprivileged"}
+    - {id: caps, input: "grep Cap /proc/self/status", command: [grep, Cap, /proc/self/status], outcome: allowed, layer: pod-security, control: "all caps dropped", explain: "CapEff zero"}
+    - {id: touch-bin, input: "touch /bin/backdoor", technique: T1543, command: [touch, /bin/backdoor], outcome: prevented, layer: pod-security, control: "read-only root", explain: "read-only fs"}
+    - {id: beacon, input: "wget -q -T 2 -O- http://127.0.0.1:9/", aliases: ["wget"], objective: exfiltration, command: [wget, -q, -T, "2", -O-, "http://127.0.0.1:9/"], outcome: detected, layer: network, control: "SDP network tool", detection: SDP network tool in sandbox, response: quarantine, explain: "beacon"}
+    - {id: shell, input: "sh -i", aliases: ["bash -i"], objective: execution, command: [sh, -i], tty: true, outcome: detected, layer: runtime, control: "Terminal shell", detection: Terminal shell in container, response: terminate, explain: "second shell"}
+    - id: drop-run
+      input: "cp /bin/busybox /srv/shop/busybox && /srv/shop/busybox echo"
+      aliases: ["drop and execute"]
+      objective: execution
+      command: [sh, -c, "cp /bin/busybox /srv/shop/busybox && exec /srv/shop/busybox echo ran"]
+      outcome: detected
+      layer: runtime
+      control: "SDP execution from shop volume"
+      detection: SDP execution from shop volume
+      response: terminate
+      explain: "drop and run"
+  pod:
+    securityContext: {runAsNonRoot: true, runAsUser: 10001, supplementalGroups: [42], seccompProfile: {type: RuntimeDefault}}
+    containers:
+      - name: target
+        image: ` + img + `
+        securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+        resources: {requests: {cpu: 10m, memory: 16Mi}, limits: {cpu: 100m, memory: 32Mi}}
+`
+
+func TestParseRealisticTerminal(t *testing.T) {
+	list, errs := Parse([]byte(realisticTerminal))
+	if len(errs) != 0 || len(list) != 1 {
+		t.Fatalf("list=%d errs=%v", len(list), errs)
+	}
+	sc := list[0]
+	if len(sc.Commands) != 6 {
+		t.Fatalf("commands=%d", len(sc.Commands))
+	}
+	if sc.Container() != "target" {
+		t.Fatalf("container=%q", sc.Container())
+	}
+	// A command with no objective serialises without the field; aliases never null.
+	for _, c := range sc.Commands {
+		if c.Aliases == nil {
+			t.Fatalf("command %q has nil aliases", c.ID)
+		}
+	}
+}
+
+func TestTerminalCommandValidationExtra(t *testing.T) {
+	bad := []struct{ name, yaml string }{
+		{"empty argv element", `
+- id: terminal
+  title: t
+  interactive: true
+  commands: [{id: a, input: "x", command: ["", "y"], outcome: allowed, layer: runtime}]
+  pod: {containers: [{name: target, image: ` + img + `}]}`},
+		{"tty on allowed", `
+- id: terminal
+  title: t
+  interactive: true
+  commands: [{id: a, input: "x", command: [sh], tty: true, outcome: allowed, layer: runtime}]
+  pod: {containers: [{name: target, image: ` + img + `}]}`},
+		{"SDP_FLAG predeclared", `
+- id: terminal
+  title: t
+  interactive: true
+  commands: [{id: a, input: "x", command: [id], outcome: allowed, layer: runtime}]
+  pod: {containers: [{name: target, image: ` + img + `, env: [{name: SDP_FLAG, value: fixed}]}]}`},
+	}
+	for _, b := range bad {
+		list, errs := Parse([]byte(b.yaml))
+		if len(errs) != 1 || len(list) != 0 {
+			t.Errorf("%s: expected one error, got list=%d errs=%v", b.name, len(list), errs)
+		}
+	}
+}

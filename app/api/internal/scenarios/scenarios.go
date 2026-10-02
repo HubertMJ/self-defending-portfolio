@@ -24,6 +24,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	corev1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/yaml"
@@ -46,7 +47,18 @@ const (
 	// MaxCommands is the catalogue ceiling on a terminal scenario's command list; the per-run cap
 	// on how many a visitor may send is a separate, smaller limit enforced by the server.
 	MaxCommands = 64
+	// Generous caps on the human-readable command and objective fields: enough for the real
+	// catalogue (a sentence or two), tight enough that a malformed entry cannot carry a wall of
+	// text into the page. Every one of these is shown to the visitor.
+	maxTechnique      = 40
+	maxControl        = 200
+	maxExplain        = 2000
+	maxObjectiveTitle = 120
 )
+
+// flagEnv is the environment variable the runner sets per terminal run; the catalogue must not
+// declare it (the API owns its value).
+const flagEnv = "SDP_FLAG"
 
 // An id ends up in a pod name and a label value: DNS-1123 label, short enough to leave room for
 // the run suffix.
@@ -132,7 +144,7 @@ type Command struct {
 	ID        string   `json:"id"`
 	Input     string   `json:"input"`
 	Aliases   []string `json:"aliases"`
-	Objective string   `json:"objective"`
+	Objective string   `json:"objective,omitempty"`
 	Technique string   `json:"technique"`
 	Command   []string `json:"command"`
 	TTY       bool     `json:"tty"`
@@ -204,8 +216,12 @@ func (s Scenario) Timeout() time.Duration {
 	return d
 }
 
-// Container is the container exec runs in: the one named, or the first.
+// Container is the container exec (or a terminal command) runs in: the one the exec names, the
+// fixed `target` for an interactive scenario, or the first container.
 func (s Scenario) Container() string {
+	if s.Interactive {
+		return TerminalContainer
+	}
 	if s.Exec != nil && s.Exec.Container != "" {
 		return s.Exec.Container
 	}
@@ -345,7 +361,15 @@ func (s *Scenario) validate() error {
 func (s *Scenario) validateInteractive(spec *corev1.PodSpec) error {
 	hasTarget := false
 	for _, c := range spec.Containers {
-		hasTarget = hasTarget || c.Name == TerminalContainer
+		if c.Name != TerminalContainer {
+			continue
+		}
+		hasTarget = true
+		for _, e := range c.Env {
+			if e.Name == flagEnv {
+				return fmt.Errorf("the catalogue must not set %s on %q; the API sets it per run", flagEnv, TerminalContainer)
+			}
+		}
 	}
 	if !hasTarget {
 		return fmt.Errorf("an interactive scenario needs a container named %q for its commands", TerminalContainer)
@@ -358,8 +382,8 @@ func (s *Scenario) validateInteractive(spec *corev1.PodSpec) error {
 		if objIDs[o.ID] {
 			return fmt.Errorf("objective #%d: duplicate id %q", i, o.ID)
 		}
-		if strings.TrimSpace(o.Title) == "" {
-			return fmt.Errorf("objective %q: title is empty", o.ID)
+		if !printableText(o.Title, maxObjectiveTitle) {
+			return fmt.Errorf("objective %q: title is empty or over %d printable characters", o.ID, maxObjectiveTitle)
 		}
 		objIDs[o.ID] = true
 	}
@@ -371,7 +395,11 @@ func (s *Scenario) validateInteractive(spec *corev1.PodSpec) error {
 	}
 	ids := map[string]bool{}
 	inputs := map[string]bool{}
-	for i, c := range s.Commands {
+	for i := range s.Commands {
+		c := &s.Commands[i]
+		if c.Aliases == nil {
+			c.Aliases = []string{} // so details serialises [] not null
+		}
 		if !shortIDPattern.MatchString(c.ID) {
 			return fmt.Errorf("command #%d: id must match [a-z0-9-]{1,32}", i)
 		}
@@ -392,6 +420,11 @@ func (c Command) validate(objectives, inputs map[string]bool) error {
 	if len(c.Command) == 0 {
 		return errors.New("command argv is empty")
 	}
+	for _, a := range c.Command {
+		if a == "" {
+			return errors.New("command argv has an empty element")
+		}
+	}
 	for _, spelling := range append([]string{c.Input}, c.Aliases...) {
 		if !printableASCII(spelling, MaxCommandInput) {
 			return fmt.Errorf("input/alias %q must be 1-%d printable ASCII characters", spelling, MaxCommandInput)
@@ -410,6 +443,21 @@ func (c Command) validate(objectives, inputs map[string]bool) error {
 	if !commandLayers[c.Layer] {
 		return fmt.Errorf("layer %q is not a defence-map layer", c.Layer)
 	}
+	// The human-readable fields are shown to the visitor: bound them and forbid control/invisible
+	// characters (the Falco "Terminal shell" rule only fires on a TTY, so a TTY command must be a
+	// detected one - otherwise a catalogue typo would make an "allowed" command get the pod killed).
+	if c.Technique != "" && !printableText(c.Technique, maxTechnique) {
+		return fmt.Errorf("technique %q is not printable or is over %d characters", c.Technique, maxTechnique)
+	}
+	if c.Control != "" && !printableText(c.Control, maxControl) {
+		return errors.New("control is not printable or is too long")
+	}
+	if c.Explain != "" && !printableText(c.Explain, maxExplain) {
+		return errors.New("explain is not printable or is too long")
+	}
+	if c.TTY && c.Outcome != "detected" {
+		return errors.New("tty: true is only for a detected command (a TTY shell is what Falco detects)")
+	}
 	if c.Outcome == "detected" {
 		if strings.TrimSpace(c.Detection) == "" {
 			return errors.New("a detected command needs a detection (the Falco rule)")
@@ -421,6 +469,23 @@ func (c Command) validate(objectives, inputs map[string]bool) error {
 		return errors.New("detection and response are set only for a detected command")
 	}
 	return nil
+}
+
+// printableText reports whether s is 1..n runes with no control or invisible-format characters
+// (tabs and other whitespace within a line are allowed). Used for the command/objective text the
+// page shows; the API never acts on these, but they must not carry control characters.
+func printableText(s string, n int) bool {
+	count := 0
+	for _, r := range s {
+		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
+			return false
+		}
+		count++
+		if count > n {
+			return false
+		}
+	}
+	return count > 0
 }
 
 // printableASCII reports whether s is 1..n characters, each a printable ASCII byte (0x20-0x7e). A
