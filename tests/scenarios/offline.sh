@@ -160,13 +160,14 @@ for t in yaml.safe_load(open(sys.argv[1])):
         continue  # an action definition, not a response rule
     name = t["rule"]
     fields = (t.get("match") or {}).get("output_fields") or []
-    pins = [f for f in fields if str(f).replace(" ", "").startswith("k8s.ns.name=")]
-    if any("sandbox-unguarded" in str(f) for f in fields):
-        print(f"FAIL\t{name}: matches sandbox-unguarded; the twin must stay unguarded")
-    elif pins == ["k8s.ns.name=sandbox"] or "k8s.ns.name=sandbox" in [str(f).replace(" ", "") for f in pins]:
-        print(f"PASS\t{name}: pinned to k8s.ns.name=sandbox only")
+    pins = [str(f).replace(" ", "") for f in fields if str(f).replace(" ", "").startswith("k8s.ns.name=")]
+    # Exactly one namespace pin, and it is sandbox. A rule that also pinned another namespace, or none,
+    # or sandbox-unguarded, could act (or at least be evaluated) in the twin; only an exact
+    # [k8s.ns.name=sandbox] keeps the twin unguarded.
+    if pins == ["k8s.ns.name=sandbox"]:
+        print(f"PASS\t{name}: pinned to exactly k8s.ns.name=sandbox")
     else:
-        print(f"FAIL\t{name}: not pinned to k8s.ns.name=sandbox (output_fields={fields}); it could act in the twin")
+        print(f"FAIL\t{name}: namespace pins are {pins or 'none'} (output_fields={fields}); must be exactly [k8s.ns.name=sandbox]")
 PY
 while IFS=$'\t' read -r verdict msg; do
   if [ "$verdict" = PASS ]; then pass "$msg"; else fail "$msg"; fi
@@ -463,8 +464,19 @@ while IFS=$'\t' read -r tag id outcome tty detection argv; do
         fail "$id: expected to be allowed but it failed ('$(head -1 <<<"$out")')"
       fi ;;
     prevented)
-      if out=$(eval "$DOCKER exec $tc $argv" 2>&1); then
+      # The exact refusal each command must get: a non-zero exit is not enough (a typo also exits
+      # non-zero), so assert the kernel's own message for the control the catalogue claims.
+      case $id in
+        touch-bin)  want="Read-only file system" ;;
+        read-token) want="No such file or directory" ;;
+        chown-root) want="Operation not permitted" ;;
+        *)          want="" ;;
+      esac
+      out=$(eval "$DOCKER exec $tc $argv" 2>&1) && rc=0 || rc=$?
+      if [ "$rc" = 0 ]; then
         fail "$id: expected to be refused but it succeeded ('$out')"
+      elif [ -n "$want" ] && ! grep -qiF "$want" <<<"$out"; then
+        fail "$id: refused, but not with the expected message ('$want'): \"$(head -1 <<<"$out")\""
       else
         pass "$id: refused by the pod (\"$(head -1 <<<"$out")\")"
         if [ "$id" = touch-bin ]; then
@@ -491,10 +503,22 @@ while IFS=$'\t' read -r tag id outcome tty detection argv; do
           else fail "$id: the tool did not fail fast ('$out')"; fi ;;
         "Terminal shell in container")
           if [ "$tty" = true ]; then pass "$id: the command asks for a TTY (tty: true)"; else fail "$id: must set tty: true"; fi
-          if out=$($DOCKER exec -t "$tc" sh -c tty 2>&1) && grep -q '^/dev/pts/' <<<"$out"; then
-            pass "$id: a real terminal is allocated ($(tr -d '\r' <<<"$out"))"
+          # Run the catalogue's own argv with a TTY and empty stdin, the way the API execs it, and record
+          # whether sh -i exits at once or stays. Under a real pty it stays (waiting for input), so a 3 s
+          # timeout (rc 124) is the expected "stays open" - that is what a live Talon kill interrupts.
+          if eval "timeout 3 $DOCKER exec -t $tc $argv" </dev/null >/dev/null 2>&1; then
+            pass "$id: '$argv' with a TTY exited on its own"
           else
-            fail "$id: no terminal ($out)"
+            rc=$?
+            if [ "$rc" = 124 ]; then pass "$id: '$argv' with a TTY stays open (killed after 3 s), as a live session would"
+            else pass "$id: '$argv' with a TTY ended (rc=$rc)"; fi
+          fi
+          # The rule's precondition is proc.tty != 0: confirm an interactive shell here gets a controlling
+          # terminal (proc.name is a shell, and -t gives it a pts).
+          if out=$($DOCKER exec -t "$tc" sh -ic 'tty' </dev/null 2>&1) && grep -q '/dev/pts/' <<<"$out"; then
+            pass "$id: an interactive shell gets a controlling terminal ($(tr -dc '/a-z0-9' <<<"$out"))"
+          else
+            fail "$id: no controlling terminal, so the rule would not fire ($out)"
           fi ;;
         "SDP execution from shop volume")
           # The command drops a binary into the shop volume and runs it: exit 0 means it executed.
