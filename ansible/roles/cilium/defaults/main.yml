@@ -53,6 +53,10 @@ cilium_gateway_api_crds_path: "/tmp/gateway-api-standard-install-{{ cilium_gatew
 
 # Chart values. Overriding this variable replaces the map wholesale.
 cilium_values:
+  # The agent, and its six init containers, from this repository (ADR 0028, as operator.image below).
+  image:
+    # yamllint disable-line rule:line-length
+    override: ghcr.io/hubertmj/self-defending-portfolio/cilium:main@sha256:5c5dcd9b1a13a333194166dfc94051cd7793ab7b65e9a653bd0d831e0d984e29
   # eBPF replaces kube-proxy entirely; k3s is started with disable-kube-proxy.
   kubeProxyReplacement: true
   k8sServiceHost: "{{ cilium_k8s_service_host }}"

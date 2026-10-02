@@ -38,6 +38,12 @@ spec:
       releaseName: cilium
       valuesObject:
         # --- identical to cilium_values in ansible/roles/cilium/defaults/main.yml ---
+        # The agent, and its six init containers, from this repository: the 1.19.8 release with the
+        # Go binaries rebuilt against fixed dependencies, on upstream's runtime layers (ADR 0028, as
+        # operator.image below). Switched last, alone: on one node a broken agent is no pod network.
+        image:
+          # yamllint disable-line rule:line-length
+          override: ghcr.io/hubertmj/self-defending-portfolio/cilium:main@sha256:5c5dcd9b1a13a333194166dfc94051cd7793ab7b65e9a653bd0d831e0d984e29
         kubeProxyReplacement: true
         k8sServiceHost: 10.4.1.20
         k8sServicePort: 6443
