@@ -97,6 +97,11 @@ spec:
           # to this for new installations, but the default is expressed as `null`, so it is stated
           # here: a chart bump must not be able to move the L7 data plane by changing a default.
           enabled: true
+          # Upstream's image at the chart's digest plus Ubuntu's OpenSSL update; Envoy is untouched
+          # (ADR 0028, as operator.image above).
+          image:
+            # yamllint disable-line rule:line-length
+            override: ghcr.io/hubertmj/self-defending-portfolio/cilium-envoy:main@sha256:6ad67d1d41da91b9b93b7b42cc16c1f899fefd2e4dfc425438c00017f95c91e0
   destination:
     server: https://kubernetes.default.svc
     namespace: kube-system
