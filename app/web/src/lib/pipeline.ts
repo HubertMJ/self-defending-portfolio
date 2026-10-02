@@ -62,7 +62,6 @@ export function runHops(run: RunView): Hop[] {
   const terminating = first(run.pods, (p) => /terminating/i.test(p.phase) || p.deleted);
   const labelled = first(run.pods, (p) => p.labels_delta[QUARANTINE_LABEL] === "true");
   const deleted = first(run.pods, (p) => p.deleted || /^deleted$/i.test(p.phase));
-  const dropped = first(run.flows, (f) => /drop/i.test(f.verdict));
   const unreachable = first(run.victim, (v) => v.status === "unreachable");
   const gone = first(run.victim, (v) => v.status === "gone");
 
@@ -91,7 +90,9 @@ export function runHops(run: RunView): Hop[] {
       ? hop({ key: "act", stage: "respond", who: "kube-apiserver", what: "quarantine label set", source: labelled ? "pod watch" : "run: responded" }, labelled?.at ?? stateRaw("responded"))
       : hop({ key: "act", stage: "respond", who: "kube-apiserver", what: "pod deleted", source: terminating ? "pod watch" : "run: responded" }, terminating?.at ?? stateRaw("responded")),
     quarantine
-      ? hop({ key: "effect", stage: "respond", who: "Cilium", what: "traffic dropped", source: dropped ? "hubble flow" : "victim probe" }, dropped?.at ?? unreachable?.at)
+      ? // FIX 1: the cut shows the moment the API's own probe of the pod stops getting an answer.
+        // There are no Hubble flow events; the first `unreachable` after the label is the evidence.
+        hop({ key: "effect", stage: "respond", who: "Cilium", what: "probe dropped", source: "API probe" }, unreachable?.at)
       : hop({ key: "effect", stage: "respond", who: "kubelet", what: "pod gone", source: deleted ? "pod watch" : "victim probe" }, deleted?.at ?? gone?.at),
   ];
   // Talon's event is stamped when Talon logs the action's result, i.e. after the API server has

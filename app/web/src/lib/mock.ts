@@ -296,12 +296,11 @@ export class MockBackend {
       }],
     ];
     if (quarantine) {
+      // No flow events: the cut shows as the API's probe going unreachable after the label (FIX 1).
       events.push(
         [2730, podEv(2714, "Running", { container_id: cid, labels_delta: { "sdp.hubertjablon.ski/quarantine": "true" } })],
         [2740, run("responded", 2740, "quarantine")],
-        [2960, { type: "flow", data: { run_id: runId, pod, at: at(2952), direction: "ingress", l4: "TCP/8080", verdict: "DROPPED", drop_reason: "Policy denied" } }],
         [3180, victim(3180, { status: "unreachable", title: "", banner: "", checksum: "" }, 300)],
-        [3540, { type: "flow", data: { run_id: runId, pod, at: at(3533), direction: "egress", l4: "UDP/53", verdict: "DROPPED", drop_reason: "Policy denied" } }],
         [6300, podEv(6300, "Terminating", { container_id: cid })],
         [6380, podEv(6380, "Deleted", { container_id: cid, deleted: true })],
       );

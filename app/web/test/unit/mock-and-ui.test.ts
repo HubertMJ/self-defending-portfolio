@@ -236,7 +236,7 @@ describe("MockBackend extension endpoints and events", () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());
 
-  it("emits contract-valid pod, victim and flow events for a quarantine run", async () => {
+  it("emits contract-valid pod, victim and talon events for a quarantine run (no flow events, FIX 1)", async () => {
     const mock = new MockBackend({ speed: 1, history: false });
     const api = new ApiClient({ fetch: mock.fetch });
     const src = mock.eventSource("/api/events");
@@ -249,7 +249,8 @@ describe("MockBackend extension endpoints and events", () => {
     await vi.advanceTimersByTimeAsync(7000);
     for (const e of seen) expect(parseStreamEvent(e.type, e.raw), e.raw).not.toBeNull();
     const types = new Set(seen.map((e) => e.type));
-    expect([...types].sort()).toEqual(["falco", "flow", "pod", "run", "talon", "victim"]);
+    // The quarantine cut is shown by the probe going unreachable, not by Hubble flow events.
+    expect([...types].sort()).toEqual(["falco", "pod", "run", "talon", "victim"]);
     const victims = seen.filter((e) => e.type === "victim").map((e) => JSON.parse(e.raw).status);
     expect(victims).toEqual(["up", "compromised", "unreachable"]);
   });

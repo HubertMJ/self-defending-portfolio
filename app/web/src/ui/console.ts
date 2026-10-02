@@ -78,6 +78,16 @@ const shortDigest = (image: string): string => {
   return `${image.slice(0, at).split("/").pop()}@sha256:${image.slice(at + 8, at + 20)}…`;
 };
 
+/** A real duration next to something a visitor can feel (FIX 3: "a blink is about 100 ms"). */
+export function humanSpeed(ms: number): string {
+  if (ms < 60) return "faster than you could blink";
+  if (ms < 180) return "about as fast as a blink (~100 ms)";
+  if (ms < 450) return "quicker than a camera shutter";
+  if (ms < 1200) return "in under a second";
+  if (ms < 3000) return "in a couple of seconds";
+  return "slower than it should be — look at the gaps below";
+}
+
 /** argv as a shell would need it typed: arguments with spaces or quotes are single-quoted. */
 export function shellJoin(argv: readonly string[]): string {
   return argv.map((a) => (/^[\w@%+=:,./-]+$/.test(a) ? a : `'${a.replace(/'/g, `'\\''`)}'`)).join(" ");
@@ -160,9 +170,7 @@ export function mountConsole(root: HTMLElement, api: ApiClient): ConsoleHandle {
   const details = new Map<string, Result<ScenarioDetails> | "loading">();
   /** Local time each hop of each run was first seen with data: `${runId}:${index}`. */
   const known = new Map<string, number>();
-  /** Runs first seen already finished: lit at once, no replay unless asked for. */
-  const instant = new Set<string>();
-  /** Runs being replayed on request: start time of the replay. */
+  /** Runs being replayed slowly on request: start time of the replay. */
   const replays = new Map<string, number>();
   let selected: string | undefined;
   let lastActive: string | undefined;
@@ -191,7 +199,10 @@ export function mountConsole(root: HTMLElement, api: ApiClient): ConsoleHandle {
   const scheduleFor = (run: RunView, hops: Hop[]): { t: ReturnType<typeof timings>; s: Schedule } => {
     const t = timings(run, hops);
     const isReplay = replays.has(run.runId);
-    const s = scheduleHops(t, { instant: !isReplay && (reduced || instant.has(run.runId)) });
+    // FIX 3: real time first. Every hop lights the moment its event arrives — so the visitor sees how
+    // fast the cluster actually is — and the slowed, dwelled replay happens only on request (the
+    // "Replay slowly" button), never under prefers-reduced-motion.
+    const s = scheduleHops(t, { instant: !isReplay });
     return { t, s };
   };
 
@@ -268,23 +279,32 @@ export function mountConsole(root: HTMLElement, api: ApiClient): ConsoleHandle {
             ? "starts when Falco catches the attack"
             : "Falco reported no detection";
 
-    // Replay badge.
-    const replaying = moving && (replays.has(run.runId) || !instant.has(run.runId));
+    // Replay badge. By default the run played in real time; the slowed replay runs only on request.
+    const isReplay = replays.has(run.runId);
+    const replaying = isReplay && moving;
     let badge = "";
     if (s.realSpanMs !== undefined && frontier >= TIMER_START + 1) {
       const real = formatDuration(s.realSpanMs);
       // The same stretch as the kill-timer (detected syscall to the response in the API server), so
       // the badge and the big number can never disagree.
       const span = `real: ${real} from the detected syscall to ${hops[TIMER_END].what}`;
-      if (reduced) badge = `Shown in real time · ${span}`;
-      else if (s.slowdown > 1 && (replaying || replays.has(run.runId) || !instant.has(run.runId))) badge = `${replaying ? "Replaying" : "Replayed"} at 1/${s.slowdown} speed · ${span}`;
-      else badge = span.charAt(0).toUpperCase() + span.slice(1);
+      if (isReplay) {
+        badge = `${replaying ? "Replaying" : "Replayed"} at 1/${s.slowdown} speed · ${span}`;
+      } else if (contained) {
+        // FIX 3: once it is over, state how fast it really was, next to something human.
+        badge = `Real time · ${span} · ${humanSpeed(s.realSpanMs)}`;
+      } else {
+        badge = `Playing in real time · ${span}`;
+      }
+    } else if (run.active && !isReplay) {
+      badge = "Playing in real time";
     }
     if (panels.badge.textContent !== badge) panels.badge.textContent = badge;
     panels.badge.hidden = badge === "";
+    // Offered once the run is over and there is a response chain to replay; never under reduced motion.
     panels.replayBtn.hidden = reduced || run.active || moving || hops.every((hp) => hp.at === undefined);
 
-    if (!moving && replays.has(run.runId)) replays.delete(run.runId), instant.add(run.runId);
+    if (!moving && replays.has(run.runId)) replays.delete(run.runId);
     if (moving || (run.active && reading !== undefined && !contained)) {
       frame = requestAnimationFrame(tick);
     }
@@ -337,7 +357,7 @@ export function mountConsole(root: HTMLElement, api: ApiClient): ConsoleHandle {
       timerLabel,
     );
     const badge = h("p", { class: "replay-badge", hidden: true });
-    const replayBtn = h("button", { type: "button", class: "btn btn--ghost btn--small", hidden: true }, "Replay");
+    const replayBtn = h("button", { type: "button", class: "btn btn--ghost btn--small", hidden: true }, "Replay slowly");
     replayBtn.addEventListener("click", () => {
       replays.set(run.runId, Date.now());
       scheduleTick();
@@ -526,7 +546,6 @@ export function mountConsole(root: HTMLElement, api: ApiClient): ConsoleHandle {
     if (!quarantine) return null;
     const before = run.victim.find((v) => v.status === "up");
     const after = run.victim.find((v) => v.status === "unreachable");
-    const drops = run.flows.filter((f) => /drop/i.test(f.verdict));
     const lastPod = run.pods[run.pods.length - 1];
     const stillRunning = run.quarantinedAt !== undefined && run.pods.some((p) => p.labels_delta[QUARANTINE_LABEL] === "true" && /running/i.test(p.phase));
     const check = (ok: boolean, title: string, detail: Child[]) =>
@@ -542,13 +561,10 @@ export function mountConsole(root: HTMLElement, api: ApiClient): ConsoleHandle {
           run.quarantinedAt !== undefined ? ` at ${clockTime(run.quarantinedAt)}` : "",
         ]),
         check(stillRunning, "Pod still running", [stillRunning ? "phase Running after the label: isolated, not deleted" : lastPod ? `last phase seen: ${lastPod.phase}` : "waiting for the pod watch"]),
-        check(after !== undefined, "Victim unreachable", [
-          before ? `answered in ${before.probe_ms} ms before; ` : "",
-          after ? `no answer within ${after.probe_ms > 0 ? after.probe_ms : 300} ms after the label` : "waiting for the next probe",
+        check(after !== undefined, "Cilium dropped the probe", [
+          before ? `the API's probe answered in ${before.probe_ms} ms before the label; ` : "",
+          after ? `after it, no answer within ${after.probe_ms > 0 ? `${after.probe_ms} ms` : "its full timeout"} — the quarantine policy cut the pod off` : "waiting for the next probe",
         ]),
-        drops.length
-          ? check(true, "Packets dropped by Cilium", [`${drops.length} flow${drops.length === 1 ? "" : "s"}: `, ...drops.slice(0, 3).flatMap((f, i) => [i ? ", " : "", h("code", {}, `${f.direction} ${f.l4} ${f.drop_reason}`)])])
-          : null,
       ),
       lastPod?.deleted ? h("p", { class: "small" }, `The API deleted the quarantined pod at the end of the run (${clockTime(Date.parse(lastPod.at))}).`) : null,
     ];
@@ -671,8 +687,6 @@ export function mountConsole(root: HTMLElement, api: ApiClient): ConsoleHandle {
     }
     root.dataset.state = run.active ? "live" : "done";
     if (!panels || panels.runId !== run.runId) {
-      // A run first seen already over is history: lit at once. One seen live is replayed hop by hop.
-      if (!run.active && !known.has(`${run.runId}:0`)) instant.add(run.runId);
       panels = build(run);
       replace(body, panels.root);
     }

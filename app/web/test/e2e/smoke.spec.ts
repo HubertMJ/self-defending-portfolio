@@ -167,11 +167,16 @@ test.describe("live run console (mock)", () => {
     await expect(consoleEl.locator(".hop[data-state=lit]")).toHaveCount(8, { timeout: 15_000 });
     await expect(consoleEl.locator(".killtimer")).toHaveAttribute("data-state", "stopped");
     await expect(consoleEl.locator(".killtimer__value")).toHaveText(/^0\.\d{3}$/);
-    // The real latency is stated next to the slowed-down replay.
-    await expect(consoleEl.locator(".replay-badge")).toContainText(/Replayed at 1\/\d+ speed · real: \d+ ms from the detected syscall to pod deleted/);
+    // FIX 3: it played in real time; the badge states how fast that was, next to something human.
+    await expect(consoleEl.locator(".replay-badge")).toContainText(/Real time · real: \d+ ms from the detected syscall to pod deleted · (faster|about as fast|quicker|in under|in a couple)/);
     // One number, two places: the badge's real duration is the kill-timer's reading.
     const badgeMs = Number(/real: (\d+) ms/.exec((await consoleEl.locator(".replay-badge").textContent()) ?? "")?.[1]);
     expect(Number(await consoleEl.locator(".killtimer__value").textContent()) * 1000).toBeCloseTo(badgeMs, 0);
+    // The slow replay is offered, not forced; clicking it runs the dwelled playback.
+    const replayBtn = consoleEl.getByRole("button", { name: "Replay slowly" });
+    await expect(replayBtn).toBeVisible();
+    await replayBtn.click();
+    await expect(consoleEl.locator(".replay-badge")).toContainText(/Replay(ing|ed) at 1\/\d+ speed/);
     // Talon logs after the API server acted; its hop shows the API server's time as a bound.
     await expect(consoleEl.locator('.hop[data-hop="talon"] .hop__t')).toHaveText(/^≤ \+\d+ ms$/);
     await expect(consoleEl.locator('.hop[data-hop="talon"] .hop__what')).toHaveText("Talon deleted the pod");
@@ -197,8 +202,9 @@ test.describe("live run console (mock)", () => {
     const consoleEl = page.locator("#console");
     await expect(consoleEl.locator(".browser")).toHaveAttribute("data-status", "unreachable");
     await expect(consoleEl.locator(".card--proof")).toContainText("sdp.hubertjablon.ski/quarantine: false → true");
-    await expect(consoleEl.locator(".card--proof")).toContainText("Packets dropped by Cilium");
+    await expect(consoleEl.locator(".card--proof")).toContainText("Cilium dropped the probe");
     await expect(consoleEl.locator('.hop[data-hop="effect"] .hop__who')).toContainText("Cilium");
+    await expect(consoleEl.locator('.hop[data-hop="effect"] .hop__what')).toHaveText("probe dropped");
     await expect(page.locator(".run").first().locator(".run__foot")).toContainText("including the time held in quarantine", { timeout: 15_000 });
     expect(problems).toEqual([]);
   });
@@ -383,7 +389,7 @@ test.describe("accessibility basics", () => {
     const consoleEl = page.locator("#console");
     // At 0.3x the whole chain is ~0.3 s; a 600 ms dwell per hop would need several seconds.
     await expect(consoleEl.locator(".hop[data-state=lit]")).toHaveCount(8, { timeout: 2_500 });
-    await expect(consoleEl.locator(".replay-badge")).toContainText("Shown in real time");
-    await expect(consoleEl.getByRole("button", { name: "Replay" })).toBeHidden();
+    await expect(consoleEl.locator(".replay-badge")).toContainText("Real time");
+    await expect(consoleEl.getByRole("button", { name: "Replay slowly" })).toBeHidden();
   });
 });
