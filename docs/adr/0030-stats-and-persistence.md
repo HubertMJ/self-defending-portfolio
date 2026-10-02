@@ -19,15 +19,19 @@ worth: no new cluster-wide grant, no new stateful workload.
 
 **A collector fed by the hub tap.** `internal/stats` accumulates the counters from the same event stream the
 page sees: `events.Hub` already has a tap (the run store uses it), and the collector registers alongside it,
-so it records exactly what was published and needs no extra API reads or RBAC. From `run`, `command`,
-`falco`/`talon` events it derives: total `runs` and `by_scenario{runs, detected, responded}`; `response_ms`
-(detection-to-response latency: `last`, `p50` over a bounded recent sample, all-time `min`/`max`);
-`unanswered` (runs detected with no response before they ended - the honest number; there is no "escapes"
-counter because nothing could measure it); per terminal command `{attempts, allowed, prevented, detected}`;
-per objective `{attempts, achieved}`; and `terminal{runs, best_objectives, median_survival_s}`. A command's
-outcome and objective are read from the catalogue by id (the event carries only the id), so the collector
-needs the scenario store but nothing from the cluster. `GET /api/stats` renders it. A scenario's interactive
-flag, command outcomes and objectives are looked up by id, never trusted from the event.
+so it records exactly what was published and needs no extra API reads or RBAC. It derives everything from the
+`run` and `command` events - the run states already encode every detection and response, so the raw
+`falco`/`talon` events are not consumed: total `runs` and `by_scenario{runs, detected, responded}`;
+`response_ms` (detection-to-response latency: `last`, `p50` over a bounded recent sample, all-time
+`min`/`max`); `unanswered` (runs detected but not responded to **before the scenario timeout** - a run the
+visitor left, let go idle, or that was killed is not an escape, so only a `timeout` ending counts); per
+terminal command `{attempts, allowed, prevented, detected}`; per objective `{attempts, achieved}` counted once
+per run ("tried / reached by X of N runs", not per keystroke); and
+`terminal{runs, best_objectives, median_survival_s}`. A command's outcome and objective are read from the
+catalogue once when the run is first seen (not per event, so Record does no file I/O under the hub lock), and
+a late event for a run that already finished is ignored rather than resurrecting it. `GET /api/stats` renders
+it; a scenario's interactive flag, command outcomes and objectives are looked up by id, never trusted from the
+event.
 
 **Persistence is one ConfigMap, `portfolio-stats` in `portfolio-api`.** It is committed empty in git with Argo
 CD ignoring its `data` (so Argo never fights the API's writes), read once at start, and written by a

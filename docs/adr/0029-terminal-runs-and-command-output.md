@@ -91,3 +91,19 @@ delete the pod before the cut is visible.
 - Correlation between an alert and a command is best effort and documented as such: a 2 s window and the
   running command. A visitor doing several things quickly may see an alert attributed to the neighbouring
   command; the Falco event's own fields remain the ground truth.
+
+## What a mid-session viewer sees, and the compare hold
+
+The SSE hub replays its last 100 events to a client that joins mid-run, and `GET /api/runs/{id}`
+keeps each run's full history up to 500 events and 256 KiB (ADR 0021). A terminal run stays well
+inside both: at most 30 commands, each a `started`, a bounded burst of `output` (capped at 4 KiB per
+command and 32 KiB per run, so a few dozen chunks for the whole run) and an end event, plus the pod
+and victim events - a couple of hundred events in the worst case. So the run's final `finished`
+event is always in `/api/runs/{id}`; a viewer who joins late sees the recent tail live and can fetch
+the whole run from that endpoint. A viewer watching someone else's run sees the same `command`
+events read-only (the run's token is never needed to watch, only to drive).
+
+The unguarded twin's extra linger, `compare_hold_seconds` (default 12), is an API environment
+setting (`COMPARE_HOLD_SECONDS`), not a catalogue field: it governs how the API runs a compare, not
+what an attack is. It belongs to the twin mechanism recorded in ADR 0031; it is noted here because
+the API owns the value.
