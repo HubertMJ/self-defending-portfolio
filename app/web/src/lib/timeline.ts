@@ -12,6 +12,8 @@
 // by time window.
 
 import {
+  type Arm,
+  type CommandEvent,
   type FalcoEvent,
   type FlowEvent,
   type PodEvent,
@@ -33,6 +35,25 @@ export interface VictimSpan extends VictimEvent {
   count: number;
 }
 
+/**
+ * One command of a terminal run, assembled from its `command` events: the output accumulated by
+ * stream, how it ended, and whether it reached an objective. The visitor's own keystroke and its
+ * answer, in order.
+ */
+export interface CommandRun {
+  seq: number;
+  id: string;
+  startedAt?: number;
+  endedAt?: number;
+  stdout: string;
+  stderr: string;
+  exitCode?: number;
+  achieved: boolean;
+  /** The pod went away under the command (no exit code): the cluster ended the run. */
+  killed: boolean;
+  truncated: boolean;
+}
+
 export interface RunView {
   runId: string;
   scenario: string;
@@ -48,6 +69,10 @@ export interface RunView {
   /** Victim probe results, oldest first, consecutive repeats collapsed. */
   victim: VictimSpan[];
   flows: FlowEvent[];
+  /** Terminal run: one entry per command the visitor ran, in order of first appearance. */
+  commands: CommandRun[];
+  /** Compare run: the two pods created together (the run's states follow the guarded arm). */
+  armPods?: { guarded: string; unguarded: string };
   /** Every event attributed to this run, oldest first: the raw view of Technical Mode. */
   events: StreamEvent[];
   podUid?: string;
@@ -122,6 +147,7 @@ export function buildTimeline(events: readonly StreamEvent[], now: number = Date
         pods: [],
         victim: [],
         flows: [],
+        commands: [],
         events: [],
         timings: {},
         active: true,
@@ -129,6 +155,10 @@ export function buildTimeline(events: readonly StreamEvent[], now: number = Date
       runs.set(data.run_id, run);
     }
     if (data.pod && !run.pod) run.pod = data.pod;
+    if (data.pods && !run.armPods) {
+      run.armPods = data.pods;
+      run.pod ??= data.pods.guarded;
+    }
     const at = ts(data.at);
     const prev = run.states[data.state];
     if (prev === undefined || at < prev) run.states[data.state] = at;
@@ -157,11 +187,12 @@ export function buildTimeline(events: readonly StreamEvent[], now: number = Date
     }
     const data = ev.data;
     const at = ts(data.at);
+    const pod = "pod" in data ? data.pod : undefined;
     // An explicit run id wins, then a pod already tied to a run, then the newest run whose window
     // contains the event.
     const runId = "run_id" in data ? data.run_id : undefined;
     let owner = runId ? runs.get(runId) : undefined;
-    owner ??= byPod.get(data.pod);
+    owner ??= pod ? byPod.get(pod) : undefined;
     if (!owner) {
       owner = list
         .filter((r) => start(r) <= at && at <= end(r))
@@ -171,8 +202,8 @@ export function buildTimeline(events: readonly StreamEvent[], now: number = Date
       unmatched.push(ev);
       continue;
     }
-    if (!owner.pod && data.pod) owner.pod = data.pod;
-    if (data.pod && !byPod.has(data.pod)) byPod.set(data.pod, owner);
+    if (!owner.pod && pod) owner.pod = pod;
+    if (pod && !byPod.has(pod)) byPod.set(pod, owner);
     owner.events.push(ev);
     switch (ev.type) {
       case "falco":
@@ -189,6 +220,9 @@ export function buildTimeline(events: readonly StreamEvent[], now: number = Date
         break;
       case "flow":
         owner.flows.push(ev.data);
+        break;
+      case "command":
+        addCommand(owner, ev.data);
         break;
     }
   }
@@ -227,13 +261,52 @@ function addPod(run: RunView, p: PodEvent): void {
 function addVictim(run: RunView, v: VictimEvent): void {
   const last = run.victim[run.victim.length - 1];
   const at = ts(v.at);
-  if (last && last.status === v.status && last.checksum === v.checksum && last.pod === v.pod) {
+  // The arm is part of the identity: a compare run interleaves two pods' probes, and collapsing
+  // across arms would merge the guarded pod's state with the unguarded one's.
+  if (last && last.status === v.status && last.checksum === v.checksum && last.pod === v.pod && last.arm === v.arm) {
     last.until = at;
     last.count += 1;
     if (v.probe_ms >= 0) last.probe_ms = v.probe_ms;
     return;
   }
   run.victim.push({ ...v, until: at, count: 1 });
+}
+
+function addCommand(run: RunView, c: CommandEvent): void {
+  let cmd = run.commands.find((x) => x.seq === c.seq);
+  if (!cmd) {
+    cmd = { seq: c.seq, id: c.id, stdout: "", stderr: "", achieved: false, killed: false, truncated: false };
+    run.commands.push(cmd);
+    run.commands.sort((a, b) => a.seq - b.seq);
+  }
+  const at = ts(c.at);
+  if (c.truncated) cmd.truncated = true;
+  switch (c.state) {
+    case "started":
+      cmd.startedAt = at;
+      break;
+    case "output":
+      if (typeof c.chunk === "string") {
+        if (c.stream === "stderr") cmd.stderr += c.chunk;
+        else cmd.stdout += c.chunk;
+      }
+      break;
+    case "exited":
+      cmd.endedAt = at;
+      if (typeof c.exit_code === "number") cmd.exitCode = c.exit_code;
+      if (c.achieved) cmd.achieved = true;
+      break;
+    case "killed":
+      cmd.endedAt = at;
+      cmd.killed = true;
+      break;
+  }
+}
+
+/** Compare run: the latest victim span seen for one arm (the twin view draws one window per arm). */
+export function victimByArm(run: RunView, arm: Arm): VictimSpan | undefined {
+  for (let i = run.victim.length - 1; i >= 0; i--) if (run.victim[i].arm === arm) return run.victim[i];
+  return undefined;
 }
 
 /** Human-readable duration: "840 ms", "2.4 s", "1 min 12 s". */

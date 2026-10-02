@@ -10,11 +10,16 @@ import {
   type Posture,
   type Scenario,
   type ScenarioDetails,
+  type Stats,
+  type TerminalAccepted,
   isAttackAccepted,
+  isCommandAccepted,
   isLimits,
+  isTerminalAccepted,
   parsePosture,
   parseScenarioDetails,
   parseScenarios,
+  parseStats,
 } from "./contract";
 
 export type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
@@ -28,6 +33,26 @@ export type AttackResult =
   | { kind: "busy" }
   | { kind: "rate-limited"; retryAfterSeconds: number }
   | { kind: "unknown-scenario" }
+  | { kind: "offline"; message: string }
+  | { kind: "error"; status: number; message: string };
+
+/** Starting the terminal returns the same shapes, plus the per-run token on success. */
+export type TerminalResult =
+  | { kind: "accepted"; run: TerminalAccepted }
+  | { kind: "busy" }
+  | { kind: "rate-limited"; retryAfterSeconds: number }
+  | { kind: "unavailable" }
+  | { kind: "offline"; message: string }
+  | { kind: "error"; status: number; message: string };
+
+/** Sending one command id to a running terminal (POST /api/runs/{id}/commands). */
+export type CommandResult =
+  | { kind: "accepted"; seq: number }
+  | { kind: "unauthorized" }
+  | { kind: "not-found" }
+  | { kind: "conflict" }
+  | { kind: "too-large" }
+  | { kind: "rate-limited"; retryAfterSeconds: number }
   | { kind: "offline"; message: string }
   | { kind: "error"; status: number; message: string };
 
@@ -160,10 +185,16 @@ export class ApiClient {
     });
   }
 
-  async attack(id: string): Promise<AttackResult> {
+  /** Extension endpoint: the counters across every visitor's runs. */
+  stats(): Promise<Result<Stats>> {
+    return this.getJson("/stats", parseStats);
+  }
+
+  /** `compare: true` runs the same catalogue attack in two pods at once (?compare=1). */
+  async attack(id: string, opts: { compare?: boolean } = {}): Promise<AttackResult> {
     let res: Response;
     try {
-      res = await this.request(`/attack/${encodeURIComponent(id)}`, { method: "POST" });
+      res = await this.request(`/attack/${encodeURIComponent(id)}${opts.compare ? "?compare=1" : ""}`, { method: "POST" });
     } catch (e) {
       return { kind: "offline", message: describe(e) };
     }
@@ -189,6 +220,86 @@ export class ApiClient {
         // Not the API talking (e.g. the static host's 405 for a POST when /api is not routed).
         if (!isJson(res)) return { kind: "offline", message: `HTTP ${res.status}` };
         return { kind: "error", status: res.status, message: `HTTP ${res.status}` };
+    }
+  }
+
+  /** Starts the terminal scenario; the token in the 202 is the only copy, so the caller must keep it. */
+  async attackTerminal(): Promise<TerminalResult> {
+    let res: Response;
+    try {
+      res = await this.request(`/attack/terminal`, { method: "POST" });
+    } catch (e) {
+      return { kind: "offline", message: describe(e) };
+    }
+    switch (res.status) {
+      case 202: {
+        const body: unknown = await res.json().catch(() => null);
+        return isTerminalAccepted(body) ? { kind: "accepted", run: body } : { kind: "error", status: 202, message: "unexpected response body" };
+      }
+      case 404:
+        // An API without the terminal scenario answers a JSON 404; the SPA host answers a non-JSON one.
+        return isJson(res) ? { kind: "unavailable" } : { kind: "offline", message: "HTTP 404" };
+      case 409:
+        return { kind: "busy" };
+      case 429:
+        return { kind: "rate-limited", retryAfterSeconds: parseRetryAfter(res.headers.get("Retry-After")) };
+      case 502:
+      case 503:
+      case 504:
+        return { kind: "offline", message: `HTTP ${res.status}` };
+      default:
+        if (!isJson(res)) return { kind: "offline", message: `HTTP ${res.status}` };
+        return { kind: "error", status: res.status, message: `HTTP ${res.status}` };
+    }
+  }
+
+  /** Sends one command id to a running terminal. The token authorises it (Bearer), never a visitor string. */
+  async runCommand(runId: string, token: string, id: string): Promise<CommandResult> {
+    let res: Response;
+    try {
+      res = await this.request(`/runs/${encodeURIComponent(runId)}/commands`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ id }),
+      });
+    } catch (e) {
+      return { kind: "offline", message: describe(e) };
+    }
+    switch (res.status) {
+      case 202: {
+        const body: unknown = await res.json().catch(() => null);
+        return isCommandAccepted(body) ? { kind: "accepted", seq: body.seq } : { kind: "error", status: 202, message: "unexpected response body" };
+      }
+      case 401:
+        return { kind: "unauthorized" };
+      case 404:
+        return { kind: "not-found" };
+      case 409:
+        return { kind: "conflict" };
+      case 413:
+        return { kind: "too-large" };
+      case 429:
+        return { kind: "rate-limited", retryAfterSeconds: parseRetryAfter(res.headers.get("Retry-After")) };
+      case 502:
+      case 503:
+      case 504:
+        return { kind: "offline", message: `HTTP ${res.status}` };
+      default:
+        if (!isJson(res)) return { kind: "offline", message: `HTTP ${res.status}` };
+        return { kind: "error", status: res.status, message: `HTTP ${res.status}` };
+    }
+  }
+
+  /** The visitor leaves: ends their terminal run. Best effort — the run also ends on idle/deadline. */
+  async leaveRun(runId: string, token: string): Promise<boolean> {
+    try {
+      const res = await this.request(`/runs/${encodeURIComponent(runId)}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      return res.ok || res.status === 404;
+    } catch {
+      return false;
     }
   }
 }

@@ -135,8 +135,13 @@ export class MockBackend {
     if (method === "GET" && runs) {
       const id = decodeURIComponent(runs[1]);
       const events = this.buffer.filter((e) => "run_id" in e.data && e.data.run_id === id);
-      const pods = new Set(events.map((e) => e.data.pod).filter(Boolean));
-      const all = this.buffer.filter((e) => events.includes(e) || (!("run_id" in e.data) && pods.has(e.data.pod)));
+      const podOf = (e: StreamEvent): string | undefined => ("pod" in e.data ? e.data.pod : undefined);
+      const pods = new Set(events.map(podOf).filter((p): p is string => !!p));
+      const all = this.buffer.filter((e) => {
+        if (events.includes(e)) return true;
+        const p = podOf(e);
+        return !("run_id" in e.data) && !!p && pods.has(p);
+      });
       const scenario = events.find((e) => e.type === "run")?.data;
       return all.length
         ? json(200, { run_id: id, scenario: scenario && "scenario" in scenario ? scenario.scenario : "", events: all.map((e, i) => ({ id: i + 1, ...e })), truncated: false })
