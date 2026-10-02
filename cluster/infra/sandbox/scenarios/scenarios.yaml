@@ -515,33 +515,30 @@
       tty: false
       outcome: allowed
       layer: pod-security
-      control: "Pod Security: every Linux capability dropped"
+      control: "Pod Security: runs non-root, holds no Linux capabilities"
       explain: >-
-        CapEff is all zeros: the pod holds no Linux capabilities at all. That is why the next few tricks
-        will not work.
+        CapEff is all zeros: the pod runs as a non-root user and holds no Linux capabilities at all. That
+        is why the next few tricks will not work.
     # ---- tamper: allowed and visible, because nothing watches an app writing its own docroot ----
     - id: deface
-      input: "deface the shop"
+      input: "echo pwned>/srv/shop/index.html;echo '{\"status\":\"defaced\"}'>/srv/shop/state.json"
       aliases: ["deface"]
       objective: tamper
       technique: T1491.001
+      # The argv is exactly the input, wrapped for the shell. It overwrites the shop's page and flips its
+      # status file, both in the writable shop volume - no temp-and-rename here, since the terminal is a
+      # person typing, not a poller that must never see a half-written file.
       command:
         - sh
         - -c
-        - >-
-          cd /srv/shop
-          && printf '%s' '<h1>SDP Shop has been defaced</h1><p>Owned through the attacker terminal.</p>' > .i
-          && mv .i index.html
-          && printf '%s' '{"status":"defaced","title":"H4CK3D - SDP Shop","banner":"Defaced from the terminal"}' > .s
-          && mv .s state.json
-          && echo 'shop defaced'
+        - "echo pwned>/srv/shop/index.html;echo '{\"status\":\"defaced\"}'>/srv/shop/state.json"
       tty: false
       outcome: allowed
       layer: runtime
       control: "Falco is watching; an app rewriting its own files is not drift"
       explain: >-
-        The shop window next to you just changed - you rewrote its page. Nothing stopped you: writing to
-        your own working directory is normal for an app, so no rule here watches for it.
+        The shop window next to you just changed - you rewrote its page and its status. Nothing stopped
+        you: writing to your own working directory is normal for an app, so no rule here watches for it.
     # ---- credentials: one allowed (the flag), one detected (/etc/shadow) ----
     - id: read-flag
       input: "cat /srv/shop/.flag"
@@ -580,10 +577,10 @@
       tty: false
       outcome: prevented
       layer: pod-security
-      control: "Pod Security: read-only root filesystem"
+      control: "Read-only root filesystem (pod hardening, not required by PSS)"
       explain: >-
-        "Read-only file system." The root filesystem is immutable, so you cannot plant a backdoor in
-        /bin. Nothing had to kill you - the write simply never happened.
+        "Read-only file system." The container's root filesystem is mounted read-only, so you cannot plant
+        a backdoor in /bin. Nothing had to kill you - the write simply never happened.
     - id: read-token
       input: "cat /var/run/secrets/kubernetes.io/serviceaccount/token"
       aliases: []
@@ -604,11 +601,11 @@
       tty: false
       outcome: prevented
       layer: pod-security
-      control: "Pod Security: no CAP_CHOWN (all capabilities dropped)"
+      control: "Pod Security: non-root user, no CAP_CHOWN"
       explain: >-
-        "Operation not permitted." Changing a file's owner needs a Linux capability the pod does not
-        have; with every capability dropped, a whole class of tricks is off the table before any rule
-        has to fire.
+        "Operation not permitted." Changing a file's owner needs CAP_CHOWN, which only root holds; the pod
+        runs as a non-root user with no capabilities, so a whole class of tricks is off the table before
+        any rule has to fire.
     # ---- exfiltration and execution: detected ----
     - id: beacon
       input: "wget -q -T 2 -O- http://127.0.0.1:9/"

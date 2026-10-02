@@ -49,18 +49,25 @@ cilium role (`scripts/check-cilium-values.sh` enforces equality):**
   rules, so the default whitelist flag stays off and every other label - the reserved labels, the namespace,
   `app.kubernetes.io/*`, and crucially `sdp.hubertjablon.ski/quarantine` - stays identity-relevant. Only the
   two per-run churn labels are removed. The result: all scenario pods in a namespace share **one stable
-  identity**, and the quarantined identity (that identity plus `quarantine=true`) is allocated once, the first
-  time any pod is ever quarantined, and reused forever after. A quarantine is then a label flip onto an
-  identity Cilium already knows and whose policy is already computed - no allocation, no cold policy build.
+  identity**, and the quarantined identity (that identity plus `quarantine=true`) is stable too, so it can be
+  reused across runs instead of a fresh identity per pod. It is **not** cached forever: Cilium's operator GCs an
+  identity no endpoint has used (chart defaults `identityGCInterval` 15m, `identityHeartbeatTimeout` 30m), so on
+  a quiet site the quarantined identity is reaped and the next quarantine allocates it cold again. What the
+  change removes is the *guaranteed* cold allocation on every single run (unique `run-id` meant the quarantined
+  identity was always new); within the GC window a quarantine is now a warm label flip. `run.sh` measures both a
+  first (possibly cold) and an immediate second (warm) quarantine against the bound, rather than assuming warm.
 - `identityChangeGracePeriod: "500ms"` (was the 5 s default). The grace period exists so other nodes can
   whitelist the new identity first. **This is a single-node cluster: there is no other node to wait for.**
   500 ms is enough to order the identity change ahead of the endpoint's datapath regeneration without the
   pathological zero; it removes ~4.5 s of pure sleep from the path.
 
-The quarantine label stays identity-relevant (it must, for the policy to select it), so an endpoint still
-changes identity on quarantine and still pays 500 ms + regeneration - but on a warm, pre-computed identity
-that is a small, bounded cost, not the 22-36 s of a cold allocation behind a 5 s sleep. The expectation is
-well under the 3 s the contract asks for; the live integration measures it.
+**What is and isn't proven.** The 22-36 s was measured end to end (label to DNS failing); its exact breakdown -
+how much was identity allocation, how much the 5 s grace, how much policy regeneration - was *not* isolated on
+the node, so this ADR does not claim allocation alone caused it. What is claimed, and what `run.sh` holds to the
+3 s bound live, is the before/after: the two changes above remove the 5 s grace (all but 500 ms) and the
+per-run guaranteed cold allocation, and the quarantine label still changing the identity means an endpoint
+still pays 500 ms + regeneration - a small, bounded cost on a warm identity. The expectation is well under the
+3 s the contract asks for; the live integration is the measurement, cold and warm.
 
 **Selecting the victim by a stable label.** The victim's one allowed flow (`sandbox-victim-from-api`, ADR
 0022) and the API's matching egress rule selected scenario pods by `run-id Exists`. A CiliumNetworkPolicy
@@ -114,9 +121,21 @@ layer; an emptyDir is a separate mount, so a binary run from it slips past. `clu
 **"SDP execution from shop volume"** (`proc.exepath startswith /srv/shop/`, CRITICAL), and
 `cluster/infra/falco-response/talon/rules.yaml` gains **"Kill execution from shop volume in sandbox"**
 (terminate). Nothing the image ships runs from `/srv/shop` (the server is `/usr/local/bin/victim`, busybox is
-`/bin`), so the only way to match is to drop and run something - the behaviour. Both this rule and the existing
-"SDP network tool in sandbox" now match `k8s.ns.name in (sdp_sandbox_namespaces)` - `sandbox` and the twin
-`sandbox-unguarded` (ADR 0031) - so detection is identical in both; the Talon rules pin `k8s.ns.name=sandbox`,
+`/bin`), so for the catalogue's `drop-run` - which `exec`s the copied binary directly - the only way to match is
+to drop and run something: the behaviour.
+
+**What this rule does not catch, by design.** It keys on `proc.exepath`, the path of the executable the kernel
+actually runs, so it sees a dropped *binary* run directly. It does not see a *script* fed to an interpreter:
+`sh /srv/shop/x` runs `/bin/sh` (exepath `/bin/sh`, the script is only an argument); a shebang script records
+the interpreter as the executable, not the script; and a binary launched through the dynamic loader
+(`/lib/ld-musl-*.so.1 /srv/shop/x`) has the loader as its exepath. Those are real gaps, not covered here. The
+tempting fix - also matching `/srv/shop` anywhere in `proc.cmdline` - is deliberately rejected: the `deface`
+command's cmdline legitimately contains `/srv/shop`, so cmdline matching would fire on an allowed command and
+make the rule lie. The honest rule catches the direct-execution case the catalogue demonstrates and is clear
+about the rest; closing the interpreter gaps is a separate decision (more rules, or a broader drift approach),
+not a quiet widening of this one. Both this rule and the existing "SDP network tool in sandbox" now match
+`k8s.ns.name in (sdp_sandbox_namespaces)` - `sandbox` and the twin `sandbox-unguarded` (ADR 0031) - so
+detection is identical in both; the Talon rules pin `k8s.ns.name=sandbox`,
 so only the guarded pod is acted on.
 
 **No new capability, no token, no name leak.** No command prints the environment, names a host outside the
@@ -135,8 +154,9 @@ validates every new catalogue field (ids, unique inputs, outcomes, layers, per-c
 
 ## Consequences
 - Taking `run-id`/`scenario` out of the identity means scenario pods are no longer each a unique Cilium
-  identity. That is the point: it was the per-run identity churn that made quarantine slow. The quarantine
-  identity is now warm after the first use; a brand-new cluster pays the cold cost once.
+  identity. That is the point: the per-run churn guaranteed a cold quarantined identity on every run. The
+  quarantined identity is now warm between runs within Cilium's identity GC window (15m/30m defaults); after a
+  longer quiet spell the next quarantine is cold again, which `run.sh`'s first/second measurement exercises.
 - The grace period is a cluster-wide Cilium setting. 500 ms is safe only because the cluster is one node; a
   multi-node cluster would want it back near the default. It is documented here and in both Cilium value files.
 - The terminal lets a visitor run a dozen different commands against a real pod, each bounded by the same

@@ -17,16 +17,19 @@
 #                           (ADR 0015, amendment 2026-10-02)
 #
 # Narrower than the contract's maximum on purpose: no `get` on the reports (only listed), no Jobs
-# (the pods carry the result), no secrets, no ConfigMaps beyond the one stats counter
-# (the scenarios are a mounted volume), nothing written or exec'd in any other namespace. `watch` on
-# pods is sandbox-only and used on one pod at a time: the
-# runner opens it with a field selector on the run's pod name and publishes what it sees as `event:
-# pod` (ADR 0021) - the same pods it can already get and list, so it reveals nothing new.
+# (the pods carry the result), no secrets, no ConfigMaps beyond the one stats counter it writes in its
+# own namespace (the scenarios are a mounted volume). It creates, execs, watches and deletes pods only in
+# the two sandbox namespaces - `sandbox` and the unguarded twin `sandbox-unguarded` (ADR 0031) - and
+# nowhere else; in kube-bench it only reads pod logs. `watch` on pods is scoped to those two namespaces
+# and used on one pod at a time: the runner opens it with a field selector on the run's pod name and
+# publishes what it sees as `event: pod` (ADR 0021) - the same pods it can already get and list, so it
+# reveals nothing new.
 #
-# What the sandbox grant still means: this ServiceAccount can create a pod of its choosing in
-# `sandbox`. What such a pod can be is bounded elsewhere, not here - Pod Security `restricted`
-# (namespace label), our signed images only (verify-portfolio-images, restrict-image-registries),
-# the sandbox ResourceQuota, default-deny with DNS only, and Falco/Talon watching it.
+# What the sandbox grants still mean: this ServiceAccount can create a pod of its choosing in `sandbox`
+# or `sandbox-unguarded`. What such a pod can be is bounded elsewhere, not here - Pod Security
+# `restricted` (namespace label), our signed images only (verify-portfolio-images,
+# restrict-image-registries), the namespace ResourceQuota, default-deny networking, the
+# activeDeadlineSeconds Kyverno bound (ADR 0031), and - in `sandbox` only - Falco/Talon acting on it.
 #
 #   kubectl auth can-i create pods -n hello   --as=system:serviceaccount:portfolio-api:portfolio-api  # no
 #   kubectl auth can-i create pods/exec -n sandbox --as=system:serviceaccount:portfolio-api:portfolio-api  # yes

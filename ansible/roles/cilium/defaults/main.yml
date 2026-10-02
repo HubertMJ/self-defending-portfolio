@@ -94,9 +94,10 @@ cilium_values:
   policyEnforcementMode: default
   # Identity-relevant pod labels and the identity-change grace period (ADR 0032). Kept identical to
   # cluster/apps/cilium.yaml (scripts/check-cilium-values.sh enforces it); the reasoning is there.
-  # The per-run scenario labels are kept out of the identity so a quarantine flips a label on an
-  # identity Cilium already knows, and the grace period drops from 5 s to 500 ms because on one node
-  # there is no other node to wait for - together these bring label-to-isolation under 3 s.
+  # The per-run scenario labels are kept out of the identity so a quarantine flips a label onto a stable
+  # identity (warm, except after Cilium GCs it on a quiet site - see cilium.yaml), and the grace period
+  # drops from 5 s to 500 ms because on one node there is no other node to wait for - together these bring
+  # label-to-isolation under 3 s (run.sh measures a cold and a warm case).
   labels: "k8s:!sdp.hubertjablon.ski/run-id k8s:!sdp.hubertjablon.ski/scenario"
   identityChangeGracePeriod: "500ms"
   # Gateway API (ADR 0010). Identical to cluster/apps/cilium.yaml so the Argo CD takeover is a
