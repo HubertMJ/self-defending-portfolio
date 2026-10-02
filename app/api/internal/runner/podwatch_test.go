@@ -68,7 +68,7 @@ func TestPodEventsFollowThePod(t *testing.T) {
 		t.Fatalf("label delta: %v", second.LabelsDelta)
 	}
 
-	r.ObserveTalon(pod, "success")
+	r.ObserveTalon("sandbox", pod, "success")
 	<-done
 	// The cleanup's deletion is reported before the run's final state.
 	if o := rec.order(); !strings.HasSuffix(o, "pod:Deleted run:finished") {
