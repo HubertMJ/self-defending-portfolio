@@ -87,8 +87,10 @@ export function renderVictim(run: RunView, readOnly: boolean): HTMLElement {
       view = h(
         "div",
         { class: "defaced" },
-        h("p", { class: "defaced__title" }, last.title || "defaced"),
-        h("p", { class: "defaced__banner" }, last.banner || "This page was replaced by the attacker."),
+        // The terminal's deface leaves only {"status":"defaced"}: no title or banner to show, so the
+        // window says what the probe knows.
+        h("p", { class: "defaced__title" }, last.title || "Page replaced"),
+        h("p", { class: "defaced__banner" }, last.banner || "The shop now serves whatever the attacker wrote instead of its front page."),
         healthy && last.checksum ? h("p", { class: "defaced__sum" }, `checksum ${healthy.checksum || "?"} → ${last.checksum}`) : null,
       );
       break;

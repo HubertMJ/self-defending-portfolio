@@ -275,6 +275,10 @@ export function stats(now: number = Date.now()): Stats {
     // is the point). attempts is counted per command start, as the API's stats collector does.
     commands: {
       whoami: { attempts: 34, allowed: 34, prevented: 0, detected: 0 },
+      hostname: { attempts: 12, allowed: 12, prevented: 0, detected: 0 },
+      ps: { attempts: 15, allowed: 15, prevented: 0, detected: 0 },
+      "ls-shop": { attempts: 21, allowed: 21, prevented: 0, detected: 0 },
+      caps: { attempts: 7, allowed: 7, prevented: 0, detected: 0 },
       deface: { attempts: 31, allowed: 31, prevented: 0, detected: 0 },
       "read-flag": { attempts: 22, allowed: 22, prevented: 0, detected: 0 },
       "touch-bin": { attempts: 12, allowed: 0, prevented: 12, detected: 0 },
@@ -282,18 +286,20 @@ export function stats(now: number = Date.now()): Stats {
       "chown-root": { attempts: 6, allowed: 0, prevented: 6, detected: 0 },
       beacon: { attempts: 18, allowed: 0, prevented: 0, detected: 18 },
       "read-shadow": { attempts: 15, allowed: 0, prevented: 0, detected: 15 },
-      shell: { attempts: 13, allowed: 0, prevented: 0, detected: 13 },
+      shell: { attempts: 6, allowed: 0, prevented: 0, detected: 6 },
       "drop-run": { attempts: 8, allowed: 0, prevented: 0, detected: 8 },
     },
-    // Objective counters, in the catalogue's order. `execution` has been tried but reached by no one
-    // (every attempt was detected and killed), so the page shows it as "0 of N".
+    // Objective counters are per run ("tried by X of the 37 terminal runs"), so none exceeds 37. A
+    // command that exits 0 reaches its objective even when the kill follows: `cat /etc/shadow` and the
+    // dropped binary both do, so credentials and execution are reached, while `wget` always fails
+    // (exit 1) and phone-home stays at 0.
     objectives: {
-      recon: { attempts: 121, achieved: 118 },
-      tamper: { attempts: 31, achieved: 31 },
-      credentials: { attempts: 37, achieved: 22 },
-      execution: { attempts: 21, achieved: 0 },
+      recon: { attempts: 36, achieved: 36 },
+      tamper: { attempts: 29, achieved: 29 },
+      credentials: { attempts: 30, achieved: 30 },
+      execution: { attempts: 13, achieved: 8 },
       exfiltration: { attempts: 18, achieved: 0 },
     },
-    terminal: { runs: 37, best_objectives: 3, median_survival_s: 48 },
+    terminal: { runs: 37, best_objectives: 4, median_survival_s: 48 },
   };
 }

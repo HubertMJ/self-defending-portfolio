@@ -224,7 +224,7 @@ test.describe("live run console (mock)", () => {
     await page.locator('.scenario[data-scenario="sensitive-file-read"] .btn--attack').click();
     await expect(page.locator(".run")).toHaveCount(2);
     await expect(page.locator(".run").first().locator(".chip--state")).toHaveText("Finished");
-    await page.locator('.run[data-run="mock-history-1"] .run__show').click();
+    await page.locator('.run[data-run="a7c3e9f1b2d40658"] .run__show').click();
     await expect(page.locator("#console .console__scenario")).toHaveText("Shell in a container");
     await expect(page.locator("#console-title")).toBeFocused();
     await page.getByRole("button", { name: "Back to the latest run" }).click();

@@ -4,6 +4,14 @@
 // factory -- so mock mode exercises the same client, parsing and rendering code as production. It
 // also enforces the contract's rules (one run at a time -> 409, 3 attacks per 10 minutes -> 429 with
 // Retry-After) so those paths can be seen and tested without a cluster.
+//
+// The event sequences are the real API's (app/api/internal/runner: runner.go, terminal.go,
+// compare.go): every event gets the hub's next id, a run event always carries `detail` ("" when
+// none), a terminal run's `detected`/`responded` carry the command_seq they are about, a command the
+// API cut short `exited` with no code, a victim event is published only when what the probe sees
+// changes, and a compare run's unguarded pod is deleted compare_hold (12 s) after the guarded arm's
+// response, after which the run finishes. Every call the page makes is kept in `calls`, so a test can
+// check what was (and was not) sent.
 
 import type { Arm, CommandEvent, PodEvent, RunEvent, RunState, StreamEvent, VictimStatus } from "./contract";
 import type { FetchLike } from "./api";
@@ -69,7 +77,7 @@ class MockEventSource implements EventSourceLike {
 
   emit(ev: StreamEvent): void {
     if (this.readyState !== 1) return;
-    const msg = new MessageEvent(ev.type, { data: JSON.stringify(ev.data) });
+    const msg = new MessageEvent(ev.type, { data: JSON.stringify(ev.data), lastEventId: String(ev.id ?? "") });
     for (const l of this.listeners.get(ev.type) ?? []) l(msg);
   }
 
@@ -95,10 +103,13 @@ interface TerminalState {
   runId: string;
   token: string;
   pod: string;
+  uid: string;
   flag: string;
   ready: boolean;
   over: boolean;
-  running: boolean;
+  /** The seq of the command running now (0: none), and what ends it early if the run ends first. */
+  running: number;
+  cutShort?: () => void;
   count: number;
   seq: number;
   quarantined: boolean;
@@ -106,7 +117,13 @@ interface TerminalState {
   deadlineTimer?: ReturnType<typeof setTimeout>;
 }
 
+/** The id of the finished run the mock's replay buffer starts with. */
+export const MOCK_HISTORY_RUN = "a7c3e9f1b2d40658";
+
 export class MockBackend {
+  /** Every request the page made, as "METHOD /path?query", oldest first. */
+  readonly calls: string[] = [];
+  private eventId = 0;
   private readonly speed: number;
   private readonly limit: number;
   private readonly windowMs: number;
@@ -143,20 +160,25 @@ export class MockBackend {
         if (this.activeRun) return;
         const runId = this.nextRunId();
         this.activeRun = runId;
-        this.terminal = { runId, token: this.newToken(), pod: `scenario-terminal-${runId.replace(/[^a-z0-9]/g, "").slice(-5)}`, flag: this.newFlag(), ready: false, over: false, running: false, count: 0, seq: 0, quarantined: false };
+        this.terminal = this.newTerminal(runId, this.newToken());
         this.startTerminal();
         // The other visitor types a quiet command, which this page sees stream in read-only.
         setTimeout(() => {
           const t = this.terminal;
-          if (t && !t.over) this.simulateCommand(t, "whoami", ++t.seq);
+          if (t && !t.over && !t.running) {
+            t.running = ++t.seq;
+            this.simulateCommand(t, "whoami", t.seq);
+          }
         }, 1400 * this.speed);
       }, opts.termVisitorAfterMs);
     }
   }
 
   readonly fetch: FetchLike = async (input, init) => {
-    const path = new URL(input, "http://mock.invalid").pathname;
+    const url = new URL(input, "http://mock.invalid");
+    const path = url.pathname;
     const method = (init?.method ?? "GET").toUpperCase();
+    this.calls.push(`${method} ${path}${url.search}`);
     await new Promise((r) => setTimeout(r, 120 * this.speed));
 
     if (method === "GET" && path === "/api/healthz") return json(200, { status: "ok" });
@@ -194,9 +216,10 @@ export class MockBackend {
         return !("run_id" in e.data) && !!p && pods.has(p);
       });
       const scenario = events.find((e) => e.type === "run")?.data;
+      // The run store keeps each event with the hub's own id, exactly as the stream sent it.
       return all.length
-        ? json(200, { run_id: id, scenario: scenario && "scenario" in scenario ? scenario.scenario : "", events: all.map((e, i) => ({ id: i + 1, ...e })), truncated: false })
-        : json(404, { error: "unknown run" });
+        ? json(200, { run_id: id, scenario: scenario && "scenario" in scenario ? scenario.scenario : "", events: all.map((e) => ({ id: e.id, type: e.type, data: e.data })), truncated: false })
+        : json(404, { error: "unknown run (only the last 50 runs are kept)" });
     }
 
     const m = /^\/api\/attack\/([^/]+)$/.exec(path);
@@ -204,7 +227,7 @@ export class MockBackend {
       const id = decodeURIComponent(m[1]);
       const scenario = SCENARIOS.find((s) => s.id === id);
       if (!scenario) return json(404, { error: "unknown scenario" });
-      if (this.activeRun) return json(409, { error: "another run is active" });
+      if (this.activeRun) return json(409, { error: "another attack is running; watch it on the live feed" });
       const rate = this.spendAttack();
       if (rate) return rate;
       const runId = this.nextRunId();
@@ -212,11 +235,11 @@ export class MockBackend {
       if (scenario.interactive) {
         // The terminal: start the run, keep a token the caller must present for each command.
         const token = this.newToken();
-        this.terminal = { runId, token, pod: `scenario-terminal-${runId.replace(/[^a-z0-9]/g, "").slice(-5)}`, flag: this.newFlag(), ready: false, over: false, running: false, count: 0, seq: 0, quarantined: false };
+        this.terminal = this.newTerminal(runId, token);
         this.startTerminal();
         return json(202, { run_id: runId, scenario: id, state: "queued", token });
       }
-      const compare = new URL(input, "http://mock.invalid").searchParams.get("compare") === "1";
+      const compare = url.searchParams.get("compare") === "1";
       if (compare) this.simulateCompare(runId, scenario.id);
       else this.simulate(runId, scenario.id);
       return json(202, { run_id: runId, scenario: id, state: "queued" });
@@ -230,7 +253,7 @@ export class MockBackend {
     while (this.attempts.length && now - this.attempts[0] > this.windowMs) this.attempts.shift();
     if (this.attempts.length >= this.limit) {
       const retry = Math.ceil((this.attempts[0] + this.windowMs - now) / 1000);
-      return json(429, { error: "rate limited" }, { "Retry-After": String(retry) });
+      return json(429, { error: "attack rate limit reached" }, { "Retry-After": String(retry) });
     }
     this.attempts.push(now);
     return null;
@@ -264,12 +287,15 @@ export class MockBackend {
     this.sources.delete(src);
   }
 
+  /** 16 hex, as the API's newRunID; the pod is named from its first 10 (podName). */
   private nextRunId(): string {
     this.seq += 1;
-    return `mock-${Date.now().toString(36)}-${this.seq}`;
+    return `${Date.now().toString(16)}${this.seq.toString(16).padStart(4, "0")}`.slice(-16).padStart(16, "0");
   }
 
+  /** The hub: every published event gets the next id, which the stream and the run store both carry. */
   private publish(ev: StreamEvent): void {
+    ev = { ...ev, id: ++this.eventId };
     this.buffer.push(ev);
     if (this.buffer.length > REPLAY) this.buffer.shift();
     for (const s of this.sources) s.emit(ev);
@@ -299,15 +325,13 @@ export class MockBackend {
    */
   private script(runId: string, scenarioId: string, t0: number, speed: number): [number, StreamEvent][] {
     const scenario = SCENARIOS.find((s) => s.id === scenarioId) ?? SCENARIOS[0];
-    const suffix = runId.replace(/[^a-z0-9]/g, "").slice(-5).padStart(5, "x");
-    const pod = `scenario-${scenarioId}-${suffix}`;
-    const uid = `7c1e${suffix}-3b2a-4f0e-9d61-${runId.length.toString(16).padStart(4, "0")}a4c09e1f`;
+    const pod = `${scenarioId}-${runId.slice(0, 10)}`;
+    const uid = `7c1e${runId.slice(0, 4)}-3b2a-4f0e-9d61-${runId.slice(4, 16)}`;
     const quarantine = scenario.response === "quarantine";
     const at = (ms: number) => new Date(t0 + ms * speed).toISOString();
-    const run = (state: RunState, ms: number, detail?: string): StreamEvent => {
-      const data: RunEvent = { run_id: runId, scenario: scenarioId, state, at: at(ms) };
+    const run = (state: RunState, ms: number, detail = ""): StreamEvent => {
+      const data: RunEvent = { run_id: runId, scenario: scenarioId, state, at: at(ms), detail };
       if (state !== "queued") data.pod = pod;
-      if (detail) data.detail = detail;
       return { type: "run", data };
     };
     const podEv = (ms: number, phase: string, extra: Partial<PodEvent> = {}): StreamEvent => ({
@@ -407,7 +431,7 @@ export class MockBackend {
 
   private seedHistory(): void {
     const t0 = Date.now() - 7 * 60_000;
-    for (const [, ev] of this.script("mock-history-1", "shell-in-container", t0, 1)) this.buffer.push(ev);
+    for (const [, ev] of this.script(MOCK_HISTORY_RUN, "shell-in-container", t0, 1)) this.buffer.push({ ...ev, id: ++this.eventId });
     while (this.buffer.length > REPLAY) this.buffer.shift();
   }
 
@@ -419,29 +443,52 @@ export class MockBackend {
     return s;
   }
 
-  private newFlag(): string {
-    let s = "";
-    for (let i = 0; i < 16; i++) s += Math.floor(Math.random() * 16).toString(16);
-    return `SDP{${s}}`;
+  private newTerminal(runId: string, token: string): TerminalState {
+    let flag = "";
+    for (let i = 0; i < 16; i++) flag += Math.floor(Math.random() * 16).toString(16);
+    const pod = `terminal-${runId.slice(0, 10)}`;
+    const uid = `9d3f${runId.slice(0, 4)}-51c0-4b7e-8a2d-${runId.slice(4, 16)}`;
+    return { runId, token, pod, uid, flag: `SDP{${flag}}`, ready: false, over: false, running: 0, count: 0, seq: 0, quarantined: false };
+  }
+
+  /** A run event of the terminal run, with the pod once it exists, as runner.publish/publishCmd send it. */
+  private termRun(t: TerminalState, state: RunState, detail = "", seq?: number): StreamEvent {
+    const data: RunEvent = { run_id: t.runId, scenario: "terminal", state, at: new Date().toISOString(), detail };
+    if (state !== "queued") data.pod = t.pod;
+    if (seq) data.command_seq = seq;
+    return { type: "run", data };
+  }
+
+  private termPod(t: TerminalState, phase: string, extra: Partial<PodEvent> = {}): StreamEvent {
+    return { type: "pod", data: { run_id: t.runId, pod: t.pod, uid: t.uid, phase, reason: "", container_id: "9b2e7c4d1a0f", image: SCENARIO_IMAGE, labels_delta: {}, deleted: false, at: new Date().toISOString(), ...extra } };
+  }
+
+  private termVictim(t: TerminalState, status: VictimStatus, probe = 3, shop?: { title: string; banner: string; checksum: string }): StreamEvent {
+    return { type: "victim", data: { run_id: t.runId, pod: t.pod, at: new Date().toISOString(), status, title: "", banner: "", checksum: "", probe_ms: probe, ...shop } };
+  }
+
+  /** Publishes `make()` after ms (scaled), unless the terminal run it belongs to is over by then. */
+  private later(t: TerminalState, ms: number, make: () => StreamEvent | null, evenIfOver = false): ReturnType<typeof setTimeout> {
+    return setTimeout(() => {
+      if (this.terminal !== t || (t.over && !evenIfOver)) return;
+      const ev = make();
+      if (ev) this.publish(ev);
+    }, ms * this.speed);
   }
 
   private startTerminal(): void {
     const t = this.terminal;
     if (!t) return;
-    const image = SCENARIO_IMAGE;
-    const uid = "7c1e-terminal-" + t.runId.replace(/[^a-z0-9]/g, "").slice(-6);
-    const at = (ms: number) => new Date(Date.now() + ms * this.speed).toISOString();
-    const emit = (ms: number, ev: StreamEvent) => setTimeout(() => this.publish(ev), ms * this.speed);
-    emit(0, { type: "run", data: { run_id: t.runId, scenario: "terminal", state: "queued", at: at(0) } });
-    emit(60, { type: "run", data: { run_id: t.runId, scenario: "terminal", state: "started", at: at(60), detail: "pod created", pod: t.pod } });
-    emit(100, { type: "pod", data: { run_id: t.runId, pod: t.pod, uid, phase: "Pending", reason: "", container_id: "", image, labels_delta: { "sdp.hubertjablon.ski/quarantine": "false", "sdp.hubertjablon.ski/run-id": t.runId }, deleted: false, at: at(100) } });
-    emit(900, { type: "pod", data: { run_id: t.runId, pod: t.pod, uid, phase: "Running", reason: "", container_id: "9b2e7c4d1a0f", image, labels_delta: {}, deleted: false, at: at(900) } });
-    emit(950, { type: "run", data: { run_id: t.runId, scenario: "terminal", state: "pod_ready", at: at(950), detail: "9b2e7c4d1a0f", pod: t.pod } });
-    // The run only accepts commands once it is ready (409 before that), as the real API does.
-    setTimeout(() => {
-      if (this.terminal === t && !t.over) t.ready = true;
-    }, 950 * this.speed);
-    emit(1000, { type: "victim", data: { run_id: t.runId, pod: t.pod, at: at(1000), status: "up", title: "SDP Shop", banner: "Open for business", probe_ms: 4, checksum: "5e0c1a77d3b2f190" } });
+    this.publish(this.termRun(t, "queued"));
+    this.later(t, 60, () => this.termRun(t, "started", "pod created"));
+    this.later(t, 100, () => this.termPod(t, "Pending", { container_id: "", labels_delta: { "sdp.hubertjablon.ski/quarantine": "false", "sdp.hubertjablon.ski/run-id": t.runId, "sdp.hubertjablon.ski/scenario": "terminal" } }));
+    this.later(t, 900, () => this.termPod(t, "Running"));
+    // The run accepts commands from the moment pod_ready is on the wire (409 before), as the API does.
+    this.later(t, 950, () => {
+      t.ready = true;
+      return this.termRun(t, "pod_ready", "9b2e7c4d1a0f");
+    });
+    this.later(t, 980, () => this.termVictim(t, "up", 4, { title: "SDP Shop", banner: "Open for business", checksum: "5e0c1a77d3b2f190" }));
     this.armIdle();
     t.deadlineTimer = setTimeout(() => this.endTerminal("deadline"), 120_000 * this.speed);
   }
@@ -453,13 +500,23 @@ export class MockBackend {
     t.idleTimer = setTimeout(() => this.endTerminal("idle"), 30_000 * this.speed);
   }
 
+  /**
+   * The run's end (runTerminal returning): a command still running is cut short first (`exited`, no
+   * code), then — unless Talon already deleted the pod — the API's own cleanup deletes it (no `gone`:
+   * that is someone else's delete), then `finished` with the reason.
+   */
   private endTerminal(detail: "killed" | "left" | "idle" | "deadline"): void {
     const t = this.terminal;
     if (!t || t.over) return;
     t.over = true;
     clearTimeout(t.idleTimer);
     clearTimeout(t.deadlineTimer);
-    this.publish({ type: "run", data: { run_id: t.runId, scenario: "terminal", state: "finished", at: new Date().toISOString(), detail, pod: t.pod } });
+    t.cutShort?.();
+    if (detail !== "killed") {
+      this.publish(this.termPod(t, "Terminating"));
+      this.publish(this.termPod(t, "Deleted", { deleted: true }));
+    }
+    this.publish(this.termRun(t, "finished", detail));
     if (this.activeRun === t.runId) this.activeRun = null;
   }
 
@@ -473,7 +530,9 @@ export class MockBackend {
   private leaveTerminal(runId: string, init?: RequestInit): Response {
     const t = this.terminal;
     if (!t || t.runId !== runId) return json(404, { error: "unknown run" });
-    if (this.bearer(init) !== t.token) return json(401, { error: "bad token" });
+    if (this.bearer(init) !== t.token) return json(401, { error: "wrong or missing token" });
+    // A run that is over answers 409 ("already over"), as Runner.Leave does.
+    if (t.over) return json(409, { error: "the run is not ready, is over, or a command is already running" });
     this.endTerminal("left");
     return json(202, { state: "finishing" });
   }
@@ -481,101 +540,100 @@ export class MockBackend {
   private runCommand(runId: string, init?: RequestInit): Response {
     const t = this.terminal;
     if (!t || t.runId !== runId) return json(404, { error: "unknown run" });
-    if (this.bearer(init) !== t.token) return json(401, { error: "bad token" });
+    if (this.bearer(init) !== t.token) return json(401, { error: "wrong or missing token" });
     let id = "";
     try {
       id = (JSON.parse(typeof init?.body === "string" ? init.body : "{}") as { id?: string }).id ?? "";
     } catch {
-      return json(400, { error: "bad body" });
+      return json(400, { error: 'body must be {"id":"<command id>"}' });
     }
     const cmd = TERMINAL_COMMANDS.find((c) => c.id === id);
     if (!cmd) return json(404, { error: "unknown command" });
     // The API answers 409 until the pod is ready, while one command runs, and once the run is over.
-    if (t.over || !t.ready) return json(409, { error: "the run is not ready or is over" });
-    if (t.running) return json(409, { error: "a command is already running" });
-    if (t.count >= 30) return json(429, { error: "too many commands" }, { "Retry-After": "0" });
+    if (t.over || !t.ready || t.running) return json(409, { error: "the run is not ready, is over, or a command is already running" });
+    if (t.count >= 30) return json(429, { error: "too many commands in this run" }, { "Retry-After": "1" });
     t.count += 1;
-    t.running = true;
+    t.running = ++t.seq;
     this.armIdle();
-    const seq = ++t.seq;
-    this.simulateCommand(t, cmd.id, seq);
-    return json(202, { seq });
+    this.simulateCommand(t, cmd.id, t.seq);
+    return json(202, { seq: t.seq });
   }
 
+  /**
+   * One command as runCommand and the webhooks publish it: `started`, the output one line per event,
+   * then `exited` with the code (`achieved` only when true: omitempty). A detected command trips Falco
+   * (`falco` with command_seq, then the run's `detected` for that seq), then Talon (`talon`, then
+   * `responded` with the command's response): a quarantine labels the pod and the probe goes
+   * unreachable while the shell goes on; a terminate deletes the pod — a non-TTY command has exited
+   * by then, a TTY shell is `killed` — and the run finishes `killed`.
+   */
   private simulateCommand(t: TerminalState, id: string, seq: number): void {
     const cmd = TERMINAL_COMMANDS.find((c) => c.id === id);
     const out = TERMINAL_OUTPUT[id];
     if (!cmd || !out) {
-      t.running = false;
+      t.running = 0;
       return;
     }
-    const base = Date.now();
-    const at = (ms: number) => new Date(base + ms * this.speed).toISOString();
-    const emit = (ms: number, ev: StreamEvent) => setTimeout(() => this.publish(ev), ms * this.speed);
-    const cmdEv = (ms: number, data: Partial<CommandEvent> & { state: CommandEvent["state"] }) =>
-      emit(ms, { type: "command", data: { run_id: t.runId, seq, id, at: at(ms), ...data } as CommandEvent });
-
-    cmdEv(0, { state: "started" });
-    let ms = 120;
-    const lines = (text: string[] | undefined, stream: "stdout" | "stderr") => {
-      for (const line of text ?? []) {
-        const chunk = (line === "${FLAG}" ? t.flag : line) + "\n";
-        cmdEv(ms, { state: "output", stream, chunk });
-        ms += 40;
-      }
+    const timers: ReturnType<typeof setTimeout>[] = [];
+    const at = (ms: number, make: () => StreamEvent | null, evenIfOver = false) => timers.push(this.later(t, ms, make, evenIfOver));
+    const cmdEv = (state: CommandEvent["state"], extra: Partial<CommandEvent> = {}): StreamEvent => ({ type: "command", data: { run_id: t.runId, seq, id, state, at: new Date().toISOString(), ...extra } });
+    const done = () => {
+      if (t.running === seq) t.running = 0;
+      t.cutShort = undefined;
+    };
+    // Leave, idle or the deadline while this command runs: its exec is cancelled, `exited` with no code.
+    t.cutShort = () => {
+      timers.forEach(clearTimeout);
+      if (t.running === seq) this.publish(cmdEv("exited"));
+      done();
     };
 
-    if (cmd.outcome === "detected") {
-      const quarantine = cmd.response === "quarantine";
-      const fields = { ...falcoFields(SCENARIOS[0], t.pod), "proc.name": cmd.command[0], "proc.cmdline": cmd.input, "k8s.pod.name": t.pod };
-      // Falco sees the syscall as the command runs; the alert reaches the API a moment later.
-      emit(ms, { type: "falco", data: { at: at(ms), rule: cmd.detection ?? "", priority: quarantine ? "Warning" : "Critical", namespace: "sandbox", pod: t.pod, output: `${cmd.detection} | command=${cmd.input} k8s_pod_name=${t.pod}`.slice(0, 1024), fields, api_received_at: at(ms + 20), command_seq: seq } });
-      this.publishAt(ms + 60, { type: "run", data: { run_id: t.runId, scenario: "terminal", state: "detected", at: at(ms + 60), detail: cmd.detection ?? "", pod: t.pod } });
-      const talonMs = ms + 180;
-      emit(talonMs, { type: "talon", data: { at: at(talonMs), action: quarantine ? "Quarantine Pod" : "Terminate Pod", actionner: quarantine ? "kubernetes:label" : "kubernetes:terminate", namespace: "sandbox", pod: t.pod, status: "success", output: quarantine ? `the pod '${t.pod}' has been labeled` : `the pod '${t.pod}' has been terminated`, api_received_at: at(talonMs + 15), command_seq: seq } });
-
-      if (quarantine) {
-        // The command finishes (connection refused), then the label lands and the probe goes dark.
-        // The run continues — the shell still works in a quarantined pod.
-        lines(out.stdout, "stdout");
-        lines(out.stderr, "stderr");
-        cmdEv(ms + 60, { state: "exited", exit_code: out.exit, achieved: cmd.objective ? out.exit === 0 : false });
-        t.quarantined = true;
-        emit(talonMs, { type: "pod", data: { run_id: t.runId, pod: t.pod, uid: "", phase: "Running", reason: "", container_id: "9b2e7c4d1a0f", image: SCENARIO_IMAGE, labels_delta: { "sdp.hubertjablon.ski/quarantine": "true" }, deleted: false, at: at(talonMs) } });
-        this.publishAt(talonMs + 40, { type: "run", data: { run_id: t.runId, scenario: "terminal", state: "responded", at: at(talonMs + 40), detail: "quarantine", pod: t.pod } });
-        emit(talonMs + 260, { type: "victim", data: { run_id: t.runId, pod: t.pod, at: at(talonMs + 260), status: "unreachable", title: "", banner: "", probe_ms: 300, checksum: "" } });
-        setTimeout(() => { if (this.terminal === t) t.running = false; }, (ms + 120) * this.speed);
-      } else {
-        // A terminate command either exits before the delete lands (non-TTY: cat, busybox echo —
-        // `exited` with its code, achieved if it has an objective) or is cut off by the delete (a TTY
-        // shell: `killed`, no exit code). Then the pod goes away and the run ends as `killed`.
-        if (cmd.tty) {
-          cmdEv(talonMs + 40, { state: "killed" });
-        } else {
-          lines(out.stdout, "stdout");
-          lines(out.stderr, "stderr");
-          cmdEv(ms + 60, { state: "exited", exit_code: out.exit, achieved: cmd.objective ? out.exit === 0 : false });
-        }
-        emit(talonMs, { type: "pod", data: { run_id: t.runId, pod: t.pod, uid: "", phase: "Terminating", reason: "", container_id: "9b2e7c4d1a0f", image: SCENARIO_IMAGE, labels_delta: {}, deleted: false, at: at(talonMs) } });
-        this.publishAt(talonMs + 30, { type: "run", data: { run_id: t.runId, scenario: "terminal", state: "responded", at: at(talonMs + 30), detail: "terminate", pod: t.pod } });
-        emit(talonMs + 80, { type: "pod", data: { run_id: t.runId, pod: t.pod, uid: "", phase: "Deleted", reason: "", container_id: "9b2e7c4d1a0f", image: SCENARIO_IMAGE, labels_delta: {}, deleted: true, at: at(talonMs + 80) } });
-        emit(talonMs + 120, { type: "victim", data: { run_id: t.runId, pod: t.pod, at: at(talonMs + 120), status: "gone", title: "", banner: "", probe_ms: 0, checksum: "" } });
-        setTimeout(() => { if (this.terminal === t) t.running = false; }, (talonMs + 100) * this.speed);
-        setTimeout(() => this.endTerminal("killed"), (talonMs + 160) * this.speed);
+    this.publish(cmdEv("started"));
+    let ms = 30;
+    for (const [stream, text] of [["stdout", out.stdout], ["stderr", out.stderr]] as const) {
+      for (const line of text ?? []) {
+        const chunk = (line === "${FLAG}" ? t.flag : line) + "\n";
+        at(ms, () => cmdEv("output", { stream, chunk }));
+        ms += 15;
       }
+    }
+    const exited = () => {
+      done();
+      return cmdEv("exited", { exit_code: out.exit, ...(cmd.objective && out.exit === 0 ? { achieved: true } : {}) });
+    };
+    if (!cmd.tty) at(ms + 20, exited);
+
+    // The deface rewrites state.json to {"status":"defaced"}: the probe sees no title, no banner, no
+    // checksum. A quarantined pod's probe sees nothing at all.
+    if (id === "deface" && !t.quarantined) at(ms + 400, () => this.termVictim(t, "defaced", 3));
+
+    if (cmd.outcome !== "detected") return;
+    const quarantine = cmd.response === "quarantine";
+    const falcoMs = ms + 60;
+    const talonMs = falcoMs + 160;
+    const fields = { ...falcoFields(SCENARIOS[0], t.pod), "proc.name": cmd.command[0], "proc.cmdline": cmd.command.join(" "), "k8s.pod.name": t.pod };
+    at(falcoMs, () => ({ type: "falco", data: { at: new Date(Date.now() - 25 * this.speed).toISOString(), rule: cmd.detection ?? "", priority: quarantine ? "Warning" : "Critical", namespace: "sandbox", pod: t.pod, output: `${cmd.detection} | command=${cmd.command.join(" ")} k8s_pod_name=${t.pod}`.slice(0, 1024), fields, api_received_at: new Date().toISOString(), command_seq: seq } }));
+    at(falcoMs + 5, () => this.termRun(t, "detected", cmd.detection ?? "", seq));
+    at(talonMs, () => ({ type: "talon", data: { at: new Date(Date.now() - 10 * this.speed).toISOString(), action: quarantine ? "Quarantine Pod" : "Terminate Pod", actionner: quarantine ? "kubernetes:label" : "kubernetes:terminate", namespace: "sandbox", pod: t.pod, status: "success", output: quarantine ? `the pod '${t.pod}' in the namespace 'sandbox' has been labeled` : `the pod '${t.pod}' in the namespace 'sandbox' has been terminated`, api_received_at: new Date().toISOString(), command_seq: seq } }));
+    at(talonMs + 10, () => this.termRun(t, "responded", cmd.response ?? "", seq));
+    if (quarantine) {
+      at(talonMs - 5, () => {
+        t.quarantined = true;
+        return this.termPod(t, "Running", { labels_delta: { "sdp.hubertjablon.ski/quarantine": "true" } });
+      });
+      // The next probe after the label gets nothing back (probe interval + its 300 ms timeout).
+      at(talonMs + 800, () => this.termVictim(t, "unreachable", 300));
       return;
     }
-
-    // allowed or prevented: just output, then exit. The run stays open.
-    lines(out.stdout, "stdout");
-    lines(out.stderr, "stderr");
-    if (id === "deface") emit(ms, { type: "victim", data: { run_id: t.runId, pod: t.pod, at: at(ms), status: "defaced", title: "H4CK3D - SDP Shop", banner: "Defaced from the terminal", probe_ms: 3, checksum: "d3fac3d0badc0de1" } });
-    cmdEv(ms + 40, { state: "exited", exit_code: out.exit, achieved: cmd.objective ? out.exit === 0 : false });
-    setTimeout(() => { if (this.terminal === t) t.running = false; }, (ms + 60) * this.speed);
-  }
-
-  private publishAt(ms: number, ev: StreamEvent): void {
-    setTimeout(() => this.publish(ev), ms * this.speed);
+    // Terminate: the pod goes away under the run. A TTY shell never exits on its own: it is killed.
+    at(talonMs + 20, () => this.termPod(t, "Terminating"));
+    if (cmd.tty) at(talonMs + 40, () => (done(), cmdEv("killed")));
+    at(talonMs + 60, () => this.termVictim(t, "gone", 0));
+    at(talonMs + 120, () => this.termPod(t, "Deleted", { deleted: true }));
+    at(talonMs + 140, () => {
+      this.endTerminal("killed");
+      return null;
+    });
   }
 
   // ---------- compare / unguarded twin (ADR 0033) ----------
@@ -592,23 +650,28 @@ export class MockBackend {
 
   private compareScript(runId: string, scenarioId: string, t0: number, speed: number): [number, StreamEvent][] {
     const scenario = SCENARIOS.find((s) => s.id === scenarioId) ?? SCENARIOS[0];
-    const suffix = runId.replace(/[^a-z0-9]/g, "").slice(-5).padStart(5, "x");
-    const guarded = `scenario-${scenarioId}-${suffix}`;
-    const unguarded = `scenario-${scenarioId}-u${suffix}`;
+    const guarded = `${scenarioId}-${runId.slice(0, 10)}`;
+    const unguarded = `${guarded}-u`;
+    const pods = { guarded, unguarded };
     const quarantine = scenario.response === "quarantine";
     const at = (ms: number) => new Date(t0 + ms * speed).toISOString();
     const [up, hit] = victimScript(scenarioId);
     const cid = "4f1c2a9e8b7d";
-    const podEv = (ms: number, pod: string, arm: Arm, phase: string, extra: Partial<PodEvent> = {}): [number, StreamEvent] => [ms, { type: "pod", data: { run_id: runId, pod, uid: `7c1e-${arm}`, phase, reason: "", container_id: "", image: SCENARIO_IMAGE, labels_delta: {}, deleted: false, at: at(ms), arm, ...extra } }];
+    // Every run event of a compare run names both pods; `pod` (the guarded one) only once it exists.
+    const run = (ms: number, state: RunState, detail = ""): [number, StreamEvent] => [ms, { type: "run", data: { run_id: runId, scenario: scenarioId, state, at: at(ms), detail, pods, ...(state === "queued" ? {} : { pod: guarded }) } }];
+    const podEv = (ms: number, pod: string, arm: Arm, phase: string, extra: Partial<PodEvent> = {}): [number, StreamEvent] => [ms, { type: "pod", data: { run_id: runId, pod, uid: `7c1e-${arm}-${runId.slice(0, 8)}`, phase, reason: "", container_id: cid, image: SCENARIO_IMAGE, labels_delta: {}, deleted: false, at: at(ms), arm, ...extra } }];
     const vic = (ms: number, pod: string, arm: Arm, v: { status: VictimStatus; title: string; banner: string; checksum: string }, probe = 3): [number, StreamEvent] => [ms, { type: "victim", data: { run_id: runId, pod, at: at(ms), probe_ms: probe, arm, ...v } }];
+    const none = { title: "", banner: "", checksum: "" };
+    // The guarded arm's response, which starts the unguarded pod's compare_hold (12 s).
+    const responded = 2740;
     const events: [number, StreamEvent][] = [
-      [0, { type: "run", data: { run_id: runId, scenario: scenarioId, state: "queued", at: at(0) } }],
-      [80, { type: "run", data: { run_id: runId, scenario: scenarioId, state: "started", at: at(80), detail: "pods created", pod: guarded, pods: { guarded, unguarded } } }],
-      podEv(120, guarded, "guarded", "Pending", { labels_delta: { "sdp.hubertjablon.ski/quarantine": "false", "sdp.hubertjablon.ski/run-id": runId } }),
-      podEv(140, unguarded, "unguarded", "Pending", { labels_delta: { "sdp.hubertjablon.ski/run-id": runId } }),
-      podEv(1880, guarded, "guarded", "Running", { container_id: cid }),
-      podEv(1900, unguarded, "unguarded", "Running", { container_id: cid }),
-      [1920, { type: "run", data: { run_id: runId, scenario: scenarioId, state: "pod_ready", at: at(1920), detail: cid, pod: guarded } }],
+      run(0, "queued"),
+      run(80, "started", "pod created"),
+      podEv(120, guarded, "guarded", "Pending", { container_id: "", labels_delta: { "sdp.hubertjablon.ski/quarantine": "false", "sdp.hubertjablon.ski/run-id": runId } }),
+      podEv(140, unguarded, "unguarded", "Pending", { container_id: "", labels_delta: { "sdp.hubertjablon.ski/quarantine": "false", "sdp.hubertjablon.ski/run-id": runId } }),
+      podEv(1880, guarded, "guarded", "Running"),
+      podEv(1900, unguarded, "unguarded", "Running"),
+      run(1920, "pod_ready", cid),
       vic(2010, guarded, "guarded", { ...up }, 4),
       vic(2020, unguarded, "unguarded", { ...up }, 4),
       vic(2180, guarded, "guarded", { ...hit }),
@@ -616,28 +679,35 @@ export class MockBackend {
       // Both pods trip Falco. Only the guarded namespace has a Talon rule.
       [2240, { type: "falco", data: { at: at(2131), rule: scenario.detection, priority: quarantine ? "Warning" : "Critical", namespace: "sandbox", pod: guarded, output: falcoOutput(scenario, guarded).slice(0, 1024), fields: falcoFields(scenario, guarded), api_received_at: at(2158), arm: "guarded" } }],
       [2260, { type: "falco", data: { at: at(2151), rule: scenario.detection, priority: quarantine ? "Warning" : "Critical", namespace: "sandbox-unguarded", pod: unguarded, output: falcoOutput(scenario, unguarded).slice(0, 1024), fields: falcoFields(scenario, unguarded), api_received_at: at(2178), arm: "unguarded" } }],
-      [2250, { type: "run", data: { run_id: runId, scenario: scenarioId, state: "detected", at: at(2250), detail: scenario.detection, pod: guarded } }],
-      [2790, { type: "talon", data: { at: at(2766), action: quarantine ? "Quarantine Pod" : "Terminate Pod", actionner: quarantine ? "kubernetes:label" : "kubernetes:terminate", namespace: "sandbox", pod: guarded, status: "success", output: quarantine ? `the pod '${guarded}' has been labeled` : `the pod '${guarded}' has been terminated`, api_received_at: at(2779), arm: "guarded" } }],
+      run(2250, "detected", scenario.detection),
+      [2790, { type: "talon", data: { at: at(2766), action: quarantine ? "Quarantine Pod" : "Terminate Pod", actionner: quarantine ? "kubernetes:label" : "kubernetes:terminate", namespace: "sandbox", pod: guarded, status: "success", output: quarantine ? `the pod '${guarded}' in the namespace 'sandbox' has been labeled` : `the pod '${guarded}' in the namespace 'sandbox' has been terminated`, api_received_at: at(2779), arm: "guarded" } }],
     ];
     if (quarantine) {
+      // The label, the response, the cut; then the quarantine linger (the unreachable + 3 s) and the
+      // API's own cleanup of the guarded pod (not a `gone`: that is someone else's delete).
       events.push(
-        podEv(2730, guarded, "guarded", "Running", { container_id: cid, labels_delta: { "sdp.hubertjablon.ski/quarantine": "true" } }),
-        [2740, { type: "run", data: { run_id: runId, scenario: scenarioId, state: "responded", at: at(2740), detail: "quarantine", pod: guarded } }],
-        vic(3180, guarded, "guarded", { status: "unreachable", title: "", banner: "", checksum: "" }, 300),
+        podEv(2730, guarded, "guarded", "Running", { labels_delta: { "sdp.hubertjablon.ski/quarantine": "true" } }),
+        run(responded, "responded", "quarantine"),
+        vic(3180, guarded, "guarded", { status: "unreachable", ...none }, 300),
+        podEv(6200, guarded, "guarded", "Terminating"),
+        podEv(6240, guarded, "guarded", "Deleted", { deleted: true }),
       );
     } else {
       events.push(
-        podEv(2730, guarded, "guarded", "Terminating", { container_id: cid }),
-        [2740, { type: "run", data: { run_id: runId, scenario: scenarioId, state: "responded", at: at(2740), detail: "terminate", pod: guarded } }],
-        podEv(2800, guarded, "guarded", "Deleted", { container_id: cid, deleted: true }),
-        vic(3180, guarded, "guarded", { status: "gone", title: "", banner: "", checksum: "" }, 0),
+        podEv(2730, guarded, "guarded", "Terminating"),
+        run(responded, "responded", "terminate"),
+        vic(2760, guarded, "guarded", { status: "gone", ...none }, 0),
+        podEv(2800, guarded, "guarded", "Deleted", { deleted: true }),
       );
     }
-    // The unguarded pod keeps serving its compromised page: Falco saw it, nothing answered. The API
-    // holds it compare_hold_seconds (12) past the guarded response, then deletes it (not a `gone` event).
+    // The unguarded pod keeps serving its compromised page — the probe reports nothing new, so no
+    // event — until compare_hold after the guarded response, when the API deletes it. Only once both
+    // pods are gone does the run finish.
+    const hold = responded + 12_000;
     events.push(
-      vic(6000, unguarded, "unguarded", { ...hit }),
-      [9200, { type: "run", data: { run_id: runId, scenario: scenarioId, state: "finished", at: at(9200), pod: guarded } }],
+      podEv(hold + 20, unguarded, "unguarded", "Terminating"),
+      podEv(hold + 60, unguarded, "unguarded", "Deleted", { deleted: true }),
+      run(hold + 80, "finished"),
     );
     if (scenarioId === "shell-in-container") {
       const d = 1500;

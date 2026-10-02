@@ -202,3 +202,20 @@ describe("terminal catalogue (fixture follows the contract)", () => {
     }
   });
 });
+
+describe("the shop window without a title or banner (the terminal's real deface)", () => {
+  it("still says what happened", async () => {
+    const { renderVictim } = await import("../../src/ui/victim");
+    const at = (ms: number) => new Date(1_000_000 + ms).toISOString();
+    const evs = [
+      { type: "run", data: { run_id: "r", scenario: "terminal", state: "started", at: at(0), pod: "terminal-0123456789" } },
+      { type: "victim", data: { run_id: "r", pod: "terminal-0123456789", at: at(10), status: "up", title: "SDP Shop", banner: "", probe_ms: 3, checksum: "5e0c1a77d3b2f190" } },
+      { type: "victim", data: { run_id: "r", pod: "terminal-0123456789", at: at(20), status: "defaced", title: "", banner: "", probe_ms: 3, checksum: "" } },
+    ].map((e) => parseStreamEvent(e.type, JSON.stringify(e.data))!);
+    const el = renderVictim(buildTimeline(evs, 1_000_100).runs[0], false);
+    expect(el.getAttribute("data-status")).toBe("defaced");
+    expect(el.querySelector(".defaced__title")?.textContent).toBe("Page replaced");
+    expect(el.querySelector(".defaced__banner")?.textContent).not.toBe("");
+    expect(el.querySelector(".defaced__sum")).toBeNull(); // no checksum, no "→ undefined"
+  });
+});
