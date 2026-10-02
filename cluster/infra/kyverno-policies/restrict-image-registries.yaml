@@ -26,8 +26,7 @@ metadata:
       from this project's own registry path. An image from any other registry or owner is rejected
       before it is pulled, so there is no path by which a third-party image runs there unverified.
 spec:
-  # Fail: bounded to the namespaces below (and falco-response, minus Falcosidekick), same reasoning
-  # as verify-portfolio-images.
+  # Fail: bounded to the namespaces below, same reasoning as verify-portfolio-images.
   failurePolicy: Fail
   # Pattern matching on a string, so there is a report to be had for pods that already exist.
   background: true
@@ -41,12 +40,20 @@ spec:
               # Kept identical to the namespace list in verify-portfolio-images.yaml: the two policies
               # are one statement about the same set of namespaces, and a divergence between them
               # would mean a namespace where origin is checked but provenance is not, or the reverse.
-              # The one deliberate exception is falco-response, which verify-portfolio-images lists
-              # whole and this policy covers through the second rule below, Falcosidekick excepted.
+              # The one deliberate exception is trivy-system, which verify-portfolio-images lists
+              # but this policy cannot: the scan Jobs and the Trivy server run aquasec/trivy and the
+              # PolicyReport adapter its own upstream image (ADR 0025).
+              #
+              # falco-response since Falcosidekick runs this project's build (ADR 0025): until then a
+              # second rule here exempted pods made only of the upstream Falcosidekick image (ADR 0023).
+              # kube-bench since its CronJob does (ADR 0025): the most privileged pod outside `falco`
+              # can only be this project's image.
               namespaces:
                 - hello
                 - sandbox
                 - portfolio-api
+                - falco-response
+                - kube-bench
       validate:
         failureAction: Enforce
         message: >-
@@ -57,58 +64,6 @@ spec:
             # Trailing `*` matches the repository name and the `:tag@sha256:...` suffix. The prefix is
             # anchored because Kyverno patterns are whole-string matches, so a registry named
             # `evil.example.com/ghcr.io/hubertmj/...` does not satisfy it.
-            containers:
-              - image: "ghcr.io/hubertmj/self-defending-portfolio/*"
-            =(initContainers):
-              - image: "ghcr.io/hubertmj/self-defending-portfolio/*"
-            =(ephemeralContainers):
-              - image: "ghcr.io/hubertmj/self-defending-portfolio/*"
-    # falco-response (ADR 0023): our registry path for every pod, with one exception - a pod whose
-    # images are *all* Falcosidekick's upstream image, the one third-party component there.
-    #
-    # Inverted on purpose. Talon runs this project's own signed build (app/talon) and is the
-    # workload in this namespace that holds Kubernetes API permissions, but a rule that selected
-    # "Talon's pods" would have to key on something the pod's author chooses: a label (leave it off
-    # and the rule never matches) or a ServiceAccount (any pod can name falco-talon). Naming the
-    # exception instead closes both: a pod is exempt only by *being* Falcosidekick - every container
-    # image under docker.io/falcosecurity/falcosidekick - so a foreign image runs here under no name,
-    # with no label, and as no ServiceAccount. Building Falcosidekick here as well would retire the
-    # exception and make falco-response one more namespace in validate-registries.
-    #
-    # A precondition, not `match.selector` or an `exclude` on images: a label selector in any rule
-    # switches off Kyverno's autogen for the whole policy, which would take the Deployment-level rules
-    # (and the offline `kyverno apply` gate in `make validate`, which only sees Deployments) away
-    # from validate-registries above too. Autogen rewrites request.object.spec to the pod template's
-    # for the controller rules. The key is every image of the pod (containers, initContainers,
-    # ephemeralContainers, missing lists as empty); AnyNotIn with a wildcard value is true as soon as
-    # one image is not Falcosidekick's, and then the pattern below decides.
-    - name: validate-registries-falco-response
-      match:
-        any:
-          - resources:
-              kinds:
-                - Pod
-              namespaces:
-                - falco-response
-      preconditions:
-        all:
-          # Folded: the line breaks become spaces, which JMESPath ignores.
-          - key: >-
-              {{ [request.object.spec.containers[].image,
-              request.object.spec.initContainers[].image || `[]`,
-              request.object.spec.ephemeralContainers[].image || `[]`][] }}
-            operator: AnyNotIn
-            value:
-              - "docker.io/falcosecurity/falcosidekick:*"
-      validate:
-        failureAction: Enforce
-        message: >-
-          Images in falco-response must come from ghcr.io/hubertmj/self-defending-portfolio/ - the
-          only registry path whose contents this project builds and signs - except a pod made only
-          of the upstream Falcosidekick image.
-        pattern:
-          spec:
-            # Same pattern as validate-registries.
             containers:
               - image: "ghcr.io/hubertmj/self-defending-portfolio/*"
             =(initContainers):

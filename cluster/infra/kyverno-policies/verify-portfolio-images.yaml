@@ -94,11 +94,20 @@ spec:
               # holds the other set of API permissions in the cluster (delete and label pods in
               # `sandbox`). Falcosidekick, next to it, is this project's build too since ADR 0025
               # (app/falcosidekick), so it is matched by imageReferences below like Talon.
+              # `kube-bench` and `trivy-system` (ADR 0025) since their workloads run this project's
+              # builds: kube-bench is the one pod outside `falco` that runs as root with the node's
+              # k3s keys mounted, and the Trivy Operator reads every workload and RBAC object in the
+              # cluster. Neither is on the repair path of a Kyverno outage (Argo CD, Kyverno, Cilium,
+              # CoreDNS), so failing closed there only pauses a benchmark run or a scan. The scan Jobs
+              # and the Trivy server run aquasec/trivy, which imageReferences does not match.
+              # kube-system (metrics-server, ADR 0025) stays out: Cilium and CoreDNS run there.
               namespaces:
                 - hello
                 - sandbox
                 - portfolio-api
                 - falco-response
+                - kube-bench
+                - trivy-system
       verifyImages:
         # Only this project's images. A rule that matched `*` would demand our signature on
         # every third-party sidecar the cluster ever runs.
@@ -181,6 +190,8 @@ spec:
                 - sandbox
                 - portfolio-api
                 - falco-response
+                - kube-bench
+                - trivy-system
       verifyImages:
         - imageReferences:
             - "ghcr.io/hubertmj/self-defending-portfolio/*"
