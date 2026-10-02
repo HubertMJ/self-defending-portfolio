@@ -40,6 +40,14 @@ spec:
           # Pinned by digest in kustomization.yaml (ADR 0008, 0011); the tag is informational.
           image: ghcr.io/hubertmj/self-defending-portfolio/api:main
           env:
+            # TEMPORARY (2026-10-02, owner's test day): attack limits raised 20x from the contract's
+            # 3 per 10 min per visitor / 30 per hour in total. Concurrency stays 1 and the sandbox
+            # ResourceQuota is unchanged, so the cluster-side blast radius is the same; only the
+            # number of runs per window grows. Remove both entries on 2026-10-03 to return to defaults.
+            - name: ATTACKS_PER_IP
+              value: "60"
+            - name: ATTACKS_GLOBAL
+              value: "600"
             # Keeps the Go GC ahead of the memory limit instead of meeting the OOM killer there.
             - name: GOMEMLIMIT
               value: "100MiB"
