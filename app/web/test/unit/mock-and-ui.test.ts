@@ -275,6 +275,141 @@ describe("MockBackend extension endpoints and events", () => {
   });
 });
 
+describe("MockBackend terminal (ADR 0033)", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  // The mock fetch sleeps on a (fake) timer, so every call must be advanced, not awaited directly.
+  async function settle<T>(p: Promise<T>, ms = 300): Promise<T> {
+    await vi.advanceTimersByTimeAsync(ms);
+    return p;
+  }
+
+  async function start() {
+    const mock = new MockBackend({ speed: 1, history: false });
+    const api = new ApiClient({ fetch: mock.fetch });
+    const src = mock.eventSource("/api/events");
+    const seen: { type: string; raw: string }[] = [];
+    for (const t of ["run", "falco", "talon", "pod", "victim", "command"]) src.addEventListener(t, (m) => seen.push({ type: t, raw: m.data }));
+    await vi.advanceTimersByTimeAsync(100);
+    const res = await settle(api.attackTerminal(), 1200);
+    if (res.kind !== "accepted") throw new Error(`terminal not accepted: ${res.kind}`);
+    return { mock, api, seen, token: res.run.token, runId: res.run.run_id, settle };
+  }
+
+  it("starts a run and returns a 32-hex token, then reaches pod_ready", async () => {
+    const { seen, token } = await start();
+    expect(token).toMatch(/^[0-9a-f]{32}$/);
+    const states = seen.filter((e) => e.type === "run").map((e) => JSON.parse(e.raw).state);
+    expect(states).toContain("pod_ready");
+    const victims = seen.filter((e) => e.type === "victim").map((e) => JSON.parse(e.raw).status);
+    expect(victims).toEqual(["up"]);
+  });
+
+  it("runs an allowed command: started → output → exited, achieved for an objective", async () => {
+    const { api, seen, token, runId } = await start();
+    const r = await settle(api.runCommand(runId, token, "read-flag"));
+    expect(r.kind).toBe("accepted");
+    await vi.advanceTimersByTimeAsync(500);
+    const cmd = seen.filter((e) => e.type === "command").map((e) => JSON.parse(e.raw));
+    expect(cmd.map((c) => c.state)).toEqual(["started", "output", "exited"]);
+    expect(cmd.find((c) => c.state === "output").chunk).toMatch(/^SDP\{[0-9a-f]{16}\}\n$/);
+    expect(cmd.find((c) => c.state === "exited").achieved).toBe(true);
+  });
+
+  it("rejects a bad token, an unknown command, and a second command while one runs", async () => {
+    const { api, token, runId } = await start();
+    expect((await settle(api.runCommand(runId, "bad", "whoami"))).kind).toBe("unauthorized");
+    expect((await settle(api.runCommand(runId, token, "nope"))).kind).toBe("not-found");
+    // `beacon` runs for the better part of a second (the detect→respond chain); a second command
+    // issued while it is in flight is refused.
+    const first = await settle(api.runCommand(runId, token, "beacon"), 200);
+    expect(first.kind).toBe("accepted");
+    const second = await settle(api.runCommand(runId, token, "hostname"), 200);
+    expect(second.kind).toBe("conflict");
+  });
+
+  it("a detected terminate command kills the pod and finishes the run", async () => {
+    const { api, seen, token, runId } = await start();
+    await settle(api.runCommand(runId, token, "read-shadow"));
+    await vi.advanceTimersByTimeAsync(1000);
+    const cmd = seen.filter((e) => e.type === "command").map((e) => JSON.parse(e.raw));
+    expect(cmd.some((c) => c.state === "killed")).toBe(true);
+    const runs = seen.filter((e) => e.type === "run").map((e) => JSON.parse(e.raw));
+    const finished = runs.find((r) => r.state === "finished");
+    expect(finished.detail).toBe("killed");
+    // The run is over: a further command is refused.
+    expect((await settle(api.runCommand(runId, token, "whoami"))).kind).toBe("conflict");
+  });
+
+  it("a detected quarantine command keeps the run going; a later command still runs", async () => {
+    const { api, seen, token, runId } = await start();
+    await settle(api.runCommand(runId, token, "beacon"));
+    await vi.advanceTimersByTimeAsync(1000);
+    const victims = seen.filter((e) => e.type === "victim").map((e) => JSON.parse(e.raw).status);
+    expect(victims).toContain("unreachable");
+    expect(seen.some((e) => e.type === "run" && JSON.parse(e.raw).state === "finished")).toBe(false);
+    expect((await settle(api.runCommand(runId, token, "whoami"))).kind).toBe("accepted");
+  });
+
+  it("DELETE ends the run with detail left", async () => {
+    const { api, seen, token, runId } = await start();
+    expect(await settle(api.leaveRun(runId, token))).toBe(true);
+    await vi.advanceTimersByTimeAsync(50);
+    const finished = seen.filter((e) => e.type === "run").map((e) => JSON.parse(e.raw)).find((r) => r.state === "finished");
+    expect(finished.detail).toBe("left");
+  });
+
+  it("every emitted terminal event is contract-valid; a deface changes the shop", async () => {
+    const { api, seen, token, runId } = await start();
+    await settle(api.runCommand(runId, token, "deface"));
+    await vi.advanceTimersByTimeAsync(500);
+    for (const e of seen) expect(parseStreamEvent(e.type, e.raw), e.raw).not.toBeNull();
+    const defaced = seen.filter((e) => e.type === "victim").map((e) => JSON.parse(e.raw).status);
+    expect(defaced).toContain("defaced");
+  });
+});
+
+describe("MockBackend compare / stats", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it("a compare run creates two pods and tags per-arm events; only the guarded arm is answered", async () => {
+    const mock = new MockBackend({ speed: 1, history: false });
+    const api = new ApiClient({ fetch: mock.fetch });
+    const src = mock.eventSource("/api/events");
+    const seen: { type: string; raw: string }[] = [];
+    for (const t of ["run", "falco", "talon", "pod", "victim"]) src.addEventListener(t, (m) => seen.push({ type: t, raw: m.data }));
+    await vi.advanceTimersByTimeAsync(100);
+    const p = api.attack("network-tool", { compare: true });
+    await vi.advanceTimersByTimeAsync(200);
+    expect((await p).kind).toBe("accepted");
+    await vi.advanceTimersByTimeAsync(10_000);
+    for (const e of seen) expect(parseStreamEvent(e.type, e.raw), e.raw).not.toBeNull();
+    const started = seen.map((e) => JSON.parse(e.raw)).find((d) => d.state === "started");
+    expect(started.pods).toMatchObject({ guarded: expect.any(String), unguarded: expect.any(String) });
+    const falco = seen.filter((e) => e.type === "falco").map((e) => JSON.parse(e.raw));
+    expect(new Set(falco.map((f) => f.arm))).toEqual(new Set(["guarded", "unguarded"]));
+    const talon = seen.filter((e) => e.type === "talon").map((e) => JSON.parse(e.raw));
+    // Only the guarded arm gets a Talon action; the unguarded namespace has no Talon rule.
+    expect(talon.every((t) => t.arm === "guarded")).toBe(true);
+  });
+
+  it("serves stats with the contract's shape", async () => {
+    const mock = new MockBackend({ speed: 0 });
+    const api = new ApiClient({ fetch: mock.fetch });
+    const r = api.stats();
+    await vi.advanceTimersByTimeAsync(10);
+    const res = await r;
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.value.by_scenario["network-tool"].runs).toBe(412);
+      expect(res.value.terminal.runs).toBeGreaterThan(0);
+      expect(res.value.response_ms.last).toBeGreaterThan(0);
+    }
+  });
+});
+
 describe("commandText", () => {
   it("shows an sh -c script verbatim and quotes anything else", async () => {
     const { commandText } = await import("../../src/ui/console");
