@@ -45,6 +45,10 @@ const (
 	commandChunkBytes = 1024     // one `output` event carries at most this much text
 	commandOutBytes   = 4 << 10  // per command
 	runOutBytes       = 32 << 10 // per run
+	// Events, not only bytes, are bounded: a pod that writes one byte at a time would otherwise turn
+	// 4 KiB into thousands of events and push the run's own events out of the run log.
+	commandOutEvents = 64  // `output` events per command
+	runOutEvents     = 300 // `output` events per run
 )
 
 // Errors Command and Leave return; the server maps them to status codes.
@@ -257,11 +261,13 @@ func (r *Runner) runCommand(ctx context.Context, rn *run, req commandReq, log *s
 		}
 	}()
 
-	sink := &cmdSink{r: r, rn: rn, seq: seq, id: cmd.ID}
+	sink := &cmdSink{rn: rn, publish: func(stream, chunk string) {
+		r.emit(rn, "command", r.commandEvent(rn, CommandEvent{
+			Seq: seq, ID: cmd.ID, State: CommandOutput, Stream: stream, Chunk: chunk}))
+	}}
 	code, err := r.exec.ExecStream(cmdCtx, rn.namespace, rn.pod, scenarios.TerminalContainer,
 		cmd.Command, cmd.TTY, sink.writer("stdout"), sink.writer("stderr"))
-	sink.flush()
-	truncated := sink.close()
+	truncated := sink.finish()
 	if err != nil {
 		log.Info("terminal command exec ended", "seq", seq, "id", cmd.ID, "err", err)
 	}
@@ -379,31 +385,58 @@ func (r *Runner) terminalResponded(rn *run) {
 	r.publishCmd(rn, StateResponded, response, seq)
 }
 
-// cmdSink turns one command's stdout/stderr into `output` events. The output is attacker-controlled,
-// so it is sanitised and scrubbed one whole line at a time - never across a chunk boundary, so a cut
-// cannot split an IP, URL or `.svc` name and let both halves past the scrubber - and only then split
-// into events of at most commandChunkBytes, with a per-command and a per-run cap. It is written to
-// concurrently (remotecommand streams stdout and stderr on separate goroutines) and may be written
-// to after the command ended (client-go's SPDY path returns on context cancel without waiting for
-// its reader goroutine), so every method takes the lock and writes after close() are dropped.
+// cmdSink turns one command's stdout/stderr into `output` events. The output is attacker-controlled:
+// whatever runs in the pod chooses every byte and every write boundary.
+//
+// The invariant, on which the scrubbing rests: text is sanitised and scrubbed only as a complete line -
+// the bytes between two newlines of one stream, or the last bytes of the stream at its end - and
+// nothing else is ever published. None of the scrubber's patterns (IPv4, IPv6, URL, `.svc` and
+// `.cluster.local` names) can match across a newline, so a token always lies inside one unit and is
+// seen whole, however the pod splits its writes and whatever bytes the sanitiser drops from between
+// its parts. A line that does not end within maxLineBytes is therefore not cut and scrubbed in
+// pieces (each piece would pass on its own); it is dropped whole and a marker is published in its
+// place. Only after scrubbing is the text cut into events, so an event boundary can fall inside a
+// replacement such as "[ip]" but never inside an address. (The unit is a line of one stream. A pod that
+// spreads an address over two lines or two streams on purpose is encoding it, as it could with spaces
+// or base64; no scrubber undoes that. The scrubber is for what tools print - ADR 0021.)
+//
+// What it bounds: the pending line per stream (maxLineBytes), the text of one event
+// (commandChunkBytes), the text and the number of events per command and per run. Lines are batched:
+// one Write publishes its complete lines together, so a burst of short lines is a few events, not one
+// event per line (the run log and the stream's replay buffer count events, not bytes).
+//
+// It is written to concurrently (remotecommand streams stdout and stderr on separate goroutines) and
+// may be written to after the command ended (client-go's SPDY path returns on context cancel without
+// waiting for its reader goroutine), so every method takes the lock and writes after finish() are
+// dropped.
 type cmdSink struct {
-	r   *Runner
-	rn  *run
-	seq int
-	id  string
+	rn *run
+	// publish sends one `output` event; set by runCommand, replaced in tests.
+	publish func(stream, chunk string)
 
 	mu        sync.Mutex
-	pending   map[string][]byte // per stream, bytes not yet at a line boundary
-	cmdUsed   int               // bytes published for this command
+	streams   map[string]*sinkStream
+	cmdUsed   int // bytes published for this command
+	cmdEvents int // `output` events published for this command
 	truncated bool
 	capped    bool // a cap was hit; no more output is published for this command
-	done      bool // the command's end event was published; late writes are dropped
+	done      bool // the command's end event is being published; late writes are dropped
 }
 
-// maxLineBytes bounds the pending buffer per stream. A line longer than this (no newline) is
-// processed as one unit, so the buffer never grows without limit and add() always makes progress -
-// even on a run of UTF-8 continuation bytes, where a rune-boundary cut could otherwise be zero.
-const maxLineBytes = 8 << 10
+// sinkStream is one stream's state: the line being assembled, and the scrubbed text of complete lines
+// not yet published.
+type sinkStream struct {
+	pending  []byte // bytes of the current line, no newline yet; never more than maxLineBytes
+	skipping bool   // inside a line that exceeded maxLineBytes: discard up to its newline
+	out      []byte // sanitised, scrubbed text waiting to be cut into events
+}
+
+// maxLineBytes is the longest line the sink will publish. No command of the catalogue prints anything
+// near it; a longer line is dropped whole (see cmdSink) rather than scrubbed in parts.
+const maxLineBytes = 2 << 10
+
+// lineDropped stands in for a line longer than maxLineBytes.
+const lineDropped = "[line too long, not shown]\n"
 
 func (s *cmdSink) writer(stream string) io.Writer { return sinkWriter{s: s, stream: stream} }
 
@@ -417,101 +450,149 @@ func (w sinkWriter) Write(p []byte) (int, error) {
 	return len(p), nil // never fail the exec stream on our account
 }
 
-func (s *cmdSink) add(stream string, p []byte) {
+func (s *cmdSink) stream(name string) *sinkStream {
+	if s.streams == nil {
+		s.streams = map[string]*sinkStream{}
+	}
+	st := s.streams[name]
+	if st == nil {
+		st = &sinkStream{}
+		s.streams[name] = st
+	}
+	return st
+}
+
+// add consumes one write. It walks p once, newline by newline, so its cost is linear in len(p) and
+// the only bytes it keeps are an unfinished line (at most maxLineBytes) and less than one event of
+// scrubbed text.
+func (s *cmdSink) add(name string, p []byte) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.done || s.capped {
 		return
 	}
-	if s.pending == nil {
-		s.pending = map[string][]byte{}
-	}
-	buf := append(s.pending[stream], p...)
-	for {
-		cut := lineCut(buf)
-		if cut == 0 {
+	st := s.stream(name)
+	for len(p) > 0 && !s.capped {
+		i := bytes.IndexByte(p, '\n')
+		if i < 0 {
+			// No newline in what is left: it is the start, or the continuation, of a line.
+			if st.skipping {
+				break
+			}
+			if len(st.pending)+len(p) > maxLineBytes {
+				s.dropLineLocked(st)
+				st.skipping = true
+				break
+			}
+			st.pending = append(st.pending, p...)
 			break
 		}
-		s.emitLineLocked(stream, buf[:cut])
-		buf = append(buf[:0:0], buf[cut:]...)
-		if s.capped {
-			buf = nil
-			break
+		rest := p[:i+1]
+		p = p[i+1:]
+		switch {
+		case st.skipping:
+			st.skipping = false // the over-long line ends here; its marker was already queued
+		case len(st.pending)+len(rest) > maxLineBytes:
+			s.dropLineLocked(st)
+		default:
+			st.pending = append(st.pending, rest...)
+			st.out = append(st.out, sanitizeOutput(string(st.pending))...)
+			st.pending = st.pending[:0]
+		}
+		// Keep the queued text below one event while the write is still being walked.
+		for len(st.out) >= commandChunkBytes && !s.capped {
+			s.emitLocked(name, st, commandChunkBytes)
 		}
 	}
-	s.pending[stream] = buf
+	// Publish what this write completed now rather than at the next one: the visitor is watching.
+	s.drainLocked(name, st)
 }
 
-func (s *cmdSink) flush() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for stream, buf := range s.pending {
-		if len(buf) > 0 && !s.capped {
-			s.emitLineLocked(stream, buf)
-		}
-		s.pending[stream] = nil
+// dropLineLocked discards the line being assembled and queues the marker in its place. s.mu is held.
+func (s *cmdSink) dropLineLocked(st *sinkStream) {
+	st.pending = st.pending[:0]
+	st.out = append(st.out, lineDropped...)
+	s.truncated = true
+}
+
+// drainLocked publishes everything queued for a stream. s.mu is held.
+func (s *cmdSink) drainLocked(name string, st *sinkStream) {
+	for len(st.out) > 0 && !s.capped {
+		s.emitLocked(name, st, commandChunkBytes)
+	}
+	if s.capped {
+		st.out, st.pending = nil, nil
 	}
 }
 
-// close stops the sink and reports whether anything was dropped. After it, a late write from a
-// still-draining exec stream is ignored (no `output` after the command's end event).
-func (s *cmdSink) close() bool {
+// finish publishes each stream's last line (the stream has ended, so the line is complete as it is),
+// stops the sink and reports whether anything was dropped. Flushing and stopping are one step under
+// the lock: a write that arrives later from a still-draining exec stream is ignored, so no `output`
+// follows the command's end event and nothing is lost unreported in between.
+func (s *cmdSink) finish() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	for _, name := range []string{"stdout", "stderr"} {
+		st := s.streams[name]
+		if st == nil {
+			continue
+		}
+		if len(st.pending) > 0 && !st.skipping && !s.capped {
+			st.out = append(st.out, sanitizeOutput(string(st.pending))...)
+		}
+		st.pending = nil
+		s.drainLocked(name, st)
+	}
 	s.done = true
 	return s.truncated
 }
 
-// lineCut is how many leading bytes of buf form the next unit to emit: through the first newline, or
-// the whole maxLineBytes once the buffer reaches that without one, else 0. It is > 0 whenever a
-// newline exists or the buffer is large, so add() terminates.
-func lineCut(buf []byte) int {
-	if i := bytes.IndexByte(buf, '\n'); i >= 0 {
-		return i + 1
+// emitLocked publishes at most max bytes from the front of st.out as one `output` event, on a rune
+// boundary, applying the per-command and per-run caps on bytes and on events; hitting any of them sets
+// truncated and stops further output for this command. It always consumes from st.out or sets capped,
+// so its callers' loops end. s.mu is held.
+func (s *cmdSink) emitLocked(name string, st *sinkStream, max int) {
+	n := len(st.out)
+	if n > max {
+		// st.out is valid UTF-8 (sanitizeOutput), so a boundary lies within three bytes of max.
+		if n = runeBoundary(st.out, max); n == 0 {
+			n = max
+		}
 	}
-	if len(buf) >= maxLineBytes {
-		return maxLineBytes
+	chunk := st.out[:n]
+	if s.cmdEvents >= commandOutEvents {
+		s.truncated, s.capped = true, true
+		return
 	}
-	return 0
-}
-
-// emitLineLocked sanitises and scrubs one line as a unit, then publishes it as one or more `output`
-// events of at most commandChunkBytes on rune boundaries, applying the per-command then per-run cap;
-// either cap sets truncated and stops further output for this command. s.mu is held.
-func (s *cmdSink) emitLineLocked(stream string, raw []byte) {
-	text := sanitizeOutput(string(raw))
-	for len(text) > 0 && !s.capped {
-		n := len(text)
-		if n > commandChunkBytes {
-			n = runeBoundary([]byte(text[:commandChunkBytes+1]), commandChunkBytes)
-		}
-		chunk := []byte(text[:n])
-		text = text[n:]
-		if room := commandOutBytes - s.cmdUsed; len(chunk) > room {
-			chunk = chunk[:runeBoundary(chunk, room)]
-			s.truncated, s.capped = true, true
-		}
-		if len(chunk) == 0 {
-			continue
-		}
-		s.rn.tmu.Lock()
-		room := runOutBytes - s.rn.runOut
-		if room < 0 {
-			room = 0
-		}
-		if len(chunk) > room {
-			chunk = chunk[:runeBoundary(chunk, room)]
-			s.truncated, s.capped = true, true
-		}
+	if room := commandOutBytes - s.cmdUsed; len(chunk) > room {
+		chunk = chunk[:runeBoundary(chunk, room)]
+		s.truncated, s.capped = true, true
+	}
+	s.rn.tmu.Lock()
+	room := runOutBytes - s.rn.runOut
+	if room < 0 {
+		room = 0
+	}
+	if s.rn.runOutEvents >= runOutEvents {
+		room = 0
+	}
+	if len(chunk) > room {
+		chunk = chunk[:runeBoundary(chunk, room)]
+		s.truncated, s.capped = true, true
+	}
+	if len(chunk) > 0 {
 		s.rn.runOut += len(chunk)
-		s.rn.tmu.Unlock()
-		if len(chunk) == 0 {
-			continue
-		}
-		s.cmdUsed += len(chunk)
-		s.r.emit(s.rn, "command", s.r.commandEvent(s.rn, CommandEvent{
-			Seq: s.seq, ID: s.id, State: CommandOutput, Stream: stream, Chunk: string(chunk)}))
+		s.rn.runOutEvents++
 	}
+	s.rn.tmu.Unlock()
+	text := string(chunk)
+	st.out = st.out[n:]
+	if text == "" {
+		return
+	}
+	s.cmdUsed += len(text)
+	s.cmdEvents++
+	s.publish(name, text)
 }
 
 // runeBoundary returns a length <= n that does not split a UTF-8 sequence.

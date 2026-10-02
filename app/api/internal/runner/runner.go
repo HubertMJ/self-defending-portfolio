@@ -228,6 +228,7 @@ type run struct {
 	respondedSeq  int       // the seq a `responded` run event was last published for
 	respondedZero bool      // a response correlated to no command was already published
 	runOut        int       // bytes of command output published across the run (32 KiB budget)
+	runOutEvents  int       // `output` events published across the run (runOutEvents budget)
 }
 
 // commandReq is one resolved command the server asked the run goroutine to execute.
