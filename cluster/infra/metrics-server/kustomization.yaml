@@ -1,0 +1,39 @@
+# metrics-server, the resource metrics API behind `kubectl top` (ADR 0025). Deployed by
+# cluster/apps/metrics-server.yaml in place of the copy k3s used to deploy from its bundled manifests,
+# which k3s no longer does (`disable: [metrics-server]`, ansible/roles/k3s/defaults/main.yml).
+#
+# The objects are k3s v1.35.9+k3s1's manifests/metrics-server/*.yaml, kind for kind and name for name
+# (same ServiceAccount, Service, APIService, ClusterRoles and bindings, same Deployment args), so
+# `v1beta1.metrics.k8s.io` keeps pointing at kube-system/metrics-server and nothing that reads the
+# metrics API notices the hand-over. What differs, each on the line that does it:
+#   * the image: this repository's build (app/metrics-server), pinned below;
+#   * the Deployment's security context: restricted (seccomp, all capabilities dropped,
+#     runAsNonRoot at pod level), where k3s's set only the container fields;
+#   * a memory limit and a CPU limit, where k3s's set requests only;
+#   * k3s's %{...}% template variables, resolved to the values k3s substituted on this cluster (read
+#     from the live Deployment before the hand-over).
+# Diff against a newer k3s's copy when bumping k3s or metrics-server:
+#   git -C <k3s checkout at the new tag> show HEAD:manifests/metrics-server/metrics-server-deployment.yaml
+#
+# kube-system, as k3s and upstream deploy it: the APIService, the auth-reader RoleBinding (it must sit
+# next to extension-apiserver-authentication-reader) and the Service name every client resolves are
+# all kube-system's. That namespace is outside verify-portfolio-images on purpose (ADR 0025): Cilium
+# and CoreDNS run there, and a fail-closed admission check would make the CNI's restart depend on
+# Kyverno.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: kube-system
+
+resources:
+  - rbac.yaml
+  - service.yaml
+  - apiservice.yaml
+  - deployment.yaml
+
+# Only the digest is referenced; the tag is informational. Bump = commit:
+#   scripts/bump-image-digest.sh metrics-server sha256:<digest from the build-images run summary>
+images:
+  - name: ghcr.io/hubertmj/self-defending-portfolio/metrics-server
+    newTag: main
+    digest: sha256:0000000000000000000000000000000000000000000000000000000000000000

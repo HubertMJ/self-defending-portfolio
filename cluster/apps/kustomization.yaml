@@ -30,6 +30,7 @@ namespace: argocd
 resources:
   - gateway-api-crds.yaml
   - cilium.yaml
+  - metrics-server.yaml
   - cert-manager.yaml
   - cert-manager-issuers.yaml
   - kyverno.yaml

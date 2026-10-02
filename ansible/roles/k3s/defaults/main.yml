@@ -32,10 +32,15 @@ k3s_tls_sans:
 
 # Bundled components that are disabled. Traefik and servicelb are replaced by
 # Cloudflare Tunnel plus Cilium; local-storage is kept so PVCs work out of the
-# box for the portfolio workloads.
+# box for the portfolio workloads. metrics-server is deployed by Argo CD from
+# this repository's own build instead (cluster/apps/metrics-server.yaml,
+# ADR 0025): k3s pins the image of a bundled add-on inside its binary. Adding
+# it here on a running cluster makes k3s delete its copy's objects on restart;
+# docs/bootstrap.md 8.10 has the order.
 k3s_disable_components:
   - traefik
   - servicelb
+  - metrics-server
 
 # CoreDNS from this repository (ADR 0026). While true, the role adds `coredns` to the disabled
 # components and writes templates/coredns-sdp.yaml.j2 into k3s's auto-deploy directory, where

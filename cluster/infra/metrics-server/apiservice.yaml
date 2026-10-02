@@ -1,0 +1,20 @@
+# k3s v1.35.9+k3s1 manifests/metrics-server/metrics-apiservice.yaml, unchanged.
+#
+# insecureSkipTLSVerify, as k3s, upstream's own manifests and the chart all ship it: metrics-server
+# serves a self-signed certificate it generates in --cert-dir at start-up, so there is no CA to pin
+# in caBundle without adding a certificate issuer for it. The connection is still TLS, and the API
+# server authenticates itself to metrics-server with its front-proxy client certificate, which
+# metrics-server checks (auth-reader in rbac.yaml).
+apiVersion: apiregistration.k8s.io/v1
+kind: APIService
+metadata:
+  name: v1beta1.metrics.k8s.io
+spec:
+  service:
+    name: metrics-server
+    namespace: kube-system
+  group: metrics.k8s.io
+  version: v1beta1
+  insecureSkipTLSVerify: true
+  groupPriorityMinimum: 100
+  versionPriority: 100

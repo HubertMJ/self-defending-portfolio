@@ -1,0 +1,44 @@
+# Wave 0: metrics-server, the resource metrics API behind `kubectl top` (ADR 0025). Until this
+# Application, k3s deployed it from manifests compiled into its binary, so its image moved only with
+# k3s - and v0.9.0 as k3s ships it carries findings fixed upstream. It is now this repository's build
+# (app/metrics-server), from cluster/infra/metrics-server, and k3s no longer deploys its own copy
+# (`disable: [metrics-server]` in ansible/roles/k3s/defaults/main.yml).
+#
+# The hand-over is ordered (docs/bootstrap.md 8.10): the Ansible change first - k3s deletes the objects
+# of a disabled add-on, by owner, which would also take objects this Application had already adopted -
+# then this Application creates the same objects again under the same names. In between, `kubectl top`
+# and the metrics API are unavailable for a minute or two; nothing in this cluster scales on them.
+#
+# On a fresh cluster the order is the natural one: Ansible installs k3s with metrics-server disabled,
+# then Argo CD syncs this.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: metrics-server
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/HubertMJ/self-defending-portfolio.git
+    targetRevision: main
+    path: cluster/infra/metrics-server
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: kube-system
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    retry:
+      limit: 5
+      backoff:
+        duration: 10s
+        factor: 2
+        maxDuration: 3m
+    syncOptions:
+      # kube-system belongs to k3s.
+      - CreateNamespace=false
