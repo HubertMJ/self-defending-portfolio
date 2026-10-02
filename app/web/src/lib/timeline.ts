@@ -45,6 +45,8 @@ export interface CommandRun {
   id: string;
   startedAt?: number;
   endedAt?: number;
+  /** The output in the order the API published it (by event id), each chunk with its stream. */
+  chunks: OutputChunk[];
   stdout: string;
   stderr: string;
   exitCode?: number;
@@ -52,6 +54,13 @@ export interface CommandRun {
   /** The pod went away under the command (no exit code): the cluster ended the run. */
   killed: boolean;
   truncated: boolean;
+}
+
+export interface OutputChunk {
+  /** The hub's event id; absent from a server that sends none (then arrival order stands). */
+  eventId?: number;
+  stream: "stdout" | "stderr";
+  text: string;
 }
 
 export interface RunView {
@@ -225,8 +234,19 @@ export function buildTimeline(events: readonly StreamEvent[], now: number = Date
         owner.flows.push(ev.data);
         break;
       case "command":
-        addCommand(owner, ev.data);
+        addCommand(owner, ev.data, ev.id);
         break;
+    }
+  }
+
+  // Output is shown in the order the API published it. Events are attributed in timestamp order,
+  // which a backfilled chunk with the same millisecond as a live one does not settle; the event id
+  // does, whenever every chunk of the command carries one.
+  for (const r of list) {
+    for (const c of r.commands) {
+      if (c.chunks.every((x) => x.eventId !== undefined)) c.chunks.sort((a, b) => (a.eventId as number) - (b.eventId as number));
+      c.stdout = c.chunks.filter((x) => x.stream === "stdout").map((x) => x.text).join("");
+      c.stderr = c.chunks.filter((x) => x.stream === "stderr").map((x) => x.text).join("");
     }
   }
 
@@ -293,10 +313,10 @@ function addVictim(run: RunView, v: VictimEvent): void {
   run.victim.push({ ...v, until: at, count: 1 });
 }
 
-function addCommand(run: RunView, c: CommandEvent): void {
+function addCommand(run: RunView, c: CommandEvent, eventId: number | undefined): void {
   let cmd = run.commands.find((x) => x.seq === c.seq);
   if (!cmd) {
-    cmd = { seq: c.seq, id: c.id, stdout: "", stderr: "", achieved: false, killed: false, truncated: false };
+    cmd = { seq: c.seq, id: c.id, chunks: [], stdout: "", stderr: "", achieved: false, killed: false, truncated: false };
     run.commands.push(cmd);
     run.commands.sort((a, b) => a.seq - b.seq);
   }
@@ -307,10 +327,7 @@ function addCommand(run: RunView, c: CommandEvent): void {
       cmd.startedAt = at;
       break;
     case "output":
-      if (typeof c.chunk === "string") {
-        if (c.stream === "stderr") cmd.stderr += c.chunk;
-        else cmd.stdout += c.chunk;
-      }
+      if (typeof c.chunk === "string") cmd.chunks.push({ eventId, stream: c.stream === "stderr" ? "stderr" : "stdout", text: c.chunk });
       break;
     case "exited":
       cmd.endedAt = at;

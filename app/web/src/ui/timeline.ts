@@ -171,9 +171,12 @@ export function mountTimeline(
   onShow?: (runId: string) => void,
 ): TimelineHandle {
   const log: StreamEvent[] = [];
-  // Backfill from /api/runs/{id} replays events the live feed also delivers; identical ones are
-  // dropped here (by type + payload) so an event is never counted twice (review item 8).
+  // Backfill from /api/runs/{id} replays events the live feed also delivers; one already here is
+  // dropped so it never counts twice. Identity is the hub's event id with the payload (ids restart
+  // with the API, payloads differ), else the payload alone: two identical lines of output are two
+  // events with two ids and both stay.
   const seen = new Set<string>();
+  const keyOf = (ev: StreamEvent) => `${ev.id ?? ""}\u0000${ev.type}\u0000${JSON.stringify(ev.data)}`;
   const openDetails = new Set<string>();
   let titles = new Map<string, string>();
   let lastAnnounced = "";
@@ -220,12 +223,12 @@ export function mountTimeline(
 
   return {
     push(ev) {
-      const key = `${ev.type}\u0000${JSON.stringify(ev.data)}`;
+      const key = keyOf(ev);
       if (seen.has(key)) return;
       seen.add(key);
       log.push(ev);
       if (log.length > MAX_LOG) {
-        for (const dropped of log.splice(0, log.length - MAX_LOG)) seen.delete(`${dropped.type}\u0000${JSON.stringify(dropped.data)}`);
+        for (const dropped of log.splice(0, log.length - MAX_LOG)) seen.delete(keyOf(dropped));
       }
       schedule();
     },

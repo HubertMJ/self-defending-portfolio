@@ -66,6 +66,21 @@ describe("timeline backfill dedup (review item 8)", () => {
     const run = latest?.runs.find((x) => x.runId === "r");
     expect(run?.commands[0].stdout).toBe("uid=10001\n"); // once, not twice
   });
+
+  it("keeps two identical lines of output that are two events (two ids), and drops a replayed id", async () => {
+    const { mountTimeline } = await import("../../src/ui/timeline");
+    const root = document.createElement("div");
+    let latest: import("../../src/lib/timeline").TimelineView | undefined;
+    const handle = mountTimeline(root, document.createElement("div"), document.createElement("div"), (v) => (latest = v), () => {});
+    const at = "2026-10-02T00:00:01.000Z";
+    const line = { run_id: "r", seq: 1, id: "ps", state: "output", stream: "stdout", chunk: "same\n", at };
+    handle.push(parseStreamEvent("run", JSON.stringify({ run_id: "r", scenario: "terminal", state: "started", at: "2026-10-02T00:00:00.000Z", pod: "p" }), "1")!);
+    handle.push(parseStreamEvent("command", JSON.stringify(line), "2")!);
+    handle.push(parseStreamEvent("command", JSON.stringify(line), "3")!);
+    handle.push(parseStreamEvent("command", JSON.stringify(line), "3")!); // the same event, replayed
+    await new Promise((r) => setTimeout(r, 30));
+    expect(latest?.runs[0].commands[0].stdout).toBe("same\nsame\n");
+  });
 });
 
 describe("parseScenarioDetails commands (review item 13)", () => {

@@ -196,14 +196,20 @@ export interface CommandEvent {
   truncated?: boolean;
 }
 
-export type StreamEvent =
+/**
+ * One event of the feed. `id` is the hub's sequence number for it — the SSE `id:` line, and the `id`
+ * of each entry of GET /api/runs/{id} — so the same event read from the stream and from a backfill is
+ * recognisably one event, and a run's output can be put back in the order it was published.
+ */
+export type StreamEvent = (
   | { type: "run"; data: RunEvent }
   | { type: "falco"; data: FalcoEvent }
   | { type: "talon"; data: TalonEvent }
   | { type: "pod"; data: PodEvent }
   | { type: "victim"; data: VictimEvent }
   | { type: "flow"; data: FlowEvent }
-  | { type: "command"; data: CommandEvent };
+  | { type: "command"; data: CommandEvent }
+) & { id?: number };
 
 export type StreamEventType = StreamEvent["type"];
 export const STREAM_EVENT_TYPES: readonly StreamEventType[] = ["run", "falco", "talon", "pod", "victim", "flow", "command"];
@@ -579,19 +585,31 @@ function stripControl(s: string): string {
   return s.replace(/[\u0000-\u0008\u000B-\u001F\u007F-\u009F]/g, "").replace(/\p{Cf}/gu, "");
 }
 
+/** The hub's event id: a positive integer (the SSE `id:` line is text, the runs endpoint's a number). */
+function eventId(v: unknown): number | undefined {
+  const n = typeof v === "string" && /^\d{1,15}$/.test(v) ? Number(v) : v;
+  return typeof n === "number" && Number.isSafeInteger(n) && n > 0 ? n : undefined;
+}
+
 /** Parses one SSE message into a typed event, or null if it does not match the contract. */
-export function parseStreamEvent(type: string, raw: string): StreamEvent | null {
+export function parseStreamEvent(type: string, raw: string, id?: unknown): StreamEvent | null {
   let data: unknown;
   try {
     data = JSON.parse(raw);
   } catch {
     return null;
   }
-  return toStreamEvent(type, data);
+  return toStreamEvent(type, data, id);
 }
 
 /** The same check for an already decoded payload (GET /api/runs/{id} returns them as JSON objects). */
-export function toStreamEvent(type: string, data: unknown): StreamEvent | null {
+export function toStreamEvent(type: string, data: unknown, id?: unknown): StreamEvent | null {
+  const ev = typedEvent(type, data);
+  const n = eventId(id);
+  return ev && n !== undefined ? { ...ev, id: n } : ev;
+}
+
+function typedEvent(type: string, data: unknown): StreamEvent | null {
   switch (type) {
     case "run":
       return isRunEvent(data) ? normalise({ type, data }) : null;
@@ -792,7 +810,7 @@ export function parseRunEvents(v: unknown): StreamEvent[] {
   const out: StreamEvent[] = [];
   for (const e of list) {
     if (!isObj(e) || !isStr(e.type)) continue;
-    const ev = toStreamEvent(e.type, e.data);
+    const ev = toStreamEvent(e.type, e.data, e.id);
     if (ev) out.push(ev);
   }
   return out;

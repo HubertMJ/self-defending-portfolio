@@ -35,9 +35,9 @@ class FakeSource implements EventSourceLike {
     this.readyState = 2;
     this.onerror?.(new Event("error"));
   }
-  send(type: string, data: unknown) {
+  send(type: string, data: unknown, lastEventId = "") {
     const raw = typeof data === "string" ? data : JSON.stringify(data);
-    for (const l of this.listeners.get(type) ?? []) l(new MessageEvent(type, { data: raw }));
+    for (const l of this.listeners.get(type) ?? []) l(new MessageEvent(type, { data: raw, lastEventId }));
   }
 }
 
@@ -113,6 +113,17 @@ describe("EventStream", () => {
     last().send("run", runEv("started", "2026-10-01T12:00:01.000Z"));
     last().send("run", runEv("detected", "2026-10-01T12:00:02.000Z"));
     expect(events.map((e) => (e.type === "run" ? e.data.state : e.type))).toEqual(["queued", "started", "detected"]);
+  });
+
+  it("keeps two events with the same payload and different ids, and carries the id", () => {
+    const { stream, events } = makeStream();
+    stream.start();
+    last().open();
+    const line = { run_id: "r", seq: 1, id: "ps", state: "output", stream: "stdout", chunk: "same\n", at: "2026-10-01T12:00:01.000Z" };
+    last().send("command", line, "7");
+    last().send("command", line, "8");
+    last().send("command", line, "8"); // replayed
+    expect(events.map((e) => e.id)).toEqual([7, 8]);
   });
 
   it("replaces a CLOSED source with backoff, and reports offline after repeated failures", () => {

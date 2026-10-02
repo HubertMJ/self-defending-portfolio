@@ -383,8 +383,12 @@ export function mountTerminal(
     return undefined;
   };
 
-  /** Per-command DOM, so output is appended (never re-rendered) as it streams (review item 22). */
-  const rendered = new Map<number, { out: HTMLElement; foot: HTMLElement; stdout: number; stderr: number; done: boolean }>();
+  /**
+   * Per-command DOM. Output that only grew at the end is appended (never re-rendered, so a screen
+   * reader hears each line once); output whose history changed — a backfill filled in a chunk the
+   * live feed had missed — rebuilds that command's block.
+   */
+  const rendered = new Map<number, { block: HTMLElement; out: HTMLElement; foot: HTMLElement; chunks: string[]; done: boolean }>();
 
   const patchFromView = () => {
     if (!els) return;
@@ -418,7 +422,9 @@ export function mountTerminal(
     setTimeout(() => els && !els.input.disabled && els.input.focus(), 0);
   };
 
-  /** Appends a command's prompt, then only the output text that has arrived since the last patch. */
+  const chunkLine = (x: CommandRun["chunks"][number]) => h("p", { class: x.stream === "stderr" ? "term__line term__line--err" : "term__line" }, x.text.replace(/\n$/, ""));
+
+  /** Patches a command's block: new output appended, changed history rebuilt, in seq order. */
   const appendCommand = (c: CommandRun) => {
     if (!els) return;
     const cmd = catalogue?.commands.find((x) => x.id === c.id);
@@ -426,18 +432,19 @@ export function mountTerminal(
     if (!rec) {
       const out = h("div", { class: "term__cmdout" });
       const foot = h("div", { class: "term__cmdfoot" });
-      els.out.appendChild(h("div", { class: "term__cmd", "data-seq": String(c.seq), "data-outcome": cmd?.outcome ?? "" }, promptEcho(cmd?.input ?? c.id), out, foot));
-      rec = { out, foot, stdout: 0, stderr: 0, done: false };
+      const block = h("div", { class: "term__cmd", "data-seq": String(c.seq), "data-outcome": cmd?.outcome ?? "" }, promptEcho(cmd?.input ?? c.id), out, foot);
+      // A command the live feed missed entirely (backfilled later) goes before the ones after it.
+      const later = [...rendered.entries()].filter(([seq]) => seq > c.seq).sort((a, b) => a[0] - b[0])[0];
+      if (later) els.out.insertBefore(block, later[1].block);
+      else els.out.appendChild(block);
+      rec = { block, out, foot, chunks: [], done: false };
       rendered.set(c.seq, rec);
     }
-    if (c.stdout.length > rec.stdout) {
-      rec.out.appendChild(h("p", { class: "term__line" }, c.stdout.slice(rec.stdout).replace(/\n$/, "")));
-      rec.stdout = c.stdout.length;
-    }
-    if (c.stderr.length > rec.stderr) {
-      rec.out.appendChild(h("p", { class: "term__line term__line--err" }, c.stderr.slice(rec.stderr).replace(/\n$/, "")));
-      rec.stderr = c.stderr.length;
-    }
+    const keys = c.chunks.map((x) => `${x.stream}\u0000${x.text}`);
+    const grew = rec.chunks.length <= keys.length && rec.chunks.every((k, i) => k === keys[i]);
+    if (!grew) replace(rec.out, ...c.chunks.map(chunkLine));
+    else for (const x of c.chunks.slice(rec.chunks.length)) rec.out.appendChild(chunkLine(x));
+    rec.chunks = keys;
     const ended = c.exitCode !== undefined || c.killed;
     if (ended && !rec.done) {
       rec.done = true;
