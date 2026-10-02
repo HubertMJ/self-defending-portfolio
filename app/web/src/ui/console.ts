@@ -22,7 +22,7 @@ import { type Child, clockTime, h, prefersReducedMotion, replace } from "../lib/
 import { type Hop, type Schedule, TIMER_END, TIMER_START, humanAction, runHops, scheduleHops, timerReading } from "../lib/pipeline";
 import { type RunView, type TimelineView, QUARANTINE_LABEL, formatDuration, guardedFalco, guardedTalon, ts } from "../lib/timeline";
 import { copyButton, extLink, sourceUrl } from "./common";
-import { renderTwin } from "./twin";
+import { heldMs, heldText, renderTwin } from "./twin";
 import { labelOf, renderVictim, victimState } from "./victim";
 
 /** The workflow identity that signs the scenario image (ADR 0011, build-images.yml). */
@@ -178,6 +178,23 @@ export function mountConsole(root: HTMLElement, api: ApiClient): ConsoleHandle {
   let view: TimelineView = { runs: [], unmatched: [] };
   let panels: Panels | undefined;
   let frame: number | undefined;
+  // The twin's "held for" counter: no event arrives while the unguarded pod stays compromised, so it
+  // is re-read every second while the run is live.
+  let twinClock: ReturnType<typeof setInterval> | undefined;
+  const syncTwinClock = (run: RunView | undefined) => {
+    const live = run !== undefined && run.armPods !== undefined && run.active;
+    if (live && twinClock === undefined) {
+      twinClock = setInterval(() => {
+        const r = current();
+        const el = panels?.victim.querySelector(".twin__held");
+        const ms = r && heldMs(r, Date.now());
+        if (el && ms !== undefined) el.textContent = heldText(ms);
+      }, 1000);
+    } else if (!live && twinClock !== undefined) {
+      clearInterval(twinClock);
+      twinClock = undefined;
+    }
+  };
 
   const heading = h("h3", { class: "console__title", id: "console-title", tabindex: "-1" }, "Live run");
   const body = h("div", { class: "console__body" });
@@ -690,6 +707,7 @@ export function mountConsole(root: HTMLElement, api: ApiClient): ConsoleHandle {
     const run = current();
     if (!run) {
       panels = undefined;
+      syncTwinClock(undefined);
       root.dataset.state = "empty";
       replace(body, h("p", { class: "empty" }, "No run yet. Launch an attack above and it plays out here, hop by hop."));
       return;
@@ -707,7 +725,7 @@ export function mountConsole(root: HTMLElement, api: ApiClient): ConsoleHandle {
     patch(p, "head", `${run.current}|${run.active}|${own.has(run.runId)}|${run.pod}|${selected}|${scenarios.size}|${view.activeRun?.runId}`, () => headPanel(run));
     const vKey = run.victim.map((v) => `${v.arm ?? ""}${v.status}${v.checksum}${v.until}`).join(",");
     const twin = run.armPods !== undefined;
-    patch(p, "victim", `${twin ? "twin|" : ""}${vKey}|${run.active}|${run.pod}|${run.pods[run.pods.length - 1]?.phase}`, () => (twin ? renderTwin(run) : renderVictim(run, run.active && !own.has(run.runId))));
+    patch(p, "victim", `${twin ? `twin|${run.unguardedPods.length}|` : ""}${vKey}|${run.active}|${run.pod}|${run.pods[run.pods.length - 1]?.phase}`, () => (twin ? renderTwin(run) : renderVictim(run, run.active && !own.has(run.runId))));
     patch(p, "pod", `${run.pods.length}|${run.pod}`, () => podPanel(run));
     patch(p, "executed", `${dKey}|${scenarios.size}`, () => executedPanel(run));
     patch(p, "proof", `${run.pods.length}|${vKey}|${run.flows.length}|${run.talon.length}|${scenarios.size}`, () => proofPanel(run));
@@ -715,6 +733,7 @@ export function mountConsole(root: HTMLElement, api: ApiClient): ConsoleHandle {
     patch(p, "raw", `${run.events.length}`, () => rawPanel(run));
     p.root.dataset.victim = victimState(run);
     p.root.dataset.victimLabel = labelOf(victimState(run));
+    syncTwinClock(run);
     scheduleTick();
   };
 

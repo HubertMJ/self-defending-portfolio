@@ -18,11 +18,7 @@ export function renderTwin(run: RunView, now: number = Date.now()): HTMLElement 
   const guardedFalco = run.falco.some((f) => f.arm === "guarded" || f.arm === undefined);
   const unguardedFalco = run.falco.some((f) => f.arm === "unguarded");
 
-  // How long the unguarded pod has been compromised: from its first non-up probe until now (or the
-  // run's end). It is never "cleaned up" by a response — only by the API's compare hold.
-  const firstHit = run.victim.find((v) => v.arm === "unguarded" && v.status !== "up");
-  const endT = run.states.finished ?? run.states.failed ?? run.states.timeout;
-  const held = firstHit ? Math.max(0, (run.active ? now : endT ?? now) - tsOf(firstHit.at)) : undefined;
+  const held = heldMs(run, now);
 
   return h(
     "div",
@@ -48,10 +44,27 @@ function arm(title: string, sub: string, window: HTMLElement, sawFalco: boolean,
       { class: "twin__verdict", "data-answered": String(answered) },
       sawFalco ? h("span", { class: "twin__chip twin__chip--detect" }, "Falco saw it") : h("span", { class: "twin__chip" }, "watching…"),
       answered ? h("span", { class: "twin__chip twin__chip--respond" }, "Talon answered") : h("span", { class: "twin__chip twin__chip--none" }, "nothing answered"),
-      heldMs !== undefined ? h("span", { class: "twin__held" }, `attacker has held this pod ${formatDuration(heldMs)}`) : null,
+      heldMs !== undefined ? h("span", { class: "twin__held" }, heldText(heldMs)) : null,
     ),
   );
 }
+
+/**
+ * How long the attacker has held the unguarded pod: from its first compromised probe until now, and
+ * at most until that pod was deleted (the API's compare hold) or the run ended. The probe publishes
+ * only changes, so nothing arrives while the pod stays compromised: the console re-reads this every
+ * second instead of waiting for an event.
+ */
+export function heldMs(run: RunView, now: number): number | undefined {
+  const firstHit = run.victim.find((v) => v.arm === "unguarded" && v.status !== "up");
+  if (!firstHit) return undefined;
+  const deleted = run.unguardedPods.find((p) => p.deleted);
+  const ends = [deleted && tsOf(deleted.at), run.states.finished, run.states.failed, run.states.timeout].filter((t): t is number => t !== undefined);
+  const end = ends.length ? Math.min(...ends) : run.active ? now : undefined;
+  return Math.max(0, (end ?? now) - tsOf(firstHit.at));
+}
+
+export const heldText = (ms: number): string => `attacker has held this pod ${formatDuration(ms)}`;
 
 function waiting(): HTMLElement {
   return h("div", { class: "browser" }, h("div", { class: "browser__view" }, h("div", { class: "browser__blank" }, h("span", { class: "browser__spinner", "aria-hidden": "true" }), "Starting the pod…")));
