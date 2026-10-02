@@ -1,4 +1,4 @@
-# ADR 0024: Argo CD runs only the controllers this installation uses
+# ADR 0024: Argo CD runs only the controllers this installation uses, and KSOPS is built here
 
 Date: 2026-10-02 · Status: accepted
 
@@ -20,6 +20,17 @@ the rest of Argo CD, so removing them was not visible in a per-image count and w
 
 Each unused controller is a process with API credentials that can be wrong, a deployment to keep
 patched and memory on an 8 GB node; none of that buys anything.
+
+The repo-server's KSOPS init container runs `viaductoss/ksops:v4.5.1`, the newest KSOPS release
+(2026-04-13; also upstream master on 2026-10-02, `git ls-remote
+https://github.com/viaduct-ai/kustomize-sops`). ADR 0023 left it as "a candidate for the Talon
+treatment". Its image is built with Go 1.25.0 and ships, besides `ksops`, a second copy of it
+(`kustomize-sops`), kustomize v5.3.0, git and glibc (distroless/base): **109** CRITICAL+HIGH
+(`aquasec/trivy:0.75.0`, 2026-10-02: 41 in each ksops copy, 23 in kustomize, 4 in Debian's OpenSSL).
+The repo-server uses exactly one file of it: `ksops install /custom-tools` copies the binary into an
+emptyDir that is mounted at `/usr/local/bin/ksops`, and Argo CD's own kustomize stays (ADR 0013,
+correction). Compiling upstream's v4.5.1 source unchanged with Go 1.26.8 leaves 19 HIGH, all in four
+modules with fixed releases: golang.org/x/crypto, x/net, x/text and google.golang.org/grpc.
 
 ## Decision
 **1. Both controllers are removed from the bootstrap kustomization**, by kustomize `$patch: delete`
@@ -60,6 +71,40 @@ notifications ConfigMap), refuses to run while the checked-out kustomization sti
 the components, and is a server-side dry run unless given `--delete`. Runbook: `docs/bootstrap.md`,
 8.5.
 
+**4. KSOPS is built here** (`app/ksops`), the way `app/talon` is (ADR 0023), and built, Trivy-gated,
+SBOM'd and signed by build-images.yml like every image under `app/` (ADR 0011, ADR 0016):
+- source: `viaduct-ai/kustomize-sops` at `d9442dc3153d9c16e517a68ce8926c9507386429`, the commit tag
+  v4.5.1 points at, fetched by full hash and checked after checkout. No Go source is changed.
+- dependencies: upstream's go.mod/go.sum with grpc v1.83.2, x/crypto v0.55.0, x/net v0.58.0 and
+  x/text v0.41.0 (grpc and x/crypto are the releases app/talon raised to), then `go mod tidy`;
+  minimal version selection moved what those four require and nothing else was raised by hand.
+  sops v3.12.2, age v1.3.1 and kustomize/api v0.19.0 - decryption and KRM I/O - are upstream's.
+  Committed in `app/ksops/modules/`, checked with `go mod verify` against go.sum and sum.golang.org.
+  The grpc raise is clean here: unlike app/talon, nothing in KSOPS's graph imports the split-out
+  `grpc/stats/opentelemetry` module, so no ambiguous import had to be removed.
+- tests: upstream's `make test` (`go vet`, `go test -race`, the PGP fixtures imported first) with
+  `--network=none`, in a stage the image depends on: 15 tests pass, 0 skipped by upstream's own
+  guards. TestKSOPSPluginInstallation is skipped explicitly: it shells out to a `kustomize` binary
+  this build does not have; the same property is checked against the built image instead (below).
+- build: upstream's flags (CGO off, `-trimpath`, `-ldflags "-w -s"`, plus an empty build id); the
+  build stage runs `ksops install` on the result and compares the copy byte for byte.
+- runtime: distroless `static-debian13:nonroot`, uid 65532, the binary at `/usr/local/bin/ksops` -
+  the path upstream's image uses, so the init container's command is unchanged. `ksops install` is
+  a subcommand of the binary (it copies `os.Executable()`), so the image needs no shell, `cp` or
+  busybox. No CA bundle, git or kustomize: KSOPS here decrypts with a local age key and never
+  dials out.
+- `golang:1.26.8` and the distroless base are the digests app/api and app/talon pin.
+
+**Verified locally** (2026-10-02), before anything deploys it: the image scans **0** CRITICAL/HIGH
+(`aquasec/trivy:0.75.0`; upstream's 109). Run like the init container (read-only root filesystem,
+uid 65532, all capabilities dropped, no-new-privileges, no network), `ksops install /custom-tools`
+writes a 46 MB static ELF. With that file mounted at `/usr/local/bin/ksops` in
+`registry.k8s.io/kustomize/kustomize:v5.8.1` - the kustomize Argo CD v3.5.3 ships - `kustomize build
+--enable-alpha-plugins --enable-exec`, as uid 999 like the repo-server, decrypts a SOPS/age-encrypted
+Secret through a `viaduct.ai/v1 ksops` exec generator; with a different age key it fails with
+sops' "0 successful groups required". The age key was a throwaway generated for the check, never
+this repository's.
+
 ## Consequences
 - Two fewer Deployments, one fewer ClusterRole/ClusterRoleBinding pair, two fewer Roles, Services,
   ServiceAccounts and NetworkPolicies in `argocd`; about 77 MiB of memory back. No change to the
@@ -71,3 +116,7 @@ the components, and is a server-side dry run unless given `--delete`. Runbook: `
   object for either controller would otherwise come back silently. `kubectl kustomize
   cluster/bootstrap/argocd | grep -i 'applicationset-controller\|notifications-controller'` must
   stay empty.
+- KSOPS joins Talon as a component whose release tracking this repository does by hand: on each
+  KSOPS release, rebuild `app/ksops/modules/` from the new tag's go.mod (Dockerfile header) and drop
+  every raise the release has caught up with; when it has caught up with all of them and its image is
+  clean, delete app/ksops and return to the upstream image.

@@ -27,7 +27,7 @@ decision are appended as dated amendments in the same file.
 | [0019](0019-frontend-stack-and-csp.md) | Frontend stack and Content Security Policy: vanilla TypeScript + esbuild, no third-party origins, Trusted Types | 6 | accepted, amended 2026-10-01 (errors never cacheable; rollout skew accepted) |
 | [0021](0021-evidence-events-and-victim-poller.md) | Evidence events (pod, enriched falco/talon, victim) and a hardened reader for the attacked pod's victim app | 7 | accepted |
 | [0023](0023-third-party-vulnerabilities.md) | Third-party vulnerabilities go down only by removing or replacing images (Dex removed, newest releases, Talon built here), never by hiding them; posture shows own vs third-party | 7 | accepted |
-| [0024](0024-argocd-trim-and-ksops-build.md) | Argo CD runs only the controllers it uses (no ApplicationSet, no notifications controller) | 7 | accepted |
+| [0024](0024-argocd-trim-and-ksops-build.md) | Argo CD runs only the controllers it uses (no ApplicationSet, no notifications controller); KSOPS built here from the pinned release with fixed dependencies | 7 | accepted |
 
 Phases 5 and 6 were built on parallel branches and merged together; the numbers they had reserved
 are all in use except 0020 (phase 6 documentation needed no decision of its own), which is released.

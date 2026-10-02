@@ -4,11 +4,17 @@
 #   scripts/bump-image-digest.sh <name> <sha256:digest>
 #   scripts/bump-image-digest.sh api sha256:3f1c...      # from the build-images run summary
 #
-# <name> is the app/<name>/ directory the image is built from (web, api, scenario); the image is
-# ghcr.io/hubertmj/self-defending-portfolio/<name>. Two reference forms are rewritten, and nothing else:
+# <name> is the app/<name>/ directory the image is built from (web, api, scenario, talon, ksops); the
+# image is ghcr.io/hubertmj/self-defending-portfolio/<name>. Two reference forms are rewritten, and
+# nothing else:
 #   * a kustomize `images:` entry whose `name:` is the image - its `digest:` line;
 #   * an inline reference <image>[:tag]@sha256:<hex> (the scenario pod specs).
 # Comments, layout and every other image are left as they are, so the diff is one line per reference.
+#
+# cluster/bootstrap/ is under cluster/, so a pin there (ksops, in cluster/bootstrap/argocd) is
+# rewritten like any other - and scripts/check-image-digests.sh refuses a placeholder there too. Argo
+# CD does not deploy the bootstrap, though (ADR 0005, amendment): when a bootstrap file changes, the
+# script says so, because the new digest reaches the cluster only through a manual `kubectl apply -k`.
 #
 # The digest is not checked against the registry here; verify it before committing:
 #   scripts/verify-image.sh ghcr.io/hubertmj/self-defending-portfolio/<name>@<digest>
@@ -43,7 +49,7 @@ import re, sys
 image, digest, files = sys.argv[1], sys.argv[2], sys.argv[3:]
 inline = re.compile(re.escape(image) + r"((?::[\w.-]+)?)@sha256:[0-9a-f]{64}")
 entry = re.compile(r"^(\s*)-\s+name:\s*" + re.escape(image) + r"\s*$")
-changed = 0
+changed, bootstrap = 0, set()
 for path in files:
     lines = open(path).read().split("\n")
     out, in_entry, indent = [], False, ""
@@ -59,10 +65,16 @@ for path in files:
         new = inline.sub(lambda r: image + r.group(1) + "@" + digest, new)
         if new != line:
             changed += 1
+            if path.startswith("cluster/bootstrap/"):
+                bootstrap.add(path.split("/")[2])
             print(f"  {path}: {line.strip()}\n  {' ' * len(path)}  -> {new.strip()}")
         out.append(new)
     open(path, "w").write("\n".join(out))
 if not changed:
     sys.exit(f"bump-image-digest: {image} is already at {digest} everywhere (nothing changed)")
 print(f"{changed} reference(s) to {image} now pinned to {digest}")
+for d in sorted(bootstrap):
+    print(f"note: cluster/bootstrap/{d} changed - Argo CD does not apply it; after the push, review and apply:\n"
+          f"  kubectl diff -k cluster/bootstrap/{d} --server-side --force-conflicts\n"
+          f"  kubectl apply -k cluster/bootstrap/{d} --server-side --force-conflicts")
 PY
