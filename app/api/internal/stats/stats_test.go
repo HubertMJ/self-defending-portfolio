@@ -120,3 +120,77 @@ func TestMarshalRoundTrip(t *testing.T) {
 		t.Fatal("dirty not cleared")
 	}
 }
+
+// Unanswered counts only a detected run that ended on the timeout; a terminal run the visitor left
+// (or that was killed/idle) after a detection is not an escape (item 18).
+func TestUnansweredOnlyTimeout(t *testing.T) {
+	for _, end := range []struct {
+		state string
+		want  int
+	}{{"timeout", 1}, {"finished", 0}, {"failed", 0}} {
+		c := New(newStore(t), nil)
+		c.Record(ev("run", map[string]any{"run_id": "r", "scenario": "shell-in-container", "state": "queued"}))
+		c.Record(ev("run", map[string]any{"run_id": "r", "scenario": "shell-in-container", "state": "detected"}))
+		c.Record(ev("run", map[string]any{"run_id": "r", "scenario": "shell-in-container", "state": end.state, "at": time.Now()}))
+		if got := c.Snapshot().Unanswered; got != end.want {
+			t.Fatalf("end=%s unanswered=%d want %d", end.state, got, end.want)
+		}
+	}
+}
+
+// An objective reached three times in one run counts once (item 19): attempts and achieved are
+// per run, so a run that tries recon twice and reaches it twice is attempts 1, achieved 1.
+func TestObjectivesCountedPerRun(t *testing.T) {
+	c := New(newStore(t), nil)
+	c.Record(ev("run", map[string]any{"run_id": "t", "scenario": "terminal", "state": "queued"}))
+	for i := 0; i < 3; i++ {
+		c.Record(ev("command", map[string]any{"run_id": "t", "id": "whoami", "state": "started"}))
+		c.Record(ev("command", map[string]any{"run_id": "t", "id": "whoami", "state": "exited", "achieved": true}))
+	}
+	c.Record(ev("run", map[string]any{"run_id": "t", "scenario": "terminal", "state": "finished", "at": time.Now()}))
+	o := c.Snapshot().Objectives["recon"]
+	if o.Attempts != 1 || o.Achieved != 1 {
+		t.Fatalf("objective recon = %+v, want attempts 1 achieved 1", o)
+	}
+	// But the command attempts counter is per run of the command (3).
+	if c.Snapshot().Commands["whoami"].Attempts != 3 {
+		t.Fatalf("whoami attempts = %d, want 3", c.Snapshot().Commands["whoami"].Attempts)
+	}
+}
+
+// A corrupt persisted blob must not panic Snapshot or install bad counters (item 20).
+func TestLoadRejectsCorrupt(t *testing.T) {
+	for _, blob := range []string{
+		`{"ByScenario":{"x":null}}`,          // nil map value -> would nil-deref in Snapshot
+		`{"Runs":-5}`,                        // negative counter
+		`{"Commands":{"a":{"Attempts":-1}}}`, // negative nested counter
+		`not json`,
+	} {
+		c := New(newStore(t), nil)
+		c.Record(ev("run", map[string]any{"run_id": "r", "scenario": "shell-in-container", "state": "queued"}))
+		before := c.Snapshot().Runs
+		if err := c.Load([]byte(blob)); err == nil {
+			t.Fatalf("Load(%q) accepted a bad blob", blob)
+		}
+		// The counters are unchanged and Snapshot still works (no panic).
+		if c.Snapshot().Runs != before {
+			t.Fatalf("Load(%q) mutated counters on failure", blob)
+		}
+	}
+}
+
+// response_ms.min handles a genuine 0 ms response (item 21): a 0 then a 900 gives min 0, not 900.
+func TestResponseMinHandlesZero(t *testing.T) {
+	c := New(newStore(t), nil)
+	base := time.Unix(100, 0).UTC()
+	run := func(id string, gap time.Duration) {
+		c.Record(ev("run", map[string]any{"run_id": id, "scenario": "shell-in-container", "state": "queued"}))
+		c.Record(ev("run", map[string]any{"run_id": id, "scenario": "shell-in-container", "state": "detected", "at": base}))
+		c.Record(ev("run", map[string]any{"run_id": id, "scenario": "shell-in-container", "state": "responded", "at": base.Add(gap)}))
+	}
+	run("a", 0)
+	run("b", 900*time.Millisecond)
+	if m := c.Snapshot().ResponseMS; m.Min != 0 || m.Max != 900 {
+		t.Fatalf("response_ms = %+v, want min 0 max 900", m)
+	}
+}

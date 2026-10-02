@@ -85,6 +85,12 @@ func run(log *slog.Logger) error {
 
 	sandbox := env("SANDBOX_NAMESPACE", "sandbox")
 	unguarded := env("UNGUARDED_NAMESPACE", "sandbox-unguarded")
+	// How long the unguarded twin is kept after the guarded arm's response, so the contrast is
+	// visible (ADR 0031). An API setting, not a catalogue field; the default is the contract's 12 s.
+	compareHoldS, err := envInt("COMPARE_HOLD_SECONDS", 12)
+	if err != nil {
+		return err
+	}
 	scenarioStore := scenarios.NewStore(env("SCENARIOS_FILE", "/etc/portfolio-api/scenarios/scenarios.yaml"), log)
 	// The replay buffer covers the run in progress for a visitor who arrives mid-run: a run with its
 	// pod and victim evidence publishes a few dozen events (ADR 0021). Complete runs are in the run
@@ -112,7 +118,8 @@ func run(log *slog.Logger) error {
 	falcoAlerts := webhook.NewDayWindow(nil)
 	talonActions := webhook.NewDayWindow(nil)
 	run := runner.New(kube, &runner.KubeExecer{Config: restCfg, Client: kube}, hub, log,
-		runner.Config{Namespace: sandbox, UnguardedNamespace: unguarded})
+		runner.Config{Namespace: sandbox, UnguardedNamespace: unguarded,
+			CompareHold: time.Duration(compareHoldS) * time.Second})
 
 	octx, ocancel := context.WithTimeout(ctx, 30*time.Second)
 	if err := run.CleanupOrphans(octx); err != nil {
@@ -168,6 +175,9 @@ func run(log *slog.Logger) error {
 	if err := run.Shutdown(sctx); err != nil {
 		log.Warn("runs still cleaning up at exit", "err", err)
 	}
+	// After the runs have published their final events, write the counters one last time and wait
+	// for it, so the last run's numbers reach the ConfigMap (ADR 0030).
+	statsStore.Flush(statsCollector)
 	if first != nil && !errors.Is(first, http.ErrServerClosed) {
 		return first
 	}

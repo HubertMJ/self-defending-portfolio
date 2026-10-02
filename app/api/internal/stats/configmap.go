@@ -8,6 +8,7 @@ package stats
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"time"
 
@@ -65,20 +66,30 @@ func (s *Store) Save(ctx context.Context, c *Collector) error {
 	if err != nil {
 		return err
 	}
-	cm, err := s.client.CoreV1().ConfigMaps(s.namespace).Get(ctx, s.name, metav1.GetOptions{})
-	if err != nil {
-		return err
+	// Retry on a conflict (someone else updated the object between our Get and Update): re-Get for a
+	// fresh resourceVersion and write again. A few tries is plenty for a once-a-minute writer.
+	for attempt := 0; attempt < 4; attempt++ {
+		cm, err := s.client.CoreV1().ConfigMaps(s.namespace).Get(ctx, s.name, metav1.GetOptions{})
+		if err != nil {
+			return err
+		}
+		if cm.Data == nil {
+			cm.Data = map[string]string{}
+		}
+		cm.Data[dataKey] = string(data)
+		if _, err = s.client.CoreV1().ConfigMaps(s.namespace).Update(ctx, cm, metav1.UpdateOptions{}); err == nil {
+			return nil
+		} else if !apierrors.IsConflict(err) {
+			return err
+		}
 	}
-	if cm.Data == nil {
-		cm.Data = map[string]string{}
-	}
-	cm.Data[dataKey] = string(data)
-	_, err = s.client.CoreV1().ConfigMaps(s.namespace).Update(ctx, cm, metav1.UpdateOptions{})
-	return err
+	return errors.New("stats configmap: too many write conflicts")
 }
 
-// Run persists c every interval while ctx is live, but only when the counters changed, and once
-// more on exit. Call it in its own goroutine.
+// Run persists c every interval while ctx is live, re-queuing a failed write so it is retried on
+// the next tick rather than lost. It does NOT write on ctx cancel: the final write is Flush, which
+// main calls after the runner's shutdown has published the last events. Call Run in its own
+// goroutine.
 func (s *Store) Run(ctx context.Context, c *Collector, interval time.Duration) {
 	if s.client == nil {
 		<-ctx.Done()
@@ -89,28 +100,29 @@ func (s *Store) Run(ctx context.Context, c *Collector, interval time.Duration) {
 	for {
 		select {
 		case <-ctx.Done():
-			s.flush(c)
 			return
 		case <-t.C:
 			if c.TakeDirty() {
-				s.saveLogged(ctx, c)
+				if err := s.Save(ctx, c); err != nil {
+					s.log.Warn("stats configmap write failed; will retry", "err", err)
+					c.markDirty() // do not drop the update
+				}
 			}
 		}
 	}
 }
 
-// flush writes a final time on shutdown, with its own short timeout (ctx is already cancelled).
-func (s *Store) flush(c *Collector) {
-	if !c.TakeDirty() {
+// Flush writes a final time, after shutdown has published the last events, if anything is pending.
+// It uses its own bounded context (the session context is already cancelled by then). main calls it
+// and waits, so the last run's counters reach the ConfigMap.
+func (s *Store) Flush(c *Collector) {
+	if s.client == nil || !c.TakeDirty() {
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	s.saveLogged(ctx, c)
-}
-
-func (s *Store) saveLogged(ctx context.Context, c *Collector) {
 	if err := s.Save(ctx, c); err != nil {
-		s.log.Warn("stats configmap write failed", "err", err)
+		s.log.Warn("stats configmap final write failed", "err", err)
+		c.markDirty()
 	}
 }

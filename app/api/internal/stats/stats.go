@@ -12,6 +12,7 @@ package stats
 
 import (
 	"encoding/json"
+	"fmt"
 	"sort"
 	"sync"
 	"time"
@@ -91,6 +92,7 @@ type agg struct {
 	TerminalRuns    int
 	BestObjectives  int
 	RespLast        int64
+	RespCount       int // responses recorded, so RespMin is valid even when the min is 0
 	RespMin         int64
 	RespMax         int64
 	RespSamples     []int64
@@ -102,29 +104,36 @@ func newAgg(now time.Time) *agg {
 		Commands: map[string]*CommandStat{}, Objectives: map[string]*ObjectiveStat{}}
 }
 
+// maxEndedTracked bounds the set of finished run ids kept to reject late events (ADR 0030).
+const maxEndedTracked = 512
+
 // Collector accumulates the counters. Safe for concurrent use: Record is called from the hub (one
 // goroutine, under the hub lock) and Snapshot/Marshal from request and persistence goroutines.
 type Collector struct {
 	scenarios *scenarios.Store
 	now       func() time.Time
 
-	mu     sync.Mutex
-	a      *agg
-	active map[string]*runState // by run id
-	pods   map[string]string    // pod name -> run id (to attribute falco/talon by pod)
-	dirty  bool
+	mu        sync.Mutex
+	a         *agg
+	active    map[string]*runState // by run id
+	ended     map[string]bool      // finished run ids, so a late event cannot resurrect a run
+	endedRing []string
+	dirty     bool
 }
 
-// runState is the in-flight view of one run, discarded when the run ends.
+// runState is the in-flight view of one run, discarded when the run ends. The scenario is resolved
+// once, when the run is first seen, so Record does no catalogue I/O under the hub lock per event.
 type runState struct {
-	scenario    string
-	interactive bool
-	start       time.Time
-	detectedAt  time.Time
-	detected    bool
-	responded   bool
-	counted     bool            // counted into Runs/ByScenario already
-	objectives  map[string]bool // objectives achieved in this run
+	scenario     string
+	sc           scenarios.Scenario
+	interactive  bool
+	start        time.Time
+	detectedAt   time.Time
+	detected     bool
+	responded    bool
+	counted      bool            // counted into Runs/ByScenario already
+	objAttempted map[string]bool // objectives this run has tried (counted once per run)
+	objAchieved  map[string]bool // objectives this run has reached (counted once per run)
 }
 
 // New returns a collector. sc is used to look up a scenario's interactive flag, command outcomes
@@ -134,7 +143,7 @@ func New(sc *scenarios.Store, now func() time.Time) *Collector {
 		now = time.Now
 	}
 	return &Collector{scenarios: sc, now: now, a: newAgg(now().UTC()),
-		active: map[string]*runState{}, pods: map[string]string{}}
+		active: map[string]*runState{}, ended: map[string]bool{}}
 }
 
 // Record files one published event (hub tap). It never blocks and never fails.
@@ -153,7 +162,6 @@ func (c *Collector) recordRun(data []byte) {
 		Scenario string    `json:"scenario"`
 		State    string    `json:"state"`
 		At       time.Time `json:"at"`
-		Pod      string    `json:"pod"`
 	}
 	if json.Unmarshal(data, &e) != nil || e.RunID == "" {
 		return
@@ -162,15 +170,13 @@ func (c *Collector) recordRun(data []byte) {
 	defer c.mu.Unlock()
 	rs := c.active[e.RunID]
 	if rs == nil {
-		interactive := false
-		if sc, ok := c.scenarios.Get(e.Scenario); ok {
-			interactive = sc.Interactive
+		if c.ended[e.RunID] {
+			return // a late event for a run that already finished: do not resurrect it
 		}
-		rs = &runState{scenario: e.Scenario, interactive: interactive, start: e.At, objectives: map[string]bool{}}
+		sc, _ := c.scenarios.Get(e.Scenario) // one lookup per run, not per event
+		rs = &runState{scenario: e.Scenario, sc: sc, interactive: sc.Interactive, start: e.At,
+			objAttempted: map[string]bool{}, objAchieved: map[string]bool{}}
 		c.active[e.RunID] = rs
-	}
-	if e.Pod != "" {
-		c.pods[e.Pod] = e.RunID
 	}
 	switch e.State {
 	case "queued":
@@ -200,16 +206,19 @@ func (c *Collector) recordRun(data []byte) {
 			c.dirty = true
 		}
 	case "finished", "failed", "timeout":
-		c.finishLocked(e.RunID, rs, e.At)
+		c.finishLocked(e.RunID, rs, e.State, e.At)
 	}
 }
 
-func (c *Collector) finishLocked(runID string, rs *runState, at time.Time) {
-	if rs.detected && !rs.responded {
+func (c *Collector) finishLocked(runID string, rs *runState, state string, at time.Time) {
+	// Unanswered is the honest "the defence missed it": detected, and no response before the
+	// scenario timeout. A run that ended because the visitor left, went idle, was killed, or the
+	// API shut down is not an escape, so only `timeout` counts (ADR 0030).
+	if state == "timeout" && rs.detected && !rs.responded {
 		c.a.Unanswered++
 	}
 	if rs.interactive {
-		if n := len(rs.objectives); n > c.a.BestObjectives {
+		if n := len(rs.objAchieved); n > c.a.BestObjectives {
 			c.a.BestObjectives = n
 		}
 		if !at.Before(rs.start) {
@@ -218,10 +227,18 @@ func (c *Collector) finishLocked(runID string, rs *runState, at time.Time) {
 	}
 	c.dirty = true
 	delete(c.active, runID)
-	for pod, id := range c.pods {
-		if id == runID {
-			delete(c.pods, pod)
-		}
+	c.markEndedLocked(runID)
+}
+
+func (c *Collector) markEndedLocked(id string) {
+	if c.ended[id] {
+		return
+	}
+	c.ended[id] = true
+	c.endedRing = append(c.endedRing, id)
+	if len(c.endedRing) > maxEndedTracked {
+		delete(c.ended, c.endedRing[0])
+		c.endedRing = c.endedRing[1:]
 	}
 }
 
@@ -241,7 +258,7 @@ func (c *Collector) recordCommand(data []byte) {
 	if rs == nil {
 		return
 	}
-	cmd, ok := c.command(rs.scenario, e.ID)
+	cmd, ok := rs.sc.CommandByID(e.ID)
 	if !ok {
 		return
 	}
@@ -257,14 +274,16 @@ func (c *Collector) recordCommand(data []byte) {
 		case "detected":
 			cs.Detected++
 		}
-		if cmd.Objective != "" {
+		// Objective attempts are per run, not per keystroke: "tried by X of N runs" (ADR 0030).
+		if cmd.Objective != "" && !rs.objAttempted[cmd.Objective] {
+			rs.objAttempted[cmd.Objective] = true
 			c.objectiveStat(cmd.Objective).Attempts++
 		}
 		c.dirty = true
 	case "exited":
-		if e.Achieved && cmd.Objective != "" {
+		if e.Achieved && cmd.Objective != "" && !rs.objAchieved[cmd.Objective] {
+			rs.objAchieved[cmd.Objective] = true
 			c.objectiveStat(cmd.Objective).Achieved++
-			rs.objectives[cmd.Objective] = true
 			c.dirty = true
 		}
 	}
@@ -324,25 +343,18 @@ func (c *Collector) objectiveStat(id string) *ObjectiveStat {
 	return v
 }
 
-func (c *Collector) command(scenario, id string) (scenarios.Command, bool) {
-	sc, ok := c.scenarios.Get(scenario)
-	if !ok {
-		return scenarios.Command{}, false
-	}
-	return sc.CommandByID(id)
-}
-
 func (c *Collector) addResponse(ms int64) {
 	if ms < 0 {
 		ms = 0
 	}
 	c.a.RespLast = ms
-	if c.a.RespMin == 0 || ms < c.a.RespMin {
+	if c.a.RespCount == 0 || ms < c.a.RespMin { // RespCount, not "min == 0": a 0 ms response is real
 		c.a.RespMin = ms
 	}
 	if ms > c.a.RespMax {
 		c.a.RespMax = ms
 	}
+	c.a.RespCount++
 	c.a.RespSamples = appendCapped(c.a.RespSamples, ms, maxResponseSamples)
 }
 
@@ -372,17 +384,18 @@ func median(xs []int64) int64 {
 	return cp[len(cp)/2]
 }
 
-// Marshal serialises the aggregate counters for the ConfigMap. Only aggregates are written - no run
-// is in it (the active map and the pod index are in-flight state, not persisted).
+// Marshal serialises the aggregate counters for the ConfigMap. Only aggregates are written - the
+// active runs and the ended-id ring are in-flight state, not persisted.
 func (c *Collector) Marshal() ([]byte, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return json.Marshal(c.a)
 }
 
-// Load replaces the counters from a previous Marshal. A blank or unparseable blob leaves the fresh
-// counters in place (a first start, or a corrupted ConfigMap). The since timestamp is kept so the
-// page can say how long the totals have been collected.
+// Load replaces the counters from a previous Marshal. A blank or unparseable or invalid blob leaves
+// the fresh (zero) counters in place and returns an error for the caller to log - a corrupted
+// ConfigMap must not panic or poison the counters. The since timestamp is kept so the page can say
+// how long the totals have been collected.
 func (c *Collector) Load(data []byte) error {
 	if len(data) == 0 {
 		return nil
@@ -391,8 +404,22 @@ func (c *Collector) Load(data []byte) error {
 	if err := json.Unmarshal(data, &a); err != nil {
 		return err
 	}
+	if err := validateAgg(&a); err != nil {
+		return err // keep the zero counters; do not install a bad aggregate
+	}
+	if a.Since.IsZero() {
+		a.Since = c.now().UTC()
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.a = &a
+	c.dirty = false
+	return nil
+}
+
+// validateAgg rejects a persisted aggregate that would break Snapshot or carry nonsense: a nil map
+// value (Snapshot dereferences it), a negative counter, or a sample array past its cap.
+func validateAgg(a *agg) error {
 	if a.ByScenario == nil {
 		a.ByScenario = map[string]*ScenarioStat{}
 	}
@@ -402,11 +429,36 @@ func (c *Collector) Load(data []byte) error {
 	if a.Objectives == nil {
 		a.Objectives = map[string]*ObjectiveStat{}
 	}
-	if a.Since.IsZero() {
-		a.Since = c.now().UTC()
+	for k, v := range a.ByScenario {
+		if v == nil {
+			return fmt.Errorf("by_scenario[%q] is null", k)
+		}
+		if v.Runs < 0 || v.Detected < 0 || v.Responded < 0 {
+			return fmt.Errorf("by_scenario[%q] has a negative counter", k)
+		}
 	}
-	c.a = &a
-	c.dirty = false
+	for k, v := range a.Commands {
+		if v == nil {
+			return fmt.Errorf("commands[%q] is null", k)
+		}
+		if v.Attempts < 0 || v.Allowed < 0 || v.Prevented < 0 || v.Detected < 0 {
+			return fmt.Errorf("commands[%q] has a negative counter", k)
+		}
+	}
+	for k, v := range a.Objectives {
+		if v == nil {
+			return fmt.Errorf("objectives[%q] is null", k)
+		}
+		if v.Attempts < 0 || v.Achieved < 0 {
+			return fmt.Errorf("objectives[%q] has a negative counter", k)
+		}
+	}
+	if a.Runs < 0 || a.Unanswered < 0 || a.TerminalRuns < 0 || a.BestObjectives < 0 || a.RespCount < 0 {
+		return fmt.Errorf("a top-level counter is negative")
+	}
+	if len(a.RespSamples) > maxResponseSamples || len(a.SurvivalSamples) > maxSurvivalSamples {
+		return fmt.Errorf("a sample array is over its cap")
+	}
 	return nil
 }
 
@@ -418,4 +470,12 @@ func (c *Collector) TakeDirty() bool {
 	d := c.dirty
 	c.dirty = false
 	return d
+}
+
+// markDirty re-sets the dirty flag, used to re-queue a write that failed so it is retried on the
+// next tick instead of lost (ADR 0030).
+func (c *Collector) markDirty() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.dirty = true
 }
