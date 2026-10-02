@@ -58,6 +58,20 @@ test.describe("security headers", () => {
   });
 });
 
+test.describe("production build has no placeholder copy (FIX 2)", () => {
+  test("no TODO-CONTENT marker or dashed placeholder ships, real content stays", async ({ page, request }) => {
+    const html = await (await request.get("/")).text();
+    expect(html).not.toContain("TODO-CONTENT");
+    expect(html).not.toContain("data-todo-content");
+    expect(html).not.toMatch(/\btodo-content\b/);
+    await page.goto("/");
+    // The real content that sat next to the placeholders is still there.
+    await expect(page.getByRole("heading", { name: "Projects" })).toBeVisible();
+    await expect(page.getByRole("link", { name: "self-defending-portfolio" }).first()).toBeVisible();
+    await expect(page.locator(".todo-content")).toHaveCount(0);
+  });
+});
+
 test.describe("API offline (nothing behind /api)", () => {
   test("the portfolio renders and every live panel shows an offline state", async ({ page }) => {
     const problems = guardConsole(page);

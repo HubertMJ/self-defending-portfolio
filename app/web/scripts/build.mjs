@@ -9,6 +9,7 @@ import * as esbuild from "esbuild";
 import { cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { stripTodoContent } from "./strip-todo-content.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const out = join(root, "dist");
@@ -28,10 +29,13 @@ const htmlPlugin = {
         names[`${entry}.${ext}`] = basename(file);
       }
       const template = await readFile(join(root, "src/index.html"), "utf8");
-      const html = template.replace(/\{\{([\w.-]+)\}\}/g, (_, key) => {
+      const substituted = template.replace(/\{\{([\w.-]+)\}\}/g, (_, key) => {
         if (!names[key]) throw new Error(`index.html references {{${key}}} but no such entry was built`);
         return names[key];
       });
+      // A production build ships no placeholder copy (FIX 2); the watch build keeps it so the owner
+      // sees, while authoring, what is still to write. `npm run todo-content` lists it from source either way.
+      const html = watch ? substituted : stripTodoContent(substituted);
       await writeFile(join(out, "index.html"), html);
       await cp(join(root, "static"), out, { recursive: true });
       console.log(`built: ${Object.values(names).join(", ")}`);
