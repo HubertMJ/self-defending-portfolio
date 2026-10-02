@@ -68,6 +68,26 @@ describe("timeline backfill dedup (review item 8)", () => {
   });
 });
 
+describe("parseScenarioDetails commands (review item 13)", () => {
+  it("keeps the whole real catalogue and rejects duplicate or unusable spellings", async () => {
+    const { parseScenarioDetails } = await import("../../src/lib/contract");
+    const { terminalDetails } = await import("../../src/lib/fixtures");
+    const parsed = parseScenarioDetails(terminalDetails());
+    expect(parsed.commands?.length).toBe(TERMINAL_COMMANDS.length);
+    const bad = parseScenarioDetails({
+      interactive: true,
+      commands: [
+        { id: "a", input: "id", command: ["id"], outcome: "allowed", layer: "runtime" },
+        { id: "b", input: "ID", command: ["id"], outcome: "allowed", layer: "runtime" }, // same spelling (case-insensitive)
+        { id: "c", input: "has a \u0001 control char", command: ["x"], outcome: "allowed", layer: "runtime" },
+        { id: "d", input: "", command: ["x"], outcome: "allowed", layer: "runtime" },
+        { id: "e", input: "ls", aliases: ["id"], command: ["ls"], outcome: "allowed", layer: "runtime" }, // alias collides with a
+      ],
+    });
+    expect(bad.commands?.map((c) => c.id)).toEqual(["a"]);
+  });
+});
+
 describe("parseStats", () => {
   it("ignores inherited properties and fills missing sections", () => {
     const s = parseStats({ objectives: { recon: { attempts: 3, achieved: 2 } } });

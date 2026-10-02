@@ -659,16 +659,25 @@ function parseCommand(v: unknown): CatalogueCommand | null {
   };
 }
 
+/** Printable ASCII, 1..80 chars: the shape the catalogue promises for a command's input/alias. */
+const isTypable = (s: string): boolean => s.length > 0 && s.length <= 80 && /^[\x20-\x7e]+$/.test(s);
+
 function parseCommands(v: unknown): CatalogueCommand[] {
   if (!Array.isArray(v)) return [];
   const out: CatalogueCommand[] = [];
-  const seen = new Set<string>();
+  const ids = new Set<string>();
+  // A spelling (input or alias) resolves to exactly one command, so a spelling claimed twice — or an
+  // empty / non-printable one — would make resolution ambiguous or unmatchable: drop such a command.
+  const spellings = new Set<string>();
   for (const c of v.slice(0, 64)) {
     const cmd = parseCommand(c);
-    if (cmd && !seen.has(cmd.id)) {
-      seen.add(cmd.id);
-      out.push(cmd);
-    }
+    if (!cmd || ids.has(cmd.id)) continue;
+    const words = [cmd.input, ...cmd.aliases].map((s) => s.toLowerCase());
+    if (!isTypable(cmd.input) || cmd.aliases.some((a) => !isTypable(a))) continue;
+    if (words.some((w) => spellings.has(w))) continue;
+    ids.add(cmd.id);
+    for (const w of words) spellings.add(w);
+    out.push(cmd);
   }
   return out;
 }

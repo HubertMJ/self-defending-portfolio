@@ -46,7 +46,7 @@ function completions(cat: Catalogue, prefix: string): string[] {
 export function mountTerminal(
   root: HTMLElement,
   api: ApiClient,
-  hooks: { onStarted?: (runId: string) => void; blocked?: () => string | null } = {},
+  hooks: { onStarted?: (runId: string) => void; blocked?: () => string | null; onRateLimited?: (seconds: number) => void } = {},
 ): TerminalHandle {
   const reduced = prefersReducedMotion();
   let catalogue: Catalogue | null = null;
@@ -170,6 +170,7 @@ export function mountTerminal(
     } else if (r.kind === "unavailable") {
       renderUnavailable();
     } else {
+      if (r.kind === "rate-limited") hooks.onRateLimited?.(r.retryAfterSeconds);
       renderIdle();
       const msg =
         r.kind === "busy" ? "Another run is in progress — only one runs at a time. Try again when it finishes." : r.kind === "rate-limited" ? `Rate limit reached: try again in ${Math.ceil(r.retryAfterSeconds)} s.` : r.kind === "error" ? `The server refused the request (HTTP ${r.status}).` : "The attack API is not reachable right now.";
@@ -214,13 +215,14 @@ export function mountTerminal(
     });
     input.addEventListener("keydown", (e) => {
       if (e.key !== "Tab" || e.shiftKey) return;
+      const typed = input.value.trim();
       const opts = catalogue ? completions(catalogue, input.value) : [];
-      if (opts.length === 0) return;
+      // Let Tab move focus normally when there is nothing to complete, or the text already is a
+      // complete command — so a finished word never traps focus on the input (review item 23).
+      if (opts.length === 0 || (opts.length === 1 && opts[0].toLowerCase() === typed.toLowerCase())) return;
       e.preventDefault();
-      // Complete to the longest shared prefix; only jump to a full match on a second Tab, so a
-      // completed word does not trap focus on the input (review item 23).
       const prefix = commonPrefix(opts);
-      if (prefix.length > input.value.trim().length) input.value = prefix;
+      if (prefix.length > typed.length) input.value = prefix;
       else if (opts.length === 1) input.value = opts[0];
       showHint(opts, true);
     });

@@ -74,6 +74,11 @@ function main(): void {
   let launcherState: { activeRun?: { runId: string; scenario: string; since: number }; cooldownUntil?: number } = {};
   const terminal = mountTerminal(byId("terminal"), api, {
     blocked: () => blockedReason(launcherState, Date.now()),
+    // A 429 starting the terminal sets the shared cooldown, so the blocked state shows on both the
+    // terminal's button and the one-click launcher (review item 11).
+    onRateLimited: (seconds) => {
+      launcherState = { ...launcherState, cooldownUntil: Date.now() + seconds * 1000 };
+    },
   });
 
   let titles = new Map<string, string>();

@@ -94,3 +94,33 @@ band hides; no compare → the twin button simply never produces a twin.
   matching the schema the page parses; `?compare=1` producing per-`arm` events; `/api/stats` matching
   the shape above; and label-to-isolation actually landing inside the window the quarantine proof
   now reads from the probe (ADR 0032).
+
+## Amendment 2026-10-02: aligned with the real API and its integration review
+
+The terminal, twin and stats were first built against the mock alone; once the API (ADR 0029, 0030)
+and the catalogue (ADR 0032) were pushed, the mock and the page were corrected to match them, and the
+integration review of this branch was worked item by item.
+
+- **The mock is the real API's shape.** The `?mock=1` fixture catalogue is the live `terminal`
+  scenario's own (five objectives, fourteen commands); a terminate command `exits` first (its own
+  process finishes — `cat /etc/shadow` reaches its objective) and the *run* then ends `killed`, while
+  only a TTY shell is `killed` mid-command; commands are refused with 409 until `pod_ready`; `leave`
+  answers 202.
+- **Summary from the run, not a command state.** "Killed N ms after your Enter" is the response time
+  (the guarded Talon action, by `command_seq`) minus the start of the command it acted on, with
+  Falco-to-response beside it; the outcome line reads from the run's `detail`.
+- **Compare never mixes arms.** The pipeline, kill-timer, pod panel and proof use only `arm:"guarded"`
+  (or unarmed) events; the unguarded arm's pods are kept apart and feed only its own window, whose
+  "held for" timer ticks from its first compromise to the run's end.
+- **Hop 8 and the proof** take the first `unreachable` *after* the quarantine label, never an earlier
+  transient timeout.
+- **The defence map lights during the session**, each command under its own layer with its own
+  verdict, "ended the session" only on the command that did; it is legible in both themes.
+- **The terminal degrades**: no catalogue → a quiet pointer to the one-click demo (not a loud error);
+  mid-session joins and reconnects backfill from `/api/runs/{id}`, deduped so nothing counts twice;
+  leaving (an explicit button, and `pagehide`) ends the run at once.
+- **Honesty and hardening**: the hero drops the escapes/"got out" tile for the objective counters and
+  the last real run; output is appended (never re-announced) and matches the API's control/format-char
+  scrub with bidi isolation; `run_id` is validated before it reaches a URL; `parseCommands` rejects a
+  catalogue with a duplicate or unusable spelling; the placeholder stripper fails the build loudly on
+  anything it cannot balance. The new components are covered by unit and end-to-end tests.
