@@ -154,7 +154,7 @@ func TestVictimTerminatedByTalon(t *testing.T) {
 	release, done := released()
 	sc := scenario("terminate", true)
 	sc.Victim, sc.TimeoutSeconds = true, 30
-	id := r.Start(sc, release)
+	id := start(t, r, sc, release)
 	pod := podName(sc.ID, id)
 
 	waitOrder(t, rec, "victim:up")
@@ -191,7 +191,7 @@ func TestVictimQuarantinedIsUnreachableNotGone(t *testing.T) {
 	release, done := released()
 	sc := scenario("quarantine", true)
 	sc.Victim, sc.TimeoutSeconds = true, 30
-	id := r.Start(sc, release)
+	id := start(t, r, sc, release)
 	waitOrder(t, rec, "victim:defaced")
 	// The quarantine policy: the app stops answering.
 	app.srv.CloseClientConnections()
@@ -213,7 +213,7 @@ func TestNoVictimProbeWithoutFlag(t *testing.T) {
 	release, done := released()
 	sc := scenario("terminate", true)
 	sc.TimeoutSeconds = 30
-	id := r.Start(sc, release)
+	id := start(t, r, sc, release)
 	rec.waitFor(t, StatePodReady)
 	time.Sleep(60 * time.Millisecond)
 	r.ObserveTalon("sandbox", podName(sc.ID, id), "success")
@@ -236,7 +236,7 @@ func TestVictimStartingAndDyingAreNotUnreachable(t *testing.T) {
 	release, done := released()
 	sc := scenario("terminate", true)
 	sc.Victim, sc.TimeoutSeconds = true, 30
-	id := r.Start(sc, release)
+	id := start(t, r, sc, release)
 	pod := podName(sc.ID, id)
 	rec.waitFor(t, StatePodReady)
 	time.Sleep(150 * time.Millisecond)

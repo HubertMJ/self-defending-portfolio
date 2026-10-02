@@ -36,9 +36,11 @@ import (
 
 // Runner is what the server needs from internal/runner.
 type Runner interface {
-	Start(sc scenarios.Scenario, release func()) string
+	// Start and StartCompare refuse a scenario they cannot run (an interactive one) with an error,
+	// having started nothing and without calling release.
+	Start(sc scenarios.Scenario, release func()) (string, error)
 	StartTerminal(sc scenarios.Scenario, release func()) (runID, token string)
-	StartCompare(sc scenarios.Scenario, release func()) string
+	StartCompare(sc scenarios.Scenario, release func()) (string, error)
 	Command(runID, token, commandID string) (int, error)
 	Leave(runID, token string) error
 	CommandSeqFor(namespace, pod string) int
@@ -256,13 +258,22 @@ func (s *Server) attack(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	resp := attackResponse{Scenario: sc.ID, State: runner.StateQueued}
+	var err error
 	switch {
 	case sc.Interactive:
 		resp.RunID, resp.Token = s.cfg.Runner.StartTerminal(sc, release)
 	case compare:
-		resp.RunID = s.cfg.Runner.StartCompare(sc, release)
+		resp.RunID, err = s.cfg.Runner.StartCompare(sc, release)
 	default:
-		resp.RunID = s.cfg.Runner.Start(sc, release)
+		resp.RunID, err = s.cfg.Runner.Start(sc, release)
+	}
+	if err != nil {
+		// The runner refused the scenario and started nothing: the slot is still ours to give back.
+		// Unreachable today (the checks above route an interactive scenario to StartTerminal and
+		// refuse it with compare), so it answers as those checks do.
+		release()
+		writeError(w, http.StatusBadRequest, "this scenario cannot be run that way")
+		return
 	}
 	s.cfg.Log.Info("attack accepted", "run_id", resp.RunID, "scenario", sc.ID, "interactive", sc.Interactive, "compare", compare)
 	writeJSON(w, http.StatusAccepted, resp)

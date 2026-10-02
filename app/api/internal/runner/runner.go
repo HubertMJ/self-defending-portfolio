@@ -302,12 +302,22 @@ func New(client kubernetes.Interface, exec Execer, pub Publisher, log *slog.Logg
 		base:           ctx, cancel: cancel, byPod: map[string]*run{}, byID: map[string]*run{}, ended: map[string]bool{}}
 }
 
+// ErrInteractive is returned by Start and StartCompare for a terminal scenario: it has no scripted
+// attack, and its run needs the command loop only StartTerminal sets up (a run started any other way
+// would close the nil channels that loop owns and crash the process).
+var ErrInteractive = errors.New("an interactive scenario runs only as a terminal run")
+
 // Start publishes `queued` and runs sc in the background. release is called exactly once, after the
-// run's pod has been deleted. The returned run id is also the suffix of the pod name.
-func (r *Runner) Start(sc scenarios.Scenario, release func()) string {
+// run's pod has been deleted. The returned run id is also the suffix of the pod name. An interactive
+// scenario is refused with ErrInteractive; then nothing is started, nothing is published, and
+// release is not called (the caller still holds the slot).
+func (r *Runner) Start(sc scenarios.Scenario, release func()) (string, error) {
+	if sc.Interactive {
+		return "", ErrInteractive
+	}
 	rn := r.newRun(sc)
 	r.launch(rn, sc, release)
-	return rn.id
+	return rn.id, nil
 }
 
 // StartTerminal begins an interactive run (ADR 0029) and returns its id and a bearer token. The

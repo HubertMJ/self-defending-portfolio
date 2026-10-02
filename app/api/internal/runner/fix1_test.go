@@ -21,7 +21,7 @@ func TestQuarantineNoVictimShortLinger(t *testing.T) {
 	release, done := released()
 	sc := scenario("quarantine", true)
 	sc.Victim, sc.TimeoutSeconds = false, 30 // no victim app, so no `unreachable`
-	id := r.Start(sc, release)
+	id := start(t, r, sc, release)
 	pod := podName(sc.ID, id)
 	rec.waitFor(t, StatePodReady)
 	r.ObserveTalon("sandbox", pod, "success")
@@ -46,7 +46,7 @@ func TestQuarantineLingerEndsOnGone(t *testing.T) {
 	release, done := released()
 	sc := scenario("quarantine", true)
 	sc.Victim, sc.TimeoutSeconds = false, 30
-	id := r.Start(sc, release)
+	id := start(t, r, sc, release)
 	pod := podName(sc.ID, id)
 	rec.waitFor(t, StatePodReady)
 	r.ObserveTalon("sandbox", pod, "success")
@@ -76,7 +76,7 @@ func TestQuarantineLingersFromUnreachable(t *testing.T) {
 	release, done := released()
 	sc := scenario("quarantine", true)
 	sc.Victim, sc.TimeoutSeconds = true, 30
-	id := r.Start(sc, release)
+	id := start(t, r, sc, release)
 	pod := podName(sc.ID, id)
 	waitOrder(t, rec, "victim:defaced")
 	r.ObserveTalon("sandbox", pod, "success")

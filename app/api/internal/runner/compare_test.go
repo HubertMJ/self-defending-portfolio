@@ -2,6 +2,7 @@ package runner
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -23,7 +24,7 @@ func TestCompareTwoArms(t *testing.T) {
 
 	sc := scenario("terminate", true)
 	sc.TimeoutSeconds = 30
-	id := r.StartCompare(sc, release)
+	id := startCompare(t, r, sc, release)
 	guardedPod := podName(sc.ID, id)
 	unguardedPod := guardedPod + "-u"
 
@@ -60,7 +61,7 @@ func TestCompareFallsBackWithoutTwin(t *testing.T) {
 	release, done := released()
 	sc := scenario("terminate", true)
 	sc.TimeoutSeconds = 30
-	id := r.StartCompare(sc, release)
+	id := startCompare(t, r, sc, release)
 	// Wait until the pod is Ready (waitReady's Gets are done) before deleting it, so the delete
 	// cannot race the first Get on the fake clientset (a test-only client-go hazard).
 	rec.waitFor(t, StatePodReady)
@@ -95,4 +96,43 @@ func hasPodsMap(rec *recorder) bool {
 		}
 	}
 	return false
+}
+
+// A terminal scenario handed to Start or StartCompare is refused with ErrInteractive - with the twin
+// configured and without it - and nothing is started: no event, no pod, release not called. Before,
+// StartCompare fell back to Start, whose run had none of the terminal loop's channels, and the loop's
+// end crashed the whole process with `close of nil channel`.
+func TestStartRefusesInteractive(t *testing.T) {
+	for _, twin := range []string{"sandbox-unguarded", ""} {
+		c := fake.NewClientset()
+		readyOnCreate(c)
+		rec := newRecorder()
+		r := New(c, &fakeExec{}, rec, nil, Config{PollInterval: 10 * time.Millisecond, QuarantineLinger: -1,
+			UnguardedNamespace: twin})
+		released := 0
+		release := func() { released++ }
+		sc := terminalScenario()
+		sc.IdleSeconds = 1 // a wrongly started run reaches the end of its loop within a second
+		if _, err := r.StartCompare(sc, release); !errors.Is(err, ErrInteractive) {
+			t.Fatalf("twin %q: StartCompare(terminal) err = %v, want ErrInteractive", twin, err)
+		}
+		if _, err := r.Start(sc, release); !errors.Is(err, ErrInteractive) {
+			t.Fatalf("twin %q: Start(terminal) err = %v, want ErrInteractive", twin, err)
+		}
+		// Let a run that was started anyway get to its end (and crash), then wait for it.
+		time.Sleep(1500 * time.Millisecond)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if err := r.Shutdown(ctx); err != nil {
+			t.Fatal(err)
+		}
+		cancel()
+		if released != 0 || len(rec.of("run")) != 0 {
+			t.Fatalf("twin %q: a refused scenario was started: release called %d times, events %s", twin, released, rec.order())
+		}
+		for _, ns := range []string{"sandbox", "sandbox-unguarded"} {
+			if l, _ := c.CoreV1().Pods(ns).List(context.Background(), metav1.ListOptions{}); len(l.Items) != 0 {
+				t.Fatalf("twin %q: a pod was created in %s", twin, ns)
+			}
+		}
+	}
 }

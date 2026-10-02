@@ -195,6 +195,25 @@ func newTestRunner(c *fake.Clientset, ex Execer, rec *recorder) *Runner {
 	return New(c, ex, rec, nil, Config{PollInterval: 10 * time.Millisecond, QuarantineLinger: -1})
 }
 
+// start and startCompare start a scripted run and fail the test if the runner refuses it.
+func start(t *testing.T, r *Runner, sc scenarios.Scenario, release func()) string {
+	t.Helper()
+	id, err := r.Start(sc, release)
+	if err != nil {
+		t.Fatalf("Start(%q): %v", sc.ID, err)
+	}
+	return id
+}
+
+func startCompare(t *testing.T, r *Runner, sc scenarios.Scenario, release func()) string {
+	t.Helper()
+	id, err := r.StartCompare(sc, release)
+	if err != nil {
+		t.Fatalf("StartCompare(%q): %v", sc.ID, err)
+	}
+	return id
+}
+
 func released() (func(), <-chan struct{}) {
 	ch := make(chan struct{})
 	var once sync.Once
@@ -220,7 +239,7 @@ func TestTerminateRunLifecycle(t *testing.T) {
 
 	sc := scenario("terminate", true)
 	sc.TimeoutSeconds = 30
-	id := r.Start(sc, release)
+	id := start(t, r, sc, release)
 	pod := podName(sc.ID, id)
 
 	rec.waitFor(t, StateQueued)
@@ -279,7 +298,7 @@ func TestQuarantineRunDeletesPod(t *testing.T) {
 	release, done := released()
 	sc := scenario("quarantine", true)
 	sc.TimeoutSeconds = 30
-	id := r.Start(sc, release)
+	id := start(t, r, sc, release)
 	pod := podName(sc.ID, id)
 	rec.waitFor(t, StateStarted)
 	// The response arrives before the alert: detected is still reported, first.
@@ -300,7 +319,7 @@ func TestTimeoutCleansUp(t *testing.T) {
 	r := newTestRunner(c, &fakeExec{}, rec)
 	release, done := released()
 	sc := scenario("terminate", false)
-	id := r.Start(sc, release)
+	id := start(t, r, sc, release)
 	rec.waitFor(t, StateStarted)
 	r.ObserveFalco("sandbox", podName(sc.ID, id), "")
 	ev := rec.waitFor(t, StateTimeout)
@@ -319,7 +338,7 @@ func TestPodNeverReady(t *testing.T) {
 	r := newTestRunner(c, &fakeExec{}, rec)
 	release, done := released()
 	sc := scenario("terminate", true)
-	id := r.Start(sc, release)
+	id := start(t, r, sc, release)
 	rec.waitFor(t, StateTimeout)
 	<-done
 	if podExists(t, c, podName(sc.ID, id)) {
@@ -336,7 +355,7 @@ func TestAdmissionRejection(t *testing.T) {
 	rec := newRecorder()
 	r := newTestRunner(c, &fakeExec{}, rec)
 	release, done := released()
-	r.Start(scenario("terminate", true), release)
+	start(t, r, scenario("terminate", true), release)
 	ev := rec.waitFor(t, StateFailed)
 	<-done
 	if !strings.Contains(ev.Detail, "admission refused") {
@@ -356,7 +375,7 @@ func TestShutdownCleansUp(t *testing.T) {
 	release, done := released()
 	sc := scenario("terminate", true)
 	sc.TimeoutSeconds = 60
-	id := r.Start(sc, release)
+	id := start(t, r, sc, release)
 	rec.waitFor(t, StateStarted)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -412,7 +431,7 @@ func TestPreExecRunsFirstWithoutTTY(t *testing.T) {
 	sc := scenario("terminate", true)
 	sc.TimeoutSeconds = 30
 	sc.PreExec = &scenarios.Exec{Command: []string{"sh", "-c", "deface"}}
-	id := r.Start(sc, release)
+	id := start(t, r, sc, release)
 	pod := podName(sc.ID, id)
 	rec.waitFor(t, StatePodReady)
 	deadline := time.Now().Add(5 * time.Second)

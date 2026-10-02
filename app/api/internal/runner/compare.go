@@ -22,11 +22,16 @@ import (
 )
 
 // StartCompare runs sc in the guarded sandbox and the unguarded twin at once under one run id. It
-// falls back to a single guarded run when the twin namespace is not configured, and refuses to put
-// an interactive (terminal) scenario in the twin - a terminal run has no single scripted attack to
-// mirror, and the server already refuses `?compare=1` for it; this is the defence in depth.
-func (r *Runner) StartCompare(sc scenarios.Scenario, release func()) string {
-	if sc.Interactive || r.cfg.UnguardedNamespace == "" || r.cfg.UnguardedNamespace == r.cfg.Namespace {
+// falls back to a single guarded run when the twin namespace is not configured. An interactive
+// (terminal) scenario is refused with ErrInteractive, as Start refuses it: a terminal run has no
+// single scripted attack to mirror, and the server already answers `?compare=1` for it with 400; this
+// is the defence in depth, and it must be an error, not a fallback - no run is started, and release
+// is not called.
+func (r *Runner) StartCompare(sc scenarios.Scenario, release func()) (string, error) {
+	if sc.Interactive {
+		return "", ErrInteractive
+	}
+	if r.cfg.UnguardedNamespace == "" || r.cfg.UnguardedNamespace == r.cfg.Namespace {
 		return r.Start(sc, release)
 	}
 	id := newRunID()
@@ -56,7 +61,7 @@ func (r *Runner) StartCompare(sc scenarios.Scenario, release func()) string {
 		}()
 		r.executeCompare(guarded, unguarded, sc)
 	}()
-	return id
+	return id, nil
 }
 
 func (r *Runner) newArm(sc scenarios.Scenario, id, namespace, arm, pod string) *run {

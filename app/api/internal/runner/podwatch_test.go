@@ -32,7 +32,7 @@ func TestPodEventsFollowThePod(t *testing.T) {
 	release, done := released()
 	sc := scenario("quarantine", true)
 	sc.TimeoutSeconds = 30
-	id := r.Start(sc, release)
+	id := start(t, r, sc, release)
 	pod := podName(sc.ID, id)
 	rec.waitFor(t, StatePodReady)
 	waitOrder(t, rec, "pod:Running")
