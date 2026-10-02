@@ -86,3 +86,18 @@
       - k8s.ns.name=sandbox
   actions:
     - action: Terminate Pod
+
+# Terminal command "drop-run" (ADR 0032): a binary executed from the shop's emptyDir, which the stock
+# drift rule above cannot see (an emptyDir is not the overlay upper layer). Same response as the drift
+# rule - a dropped-and-run binary is a post-compromise step, nothing about the pod is worth keeping.
+# Pinned to sandbox like every rule here, so the same detection in the unguarded twin draws no response
+# (ADR 0031).
+- rule: Kill execution from shop volume in sandbox
+  description: A binary was executed from the shop volume in a sandbox pod
+  match:
+    rules:
+      - SDP execution from shop volume
+    output_fields:
+      - k8s.ns.name=sandbox
+  actions:
+    - action: Terminate Pod

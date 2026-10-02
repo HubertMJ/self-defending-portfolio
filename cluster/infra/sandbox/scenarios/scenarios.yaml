@@ -1,14 +1,17 @@
-# The four controlled attack scenarios a visitor can trigger (phase 5; ADR 0017 for the safety model,
-# ADR 0018 for the detection -> response mapping). This file is data for the portfolio API: kustomize
-# turns it into ConfigMap `scenarios` in `portfolio-api`, key `scenarios.yaml` (./kustomization.yaml),
-# and the API executes it. The format is the phase 5/6 contract:
+# The controlled attacks a visitor can trigger: four one-click scenarios (phase 5; ADR 0017 for the
+# safety model, ADR 0018 for the detection -> response mapping) and one interactive `terminal` scenario
+# the visitor types into (ADR 0032). This file is data for the portfolio API: kustomize turns it into
+# ConfigMap `scenarios` in `portfolio-api`, key `scenarios.yaml` (./kustomization.yaml), and the API
+# executes it. The format is the phase 5/6 contract:
 #
 #   id               stable identifier, the {id} of POST /api/attack/{id}; the API must not hardcode ids
 #   title, summary   what the visitor reads before clicking
 #   technique        MITRE ATT&CK technique id
 #   detection        the Falco rule that fires (stock rules are in the Falco 0.45.0 image's
-#                    /etc/falco/falco_rules.yaml, custom ones in cluster/infra/falco/kustomization.yaml customRules)
-#   response         what Falco Talon does: terminate (pod deleted) | quarantine (pod labelled, cut off)
+#                    /etc/falco/falco_rules.yaml, custom ones in cluster/infra/falco/kustomization.yaml customRules);
+#                    "" for the interactive terminal, whose detections are per command below
+#   response         what Falco Talon does: terminate (pod deleted) | quarantine (pod labelled, cut off);
+#                    "" for the interactive terminal
 #   timeout_seconds  <= 120; the API sets activeDeadlineSeconds from it and gives up after it
 #   pod              a PodSpec. The API adds metadata (generateName, namespace `sandbox`, labels
 #                    sdp.hubertjablon.ski/run-id and sdp.hubertjablon.ski/quarantine: "false") and
@@ -19,6 +22,28 @@
 #                    the instant it starts, so its visible effect has to come first (scenario 1)
 #   victim           true: the pod serves the "SDP Shop" on :8080 and the API polls its /state.json
 #                    during the run (ADR 0022); absent or false: nothing to poll
+#
+# The interactive terminal (ADR 0032) adds these fields; the four one-click scenarios never set them:
+#   interactive      true: no exec/pre_exec; the API runs the commands below one at a time, each only
+#                    when the visitor asks, by command id (never free text - contract hard rule)
+#   idle_seconds     no command for this long ends the run
+#   objectives[]     {id, title} - what the visitor tries to reach, in kill-chain order; a command may
+#                    count towards one (commands[].objective)
+#   commands[]       the catalogue of what the visitor may run; the only thing the API accepts is an id:
+#       id           stable, [a-z0-9-]{1,32}
+#       input        what the visitor types; unique across the catalogue; <= 80 printable ASCII
+#       aliases      other accepted spellings (the web's completion offers `input`, accepts these too)
+#       objective    optional: the objectives[].id this counts towards
+#       technique    MITRE ATT&CK id
+#       command      argv run in container `target`
+#       tty          a TTY is allocated (only `shell` needs one, for the terminal-shell rule)
+#       outcome      allowed | prevented | detected - what happens, for the defence map's verdict
+#       layer        which defence layer answers: edge | host | network | supply-chain | admission |
+#                    pod-security | runtime (the one the web lights for this command)
+#       control      one line naming what answers
+#       detection    (outcome detected only) the Falco rule that fires
+#       response     (outcome detected only) terminate | quarantine
+#       explain      one or two sentences shown after the command ran
 #
 # What every pod spec has in common, and why (each one passes pod-security-restricted,
 # require-pod-resources, restrict-image-registries and verify-portfolio-images - checked for every
@@ -341,3 +366,300 @@
         && sleep 1
         && cp /bin/busybox /tmp/busybox && exec /tmp/busybox sleep 60
     tty: false
+
+# ---------------------------------------------------------------------------------------------------
+# 5. The interactive terminal (ADR 0032). Unlike the four above, nothing runs on its own: the API
+#    starts the pod, and the visitor types commands that are run one at a time, by id, in container
+#    `target`. The pod is the same hardened victim shop on :8080, read-only root filesystem, no token,
+#    plus the `shadow` group (so `cat /etc/shadow` can succeed, as scenario 3) and a per-run capture
+#    flag the API injects as env SDP_FLAG; the victim writes it to /srv/shop/.flag (0600) and never
+#    serves it (app/scenario/victim). The shop volume is 2 MiB here, not 1: `drop-run` copies busybox
+#    into it, and it must fit next to the page, the state and the flag.
+#
+#    The commands are grouped by the kill chain. The quiet ones (recon, deface, read the flag) are
+#    `allowed` or `prevented` and the run goes on; the loud ones (`beacon`, `read-shadow`, `shell`,
+#    `drop-run`) are `detected` and end it - `beacon` by quarantine (the pod keeps running, cut off),
+#    the others by termination. So a visitor who does the quiet things first gets further, which is the
+#    lesson. Each command is proven under this pod's own security context in tests/scenarios/offline.sh:
+#    an `allowed` one really succeeds, a `prevented` one really fails with the kernel's own error and
+#    kills nothing, and a `detected` one really meets its Falco rule's preconditions.
+#
+#    Two custom Falco rules carry this scenario (cluster/infra/falco/kustomization.yaml): the existing
+#    "SDP network tool in sandbox" (for `beacon`), and a new "SDP execution from shop volume" for
+#    `drop-run` - the stock drift rule only sees the overlay upper layer, and /srv/shop is an emptyDir,
+#    not overlayfs, so a binary run from it would otherwise slip past. Both fire in `sandbox` and in the
+#    unguarded twin; the matching Talon rules pin k8s.ns.name=sandbox, so only the guarded pod is acted
+#    on (ADR 0031).
+- id: terminal
+  title: Attacker's terminal
+  summary: >-
+    Drops you into a shell on a running, fully hardened pod and lets you try things by hand - look
+    around, deface the shop, hunt for credentials, phone home - and watch which layer answers each move
+    and how fast. Some commands the pod simply refuses; some Falco only watches; some get you cut off or
+    killed mid-keystroke.
+  technique: T1059.004
+  detection: ""
+  response: ""
+  interactive: true
+  timeout_seconds: 120
+  idle_seconds: 30
+  victim: true
+  objectives:
+    - {id: recon, title: "Look around"}
+    - {id: tamper, title: "Deface the shop"}
+    - {id: credentials, title: "Steal credentials"}
+    - {id: execution, title: "Run your own code"}
+    - {id: exfiltration, title: "Phone home"}
+  pod:
+    restartPolicy: Never
+    automountServiceAccountToken: false
+    enableServiceLinks: false
+    terminationGracePeriodSeconds: 0
+    securityContext:
+      runAsNonRoot: true
+      runAsUser: 10001
+      runAsGroup: 10001
+      # Alpine's `shadow` group (gid 42), as scenario 3: so the `read-shadow` command can open
+      # /etc/shadow without root and without loosening the file's mode. Every account in the image is
+      # locked, so there is no hash to find - the detection is the point, not the contents.
+      supplementalGroups: [42]
+      seccompProfile:
+        type: RuntimeDefault
+    containers:
+      - name: target
+        image: *scenario-image
+        command: *victim-command
+        ports: *victim-ports
+        readinessProbe: *victim-probe
+        volumeMounts: *victim-mounts
+        securityContext:
+          allowPrivilegeEscalation: false
+          # Read-only on purpose: it is what makes `touch /bin/backdoor` fail, and `drop-run` has to go
+          # through the writable shop volume instead (which the custom execution rule then catches).
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+        resources:
+          requests:
+            cpu: 10m
+            memory: 16Mi
+          limits:
+            cpu: 100m
+            memory: 32Mi
+    volumes:
+      # 2 MiB (the other scenarios use 1): the page, the state file, the flag, and room for the busybox
+      # copy `drop-run` writes here. Still an emptyDir, so the root filesystem stays read-only.
+      - name: shop
+        emptyDir:
+          sizeLimit: 2Mi
+  commands:
+    # ---- recon: allowed, Falco watching, no rule matches ----
+    - id: whoami
+      input: "id"
+      aliases: ["whoami"]
+      objective: recon
+      technique: T1033
+      command: ["id"]
+      tty: false
+      outcome: allowed
+      layer: runtime
+      control: "Falco is watching; plain recon matches no rule"
+      explain: >-
+        You are an unprivileged user (uid 10001) in a hardened pod. Falco sees this and lets it pass -
+        looking around is not, by itself, an attack.
+    - id: hostname
+      input: "hostname"
+      aliases: []
+      objective: recon
+      technique: T1082
+      command: ["hostname"]
+      tty: false
+      outcome: allowed
+      layer: runtime
+      control: "Falco is watching; plain recon matches no rule"
+      explain: >-
+        The pod name, nothing more. No node name, no cluster detail - the pod was built without that
+        information to leak.
+    - id: ps
+      input: "ps"
+      aliases: ["ps aux"]
+      objective: recon
+      technique: T1057
+      command: ["ps"]
+      tty: false
+      outcome: allowed
+      layer: runtime
+      control: "Falco is watching; plain recon matches no rule"
+      explain: >-
+        Only the shop server and your own command run here: one container, one job, nothing else to
+        pivot to.
+    - id: ls-shop
+      input: "ls -la /srv/shop"
+      aliases: []
+      objective: recon
+      technique: T1083
+      command: ["ls", "-la", "/srv/shop"]
+      tty: false
+      outcome: allowed
+      layer: runtime
+      control: "Falco is watching; plain recon matches no rule"
+      explain: >-
+        The shop's files, writable by you because this directory is the one writable spot in the pod.
+        Note the .flag - that is a goal.
+    - id: caps
+      input: "grep Cap /proc/self/status"
+      aliases: []
+      objective: recon
+      technique: T1082
+      command: ["grep", "Cap", "/proc/self/status"]
+      tty: false
+      outcome: allowed
+      layer: pod-security
+      control: "Pod Security: every Linux capability dropped"
+      explain: >-
+        CapEff is all zeros: the pod holds no Linux capabilities at all. That is why the next few tricks
+        will not work.
+    # ---- tamper: allowed and visible, because nothing watches an app writing its own docroot ----
+    - id: deface
+      input: "deface the shop"
+      aliases: ["deface"]
+      objective: tamper
+      technique: T1491.001
+      command:
+        - sh
+        - -c
+        - >-
+          cd /srv/shop
+          && printf '%s' '<h1>SDP Shop has been defaced</h1><p>Owned through the attacker terminal.</p>' > .i
+          && mv .i index.html
+          && printf '%s' '{"status":"defaced","title":"H4CK3D - SDP Shop","banner":"Defaced from the terminal"}' > .s
+          && mv .s state.json
+          && echo 'shop defaced'
+      tty: false
+      outcome: allowed
+      layer: runtime
+      control: "Falco is watching; an app rewriting its own files is not drift"
+      explain: >-
+        The shop window next to you just changed - you rewrote its page. Nothing stopped you: writing to
+        your own working directory is normal for an app, so no rule here watches for it.
+    # ---- credentials: one allowed (the flag), one detected (/etc/shadow) ----
+    - id: read-flag
+      input: "cat /srv/shop/.flag"
+      aliases: []
+      objective: credentials
+      technique: T1552.001
+      command: ["cat", "/srv/shop/.flag"]
+      tty: false
+      outcome: allowed
+      layer: runtime
+      control: "Falco is watching; reading a file you can already open is not flagged"
+      explain: >-
+        You found this run's flag. Reading it was allowed - but detection is not prevention, and reading
+        a secret inside the pod is not the same as getting it out past a default-deny network.
+    - id: read-shadow
+      input: "cat /etc/shadow"
+      aliases: []
+      objective: credentials
+      technique: T1003.008
+      command: ["cat", "/etc/shadow"]
+      tty: false
+      outcome: detected
+      layer: runtime
+      control: "Falco rule Read sensitive file untrusted -> terminate"
+      detection: Read sensitive file untrusted
+      response: terminate
+      explain: >-
+        Falco caught an untrusted program opening the password database and Talon deleted the pod. What
+        you got was worthless anyway: every account in the image is locked, there is no hash in the file.
+    # ---- prevented: the pod refuses, nothing is killed ----
+    - id: touch-bin
+      input: "touch /bin/backdoor"
+      aliases: []
+      technique: T1543
+      command: ["touch", "/bin/backdoor"]
+      tty: false
+      outcome: prevented
+      layer: pod-security
+      control: "Pod Security: read-only root filesystem"
+      explain: >-
+        "Read-only file system." The root filesystem is immutable, so you cannot plant a backdoor in
+        /bin. Nothing had to kill you - the write simply never happened.
+    - id: read-token
+      input: "cat /var/run/secrets/kubernetes.io/serviceaccount/token"
+      aliases: []
+      technique: T1528
+      command: ["cat", "/var/run/secrets/kubernetes.io/serviceaccount/token"]
+      tty: false
+      outcome: prevented
+      layer: pod-security
+      control: "Pod Security: no ServiceAccount token mounted"
+      explain: >-
+        "No such file or directory." There is no token to steal: the pod was created with none, so it
+        cannot talk to the Kubernetes API no matter what you run.
+    - id: chown-root
+      input: "chown 0 /srv/shop/index.html"
+      aliases: []
+      technique: T1222.002
+      command: ["chown", "0", "/srv/shop/index.html"]
+      tty: false
+      outcome: prevented
+      layer: pod-security
+      control: "Pod Security: no CAP_CHOWN (all capabilities dropped)"
+      explain: >-
+        "Operation not permitted." Changing a file's owner needs a Linux capability the pod does not
+        have; with every capability dropped, a whole class of tricks is off the table before any rule
+        has to fire.
+    # ---- exfiltration and execution: detected ----
+    - id: beacon
+      input: "wget -q -T 2 -O- http://127.0.0.1:9/"
+      aliases: ["wget"]
+      objective: exfiltration
+      technique: T1071.001
+      command: ["wget", "-q", "-T", "2", "-O-", "http://127.0.0.1:9/"]
+      tty: false
+      outcome: detected
+      layer: network
+      control: "Falco rule SDP network tool in sandbox -> quarantine"
+      detection: SDP network tool in sandbox
+      response: quarantine
+      explain: >-
+        A network tool started: Falco flagged it and Talon quarantined the pod. The run goes on - you
+        still have a shell - but Cilium has cut every connection, both ways, so the shop next to you
+        just went unreachable. You are trapped with nothing to call out to.
+    - id: shell
+      input: "sh -i"
+      aliases: ["bash -i"]
+      objective: execution
+      technique: T1059.004
+      command: ["sh", "-i"]
+      tty: true
+      outcome: detected
+      layer: runtime
+      control: "Falco rule Terminal shell in container -> terminate"
+      detection: Terminal shell in container
+      response: terminate
+      explain: >-
+        A second interactive shell with a terminal attached is exactly the signature Falco watches for;
+        Talon deleted the pod within a second or two. This ends your run.
+    - id: drop-run
+      input: "cp /bin/busybox /srv/shop/busybox && /srv/shop/busybox echo"
+      aliases: ["drop and execute"]
+      objective: execution
+      technique: T1105
+      # Named `busybox` on disk so the applet dispatch works (busybox picks its applet from argv[0]); a
+      # copy under any other name would just print "applet not found" - though it would still be a
+      # process executed from the shop volume, which is what the rule keys on.
+      command:
+        - sh
+        - -c
+        - "cp /bin/busybox /srv/shop/busybox && exec /srv/shop/busybox echo 'dropped and ran'"
+      tty: false
+      outcome: detected
+      layer: runtime
+      control: "Falco rule SDP execution from shop volume -> terminate"
+      detection: SDP execution from shop volume
+      response: terminate
+      explain: >-
+        You copied a binary into the writable shop volume and ran it. The stock drift rule misses this -
+        that volume is not the container's overlay layer - so a custom rule watches for execution from
+        it. Falco caught it and Talon deleted the pod.

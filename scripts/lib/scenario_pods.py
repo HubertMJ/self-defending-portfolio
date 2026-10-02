@@ -51,6 +51,108 @@ PLACEHOLDER_DIGEST = "sha256:" + "0" * 64
 ID_RE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,40}[a-z0-9])?$")
 TECHNIQUE_RE = re.compile(r"^T\d{4}(\.\d{3})?$")
 
+# The interactive terminal (ADR 0032), one scenario: id `terminal`, interactive: true, a catalogue of
+# commands the API will run by id. The fields and their bounds are the phase 5/6 contract.
+TERMINAL_ID = "terminal"
+LAYERS = {"edge", "host", "network", "supply-chain", "admission", "pod-security", "runtime"}
+OUTCOMES = {"allowed", "prevented", "detected"}
+CMD_ID_RE = re.compile(r"^[a-z0-9-]{1,32}$")
+MAX_INPUT = 80
+MIN_COMMANDS, MAX_COMMANDS = 12, 16
+COMMAND_REQUIRED = {
+    "id": str,
+    "input": str,
+    "technique": str,
+    "command": list,
+    "tty": bool,
+    "outcome": str,
+    "layer": str,
+    "control": str,
+    "explain": str,
+}
+
+
+def check_commands(entry: dict, where: str) -> list:
+    """The interactive terminal's extra fields: idle_seconds, objectives[], commands[]."""
+    problems = []
+    if entry.get("interactive") is not True:
+        problems.append(f"{where}: terminal must set `interactive: true`")
+    idle = entry.get("idle_seconds")
+    if not isinstance(idle, int) or isinstance(idle, bool) or not 0 < idle <= entry.get("timeout_seconds", 0):
+        problems.append(f"{where}: idle_seconds must be an int 1..timeout_seconds")
+    if entry.get("detection") != "" or entry.get("response") != "":
+        problems.append(f"{where}: detection and response must be empty strings for the terminal")
+    if "exec" in entry and entry["exec"] is not None:
+        problems.append(f"{where}: the terminal has no exec (commands are run on request)")
+    if "pre_exec" in entry:
+        problems.append(f"{where}: the terminal has no pre_exec")
+
+    objectives = entry.get("objectives")
+    objective_ids = set()
+    if not isinstance(objectives, list) or not objectives:
+        problems.append(f"{where}: objectives must be a non-empty list of {{id, title}}")
+    else:
+        for i, o in enumerate(objectives):
+            if not (isinstance(o, dict) and isinstance(o.get("id"), str) and isinstance(o.get("title"), str)):
+                problems.append(f"{where}: objective #{i} must be {{id: str, title: str}}")
+            elif not CMD_ID_RE.match(o["id"]):
+                problems.append(f"{where}: objective id {o['id']!r} must be [a-z0-9-]{{1,32}}")
+            else:
+                objective_ids.add(o["id"])
+
+    commands = entry.get("commands")
+    if not isinstance(commands, list):
+        problems.append(f"{where}: commands must be a list")
+        return problems
+    if not MIN_COMMANDS <= len(commands) <= MAX_COMMANDS:
+        problems.append(f"{where}: {len(commands)} commands; the contract asks for {MIN_COMMANDS}..{MAX_COMMANDS}")
+    seen_ids, seen_inputs = set(), set()
+    for i, c in enumerate(commands):
+        cw = f"{where} command #{i} ({c.get('id', '?') if isinstance(c, dict) else '?'})"
+        if not isinstance(c, dict):
+            problems.append(f"{cw}: not a mapping")
+            continue
+        for key, kind in COMMAND_REQUIRED.items():
+            if not isinstance(c.get(key), kind) or isinstance(c.get(key), bool) != (kind is bool):
+                problems.append(f"{cw}: `{key}` missing or not a {kind.__name__}")
+        if isinstance(c.get("id"), str):
+            if not CMD_ID_RE.match(c["id"]):
+                problems.append(f"{cw}: id must be [a-z0-9-]{{1,32}}")
+            if c["id"] in seen_ids:
+                problems.append(f"{cw}: duplicate command id")
+            seen_ids.add(c["id"])
+        if isinstance(c.get("input"), str):
+            inp = c["input"]
+            if not inp or len(inp) > MAX_INPUT or not all(32 <= ord(ch) < 127 for ch in inp):
+                problems.append(f"{cw}: input must be 1..{MAX_INPUT} printable ASCII")
+            if inp in seen_inputs:
+                problems.append(f"{cw}: duplicate input {inp!r}")
+            seen_inputs.add(inp)
+        if "aliases" in c and not (isinstance(c["aliases"], list) and all(isinstance(a, str) for a in c["aliases"])):
+            problems.append(f"{cw}: aliases must be a list of strings")
+        if isinstance(c.get("technique"), str) and not TECHNIQUE_RE.match(c["technique"]):
+            problems.append(f"{cw}: technique must be a MITRE ATT&CK id")
+        if isinstance(c.get("command"), list) and not (c["command"] and all(isinstance(a, str) for a in c["command"])):
+            problems.append(f"{cw}: command must be a non-empty list of strings")
+        if c.get("outcome") not in OUTCOMES:
+            problems.append(f"{cw}: outcome must be one of {sorted(OUTCOMES)}")
+        if c.get("layer") not in LAYERS:
+            problems.append(f"{cw}: layer must be one of {sorted(LAYERS)}")
+        obj = c.get("objective")
+        if obj is not None and obj not in objective_ids:
+            problems.append(f"{cw}: objective {obj!r} is not one of objectives[].id")
+        if c.get("outcome") == "detected":
+            if not (isinstance(c.get("detection"), str) and c["detection"]):
+                problems.append(f"{cw}: a detected command needs a non-empty detection")
+            if c.get("response") not in RESPONSES:
+                problems.append(f"{cw}: a detected command needs response in {sorted(RESPONSES)}")
+        else:
+            if c.get("detection"):
+                problems.append(f"{cw}: only a detected command carries a detection")
+            if c.get("response"):
+                problems.append(f"{cw}: only a detected command carries a response")
+    return problems
+
 
 def load_scenarios(configmap_path: Path) -> list:
     for doc in yaml.safe_load_all(configmap_path.read_text()):
@@ -77,10 +179,25 @@ def check(entry: dict, index: int) -> list:
         problems.append(f"{where}: id must be a short DNS label")
     if not TECHNIQUE_RE.match(entry["technique"]):
         problems.append(f"{where}: technique must be a MITRE ATT&CK id (T1234 or T1234.001)")
-    if entry["response"] not in RESPONSES:
-        problems.append(f"{where}: response must be one of {sorted(RESPONSES)}")
     if not 0 < entry["timeout_seconds"] <= MAX_TIMEOUT:
         problems.append(f"{where}: timeout_seconds must be 1..{MAX_TIMEOUT}")
+
+    interactive = entry.get("interactive") is True
+    if interactive:
+        # The terminal (ADR 0032): no exec/response here; the commands catalogue is checked instead.
+        problems += check_commands(entry, where)
+    else:
+        if entry["response"] not in RESPONSES:
+            problems.append(f"{where}: response must be one of {sorted(RESPONSES)}")
+        exec_ = entry.get("exec", "missing")
+        if exec_ == "missing":
+            problems.append(f"{where}: `exec` must be present ({{command, tty}} or null)")
+        elif exec_ is not None:
+            command = exec_.get("command") if isinstance(exec_, dict) else None
+            if not (isinstance(command, list) and command and all(isinstance(a, str) for a in command)):
+                problems.append(f"{where}: exec.command must be a non-empty list of strings")
+            if not isinstance(exec_.get("tty") if isinstance(exec_, dict) else None, bool):
+                problems.append(f"{where}: exec.tty must be true or false")
 
     pod = entry["pod"]
     if "activeDeadlineSeconds" in pod:
@@ -91,16 +208,6 @@ def check(entry: dict, index: int) -> list:
     for c in containers + (pod.get("initContainers") or []):
         if not IMAGE_RE.match(str(c.get("image", ""))):
             problems.append(f"{where}: image {c.get('image')!r} is not the scenario image pinned by digest")
-
-    exec_ = entry.get("exec", "missing")
-    if exec_ == "missing":
-        problems.append(f"{where}: `exec` must be present ({{command, tty}} or null)")
-    elif exec_ is not None:
-        command = exec_.get("command") if isinstance(exec_, dict) else None
-        if not (isinstance(command, list) and command and all(isinstance(a, str) for a in command)):
-            problems.append(f"{where}: exec.command must be a non-empty list of strings")
-        if not isinstance(exec_.get("tty") if isinstance(exec_, dict) else None, bool):
-            problems.append(f"{where}: exec.tty must be true or false")
     return problems
 
 
@@ -122,8 +229,12 @@ def main(argv: list) -> int:
         problems.append("ids are not unique")
     if missing := FIXED_IDS - set(ids):
         problems.append(f"the contract's fixed ids are missing: {sorted(missing)}")
-    if len(ids) != 4:
-        problems.append(f"the contract defines 4 scenarios, found {len(ids)}")
+    if TERMINAL_ID not in ids:
+        problems.append(f"the interactive `{TERMINAL_ID}` scenario is missing (ADR 0032)")
+    # The four one-click scenarios (the three fixed ids plus the drop/execute one) stay, and the
+    # terminal is the fifth; a sixth would be a contract change reviewed here.
+    if len(ids) != 5:
+        problems.append(f"the contract defines 5 scenarios (4 one-click + terminal), found {len(ids)}")
     if problems:
         print("scenario_pods: scenarios.yaml does not match the phase 5/6 contract:", file=sys.stderr)
         for p in problems:

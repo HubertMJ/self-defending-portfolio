@@ -99,3 +99,31 @@ amendment). No Falco or Talon rule changed. The
 marking shells have no TTY, so they do not trip "Terminal shell in container", and the sensitive file is
 still opened by `cat`, never by a shell redirect (shells are on that rule's trusted list).
 `tests/scenarios/offline.sh` checks the exec'd program, not argv0, and also checks the mutation.
+
+## Amendment 2026-10-02: the interactive terminal's detections, and a rule for execution from the shop volume (ADR 0032)
+
+The fifth scenario, `terminal` (ADR 0032), is not one exec mapped to one rule but a catalogue of commands, each
+with its own outcome. The mapping for its *detected* commands, and the one new rule they need:
+
+| terminal command | Falco rule | priority | Talon rule -> action |
+|---|---|---|---|
+| `read-shadow` (`cat /etc/shadow`) | Read sensitive file untrusted (stock) | WARNING | Kill sensitive file read in sandbox -> terminate |
+| `beacon` (`wget http://127.0.0.1:9/`) | SDP network tool in sandbox (custom) | WARNING | Quarantine network tool in sandbox -> quarantine |
+| `shell` (`sh -i`, tty) | Terminal shell in container (stock) | NOTICE | Kill terminal shell in sandbox -> terminate |
+| `drop-run` (busybox from `/srv/shop`) | **SDP execution from shop volume (new custom)** | CRITICAL | **Kill execution from shop volume in sandbox -> terminate** |
+
+The terminal reuses three existing rules; only `drop-run` needs a new one. The stock "Drop and execute new
+binary in container" keys on `proc.is_exe_upper_layer`, which is true only for the container's overlay upper
+layer. The terminal pod keeps a read-only root filesystem, so a dropped binary must go into the shop's emptyDir
+(`/srv/shop`), which is a separate mount, not the overlay - the stock rule is blind to it. The new rule **"SDP
+execution from shop volume"** (`proc.exepath startswith /srv/shop/`, CRITICAL) catches it; nothing the image
+ships runs from there, so the only match is a drop-and-run. Its Talon rule **"Kill execution from shop volume in
+sandbox"** terminates, like the drift rule, and pins `k8s.ns.name=sandbox`.
+
+Both custom rules ("SDP network tool in sandbox" and the new one) now match `k8s.ns.name in
+(sdp_sandbox_namespaces)` - `sandbox` and the unguarded twin `sandbox-unguarded` (ADR 0031) - so Falco detects
+in both; the Talon rules still pin `k8s.ns.name=sandbox`, so only the guarded pod is acted on. The allowed and
+prevented terminal commands map to no rule by design (the defence map shows which layer answered, or that none
+did). `tests/scenarios/offline.sh` checks every terminal command's precondition under the pod's security
+context, and that every scenario/terminal detection and Talon match is a loaded, enabled rule at or above
+Falcosidekick's cut-off; a fifth-scenario detection with no offline check fails the script.

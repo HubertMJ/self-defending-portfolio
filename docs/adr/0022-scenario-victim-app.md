@@ -116,3 +116,17 @@ before it does anything, which cannot help - the detection is the shell starting
 `tests/scenarios/offline.sh` checks that a pre_exec has no TTY, runs no network tool, reads no
 sensitive file and runs nothing from `/tmp`, exits 0 after its pause, and has already changed the
 victim when the detected exec starts; `tests/scenarios/run.sh` runs it like the API.
+
+## Amendment 2026-10-02: the per-run capture flag for the interactive terminal (ADR 0032)
+
+The interactive terminal (ADR 0032) gives the visitor a `credentials` objective: find and read a per-run
+secret. The API injects it as env `SDP_FLAG` (`SDP{` + 16 hex + `}`) on container `target`, and the victim
+(`app/scenario/victim`) writes it to `/srv/shop/.flag` on start, mode 0600, with a temp-then-rename like its
+other writes. It is **never served**: the shop routes only `/` and `/state.json`, so a GET of `/.flag` (or any
+other path) is a 404, and the flag never appears in `/state.json`. A terminal visitor reads it with
+`cat /srv/shop/.flag` - which is allowed and is the point: reading a secret inside the pod is a real find and
+also not the same as getting it out past a default-deny network. Absent env (the four one-click scenarios, and
+running the image standalone): no flag file. The flag value is capped (128 bytes) as a safety bound; the API is
+its only writer. The terminal's shop emptyDir is 2 MiB rather than 1, so the `drop-run` command's busybox copy
+fits next to the page, state and flag. Unit-tested in `app/scenario/victim` (written 0600, not served, does not
+leak into state, truncated past the cap).

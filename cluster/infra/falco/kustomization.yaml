@@ -148,19 +148,49 @@ helmCharts:
       # pinned Falco binary.
       customRules:
         sdp-rules.yaml: |-
+          # The two sandboxes the attack demo runs in: `sandbox` (Falco detects, Talon responds) and
+          # `sandbox-unguarded`, its twin (Falco detects, nothing responds - ADR 0031). The custom
+          # rules below fire in both so the detection is identical; the difference is Talon's rules,
+          # which pin k8s.ns.name=sandbox, so only the guarded pod is acted on. A rule name still says
+          # "in sandbox" because that is the Talon match and the scenario `detection` value; the list
+          # is what widens the condition to the twin.
+          - list: sdp_sandbox_namespaces
+            items: [sandbox, sandbox-unguarded]
           - rule: SDP network tool in sandbox
             desc: >
-              A network transfer or connection tool was started in a container in the sandbox
+              A network transfer or connection tool was started in a container in a sandbox
               namespace. Workloads there have no reason to fetch anything; this is the trigger for
               the quarantine label (ADR 0013).
             condition: >
-              spawned_process and container and k8s.ns.name = "sandbox"
+              spawned_process and container and k8s.ns.name in (sdp_sandbox_namespaces)
               and proc.name in (wget, nc, curl)
             output: >
               Network tool started in sandbox (proc=%proc.name cmdline=%proc.cmdline
               user=%user.name container=%container.name image=%container.image.repository)
             priority: WARNING
             tags: [sdp, network, sandbox]
+          # The terminal's drop-and-run (ADR 0032): a binary copied into the shop's emptyDir and
+          # executed. The stock "Drop and execute new binary in container" rule keys on
+          # proc.is_exe_upper_layer, which is only true for the container's overlay upper layer; an
+          # emptyDir is a separate mount, so a binary run from /srv/shop would otherwise go unseen.
+          # This rule catches a process whose executable lives under the shop volume. Nothing the image
+          # ships runs from there (the server binary is /usr/local/bin/victim, busybox is /bin), so the
+          # only way to match is to drop and run something, which is the behaviour. CRITICAL, as the
+          # stock drift rule is.
+          - rule: SDP execution from shop volume
+            desc: >
+              A program was executed from the shop's writable volume (/srv/shop) in a sandbox
+              namespace. Nothing the image ships runs from there; a binary executed from it was dropped
+              after the container started - container drift the overlay-layer rule cannot see (ADR 0032).
+            condition: >
+              spawned_process and container and k8s.ns.name in (sdp_sandbox_namespaces)
+              and proc.exepath startswith /srv/shop/
+            output: >
+              Binary executed from the shop volume in sandbox (exe=%proc.exepath proc=%proc.name
+              cmdline=%proc.cmdline user=%user.name container=%container.name
+              image=%container.image.repository)
+            priority: CRITICAL
+            tags: [sdp, drift, sandbox]
 
       falco:
         json_output: true

@@ -129,6 +129,53 @@ func TestRoutes(t *testing.T) {
 	}
 }
 
+func TestFlagWrittenButNotServed(t *testing.T) {
+	s := newShop(t)
+	const flag = "SDP{0123456789abcdef}"
+	if err := writeFlag(s.docroot, flag); err != nil {
+		t.Fatal(err)
+	}
+	// On disk, 0600, with the flag in it (a trailing newline is fine: `cat` prints it either way).
+	info, err := os.Stat(filepath.Join(s.docroot, ".flag"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf(".flag mode %o, want 600", info.Mode().Perm())
+	}
+	raw, err := os.ReadFile(filepath.Join(s.docroot, ".flag"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(string(raw)) != flag {
+		t.Fatalf(".flag content %q, want %q", strings.TrimSpace(string(raw)), flag)
+	}
+	// Never served: there is no route for it, only / and /state.json.
+	for _, path := range []string{"/.flag", "/flag", "/state.json/../.flag"} {
+		if rec := get(t, s, http.MethodGet, path); rec.Code != http.StatusNotFound {
+			t.Fatalf("GET %s: %d, want 404 (the flag must not be served)", path, rec.Code)
+		}
+	}
+	// The flag does not leak into /state.json either.
+	if body := get(t, s, http.MethodGet, "/state.json").Body.String(); strings.Contains(body, flag) {
+		t.Fatalf("/state.json leaked the flag: %s", body)
+	}
+}
+
+func TestFlagTruncated(t *testing.T) {
+	s := newShop(t)
+	if err := writeFlag(s.docroot, strings.Repeat("A", maxFlag+50)); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(filepath.Join(s.docroot, ".flag"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := len(strings.TrimSpace(string(raw))); got != maxFlag {
+		t.Fatalf("flag length %d, want capped at %d", got, maxFlag)
+	}
+}
+
 func TestCheckURL(t *testing.T) {
 	cases := map[string]string{
 		":8080":        "http://127.0.0.1:8080/state.json",

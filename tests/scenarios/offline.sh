@@ -106,7 +106,15 @@ python3 - "$WORK_DIR/rules.json" "$SCENARIOS" "$REPO_ROOT/cluster/infra/falco-re
 import json, sys, yaml
 loaded = {r["info"]["name"]: r["info"] for r in json.load(open(sys.argv[1]))["rules"]}
 order = ["debug", "informational", "notice", "warning", "error", "critical", "alert", "emergency"]
-wanted = [(f"scenario {s['id']}", s["detection"]) for s in yaml.safe_load(open(sys.argv[2]))]
+wanted = []
+for s in yaml.safe_load(open(sys.argv[2])):
+    if s.get("interactive"):
+        # The terminal has no one detection: every `detected` command names its own Falco rule.
+        for c in s.get("commands", []):
+            if c.get("outcome") == "detected":
+                wanted.append((f"terminal command {c['id']}", c["detection"]))
+    else:
+        wanted.append((f"scenario {s['id']}", s["detection"]))
 wanted += [(f"talon rule '{t['rule']}'", name)
            for t in yaml.safe_load(open(sys.argv[3])) if "rule" in t for name in t["match"]["rules"]]
 for who, name in wanted:
@@ -136,6 +144,34 @@ else
   fail "falco-talon rules check failed"; printf '%s\n' "$out" | tail -20 >&2
 fi
 
+# ---------------------------------------------------------------- 3b. Talon never reaches the twin
+#
+# The unguarded twin (ADR 0031) is "Falco detects, nothing responds". That holds only if every Talon
+# response rule pins k8s.ns.name=sandbox and none mentions sandbox-unguarded: a rule that matched the
+# twin, plus the fact Talon has no Role there, would be a 403 per action, not "no response". Checked
+# from the rules file so a rule added without a namespace pin (which would act cluster-wide) fails here.
+
+step "every Talon rule acts in sandbox only, never in the unguarded twin (ADR 0031)"
+
+python3 - "$REPO_ROOT/cluster/infra/falco-response/talon/rules.yaml" <<'PY' > "$WORK_DIR/talon-ns.txt"
+import sys, yaml
+for t in yaml.safe_load(open(sys.argv[1])):
+    if "rule" not in t:
+        continue  # an action definition, not a response rule
+    name = t["rule"]
+    fields = (t.get("match") or {}).get("output_fields") or []
+    pins = [f for f in fields if str(f).replace(" ", "").startswith("k8s.ns.name=")]
+    if any("sandbox-unguarded" in str(f) for f in fields):
+        print(f"FAIL\t{name}: matches sandbox-unguarded; the twin must stay unguarded")
+    elif pins == ["k8s.ns.name=sandbox"] or "k8s.ns.name=sandbox" in [str(f).replace(" ", "") for f in pins]:
+        print(f"PASS\t{name}: pinned to k8s.ns.name=sandbox only")
+    else:
+        print(f"FAIL\t{name}: not pinned to k8s.ns.name=sandbox (output_fields={fields}); it could act in the twin")
+PY
+while IFS=$'\t' read -r verdict msg; do
+  if [ "$verdict" = PASS ]; then pass "$msg"; else fail "$msg"; fi
+done < "$WORK_DIR/talon-ns.txt"
+
 # ---------------------------------------------------------------------------- 4. preconditions
 
 step "scenario preconditions under each pod's security context (image built from app/scenario)"
@@ -149,6 +185,8 @@ python3 - "$SCENARIOS" <<'PY' > "$WORK_DIR/scenarios.tsv"
 import re, shlex, sys, yaml
 SHELLS = {"ash", "bash", "csh", "ksh", "sh", "tcsh", "zsh", "dash"}
 for s in yaml.safe_load(open(sys.argv[1])):
+    if s.get("interactive"):
+        continue  # the terminal has no single exec; its commands are checked in their own section
     pod = s["pod"]; psc = pod.get("securityContext", {})
     target = next(c for c in pod["containers"] if c["name"] == "target")
     csc = target.get("securityContext", {})
@@ -334,6 +372,163 @@ while IFS=$'\t' read -r id detection flags cmd exec_cmd tty trigger victim probe
     fi
   fi
 done < "$WORK_DIR/scenarios.tsv"
+
+# ---------------------------------------------------------- 6. the interactive terminal (ADR 0032)
+#
+# The terminal scenario is not one exec but a catalogue of commands the visitor runs by hand. Each one
+# claims an outcome (allowed | prevented | detected); this proves that claim under the terminal pod's
+# own security context, the same way the four one-click scenarios are proven above:
+#   allowed   - the command really succeeds (and read-flag prints the flag, deface changes the shop);
+#   prevented - the command really fails with the pod's own refusal and kills nothing;
+#   detected  - the command really meets its Falco rule's preconditions (a successful sensitive-file
+#               open, a network tool's process name, a TTY for the shell, a binary executed from the
+#               shop volume for the custom drift rule).
+# The flag the API injects (SDP_FLAG) is written to /srv/shop/.flag, 0600; that it is never *served* is
+# covered by the victim's own unit tests (app/scenario/victim: TestFlagWrittenButNotServed).
+
+step "terminal catalogue: each command under the terminal pod's security context (ADR 0032)"
+
+python3 - "$SCENARIOS" <<'PY' > "$WORK_DIR/terminal.tsv"
+import shlex, sys, yaml
+term = next((s for s in yaml.safe_load(open(sys.argv[1])) if s.get("interactive")), None)
+if term is None:
+    sys.exit("offline.sh: no interactive terminal scenario found")
+pod = term["pod"]; psc = pod.get("securityContext", {})
+target = next(c for c in pod["containers"] if c["name"] == "target")
+csc = target.get("securityContext", {})
+uid = csc.get("runAsUser", psc.get("runAsUser")); gid = csc.get("runAsGroup", psc.get("runAsGroup"))
+flags = ["--user", f"{uid}:{gid}", "--network", "none", "--security-opt", "no-new-privileges",
+         "--memory", target["resources"]["limits"]["memory"].replace("Mi", "m")]
+empty = {v["name"]: v["emptyDir"] for v in pod.get("volumes", []) if "emptyDir" in v}
+for m in target.get("volumeMounts", []):
+    if m["name"] in empty:
+        size = str(empty[m["name"]].get("sizeLimit", "1Mi")).replace("Mi", "m").replace("Ki", "k")
+        # `exec`: a Kubernetes emptyDir allows execution; a Docker --tmpfs defaults to noexec, which
+        # would make `drop-run` fail for the wrong reason. The tmpfs here stands in for the emptyDir,
+        # so it must match the cluster's behaviour (the drop-run command is the whole point of it).
+        flags += ["--tmpfs", f"{m['mountPath']}:rw,exec,size={size},mode=1777"]
+if csc.get("capabilities", {}).get("drop") == ["ALL"]:
+    flags += ["--cap-drop", "ALL"]
+for g in psc.get("supplementalGroups", []):
+    flags += ["--group-add", str(g)]
+if csc.get("readOnlyRootFilesystem"):
+    flags += ["--read-only"]
+probe = (target.get("readinessProbe") or {}).get("exec", {}).get("command", [])
+print("META\t" + shlex.join(flags) + "\t" + shlex.join(target["command"]) + "\t" + shlex.join(probe))
+for c in term["commands"]:
+    print("\t".join(["CMD", c["id"], c["outcome"], str(c["tty"]).lower(),
+                     c.get("detection") or "-", shlex.join(c["command"])]))
+PY
+
+IFS=$'\t' read -r _ TFLAGS TCMD TPROBE < <(grep '^META' "$WORK_DIR/terminal.tsv")
+FLAG="SDP{0123456789abcdef}"
+
+tc=$(start "terminal" "$TFLAGS -e SDP_FLAG=$FLAG" "$TCMD")
+up=
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  up=$(eval "$DOCKER exec $tc $TPROBE" 2>/dev/null) && [ "$(field status "$up")" = up ] && break
+  up=; sleep 0.5
+done
+if [ "$(field status "$up")" = up ]; then
+  pass "terminal: the shop is up under the pod's security context ($up)"
+else
+  fail "terminal: the shop is not up: '${up:-no answer}'"
+fi
+
+# The per-run flag: written where the credentials objective reads it, 0600, holding what the API set.
+flagfile=$($DOCKER exec "$tc" cat /srv/shop/.flag 2>/dev/null || true)
+if [ "$flagfile" = "$FLAG" ]; then pass "terminal: the per-run flag is at /srv/shop/.flag"
+else fail "terminal: /srv/shop/.flag is '${flagfile:-missing}', expected the injected flag"; fi
+mode=$($DOCKER exec "$tc" ls -l /srv/shop/.flag 2>/dev/null | cut -c1-10 || true)
+case $mode in -rw-------) pass "terminal: /srv/shop/.flag is 0600 ($mode)";;
+  *) fail "terminal: /srv/shop/.flag mode is '${mode:-unknown}', want -rw-------";; esac
+
+while IFS=$'\t' read -r tag id outcome tty detection argv; do
+  [ "$tag" = CMD ] || continue
+  printf '  -- %s (%s)\n' "$id" "$outcome"
+  case $outcome in
+    allowed)
+      if out=$(eval "$DOCKER exec $tc $argv" 2>&1); then
+        case $id in
+          read-flag)
+            if grep -qF "$FLAG" <<<"$out"; then pass "$id: prints the flag"; else fail "$id: the flag was not printed ('$out')"; fi ;;
+          deface)
+            st=$(eval "$DOCKER exec $tc $TPROBE" 2>/dev/null || true)
+            if [ "$(field status "$st")" = defaced ]; then pass "$id: the shop is now defaced (\"$(field banner "$st")\")"
+            else fail "$id: the shop did not change ('${st:-no answer}')"; fi ;;
+          *)
+            pass "$id: runs and exits 0" ;;
+        esac
+      else
+        fail "$id: expected to be allowed but it failed ('$(head -1 <<<"$out")')"
+      fi ;;
+    prevented)
+      if out=$(eval "$DOCKER exec $tc $argv" 2>&1); then
+        fail "$id: expected to be refused but it succeeded ('$out')"
+      else
+        pass "$id: refused by the pod (\"$(head -1 <<<"$out")\")"
+        if [ "$id" = touch-bin ]; then
+          if $DOCKER exec "$tc" test -e /bin/backdoor 2>/dev/null; then fail "$id: /bin/backdoor was created"
+          else pass "$id: nothing was written (/bin/backdoor does not exist)"; fi
+        fi
+      fi ;;
+    detected)
+      case $detection in
+        "Read sensitive file untrusted")
+          # open_read needs a successful open; cat is not a trusted reader (same as scenario 3).
+          if out=$(eval "$DOCKER exec $tc $argv" 2>&1) && grep -q '^root:' <<<"$out"; then
+            pass "$id: the read succeeds as uid $($DOCKER exec "$tc" id -u) (open_read matches)"
+          else
+            fail "$id: the read failed, so the rule would not fire ('$out')"
+          fi ;;
+        "SDP network tool in sandbox")
+          first=$(eval "set -- $argv"; basename "$1")
+          case $first in wget|nc|curl) pass "$id: proc.name '$first' is in the rule's list";;
+            *) fail "$id: '$first' is not wget/nc/curl";; esac
+          start_s=$SECONDS
+          out=$(eval "$DOCKER exec $tc $argv" 2>&1 || true)
+          if [ $((SECONDS - start_s)) -le 5 ]; then pass "$id: the tool starts and fails fast without network"
+          else fail "$id: the tool did not fail fast ('$out')"; fi ;;
+        "Terminal shell in container")
+          if [ "$tty" = true ]; then pass "$id: the command asks for a TTY (tty: true)"; else fail "$id: must set tty: true"; fi
+          if out=$($DOCKER exec -t "$tc" sh -c tty 2>&1) && grep -q '^/dev/pts/' <<<"$out"; then
+            pass "$id: a real terminal is allocated ($(tr -d '\r' <<<"$out"))"
+          else
+            fail "$id: no terminal ($out)"
+          fi ;;
+        "SDP execution from shop volume")
+          # The command drops a binary into the shop volume and runs it: exit 0 means it executed.
+          if out=$(eval "$DOCKER exec $tc $argv" 2>&1) && grep -q 'dropped and ran' <<<"$out"; then
+            pass "$id: a binary copied into /srv/shop ran (\"$(tr -d '\r' <<<"$out" | tail -1)\")"
+          else
+            fail "$id: the drop-and-run did not execute ('$out')"
+          fi
+          # proc.exepath startswith /srv/shop: run the dropped binary long enough to read its exe link.
+          $DOCKER exec -d "$tc" /srv/shop/busybox sleep 30 >/dev/null 2>&1 || true
+          exe=
+          for _ in 1 2 3 4 5; do
+            # shellcheck disable=SC2016  # expanded by the container's shell, not this one
+            exe=$($DOCKER exec "$tc" sh -c 'for p in /proc/[0-9]*; do readlink "$p/exe"; done' 2>/dev/null \
+              | grep '^/srv/shop/' | head -1 || true)
+            [ -n "$exe" ] && break
+            sleep 1
+          done
+          if [ -n "$exe" ]; then pass "$id: a process runs from $exe (proc.exepath matches the custom rule)"
+          else fail "$id: no process runs from /srv/shop"; fi
+          # ... and /srv/shop is a separate mount, so the stock drift rule (overlay upper layer) is blind
+          # to it - which is exactly why the custom rule exists.
+          if $DOCKER exec "$tc" cat /proc/self/mountinfo | awk '{print $5}' | grep -qx /srv/shop; then
+            pass "$id: /srv/shop is a separate mount; is_exe_upper_layer is false there (stock rule blind)"
+          else
+            fail "$id: /srv/shop is not a separate mount; the stock drift rule would already cover it"
+          fi ;;
+        *)
+          fail "$id: no offline precondition check for detection '$detection' - add one" ;;
+      esac ;;
+    *)
+      fail "$id: unknown outcome '$outcome'" ;;
+  esac
+done < "$WORK_DIR/terminal.tsv"
 
 # ---------------------------------------------------------------------------- result
 

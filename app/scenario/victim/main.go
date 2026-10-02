@@ -50,6 +50,10 @@ const (
 	// few hundred. A larger file is truncated, which for state.json means "invalid".
 	maxState = 4 << 10
 	maxIndex = 64 << 10
+	// The per-run capture flag (SDP_FLAG) is "SDP{" + 16 hex + "}" = 21 bytes; the cap is slack for a
+	// future format, not a contract. Longer is truncated rather than refused: the API is the only
+	// writer of this env, so this is a safety bound, not input validation.
+	maxFlag = 128
 )
 
 // The healthy shop. Plain, static, no script, no external reference.
@@ -106,6 +110,17 @@ func main() {
 	if err := initDocroot(*docroot); err != nil {
 		log.Fatalf("victim: %v", err)
 	}
+	// The terminal scenario's capture flag (ADR 0029/0032): the API sets SDP_FLAG per run, the shop
+	// drops it at /srv/shop/.flag (0600) and never serves it - there is no route for it, only / and
+	// /state.json. A terminal visitor can `cat` it (the `credentials` objective), which is the point:
+	// reading it inside the pod is a real find, and also not the same as getting it out past a
+	// default-deny network. Absent env (the one-click scenarios, and running the image on its own):
+	// no flag file.
+	if flag := strings.TrimSpace(os.Getenv("SDP_FLAG")); flag != "" {
+		if err := writeFlag(*docroot, flag); err != nil {
+			log.Fatalf("victim: flag: %v", err)
+		}
+	}
 	srv := &http.Server{
 		Addr:              *addr,
 		Handler:           &shop{docroot: *docroot},
@@ -137,6 +152,20 @@ func writeAtomic(dir, name, content string) error {
 		return err
 	}
 	return os.Rename(tmp, filepath.Join(dir, name))
+}
+
+// writeFlag stores the per-run capture flag at <dir>/.flag, mode 0600. temp-then-rename like
+// writeAtomic, so a concurrent reader never sees a half-written flag; both names are dotfiles with no
+// route, so neither is ever served.
+func writeFlag(dir, flag string) error {
+	if len(flag) > maxFlag {
+		flag = flag[:maxFlag]
+	}
+	tmp := filepath.Join(dir, ".flag.tmp")
+	if err := os.WriteFile(tmp, []byte(flag+"\n"), 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, filepath.Join(dir, ".flag"))
 }
 
 type shop struct {
