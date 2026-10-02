@@ -25,6 +25,16 @@ images:
   - name: public.ecr.aws/docker/library/redis
     newTag: 8.2.10-alpine
     digest: sha256:b51665e66f00759be7c3152ad5ac3c66fb2f619c13ef62dea7cc1f9914524635
+  # KSOPS for the repo-server's init container (argocd-repo-server-ksops.yaml): this repository's
+  # build of the v4.5.1 release, app/ksops (ADR 0024), built, Trivy-gated and signed by
+  # build-images.yml. Pinned by digest (ADR 0008); `scripts/bump-image-digest.sh ksops <digest>`
+  # rewrites the line below, scripts/validate-cluster.sh reads it (so a local KSOPS render runs the
+  # same binary), and a placeholder is refused by `make validate` and CI
+  # (scripts/check-image-digests.sh). Bootstrap-owned like everything here: a new digest reaches
+  # the cluster only through `kubectl apply -k cluster/bootstrap/argocd` (docs/bootstrap.md 8.6).
+  - name: ghcr.io/hubertmj/self-defending-portfolio/ksops
+    newTag: main
+    digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
 
 patches:
   - path: argocd-cm.yaml

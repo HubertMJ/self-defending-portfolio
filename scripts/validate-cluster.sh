@@ -20,12 +20,15 @@ DOCKER=${DOCKER:-docker}
 # Pinned by tag and digest.
 KUSTOMIZE_IMAGE=${KUSTOMIZE_IMAGE:-registry.k8s.io/kustomize/kustomize:v5.7.1@sha256:937e7832dc0b09288b1398399dadb97382a27bbc35bee8fdcac47c7de4fff14d}
 KUBECONFORM_IMAGE=${KUBECONFORM_IMAGE:-ghcr.io/yannh/kubeconform:v0.8.0-alpine@sha256:6b90a5f23d846140ce0194fe050b1995e546eba938f3a6bf10c039dd5e24588f}
-# Ships kustomize plus the KSOPS plugin. Same image and digest as the argocd-repo-server init
-# container, so a local validation exercises exactly the ksops binary the cluster uses. Its kustomize
-# (v5.3.0, ksops build) is no longer the cluster's: the repo-server keeps Argo CD's own v5.8.1 since
-# ADR 0013's amendment. Only used when an age key is present; the decryption itself is the same KRM
-# function either way.
-KSOPS_IMAGE=${KSOPS_IMAGE:-viaductoss/ksops:v4.5.1@sha256:4def9fdd4e2f850265740ebe9592c5455d19b76891e88e602df8b52d74b95334}
+# The KSOPS plugin: this repository's build (app/ksops, ADR 0024), read from the `images:` entry the
+# argocd-repo-server init container is pinned by, so a local validation exercises exactly the ksops
+# binary the cluster uses and a digest bump (scripts/bump-image-digest.sh ksops ...) needs no second
+# edit here. The image is one static binary and no kustomize: the binary is taken out of it the way
+# the init container does (`ksops install`) and run by KUSTOMIZE_IMAGE above. Only used when an age
+# key is present.
+KSOPS_REF=ghcr.io/hubertmj/self-defending-portfolio/ksops
+ksops_digest=$(sed -n "\|name: $KSOPS_REF\$|,/digest:/s/^ *digest: *//p" cluster/bootstrap/argocd/kustomization.yaml)
+KSOPS_IMAGE=${KSOPS_IMAGE:-$KSOPS_REF@$ksops_digest}
 # Same Kyverno release as the in-cluster controller (chart 3.9.1 = v1.19.1, cluster/apps/kyverno.yaml),
 # so a policy that loads here loads there, with the same PSS check library behind `podSecurity`.
 KYVERNO_CLI_IMAGE=${KYVERNO_CLI_IMAGE:-ghcr.io/kyverno/kyverno-cli:v1.19.1@sha256:ced7b2be0b04250cabfe695f15307f69eb715fe23234816388af4f3812915b2a}
@@ -56,14 +59,27 @@ kustomize() { $DOCKER run --rm -v "$1":/work -w /work "$KUSTOMIZE_IMAGE" build "
 # Same thing, but with the KSOPS plugin and the age identity available, so encrypted resources are
 # actually decrypted. The key is mounted read-only at a fixed path; it is never copied or printed.
 kustomize_ksops() {
-  # --user 0: the image runs as uid 65532 and the operator's key file is 0600, so the
-  # non-root user inside the container could not read it. Root in a throwaway container is fine.
+  # The plugin binary, installed once per run exactly as the repo-server's init container does it:
+  # `ksops install` from the pinned image into an empty directory (read-only root filesystem, no
+  # network), then mounted on kustomize's PATH. --user: the operator's own uid, so the directory
+  # mktemp created is writable from inside.
+  if [ ! -x "$WORK_DIR/ksops-bin/ksops" ]; then
+    mkdir -p "$WORK_DIR/ksops-bin"
+    if ! out=$($DOCKER run --rm --read-only --network none --user "$(id -u):$(id -g)" \
+                 -v "$WORK_DIR/ksops-bin":/custom-tools "$KSOPS_IMAGE" install /custom-tools 2>&1); then
+      printf 'validate-cluster: cannot install ksops from %s:\n%s\n' "$KSOPS_IMAGE" "$out" >&2
+      exit 1
+    fi
+  fi
+  # --user 0, explicitly: the operator's key file is 0600, and this must not start failing if the
+  # kustomize image ever defaults to a non-root user. Root in a throwaway container is fine.
   $DOCKER run --rm --user 0:0 \
     -v "$1":/work:ro \
+    -v "$WORK_DIR/ksops-bin/ksops":/usr/local/bin/ksops:ro \
     -v "$SOPS_AGE_KEY_FILE":/age/keys.txt:ro \
     -w /work \
     -e SOPS_AGE_KEY_FILE=/age/keys.txt \
-    --entrypoint kustomize "$KSOPS_IMAGE" \
+    "$KUSTOMIZE_IMAGE" \
     build --enable-alpha-plugins --enable-exec "$2"
 }
 

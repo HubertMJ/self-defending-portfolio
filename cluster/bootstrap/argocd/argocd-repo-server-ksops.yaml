@@ -1,17 +1,25 @@
 # KSOPS integration (ADR 0006). Strategic merge patch, so the lists below are merged into the
 # upstream Deployment by `name` rather than replacing it.
 #
-# The ksops image is distroless and has no shell, so the copy is done by the binary itself:
-# `ksops install <dir>` drops the `ksops` binary into the shared emptyDir, and a subPath mount puts
+# The ksops image is distroless `static` and has no shell, so the copy is done by the binary itself:
+# `ksops install <dir>` copies its own executable into the shared emptyDir, and a subPath mount puts
 # it on the repo-server's PATH, where kustomize finds it as an exec KRM function
 # (`exec: path: ksops` in each ksops.yaml; needs --enable-alpha-plugins --enable-exec, argocd-cm).
 #
-# Only the plugin, not the kustomize the ksops image also carries. Until 2026-10-01 this used
-# `--with-kustomize` and mounted that binary over /usr/local/bin/kustomize, so the repo-server ran
-# kustomize v5.3.0 (ksops build) instead of the v5.8.1 Argo CD v3.5.3 ships. v5.3.0's helmCharts
-# calls `helm version -c --short`, which the bundled Helm 4 rejects, so no kustomization could render
-# a chart (ADR 0013, amendment). KSOPS itself only needs exec KRM functions, which v5.8.1 runs the
-# same way (checked offline: a sops/age-encrypted Secret decrypts with kustomize 5.8.1 + this ksops).
+# The image is this repository's build of KSOPS v4.5.1 (app/ksops, ADR 0024): the same release
+# upstream's viaductoss/ksops:v4.5.1 ships, compiled with Go 1.26.8 and fixed dependencies, one static
+# binary at /usr/local/bin/ksops and nothing else (upstream's image: 109 CRITICAL+HIGH, ours: 0). Same
+# path and the same `install` subcommand, so the command below did not change with the image. The
+# reference is `:main` here and pinned to a digest by the `images:` entry in kustomization.yaml.
+#
+# Only the plugin; the repo-server keeps Argo CD's own kustomize. Until 2026-10-01 this used
+# `--with-kustomize` and mounted upstream's image's kustomize over /usr/local/bin/kustomize, so the
+# repo-server ran kustomize v5.3.0 (ksops build) instead of the v5.8.1 Argo CD v3.5.3 ships. v5.3.0's
+# helmCharts calls `helm version -c --short`, which the bundled Helm 4 rejects, so no kustomization
+# could render a chart (ADR 0013, amendment). Our image has no kustomize at all, so `--with-kustomize`
+# would now fail outright rather than silently downgrade. KSOPS itself only needs exec KRM functions,
+# which v5.8.1 runs the same way (checked offline with this image: a sops/age-encrypted Secret
+# decrypts with kustomize 5.8.1 + the installed binary, ADR 0024).
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -25,7 +33,7 @@ spec:
         fsGroup: 999
       initContainers:
         - name: install-ksops
-          image: viaductoss/ksops:v4.5.1@sha256:4def9fdd4e2f850265740ebe9592c5455d19b76891e88e602df8b52d74b95334
+          image: ghcr.io/hubertmj/self-defending-portfolio/ksops:main
           command:
             - /usr/local/bin/ksops
             - install
@@ -34,8 +42,9 @@ spec:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
             runAsNonRoot: true
-            # The image's USER is the name "nonroot", which the kubelet cannot resolve to a UID,
-            # so runAsNonRoot alone would fail the container. 65532 is that user.
+            # 65532, the distroless nonroot user our image's USER also names numerically. Stated
+            # here anyway: upstream's image named the user ("nonroot"), which the kubelet cannot
+            # check against runAsNonRoot, and the pod must not depend on which image is in it.
             runAsUser: 65532
             runAsGroup: 65532
             capabilities:

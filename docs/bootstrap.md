@@ -868,6 +868,63 @@ it is there so one file covers every component the bootstrap has dropped.
 Rollback: remove the two patch entries from `cluster/bootstrap/argocd/kustomization.yaml` and
 re-apply; `apply -k` recreates every object from install.yaml.
 
+### 8.6 KSOPS from this repository (two stages, then a bootstrap re-apply, ADR 0024)
+
+`app/ksops` is built and signed by `build-images.yml` only from `main`, and the repo-server's init
+container pins its digest, so it arrives like Talon in 8.3 - with one difference: the pin lives in
+the bootstrap kustomization, which Argo CD does not deploy, so the last step is a manual apply.
+
+1. **Stage 1: the image.** Push everything up to and including the commit that adds `app/ksops/`
+   (and none of the commit "argocd: run KSOPS from this repository's signed image"). The workflow
+   builds `ksops` (upstream tests, Trivy gate, SBOM, cosign) and prints `.../ksops@sha256:...`.
+   Nothing in the cluster changes. Make the new GHCR package `self-defending-portfolio/ksops`
+   public (5.2) - a fresh bootstrap pulls it without credentials - then from a machine that is not
+   logged in to GHCR:
+
+   ```sh
+   scripts/verify-image.sh ghcr.io/hubertmj/self-defending-portfolio/ksops@sha256:<digest>
+   mkdir -m 777 /tmp/ksops-check && docker run --rm --read-only --user 65532:65532 --cap-drop ALL \
+     --network none -v /tmp/ksops-check:/custom-tools \
+     ghcr.io/hubertmj/self-defending-portfolio/ksops@sha256:<digest> install /custom-tools
+   file /tmp/ksops-check/ksops     # ELF 64-bit LSB executable, x86-64, statically linked
+   ```
+
+2. **Stage 2: the switch.** On the switch commit, replace the placeholder and validate - `make
+   validate` refuses the placeholder, and with `SOPS_AGE_KEY_FILE` set it renders both KSOPS
+   directories for real with the binary installed from that very digest:
+
+   ```sh
+   scripts/bump-image-digest.sh ksops sha256:<digest>   # cluster/bootstrap/argocd/kustomization.yaml
+   SOPS_AGE_KEY_FILE=~/.config/sops/age/keys.txt make lint validate   # "(KSOPS decrypted)" twice
+   git commit --amend --no-edit && git push
+   ```
+
+3. **The bootstrap re-apply.** The diff must be the repo-server Deployment's init container image
+   and nothing else:
+
+   ```sh
+   kubectl diff -k cluster/bootstrap/argocd --server-side --force-conflicts
+   kubectl apply -k cluster/bootstrap/argocd --server-side --force-conflicts
+   kubectl -n argocd rollout status deploy/argocd-repo-server
+   kubectl -n argocd get deploy argocd-repo-server \
+     -o jsonpath='{.spec.template.spec.initContainers[0].image}'   # .../ksops:main@sha256:<digest>
+   kubectl -n argocd logs deploy/argocd-repo-server -c install-ksops   # installed /custom-tools/ksops
+   ```
+
+   Accept it by making Argo CD decrypt again: a hard refresh of the two Applications with KSOPS
+   generators must render their Secrets, i.e. stay Synced/Healthy with no ComparisonError:
+
+   ```sh
+   argocd app get cert-manager-issuers --hard-refresh | grep -E 'Sync Status|Health Status'
+   argocd app get cloudflared --hard-refresh | grep -E 'Sync Status|Health Status'
+   ```
+
+   One repo-server replica: while it rolls (seconds), Argo CD cannot render manifests and retries;
+   nothing already running is touched.
+
+Rollback: revert the switch commit and re-apply the bootstrap; upstream's `viaductoss/ksops:v4.5.1`
+comes back with the same `ksops install /custom-tools` command.
+
 ## Rebuild from zero
 
 ```sh

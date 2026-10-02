@@ -41,7 +41,8 @@ Decisions are accepted with their known costs written down. The ones still open:
 |------|-----|
 | `make validate` renders with kustomize v5.7.1; Argo CD's repo-server runs its own v5.8.1 | [0013](0013-runtime-detection-and-response.md) |
 | Talon 0.3.0's k8sevents notifier cannot work (object keys title-cased); the fix is in the commit app/talon builds, the notifier stays off until enabling it is decided | [0013](0013-runtime-detection-and-response.md), [0023](0023-third-party-vulnerabilities.md) |
-| Third-party images with fixed but unreleased or unadopted findings: Argo CD, KSOPS, Falcosidekick, Cilium 1.19, metrics-server; Talon's raised dependencies need re-checking on each upstream release | [0023](0023-third-party-vulnerabilities.md) |
+| Third-party images with fixed but unreleased or unadopted findings: Argo CD, Falcosidekick, Cilium 1.19, metrics-server; Talon's and KSOPS's raised dependencies need re-checking on each upstream release | [0023](0023-third-party-vulnerabilities.md), [0024](0024-argocd-trim-and-ksops-build.md) |
+| The KSOPS image pin is in the bootstrap: a digest bump reaches the cluster only through a manual `kubectl apply -k cluster/bootstrap/argocd`; `argocd` is outside Kyverno's signature check by design | [0024](0024-argocd-trim-and-ksops-build.md) |
 | Argo CD has no requests/limits and is excluded from the resources policy | [0012](0012-pod-security-and-resource-policy.md) |
 | `ClusterPolicy` is deprecated in Kyverno 1.19; migration to ImageValidatingPolicy / CEL policies deferred | [0011](0011-supply-chain.md), [0012](0012-pod-security-and-resource-policy.md) |
 | The signer identity still accepts the phase 3 `build-web.yml` (transition); dropped once hello runs a `build-images.yml` digest | [0016](0016-one-image-workflow.md) |

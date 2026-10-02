@@ -13,11 +13,11 @@ landed, and the only credential in play is Argo CD's own service account.
 | Path | What it is |
 |------|------------|
 | `bootstrap.sh` | idempotent installer: namespace, age key Secret, `kubectl apply -k argocd/`, wait, print next steps |
-| `argocd/kustomization.yaml` | pinned upstream `install.yaml` + the patches below + a newer Redis patch release (ADR 0023) |
+| `argocd/kustomization.yaml` | pinned upstream `install.yaml` + the patches below + a newer Redis patch release (ADR 0023) + the KSOPS image digest (ADR 0024) |
 | `argocd/namespace.yaml` | `argocd` namespace with Pod Security Standards `restricted` |
 | `argocd/argocd-cm.yaml` | `kustomize.buildOptions` so the KSOPS exec plugin runs |
 | `argocd/argocd-cmd-params-cm.yaml` | `server.insecure: "true"` — the UI is LAN-only, never published |
-| `argocd/argocd-repo-server-ksops.yaml` | KSOPS init container + the age key mount |
+| `argocd/argocd-repo-server-ksops.yaml` | KSOPS init container (this repository's build, `app/ksops`) + the age key mount |
 | `argocd/argocd-dex-server-delete.yaml` | deletes every Dex object: there is no SSO, so Dex served nobody (ADR 0023) |
 | `argocd/argocd-applicationset-controller-delete.yaml` | deletes the ApplicationSet controller: nothing here is an ApplicationSet; the CRD stays (ADR 0024) |
 | `argocd/argocd-notifications-controller-delete.yaml` | deletes the notifications controller and its empty ConfigMap: no triggers, no subscriptions (ADR 0024) |
@@ -32,7 +32,7 @@ A fork has to replace each of them before its first sync:
 
 | Value | Where | What it is |
 |-------|-------|------------|
-| `HubertMJ` / `hubertmj` | `cluster/apps/*.yaml`, `cluster/bootstrap/argocd/root-application.yaml`, the image paths in `cluster/infra/hello/`, `cluster/infra/portfolio-api/` and `cluster/infra/sandbox/scenarios/`, both image policies in `cluster/infra/kyverno-policies/`, `.github/workflows/build-images.yml`, `scripts/verify-image.sh`, `scripts/bump-image-digest.sh`, `scripts/lib/scenario_pods.py`, `app/` (Go module path, image labels, scenario image checks), `tests/` | GitHub owner; the registry path is its lower-case form |
+| `HubertMJ` / `hubertmj` | `cluster/apps/*.yaml`, `cluster/bootstrap/argocd/root-application.yaml`, the image paths in `cluster/bootstrap/argocd/` (KSOPS), `cluster/infra/hello/`, `cluster/infra/portfolio-api/` and `cluster/infra/sandbox/scenarios/`, both image policies in `cluster/infra/kyverno-policies/`, `.github/workflows/build-images.yml`, `scripts/verify-image.sh`, `scripts/bump-image-digest.sh`, `scripts/validate-cluster.sh`, `scripts/lib/scenario_pods.py`, `app/` (Go module path, image labels, scenario image checks), `tests/` | GitHub owner; the registry path is its lower-case form |
 | `hubertjablon.ski` | `cluster/infra/gateway/`, `cluster/infra/hello/`, `cluster/infra/portfolio-api/`, `cluster/infra/cloudflared/config.yaml`, `cluster/infra/cert-manager-issuers/`, `app/` (API same-origin check, site content), `tests/` | the site's hostname and DNS zone |
 | ACME contact email | `cluster/infra/cert-manager-issuers/clusterissuer-*.yaml` | Let's Encrypt account contact |
 | tunnel UUID | `tunnel:` in `cluster/infra/cloudflared/config.yaml` | output of `cloudflared tunnel create portfolio` |
@@ -118,13 +118,22 @@ decrypted in-cluster by KSOPS with this key (ADR 0006).
 
 ### The KSOPS image has no shell
 
-The usual KSOPS init container is `sh -c 'cp ... /custom-tools/'`. `viaductoss/ksops:v4.5.1` is
-distroless: no `sh`, no `cp`. The copy is therefore done by the binary itself,
-`ksops install /custom-tools`. Only the plugin is installed. Upstream's `--with-kustomize` form also
-copies the image's kustomize (v5.3.0) over Argo CD's own (v5.8.1), and that older kustomize cannot
-render Helm charts with the Helm 4 that Argo CD v3.5.3 bundles (ADR 0013, amendment). The
-init container also needs `runAsUser: 65532` explicitly, because the image's `USER` is the *name*
-`nonroot`, which the kubelet cannot resolve to a UID — `runAsNonRoot: true` alone fails it.
+The usual KSOPS init container is `sh -c 'cp ... /custom-tools/'`. The KSOPS image here is this
+repository's own build of the v4.5.1 release (`app/ksops`, ADR 0024): one static binary at
+`/usr/local/bin/ksops` on distroless `static` - no `sh`, no `cp`, no kustomize. The copy is therefore
+done by the binary itself, `ksops install /custom-tools`, which copies its own executable. Only the
+plugin is installed: Argo CD's own kustomize (v5.8.1) stays. Upstream's `--with-kustomize` form,
+used until 2026-10-01 with upstream's image, copied that image's kustomize (v5.3.0) over it, and that
+older kustomize cannot render Helm charts with the Helm 4 that Argo CD v3.5.3 bundles (ADR 0013,
+amendment). The init container states `runAsUser: 65532` explicitly: our image's `USER` is numeric,
+but upstream's was the *name* `nonroot`, which the kubelet cannot check against `runAsNonRoot`, and
+the pod should not depend on which of the two it runs.
+
+The image is pinned by digest in `argocd/kustomization.yaml` (`images:`) and comes from GHCR, so a
+fresh bootstrap needs the `self-defending-portfolio/ksops` package to be public, like the others
+(`docs/bootstrap.md`, 5.2). It is deliberately not checked by Kyverno's `verify-portfolio-images`:
+that policy fails closed, Kyverno is itself deployed by Argo CD, and a repo-server that cannot start
+while Kyverno is down could never redeploy Kyverno (ADR 0024).
 
 ### A missing secret fails the sync instead of half-working
 
@@ -139,7 +148,8 @@ away from the cause, and copying the example to the real name during bootstrap w
 with the value `REPLACE-ME` into the cluster and into git history.
 
 `scripts/validate-cluster.sh` knows about this. When the encrypted file and a readable
-`$SOPS_AGE_KEY_FILE` are both there it renders for real, with the KSOPS plugin, from the same image
-and digest the repo-server uses — so an operator who mis-encrypts finds out before pushing.
+`$SOPS_AGE_KEY_FILE` are both there it renders for real, with the KSOPS plugin installed by
+`ksops install` from the same image and digest the repo-server uses — so an operator who
+mis-encrypts finds out before pushing.
 Otherwise (CI, or a fresh clone) it renders a throwaway copy with the generator removed and says so,
 so the manifests next to the secret are still validated.

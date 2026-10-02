@@ -105,6 +105,29 @@ Secret through a `viaduct.ai/v1 ksops` exec generator; with a different age key 
 sops' "0 successful groups required". The age key was a throwaway generated for the check, never
 this repository's.
 
+**5. The repo-server runs it.** The init container in
+`cluster/bootstrap/argocd/argocd-repo-server-ksops.yaml` names
+`ghcr.io/hubertmj/self-defending-portfolio/ksops:main`, pinned by digest through an `images:` entry
+in the bootstrap kustomization, next to Redis's. Its command (`/usr/local/bin/ksops install
+/custom-tools`), its restricted security context, and the repo-server's single subPath mount of
+`/usr/local/bin/ksops` are unchanged; Argo CD's kustomize stays (ADR 0013, correction). Because the pin
+is in the bootstrap, it is placeholder-checked like every other pin (`scripts/check-image-digests.sh`
+scans all of `cluster/`), bumped by `scripts/bump-image-digest.sh ksops <digest>` (which now points out
+that a bootstrap file needs the manual apply), and reaches the cluster only through `kubectl apply -k
+cluster/bootstrap/argocd` (`docs/bootstrap.md`, 8.6). `scripts/validate-cluster.sh` reads the same
+digest, takes the binary out with `ksops install` the way the init container does, and runs it under
+its pinned kustomize, so a local render with the age key exercises the cluster's binary; upstream's
+image is no longer referenced anywhere.
+
+Not added to admission verification: `argocd` stays outside `verify-portfolio-images` (and
+`restrict-image-registries`). Those rules fail closed, and Kyverno is itself an Argo CD Application:
+with the repo-server's pod gated on Kyverno, a Kyverno outage would leave Argo CD unable to start a
+repo-server, and so unable to redeploy Kyverno - the cluster's repair path would depend on the thing
+being repaired. `argocd` is excluded from the other Kyverno image rules for the same reason
+(disallow-latest-tag's comment). The image is still signed, SBOM'd and Trivy-gated in CI, verifiable
+by hand (`scripts/verify-image.sh`), pinned by digest, and only an operator with cluster-admin can
+change the pin.
+
 ## Consequences
 - Two fewer Deployments, one fewer ClusterRole/ClusterRoleBinding pair, two fewer Roles, Services,
   ServiceAccounts and NetworkPolicies in `argocd`; about 77 MiB of memory back. No change to the
@@ -120,3 +143,9 @@ this repository's.
   KSOPS release, rebuild `app/ksops/modules/` from the new tag's go.mod (Dockerfile header) and drop
   every raise the release has caught up with; when it has caught up with all of them and its image is
   clean, delete app/ksops and return to the upstream image.
+- Once applied, KSOPS leaves the third-party column of the posture page: upstream's image (29
+  CRITICAL+HIGH in the cluster on 2026-10-01, 109 with today's Trivy DB) is replaced by an own image
+  at 0. The repo-server pulls one more image from GHCR, so a fresh bootstrap needs the
+  `self-defending-portfolio/ksops` package public, as every other package here.
+- Staged like Talon (ADR 0023): the image first, from `main`; then the switch commit with the real
+  digest; then the bootstrap re-apply. Until the re-apply, the cluster keeps running upstream's image.
