@@ -4,9 +4,9 @@
 #   scripts/bump-image-digest.sh <name> <sha256:digest>
 #   scripts/bump-image-digest.sh api sha256:3f1c...      # from the build-images run summary
 #
-# <name> is the app/<name>/ directory the image is built from (web, api, scenario, talon, ksops); the
-# image is ghcr.io/hubertmj/self-defending-portfolio/<name>. Two reference forms are rewritten, and
-# nothing else:
+# <name> is the app/<name>/ directory the image is built from (web, api, scenario, talon, ksops,
+# coredns); the image is ghcr.io/hubertmj/self-defending-portfolio/<name>. Two reference forms are
+# rewritten, and nothing else:
 #   * a kustomize `images:` entry whose `name:` is the image - its `digest:` line;
 #   * an inline reference <image>[:tag]@sha256:<hex> (the scenario pod specs).
 # Comments, layout and every other image are left as they are, so the diff is one line per reference.
@@ -15,6 +15,10 @@
 # rewritten like any other - and scripts/check-image-digests.sh refuses a placeholder there too. Argo
 # CD does not deploy the bootstrap, though (ADR 0005, amendment): when a bootstrap file changes, the
 # script says so, because the new digest reaches the cluster only through a manual `kubectl apply -k`.
+#
+# ansible/ is searched too, for the one image deployed by Ansible rather than Argo CD: coredns, whose
+# pin is k3s_coredns_image in ansible/roles/k3s/defaults/main.yml (ADR 0026). It reaches the cluster
+# only when the k3s role runs, and the script says so.
 #
 # The digest is not checked against the registry here; verify it before committing:
 #   scripts/verify-image.sh ghcr.io/hubertmj/self-defending-portfolio/<name>@<digest>
@@ -40,8 +44,8 @@ if [ "$digest" = "sha256:$(printf '0%.0s' {1..64})" ]; then
 fi
 
 image=ghcr.io/hubertmj/self-defending-portfolio/$name
-mapfile -t files < <(git grep -l -F "$image" -- cluster/ | sort)
-[ "${#files[@]}" -gt 0 ] || { echo "bump-image-digest: nothing under cluster/ references $image" >&2; exit 1; }
+mapfile -t files < <(git grep -l -F "$image" -- cluster/ ansible/ | sort)
+[ "${#files[@]}" -gt 0 ] || { echo "bump-image-digest: nothing under cluster/ or ansible/ references $image" >&2; exit 1; }
 
 python3 - "$image" "$digest" "${files[@]}" <<'PY'
 import re, sys
@@ -49,7 +53,7 @@ import re, sys
 image, digest, files = sys.argv[1], sys.argv[2], sys.argv[3:]
 inline = re.compile(re.escape(image) + r"((?::[\w.-]+)?)@sha256:[0-9a-f]{64}")
 entry = re.compile(r"^(\s*)-\s+name:\s*" + re.escape(image) + r"\s*$")
-changed, bootstrap = 0, set()
+changed, bootstrap, ansible = 0, set(), False
 for path in files:
     lines = open(path).read().split("\n")
     out, in_entry, indent = [], False, ""
@@ -67,6 +71,8 @@ for path in files:
             changed += 1
             if path.startswith("cluster/bootstrap/"):
                 bootstrap.add(path.split("/")[2])
+            if path.startswith("ansible/"):
+                ansible = True
             print(f"  {path}: {line.strip()}\n  {' ' * len(path)}  -> {new.strip()}")
         out.append(new)
     open(path, "w").write("\n".join(out))
@@ -77,4 +83,8 @@ for d in sorted(bootstrap):
     print(f"note: cluster/bootstrap/{d} changed - Argo CD does not apply it; after the push, review and apply:\n"
           f"  kubectl diff -k cluster/bootstrap/{d} --server-side --force-conflicts\n"
           f"  kubectl apply -k cluster/bootstrap/{d} --server-side --force-conflicts")
+if ansible:
+    print("note: ansible/ changed - neither Argo CD nor CI applies it; after the push, run the role (docs/bootstrap.md 8.7):\n"
+          "  cd ansible && ansible-playbook playbooks/cluster.yml --tags k3s --check --diff\n"
+          "  ansible-playbook playbooks/cluster.yml --tags k3s")
 PY

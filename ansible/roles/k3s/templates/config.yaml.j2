@@ -4,6 +4,7 @@
 node-ip: "{{ k3s_node_ip }}"
 cluster-cidr: "{{ k3s_cluster_cidr }}"
 service-cidr: "{{ k3s_service_cidr }}"
+cluster-dns: "{{ k3s_cluster_dns }}"
 write-kubeconfig-mode: "{{ k3s_write_kubeconfig_mode }}"
 secrets-encryption: {{ k3s_secrets_encryption | ternary('true', 'false') }}
 protect-kernel-defaults: {{ k3s_protect_kernel_defaults | ternary('true', 'false') }}
@@ -17,8 +18,9 @@ flannel-backend: "{{ k3s_flannel_backend }}"
 disable-network-policy: {{ k3s_disable_network_policy | ternary('true', 'false') }}
 disable-kube-proxy: {{ k3s_disable_kube_proxy | ternary('true', 'false') }}
 
+# coredns: replaced by this repository's build while k3s_coredns_own is true (ADR 0026).
 disable:
-{% for component in k3s_disable_components %}
+{% for component in k3s_disable_components + (['coredns'] if k3s_coredns_own else []) %}
   - "{{ component }}"
 {% endfor %}
 

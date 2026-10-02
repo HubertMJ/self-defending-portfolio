@@ -770,6 +770,10 @@ make verify
 A restart of k3s on one node interrupts the API server for under a minute. Running containers keep
 running (their containerd shims outlive the restart), and Argo CD and Kyverno reconnect on their own.
 
+Since ADR 0026 the image the cluster runs is this repository's (8.7), not k3s's: the bump above still
+matters for Kubernetes, containerd and metrics-server, and on every k3s bump compare the release's
+`manifests/coredns.yaml` with `ansible/roles/k3s/templates/coredns-sdp.yaml.j2`.
+
 ### 8.3 Falco Talon from this repository (two stages, like section 7)
 
 `app/talon` is built and signed by `build-images.yml` only from `main`, and the manifests that run it
@@ -924,6 +928,97 @@ the bootstrap kustomization, which Argo CD does not deploy, so the last step is 
 
 Rollback: revert the switch commit and re-apply the bootstrap; upstream's `viaductoss/ksops:v4.5.1`
 comes back with the same `ksops install /custom-tools` command.
+
+### 8.7 CoreDNS from this repository (two stages, then the k3s role, ADR 0026)
+
+`app/coredns` is built and signed by `build-images.yml` only from `main`. It is not deployed by Argo
+CD (Argo CD needs cluster DNS) but by the k3s role, as a k3s auto-deploy manifest that replaces k3s's
+bundled `coredns.yaml`; the pin is `k3s_coredns_image` in `ansible/roles/k3s/defaults/main.yml`.
+
+1. **Stage 1: the image.** Push everything up to and including the commit that adds `app/coredns/`
+   (and none of the commit "k3s: run CoreDNS from this repository's signed image"). The workflow
+   builds `coredns` (upstream tests, Trivy gate, SBOM, cosign) and prints `.../coredns@sha256:...`.
+   Nothing in the cluster changes. Make the GHCR package `self-defending-portfolio/coredns` public
+   (5.2): containerd pulls it without credentials, and a fresh node needs it before anything else.
+   Then, from a machine not logged in to GHCR:
+
+   ```sh
+   IMG=ghcr.io/hubertmj/self-defending-portfolio/coredns@sha256:<digest>
+   scripts/verify-image.sh "$IMG"
+   docker run --rm "$IMG" -version          # CoreDNS-1.14.7 / linux/amd64, go1.26.8, 427fc80
+   printf '.:53 {\n  hosts {\n    10.4.1.20 k3s01\n  }\n}\n' > /tmp/Corefile
+   docker run -d --name cdns --read-only --cap-drop ALL --cap-add NET_BIND_SERVICE \
+     --security-opt no-new-privileges -v /tmp/Corefile:/Corefile:ro "$IMG" -conf /Corefile
+   docker run --rm --network container:cdns alpine:3.22 sh -c \
+     'apk add -q bind-tools && dig +short @127.0.0.1 k3s01'   # 10.4.1.20 (uid 65532 bound :53)
+   docker rm -f cdns
+   ```
+
+2. **Stage 2: the switch.** On the switch commit, replace the placeholder and validate - `make
+   validate` (scripts/check-image-digests.sh) refuses the placeholder in `ansible/` too:
+
+   ```sh
+   scripts/bump-image-digest.sh coredns sha256:<digest>   # ansible/roles/k3s/defaults/main.yml
+   make lint validate
+   git commit --amend --no-edit && git push
+   ```
+
+3. **The role run (the cutover).** Before, record the state; keep a second terminal running a DNS
+   probe from inside the cluster for the whole run - it must not stop answering:
+
+   ```sh
+   kubectl -n kube-system get deploy coredns \
+     -o jsonpath='{.metadata.annotations.objectset\.rio\.cattle\.io/owner-name} {.spec.template.spec.containers[0].image}{"\n"}'
+   # coredns rancher/mirrored-coredns-coredns:1.14.7
+   kubectl -n kube-system get svc kube-dns -o jsonpath='{.spec.clusterIP}{"\n"}'   # 10.43.0.10
+   # terminal 2: a throwaway resolver loop in kube-system (exempt from the Kyverno pod rules, no
+   # CiliumNetworkPolicy there), resolving through the kube-dns Service like every pod does:
+   kubectl -n kube-system run dnsprobe --rm -it --restart=Never --image=docker.io/library/busybox:1.37 \
+     -- sh -c 'while true; do printf "%s " "$(date +%T)"; nslookup -timeout=1 kubernetes.default.svc.cluster.local >/dev/null 2>&1 && echo ok || echo FAIL; sleep 0.5; done'
+   ```
+
+   ```sh
+   cd ansible
+   ansible-playbook playbooks/cluster.yml --tags k3s --check --diff
+   # expect: coredns-sdp.yaml (new), config.yaml (+cluster-dns, +coredns under disable), "Restart k3s"
+   ansible-playbook playbooks/cluster.yml --tags k3s
+   ```
+
+   The role writes the manifest first; k3s applies it within 15 s and takes the six objects over in
+   place; the Deployment rolls surge-first; the role waits for owner `coredns-sdp` with the new image
+   and a finished rollout, and only then disables k3s's copy and restarts k3s (API down under a
+   minute, DNS unaffected - it is served by the running pod). Accept it:
+
+   ```sh
+   kubectl -n kube-system get deploy coredns \
+     -o jsonpath='{.metadata.annotations.objectset\.rio\.cattle\.io/owner-name} {.spec.template.spec.containers[0].image}{"\n"}'
+   # coredns-sdp ghcr.io/hubertmj/self-defending-portfolio/coredns:main@sha256:<digest>
+   kubectl -n kube-system get svc kube-dns -o jsonpath='{.spec.clusterIP}{"\n"}'   # still 10.43.0.10
+   kubectl -n kube-system get pods -l k8s-app=kube-dns -o wide       # one pod, Running, 1/1
+   kubectl -n kube-system get addon coredns                           # NotFound (k3s removed it)
+   kubectl -n kube-system get addon coredns-sdp                       # present
+   kubectl -n kube-system logs deploy/coredns | head                  # CoreDNS-1.14.7, no errors
+   ssh k3s01 sudo ls /var/lib/rancher/k3s/server/manifests/            # coredns-sdp.yaml, no coredns.yaml
+   ```
+
+   Then check what depends on the `k8s-app: kube-dns` labels: the probe never printed FAIL; Hubble
+   still logs DNS lookups through the L7 rules (`hubble observe --protocol dns -n cloudflared`);
+   the Applications stay Synced/Healthy (Argo CD resolves github.com); `make verify`. Trivy Operator
+   rescans kube-system within its cycle and the posture page moves CoreDNS to the own column at 0.
+
+**Rollback.** Two levels, both a role run:
+
+- *Binary only, no gap* - keep the delivery, run upstream's image:
+  `ansible-playbook playbooks/cluster.yml --tags k3s -e
+  k3s_coredns_image=docker.io/rancher/mirrored-coredns-coredns:1.14.7@sha256:7efd3c635b03efd68c4e8398fc45f0d993d0e9ab016f72c1cefb0fd6d01aa286`
+  (a surge-first roll, no k3s restart).
+- *Delivery* - back to k3s's own CoreDNS: `-e k3s_coredns_own=false` (or revert the switch commit
+  and set it in the role defaults). The role removes `coredns-sdp.yaml` (which deletes nothing),
+  drops `coredns` from `disable` and restarts k3s; k3s re-stages its manifest and takes the same
+  objects back, and the role waits for owner `coredns` and the rollout. That roll uses k3s's
+  `maxUnavailable: 1`, so expect a few seconds without a ready DNS pod; clients retry. Afterwards
+  `kubectl -n kube-system delete addon coredns-sdp` removes the stale bookkeeping object (its
+  objects carry no owner references, so nothing else goes with it).
 
 ## Rebuild from zero
 

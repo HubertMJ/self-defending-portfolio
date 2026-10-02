@@ -44,6 +44,75 @@
     mode: "0600"
   notify: Restart k3s
 
+# CoreDNS from this repository (ADR 0026). On a live cluster the order is the cutover: the manifest
+# goes in while k3s's own coredns is still enabled, k3s's deploy controller (15 s poll) takes the
+# same-named objects over, and the Deployment rolls to the new image surge-first, so a ready DNS
+# server exists throughout. Only then does config.yaml disable k3s's copy; the restart that follows
+# removes k3s's coredns.yaml and deletes what it still owns - nothing, since k3s finds its objects by
+# an owner hash the takeover replaced.
+- name: Check whether k3s is already running
+  ansible.builtin.service_facts:
+
+- name: Remember whether this is a live cluster
+  ansible.builtin.set_fact:
+    k3s_was_running: "{{ ansible_facts.services['k3s.service'].state | default('') == 'running' }}"
+
+- name: Create the k3s auto-deploy directory
+  ansible.builtin.file:
+    path: "{{ k3s_coredns_manifest_path | dirname }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+  when: k3s_coredns_own | bool
+
+- name: Install this repository's CoreDNS manifest
+  ansible.builtin.template:
+    src: coredns-sdp.yaml.j2
+    dest: "{{ k3s_coredns_manifest_path }}"
+    owner: root
+    group: root
+    mode: "0600"
+  register: k3s_coredns_manifest
+  when: k3s_coredns_own | bool
+
+# Rollback: without the file and with coredns no longer disabled, the restart re-stages k3s's own
+# manifest, which takes the objects back. Removing the file alone deletes nothing in the cluster.
+- name: Remove this repository's CoreDNS manifest
+  ansible.builtin.file:
+    path: "{{ k3s_coredns_manifest_path }}"
+    state: absent
+  notify: Restart k3s
+  when: not (k3s_coredns_own | bool)
+
+- name: Wait for k3s to take CoreDNS over with the new manifest
+  ansible.builtin.command:
+    cmd: >-
+      {{ k3s_binary_path }} kubectl -n kube-system get deployment coredns -o
+      jsonpath='{.metadata.annotations.objectset\.rio\.cattle\.io/owner-name} {.spec.template.spec.containers[0].image}'
+  register: k3s_coredns_owner
+  changed_when: false
+  retries: "{{ k3s_coredns_rollout_retries }}"
+  delay: "{{ k3s_coredns_rollout_delay }}"
+  until: k3s_coredns_owner.stdout == (k3s_coredns_manifest_path | basename | splitext | first) ~ ' ' ~ k3s_coredns_image
+  when:
+    - k3s_coredns_own | bool
+    - k3s_coredns_manifest is changed
+    - k3s_was_running | bool
+    - not ansible_check_mode
+
+- name: Wait for the CoreDNS rollout before k3s's own copy is disabled
+  ansible.builtin.command:
+    cmd: >-
+      {{ k3s_binary_path }} kubectl -n kube-system rollout status deployment/coredns
+      --timeout={{ k3s_coredns_rollout_retries * k3s_coredns_rollout_delay }}s
+  changed_when: false
+  when:
+    - k3s_coredns_own | bool
+    - k3s_coredns_manifest is changed
+    - k3s_was_running | bool
+    - not ansible_check_mode
+
 - name: Render the k3s server configuration
   ansible.builtin.template:
     src: config.yaml.j2
@@ -87,6 +156,34 @@
   retries: "{{ k3s_readyz_retries }}"
   delay: "{{ k3s_readyz_delay }}"
   until: k3s_readyz.rc == 0
+
+# Either direction, on a cluster that was already running: the expected manifest owns CoreDNS and
+# the Deployment has rolled. Skipped on a first install, where no CNI exists yet (cilium role).
+- name: Wait for CoreDNS to be owned by the expected manifest
+  ansible.builtin.command:
+    cmd: >-
+      {{ k3s_binary_path }} kubectl -n kube-system get deployment coredns -o
+      jsonpath='{.metadata.annotations.objectset\.rio\.cattle\.io/owner-name}'
+  register: k3s_coredns_owner_after
+  changed_when: false
+  retries: "{{ k3s_coredns_rollout_retries }}"
+  delay: "{{ k3s_coredns_rollout_delay }}"
+  until: >-
+    k3s_coredns_owner_after.stdout ==
+    ((k3s_coredns_manifest_path | basename | splitext | first) if (k3s_coredns_own | bool) else 'coredns')
+  when:
+    - k3s_was_running | bool
+    - not ansible_check_mode
+
+- name: Wait for the CoreDNS Deployment to be rolled out
+  ansible.builtin.command:
+    cmd: >-
+      {{ k3s_binary_path }} kubectl -n kube-system rollout status deployment/coredns
+      --timeout={{ k3s_coredns_rollout_retries * k3s_coredns_rollout_delay }}s
+  changed_when: false
+  when:
+    - k3s_was_running | bool
+    - not ansible_check_mode
 
 # no_log on both tasks below: the kubeconfig embeds the cluster CA plus the
 # admin client certificate and key, and without it Ansible prints the whole

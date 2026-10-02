@@ -42,6 +42,29 @@ argument_specs:
         description: Bundled k3s components to disable.
         type: list
         elements: str
+      k3s_coredns_own:
+        description: Run CoreDNS from this repository's image instead of k3s's bundled one (ADR 0026).
+        type: bool
+        default: true
+      k3s_coredns_image:
+        description: CoreDNS image reference, pinned by digest.
+        type: str
+      k3s_cluster_dns:
+        description: ClusterIP of the kube-dns Service and kubelet's cluster-dns.
+        type: str
+        default: 10.43.0.10
+      k3s_coredns_manifest_path:
+        description: Path of the CoreDNS manifest in k3s's auto-deploy directory.
+        type: str
+        default: /var/lib/rancher/k3s/server/manifests/coredns-sdp.yaml
+      k3s_coredns_rollout_retries:
+        description: Attempts while waiting for the CoreDNS Deployment to be taken over and rolled.
+        type: int
+        default: 36
+      k3s_coredns_rollout_delay:
+        description: Seconds between those attempts.
+        type: int
+        default: 5
       k3s_flannel_backend:
         description: Value of flannel-backend; none hands the CNI to Cilium.
         type: str

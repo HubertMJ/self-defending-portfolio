@@ -37,6 +37,34 @@ k3s_disable_components:
   - traefik
   - servicelb
 
+# CoreDNS from this repository (ADR 0026). While true, the role adds `coredns` to the disabled
+# components and writes templates/coredns-sdp.yaml.j2 into k3s's auto-deploy directory, where
+# k3s's deploy controller applies it on every start. The objects keep k3s's names, labels and
+# ClusterIP, so the switch in either direction is a rolling update of the same Deployment
+# (docs/bootstrap.md 8.7). false is the rollback: the file is removed, k3s's own manifest comes back
+# and takes the objects over again on the restart that follows.
+k3s_coredns_own: true
+
+# The image, pinned by digest; only CI on main builds and signs it (build-images.yml, ADR 0016).
+# Bumped with scripts/bump-image-digest.sh coredns <digest>; scripts/check-image-digests.sh refuses
+# the all-zero placeholder here as it does under cluster/. Applied only by running this role.
+k3s_coredns_image: >-
+  ghcr.io/hubertmj/self-defending-portfolio/coredns:main@sha256:9aafd8a87ef2742ad153dbc22936551fb47f92e042592a76d05e42c2f00cbacc
+
+# ClusterIP of the kube-dns Service and kubelet's --cluster-dns, from this one value. k3s's default
+# (the tenth address of k3s_service_cidr); every running pod's resolv.conf already names it, so it
+# must not change on a live cluster.
+k3s_cluster_dns: 10.43.0.10
+
+# The auto-deploy file. Its name sorts before k3s's coredns.yaml, so on a k3s start that both
+# applies it and removes the disabled coredns.yaml, the takeover comes first and the removal finds
+# no objects left to delete (ADR 0026).
+k3s_coredns_manifest_path: /var/lib/rancher/k3s/server/manifests/coredns-sdp.yaml
+
+# How long to wait for the CoreDNS Deployment to be taken over and rolled (retries x delay seconds).
+k3s_coredns_rollout_retries: 36
+k3s_coredns_rollout_delay: 5
+
 # CNI handover: flannel, the built-in network policy controller and kube-proxy
 # are all disabled because Cilium provides them (kube-proxy replacement in eBPF).
 k3s_flannel_backend: none

@@ -1,0 +1,265 @@
+# {{ ansible_managed }}
+#
+# CoreDNS built by this repository (app/coredns, ADR 0026) in place of the copy k3s bundles. The
+# k3s role writes this file into k3s's auto-deploy directory and disables k3s's own `coredns`
+# manifest; k3s's deploy controller applies it exactly as it applied its own: on every k3s start and
+# whenever the file changes. Not an Argo CD Application on purpose: Argo CD needs cluster DNS to
+# fetch this repository, so DNS must not depend on Argo CD (nor on Kyverno: kube-system is outside
+# every Kyverno rule).
+#
+# This mirrors manifests/coredns.yaml of k3s {{ k3s_version }} object for object - the same names,
+# labels, selector, ServiceAccount, RBAC and ClusterIP - so k3s's apply takes the live objects over
+# in place instead of replacing them (ADR 0026, cutover). Every Cilium policy that allows DNS selects
+# `k8s-app: kube-dns` in kube-system, and Hubble's DNS visibility and toFQDNs rules ride on those
+# policies; the pod labels are unchanged. What differs from k3s is marked "differs from k3s".
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: coredns
+  namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    kubernetes.io/bootstrapping: rbac-defaults
+  name: system:coredns
+rules:
+  - apiGroups:
+      - ""
+    resources:
+      - endpoints
+      - services
+      - pods
+      - namespaces
+    verbs:
+      - list
+      - watch
+  - apiGroups:
+      - discovery.k8s.io
+    resources:
+      - endpointslices
+    verbs:
+      - list
+      - watch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  annotations:
+    rbac.authorization.kubernetes.io/autoupdate: "true"
+  labels:
+    kubernetes.io/bootstrapping: rbac-defaults
+  name: system:coredns
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:coredns
+subjects:
+  - kind: ServiceAccount
+    name: coredns
+    namespace: kube-system
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: coredns
+  namespace: kube-system
+data:
+  # k3s's Corefile, with one change (differs from k3s): `health` has `lameduck 5s`, as kubeadm's
+  # default Corefile does. On SIGTERM the old pod keeps answering for 5 s while its endpoint is
+  # withdrawn, so a rolling update does not drop the queries already on their way to it.
+  Corefile: |
+    .:53 {
+        errors
+        health {
+          lameduck 5s
+        }
+        ready
+        kubernetes cluster.local in-addr.arpa ip6.arpa {
+          pods insecure
+          fallthrough in-addr.arpa ip6.arpa
+        }
+        hosts /etc/coredns/NodeHosts {
+          ttl 60
+          reload 15s
+          fallthrough
+        }
+        prometheus :9153
+        cache 30
+        loop
+        reload
+        loadbalance
+        import /etc/coredns/custom/*.override
+        forward . /etc/resolv.conf
+    }
+    import /etc/coredns/custom/*.server
+  # Differs from k3s: written here, not by k3s. k3s keeps NodeHosts up to date only while its own
+  # coredns is enabled (pkg/node, run with !Skips["coredns"]); with it disabled the entry for this
+  # single node is rendered from the inventory, in k3s's format ("<InternalIP> <node name>").
+  NodeHosts: |
+    {{ k3s_node_ip }} {{ ansible_facts['hostname'] }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: coredns
+  namespace: kube-system
+  labels:
+    k8s-app: kube-dns
+    kubernetes.io/name: "CoreDNS"
+spec:
+  revisionHistoryLimit: 0
+  # Differs from k3s (maxUnavailable: 1): on one replica, k3s's strategy may stop the old pod before
+  # the new one is ready. Surge first, so the cluster always has a ready DNS server during a roll -
+  # including the cutover itself, which is a roll of this Deployment.
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      k8s-app: kube-dns
+  template:
+    metadata:
+      labels:
+        k8s-app: kube-dns
+    spec:
+      priorityClassName: "system-cluster-critical"
+      serviceAccountName: coredns
+      tolerations:
+        - key: "CriticalAddonsOnly"
+          operator: "Exists"
+        - key: "node-role.kubernetes.io/control-plane"
+          operator: "Exists"
+          effect: "NoSchedule"
+      nodeSelector:
+        kubernetes.io/os: linux
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              k8s-app: kube-dns
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      # Differs from k3s (no pod securityContext): the full `restricted` Pod Security profile, stated
+      # rather than inherited from the image. The image's user is 65532 (distroless nonroot).
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: coredns
+          # Differs from k3s: this repository's signed build, pinned by digest (scripts/bump-image-digest.sh coredns).
+          image: "{{ k3s_coredns_image }}"
+          imagePullPolicy: IfNotPresent
+          resources:
+            limits:
+              memory: 170Mi
+            requests:
+              cpu: 100m
+              memory: 70Mi
+          args: ["-conf", "/etc/coredns/Corefile"]
+          volumeMounts:
+            - name: config-volume
+              mountPath: /etc/coredns
+              readOnly: true
+            - name: custom-config-volume
+              mountPath: /etc/coredns/custom
+              readOnly: true
+          ports:
+            - containerPort: 53
+              name: dns
+              protocol: UDP
+            - containerPort: 53
+              name: dns-tcp
+              protocol: TCP
+            - containerPort: 9153
+              name: metrics
+              protocol: TCP
+          # As k3s: the one capability `restricted` allows adding. The binary carries
+          # cap_net_bind_service=ep as a file capability (app/coredns/Dockerfile), which is what lets
+          # uid 65532 bind :53 with no-new-privileges set.
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              add:
+                - NET_BIND_SERVICE
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+              scheme: HTTP
+            initialDelaySeconds: 60
+            periodSeconds: 10
+            timeoutSeconds: 1
+            successThreshold: 1
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 8181
+              scheme: HTTP
+            initialDelaySeconds: 0
+            periodSeconds: 2
+            timeoutSeconds: 1
+            successThreshold: 1
+            failureThreshold: 3
+      dnsPolicy: Default
+      volumes:
+        - name: config-volume
+          configMap:
+            name: coredns
+            items:
+              - key: Corefile
+                path: Corefile
+              - key: NodeHosts
+                path: NodeHosts
+        - name: custom-config-volume
+          configMap:
+            name: coredns-custom
+            optional: true
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kube-dns
+  namespace: kube-system
+  annotations:
+    prometheus.io/port: "9153"
+    prometheus.io/scrape: "true"
+  labels:
+    k8s-app: kube-dns
+    kubernetes.io/cluster-service: "true"
+    kubernetes.io/name: "CoreDNS"
+spec:
+  selector:
+    k8s-app: kube-dns
+  # The address every pod's resolv.conf names (kubelet --cluster-dns, set from the same variable in
+  # config.yaml). Immutable on a live Service: it must stay what k3s assigned.
+  clusterIP: {{ k3s_cluster_dns }}
+  clusterIPs: [{{ k3s_cluster_dns }}]
+  ipFamilyPolicy: SingleStack
+  ports:
+    - name: dns
+      port: 53
+      protocol: UDP
+    - name: dns-tcp
+      port: 53
+      protocol: TCP
+    - name: metrics
+      port: 9153
+      protocol: TCP

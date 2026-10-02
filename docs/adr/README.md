@@ -28,6 +28,7 @@ decision are appended as dated amendments in the same file.
 | [0021](0021-evidence-events-and-victim-poller.md) | Evidence events (pod, enriched falco/talon, victim) and a hardened reader for the attacked pod's victim app | 7 | accepted |
 | [0023](0023-third-party-vulnerabilities.md) | Third-party vulnerabilities go down only by removing or replacing images (Dex removed, newest releases, Talon built here), never by hiding them; posture shows own vs third-party | 7 | accepted |
 | [0024](0024-argocd-trim-and-ksops-build.md) | Argo CD runs only the controllers it uses (no ApplicationSet, no notifications controller); KSOPS built here from the pinned release with fixed dependencies | 7 | accepted |
+| [0026](0026-coredns-build-and-delivery.md) | CoreDNS built here from the pinned release with fixed dependencies, deployed by the k3s role as a k3s auto-deploy manifest in place of k3s's bundled copy (same objects and ClusterIP, taken over by a rolling update) | 7 | accepted |
 
 Phases 5 and 6 were built on parallel branches and merged together; the numbers they had reserved
 are all in use except 0020 (phase 6 documentation needed no decision of its own), which is released.
@@ -43,6 +44,7 @@ Decisions are accepted with their known costs written down. The ones still open:
 | Talon 0.3.0's k8sevents notifier cannot work (object keys title-cased); the fix is in the commit app/talon builds, the notifier stays off until enabling it is decided | [0013](0013-runtime-detection-and-response.md), [0023](0023-third-party-vulnerabilities.md) |
 | Third-party images with fixed but unreleased or unadopted findings: Argo CD, Falcosidekick, Cilium 1.19, metrics-server; Talon's and KSOPS's raised dependencies need re-checking on each upstream release | [0023](0023-third-party-vulnerabilities.md), [0024](0024-argocd-trim-and-ksops-build.md) |
 | The KSOPS image pin is in the bootstrap: a digest bump reaches the cluster only through a manual `kubectl apply -k cluster/bootstrap/argocd`; `argocd` is outside Kyverno's signature check by design | [0024](0024-argocd-trim-and-ksops-build.md) |
+| CoreDNS no longer moves with k3s: each k3s bump must diff its bundled `coredns.yaml` against the role's template; the image pin is in the k3s role and reaches the cluster only when the role runs; `kube-system` is outside Kyverno's signature check by design; NodeHosts is static (single node) | [0026](0026-coredns-build-and-delivery.md) |
 | Argo CD has no requests/limits and is excluded from the resources policy | [0012](0012-pod-security-and-resource-policy.md) |
 | `ClusterPolicy` is deprecated in Kyverno 1.19; migration to ImageValidatingPolicy / CEL policies deferred | [0011](0011-supply-chain.md), [0012](0012-pod-security-and-resource-policy.md) |
 | The signer identity still accepts the phase 3 `build-web.yml` (transition); dropped once hello runs a `build-images.yml` digest | [0016](0016-one-image-workflow.md) |
