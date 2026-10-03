@@ -79,3 +79,20 @@ the Kyverno gate, so a pod the twin would refuse fails in CI.
   places a pod.
 - Live check integration must run: a `compare` run end to end, confirming Falco alerts in both namespaces and
   Talon acts only in `sandbox`.
+
+## Amendment 2026-10-03: the deadline bound is 300 s, not 120
+
+`require-sandbox-deadline` now admits a positive `activeDeadlineSeconds` of at most **300** (was 120). The
+interactive terminal's session went to 300 s (ADR 0032 amendment): visitors' sessions, the owner's included,
+ended "session over" while they were still reading the explanation of the command they had just run. The
+bound stays one number for every pod in `sandbox` and `sandbox-unguarded`; nothing else changed. The four
+one-click scenarios still ask for 90 s, and the twin only ever runs those (the API runs `compare` for them,
+not for the terminal), so an unanswered twin pod still ends at 90 s in practice and at 300 s at the very
+most - the ceiling the cluster enforces is what moved, not what the twin does.
+
+The price is that one run slot (ADR 0015) is now held for up to five minutes: a visitor who arrives while
+someone else's terminal is open may wait that long, watching it read-only, before they can start their own.
+The owner accepted that trade. The quota (3 pods) and the rate limits are unchanged, so the blast radius per
+pod is the same; only how long one pod may live has grown. `tests/admission/sandbox-deadline-pods.yaml`
+moves with the bound: 301 is refused and 300 admitted, in both namespaces, live (`run.sh`) and offline
+(`offline.sh`).

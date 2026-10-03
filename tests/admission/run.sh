@@ -2,8 +2,8 @@
 # Phase 3's Definition of Done, as an executable assertion: an image this project's workflow did not
 # sign does not get into the cluster. Since phase 4 (plan commit 9, ADR 0012) also: a privileged Pod
 # and a Pod without requests and limits do not get in either (workload-policy-pods.yaml, in `default`).
-# Since ADR 0031 also: a Pod in `sandbox` or `sandbox-unguarded` without a deadline of at most 120 s does
-# not get in, and one at 120 s does (sandbox-deadline-pods.yaml; its offline twin is ./offline.sh).
+# Since ADR 0031 also: a Pod in `sandbox` or `sandbox-unguarded` without a deadline of at most 300 s does
+# not get in, and one at 300 s does (sandbox-deadline-pods.yaml; its offline twin is ./offline.sh).
 #
 # Everything here is `kubectl apply --dry-run=server`, which runs the full admission chain -- the
 # built-in Pod Security admission plugin and then Kyverno's webhook -- and discards the object. No Pod

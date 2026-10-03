@@ -1,7 +1,8 @@
 # require-sandbox-deadline (ADR 0031): a Pod in `sandbox` or the unguarded twin `sandbox-unguarded` is
-# refused unless it sets a positive activeDeadlineSeconds of at most 120. One violation per refused Pod
-# (no deadline; 121), in each namespace, and the bound itself (120) admitted in each - a policy that
-# refused every sandbox pod would be an outage of the demo, not a working bound.
+# refused unless it sets a positive activeDeadlineSeconds of at most 300 (120 until the ADR 0031 amendment of
+# 2026-10-03). One violation per refused Pod (no deadline; 301), in each namespace, and the bound itself
+# (300) admitted in each - a policy that refused every sandbox pod would be an outage of the demo, not a
+# working bound.
 #
 # Read by two runners, each off the annotations, as for the other manifests here:
 #   tests/admission/run.sh      against the live cluster, `kubectl apply --dry-run=server`: the full
@@ -98,15 +99,15 @@ spec:
 apiVersion: v1
 kind: Pod
 metadata:
-  name: admission-test-deadline-121
+  name: admission-test-deadline-301
   namespace: sandbox
   labels:
     app.kubernetes.io/name: admission-test
   annotations:
     tests.hubertjablon.ski/expect-policy: require-sandbox-deadline
 spec:
-  # The one violation: one second over the 120 s bound.
-  activeDeadlineSeconds: 121
+  # The one violation: one second over the 300 s bound.
+  activeDeadlineSeconds: 301
   restartPolicy: Never
   automountServiceAccountToken: false
   enableServiceLinks: false
@@ -136,7 +137,7 @@ spec:
 apiVersion: v1
 kind: Pod
 metadata:
-  name: admission-test-deadline-121-twin
+  name: admission-test-deadline-301-twin
   namespace: sandbox-unguarded
   labels:
     app.kubernetes.io/name: admission-test
@@ -144,7 +145,7 @@ metadata:
     tests.hubertjablon.ski/expect-policy: require-sandbox-deadline
 spec:
   # The same, in the unguarded twin.
-  activeDeadlineSeconds: 121
+  activeDeadlineSeconds: 301
   restartPolicy: Never
   automountServiceAccountToken: false
   enableServiceLinks: false
@@ -174,7 +175,7 @@ spec:
 apiVersion: v1
 kind: Pod
 metadata:
-  name: admission-test-deadline-120
+  name: admission-test-deadline-300
   namespace: sandbox
   labels:
     app.kubernetes.io/name: admission-test
@@ -182,7 +183,7 @@ metadata:
     tests.hubertjablon.ski/expect-admitted: "true"
 spec:
   # At the bound: admitted.
-  activeDeadlineSeconds: 120
+  activeDeadlineSeconds: 300
   restartPolicy: Never
   automountServiceAccountToken: false
   enableServiceLinks: false
@@ -212,7 +213,7 @@ spec:
 apiVersion: v1
 kind: Pod
 metadata:
-  name: admission-test-deadline-120-twin
+  name: admission-test-deadline-300-twin
   namespace: sandbox-unguarded
   labels:
     app.kubernetes.io/name: admission-test
@@ -220,7 +221,7 @@ metadata:
     tests.hubertjablon.ski/expect-admitted: "true"
 spec:
   # At the bound, in the twin: admitted.
-  activeDeadlineSeconds: 120
+  activeDeadlineSeconds: 300
   restartPolicy: Never
   automountServiceAccountToken: false
   enableServiceLinks: false
