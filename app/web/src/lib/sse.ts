@@ -14,8 +14,9 @@
 // connections in a row the stream stops retrying on its own and says so; retryNow() starts over.
 //
 // The server replays the last 50 events on every connect, so a reconnect re-delivers events the page
-// has already shown. They are dropped here by identity (type + payload), which keeps the consumers
-// free of dedup logic.
+// has already shown. They are dropped here by identity (the event's id, with its type and payload, or
+// type and payload alone from a server that sends no ids), which keeps the consumers free of dedup
+// logic. Two identical lines of output are two events with two ids, and both are kept.
 
 import { STREAM_EVENT_TYPES, type StreamEvent, parseStreamEvent } from "./contract";
 
@@ -196,9 +197,9 @@ export class EventStream {
       source.addEventListener(type, (msg: MessageEvent) => {
         if (this.source !== source) return;
         const raw = typeof msg.data === "string" ? msg.data : "";
-        const key = `${type}\u0000${raw}`;
+        const key = `${msg.lastEventId}\u0000${type}\u0000${raw}`;
         if (this.seenSet.has(key)) return;
-        const ev = parseStreamEvent(type, raw);
+        const ev = parseStreamEvent(type, raw, msg.lastEventId);
         if (!ev) return;
         this.remember(key);
         this.opts.onEvent(ev);

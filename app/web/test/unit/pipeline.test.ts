@@ -24,6 +24,26 @@ function terminateRun(): StreamEvent[] {
 }
 
 describe("runHops", () => {
+  it("on a compare run, hop 8 is the guarded pod's: the twin's unreachable or gone never lights it", () => {
+    const pods = { guarded: "g", unguarded: "g-u" };
+    const ev = (type: string, data: Record<string, unknown>) => ({ type, data }) as unknown as StreamEvent;
+    const v = (ms: number, pod: string, arm: string, status: string) => ev("victim", { run_id: "c", pod, at: at(ms), status, title: "", banner: "", probe_ms: 3, checksum: "", arm });
+    const base = [
+      ev("run", { run_id: "c", scenario: "network-tool", state: "started", at: at(0), pod: "g", pods, detail: "" }),
+      ev("talon", { at: at(900), action: "Quarantine Pod", actionner: "kubernetes:label", namespace: "sandbox", pod: "g", status: "success", arm: "guarded" }),
+      ev("pod", { run_id: "c", pod: "g", uid: "u", phase: "Running", reason: "", container_id: "c", image: "", labels_delta: { "sdp.hubertjablon.ski/quarantine": "true" }, deleted: false, at: at(950), arm: "guarded" }),
+      // The twin's probe fails first (its own pod being cleaned up, say)…
+      v(1000, "g-u", "unguarded", "unreachable"),
+    ];
+    let hops = runHops(buildTimeline(base, T0 + 5000).runs[0]);
+    expect(hops[7].at).toBeUndefined();
+    // …and only the guarded pod's own cut lights the hop.
+    hops = runHops(buildTimeline([...base, v(1400, "g", "guarded", "unreachable")], T0 + 5000).runs[0]);
+    expect(hops[7].at).toBe(T0 + 1400);
+    const term = [ev("run", { run_id: "d", scenario: "drop-and-execute", state: "started", at: at(0), pod: "g", pods, detail: "" }), v(500, "g-u", "unguarded", "gone")];
+    expect(runHops(buildTimeline(term, T0 + 5000).runs[0])[7].at).toBeUndefined();
+  });
+
   it("maps every hop of a terminate run to its real timestamp", () => {
     const run = buildTimeline(terminateRun(), T0 + 5000).runs[0];
     const hops = runHops(run);

@@ -20,8 +20,9 @@ import type { ApiClient, Result } from "../lib/api";
 import type { Scenario, ScenarioDetails } from "../lib/contract";
 import { type Child, clockTime, h, prefersReducedMotion, replace } from "../lib/dom";
 import { type Hop, type Schedule, TIMER_END, TIMER_START, humanAction, runHops, scheduleHops, timerReading } from "../lib/pipeline";
-import { type RunView, type TimelineView, QUARANTINE_LABEL, formatDuration } from "../lib/timeline";
+import { type RunView, type TimelineView, QUARANTINE_LABEL, formatDuration, guardedFalco, guardedTalon, ts } from "../lib/timeline";
 import { copyButton, extLink, sourceUrl } from "./common";
+import { heldMs, heldText, renderTwin } from "./twin";
 import { labelOf, renderVictim, victimState } from "./victim";
 
 /** The workflow identity that signs the scenario image (ADR 0011, build-images.yml). */
@@ -77,6 +78,16 @@ const shortDigest = (image: string): string => {
   if (at < 0) return image;
   return `${image.slice(0, at).split("/").pop()}@sha256:${image.slice(at + 8, at + 20)}…`;
 };
+
+/** A real duration next to something a visitor can feel (FIX 3: "a blink is about 100 ms"). */
+export function humanSpeed(ms: number): string {
+  if (ms < 60) return "faster than you could blink";
+  if (ms < 180) return "about as fast as a blink (~100 ms)";
+  if (ms < 450) return "quicker than a camera shutter";
+  if (ms < 1200) return "in under a second";
+  if (ms < 3000) return "in a couple of seconds";
+  return "slower than it should be — look at the gaps below";
+}
 
 /** argv as a shell would need it typed: arguments with spaces or quotes are single-quoted. */
 export function shellJoin(argv: readonly string[]): string {
@@ -160,22 +171,43 @@ export function mountConsole(root: HTMLElement, api: ApiClient): ConsoleHandle {
   const details = new Map<string, Result<ScenarioDetails> | "loading">();
   /** Local time each hop of each run was first seen with data: `${runId}:${index}`. */
   const known = new Map<string, number>();
-  /** Runs first seen already finished: lit at once, no replay unless asked for. */
-  const instant = new Set<string>();
-  /** Runs being replayed on request: start time of the replay. */
+  /** Runs being replayed slowly on request: start time of the replay. */
   const replays = new Map<string, number>();
   let selected: string | undefined;
   let lastActive: string | undefined;
   let view: TimelineView = { runs: [], unmatched: [] };
   let panels: Panels | undefined;
   let frame: number | undefined;
+  // The twin's "held for" counter: no event arrives while the unguarded pod stays compromised, so it
+  // is re-read every second while the run is live.
+  let twinClock: ReturnType<typeof setInterval> | undefined;
+  const syncTwinClock = (run: RunView | undefined) => {
+    const live = run !== undefined && run.armPods !== undefined && run.active;
+    if (live && twinClock === undefined) {
+      twinClock = setInterval(() => {
+        const r = current();
+        const el = panels?.victim.querySelector(".twin__held");
+        const ms = r && heldMs(r, Date.now());
+        if (el && ms !== undefined) replace(el, ...heldText(ms));
+      }, 1000);
+    } else if (!live && twinClock !== undefined) {
+      clearInterval(twinClock);
+      twinClock = undefined;
+    }
+  };
 
   const heading = h("h3", { class: "console__title", id: "console-title", tabindex: "-1" }, "Live run");
   const body = h("div", { class: "console__body" });
   replace(root, h("div", { class: "console__top" }, heading), body);
 
-  const current = (): RunView | undefined =>
-    (selected ? view.runs.find((r) => r.runId === selected) : undefined) ?? view.activeRun ?? view.runs[0];
+  // The terminal has its own panel (ui/terminal.ts); the console never shows a terminal run.
+  const showable = (r: RunView | undefined): r is RunView => r !== undefined && r.scenario !== "terminal";
+  const current = (): RunView | undefined => {
+    const picked = selected ? view.runs.find((r) => r.runId === selected) : undefined;
+    if (showable(picked)) return picked;
+    if (showable(view.activeRun)) return view.activeRun;
+    return view.runs.find(showable);
+  };
 
   const timings = (run: RunView, hops: Hop[]) => {
     const replayAt = replays.get(run.runId);
@@ -191,7 +223,10 @@ export function mountConsole(root: HTMLElement, api: ApiClient): ConsoleHandle {
   const scheduleFor = (run: RunView, hops: Hop[]): { t: ReturnType<typeof timings>; s: Schedule } => {
     const t = timings(run, hops);
     const isReplay = replays.has(run.runId);
-    const s = scheduleHops(t, { instant: !isReplay && (reduced || instant.has(run.runId)) });
+    // FIX 3: real time first. Every hop lights the moment its event arrives — so the visitor sees how
+    // fast the cluster actually is — and the slowed, dwelled replay happens only on request (the
+    // "Replay slowly" button), never under prefers-reduced-motion.
+    const s = scheduleHops(t, { instant: !isReplay });
     return { t, s };
   };
 
@@ -268,23 +303,32 @@ export function mountConsole(root: HTMLElement, api: ApiClient): ConsoleHandle {
             ? "starts when Falco catches the attack"
             : "Falco reported no detection";
 
-    // Replay badge.
-    const replaying = moving && (replays.has(run.runId) || !instant.has(run.runId));
+    // Replay badge. By default the run played in real time; the slowed replay runs only on request.
+    const isReplay = replays.has(run.runId);
+    const replaying = isReplay && moving;
     let badge = "";
     if (s.realSpanMs !== undefined && frontier >= TIMER_START + 1) {
       const real = formatDuration(s.realSpanMs);
       // The same stretch as the kill-timer (detected syscall to the response in the API server), so
       // the badge and the big number can never disagree.
       const span = `real: ${real} from the detected syscall to ${hops[TIMER_END].what}`;
-      if (reduced) badge = `Shown in real time · ${span}`;
-      else if (s.slowdown > 1 && (replaying || replays.has(run.runId) || !instant.has(run.runId))) badge = `${replaying ? "Replaying" : "Replayed"} at 1/${s.slowdown} speed · ${span}`;
-      else badge = span.charAt(0).toUpperCase() + span.slice(1);
+      if (isReplay) {
+        badge = `${replaying ? "Replaying" : "Replayed"} at 1/${s.slowdown} speed · ${span}`;
+      } else if (contained) {
+        // FIX 3: once it is over, state how fast it really was, next to something human.
+        badge = `Real time · ${span} · ${humanSpeed(s.realSpanMs)}`;
+      } else {
+        badge = `Playing in real time · ${span}`;
+      }
+    } else if (run.active && !isReplay) {
+      badge = "Playing in real time";
     }
     if (panels.badge.textContent !== badge) panels.badge.textContent = badge;
     panels.badge.hidden = badge === "";
+    // Offered once the run is over and there is a response chain to replay; never under reduced motion.
     panels.replayBtn.hidden = reduced || run.active || moving || hops.every((hp) => hp.at === undefined);
 
-    if (!moving && replays.has(run.runId)) replays.delete(run.runId), instant.add(run.runId);
+    if (!moving && replays.has(run.runId)) replays.delete(run.runId);
     if (moving || (run.active && reading !== undefined && !contained)) {
       frame = requestAnimationFrame(tick);
     }
@@ -337,7 +381,7 @@ export function mountConsole(root: HTMLElement, api: ApiClient): ConsoleHandle {
       timerLabel,
     );
     const badge = h("p", { class: "replay-badge", hidden: true });
-    const replayBtn = h("button", { type: "button", class: "btn btn--ghost btn--small", hidden: true }, "Replay");
+    const replayBtn = h("button", { type: "button", class: "btn btn--ghost btn--small", hidden: true }, "Replay slowly");
     replayBtn.addEventListener("click", () => {
       replays.set(run.runId, Date.now());
       scheduleTick();
@@ -522,11 +566,12 @@ export function mountConsole(root: HTMLElement, api: ApiClient): ConsoleHandle {
 
   const proofPanel = (run: RunView): Kids | null => {
     const sc = scenarios.get(run.scenario);
-    const quarantine = run.quarantinedAt !== undefined || sc?.response === "quarantine" || run.talon.some((t) => /label/i.test(t.actionner ?? t.action));
+    const gt = guardedTalon(run);
+    const quarantine = run.quarantinedAt !== undefined || sc?.response === "quarantine" || (gt !== undefined && /label/i.test(gt.actionner ?? gt.action));
     if (!quarantine) return null;
-    const before = run.victim.find((v) => v.status === "up");
-    const after = run.victim.find((v) => v.status === "unreachable");
-    const drops = run.flows.filter((f) => /drop/i.test(f.verdict));
+    const before = run.victim.find((v) => v.status === "up" && v.arm !== "unguarded");
+    // The cut is the first probe that failed after the label landed, not any earlier timeout.
+    const after = run.victim.find((v) => v.status === "unreachable" && v.arm !== "unguarded" && (run.quarantinedAt === undefined || ts(v.at) >= run.quarantinedAt));
     const lastPod = run.pods[run.pods.length - 1];
     const stillRunning = run.quarantinedAt !== undefined && run.pods.some((p) => p.labels_delta[QUARANTINE_LABEL] === "true" && /running/i.test(p.phase));
     const check = (ok: boolean, title: string, detail: Child[]) =>
@@ -542,13 +587,10 @@ export function mountConsole(root: HTMLElement, api: ApiClient): ConsoleHandle {
           run.quarantinedAt !== undefined ? ` at ${clockTime(run.quarantinedAt)}` : "",
         ]),
         check(stillRunning, "Pod still running", [stillRunning ? "phase Running after the label: isolated, not deleted" : lastPod ? `last phase seen: ${lastPod.phase}` : "waiting for the pod watch"]),
-        check(after !== undefined, "Victim unreachable", [
-          before ? `answered in ${before.probe_ms} ms before; ` : "",
-          after ? `no answer within ${after.probe_ms > 0 ? after.probe_ms : 300} ms after the label` : "waiting for the next probe",
+        check(after !== undefined, "Cilium dropped the probe", [
+          before ? `the API's probe answered in ${before.probe_ms} ms before the label; ` : "",
+          after ? `after it, no answer within ${after.probe_ms > 0 ? `${after.probe_ms} ms` : "its full timeout"} — the quarantine policy cut the pod off` : "waiting for the next probe",
         ]),
-        drops.length
-          ? check(true, "Packets dropped by Cilium", [`${drops.length} flow${drops.length === 1 ? "" : "s"}: `, ...drops.slice(0, 3).flatMap((f, i) => [i ? ", " : "", h("code", {}, `${f.direction} ${f.l4} ${f.drop_reason}`)])])
-          : null,
       ),
       lastPod?.deleted ? h("p", { class: "small" }, `The API deleted the quarantined pod at the end of the run (${clockTime(Date.parse(lastPod.at))}).`) : null,
     ];
@@ -610,8 +652,8 @@ export function mountConsole(root: HTMLElement, api: ApiClient): ConsoleHandle {
   let openVerify: string | undefined;
 
   const rawPanel = (run: RunView): Kids => {
-    const falco = run.falco[0];
-    const talon = run.talon[0];
+    const falco = guardedFalco(run);
+    const talon = guardedTalon(run);
     return [
       h("h4", { class: "card__title" }, "Technical detail"),
       h(
@@ -665,14 +707,13 @@ export function mountConsole(root: HTMLElement, api: ApiClient): ConsoleHandle {
     const run = current();
     if (!run) {
       panels = undefined;
+      syncTwinClock(undefined);
       root.dataset.state = "empty";
       replace(body, h("p", { class: "empty" }, "No run yet. Launch an attack above and it plays out here, hop by hop."));
       return;
     }
     root.dataset.state = run.active ? "live" : "done";
     if (!panels || panels.runId !== run.runId) {
-      // A run first seen already over is history: lit at once. One seen live is replayed hop by hop.
-      if (!run.active && !known.has(`${run.runId}:0`)) instant.add(run.runId);
       panels = build(run);
       replace(body, panels.root);
     }
@@ -682,8 +723,9 @@ export function mountConsole(root: HTMLElement, api: ApiClient): ConsoleHandle {
     const d = details.get(run.scenario);
     const dKey = d === undefined || d === "loading" ? "l" : d.ok ? "ok" : "no";
     patch(p, "head", `${run.current}|${run.active}|${own.has(run.runId)}|${run.pod}|${selected}|${scenarios.size}|${view.activeRun?.runId}`, () => headPanel(run));
-    const vKey = run.victim.map((v) => `${v.status}${v.checksum}${v.until}`).join(",");
-    patch(p, "victim", `${vKey}|${run.active}|${run.pod}|${run.pods[run.pods.length - 1]?.phase}`, () => renderVictim(run, run.active && !own.has(run.runId)));
+    const vKey = run.victim.map((v) => `${v.arm ?? ""}${v.status}${v.checksum}${v.until}`).join(",");
+    const twin = run.armPods !== undefined;
+    patch(p, "victim", `${twin ? `twin|${run.unguardedPods.length}|` : ""}${vKey}|${run.active}|${run.pod}|${run.pods[run.pods.length - 1]?.phase}`, () => (twin ? renderTwin(run) : renderVictim(run, run.active && !own.has(run.runId))));
     patch(p, "pod", `${run.pods.length}|${run.pod}`, () => podPanel(run));
     patch(p, "executed", `${dKey}|${scenarios.size}`, () => executedPanel(run));
     patch(p, "proof", `${run.pods.length}|${vKey}|${run.flows.length}|${run.talon.length}|${scenarios.size}`, () => proofPanel(run));
@@ -691,6 +733,7 @@ export function mountConsole(root: HTMLElement, api: ApiClient): ConsoleHandle {
     patch(p, "raw", `${run.events.length}`, () => rawPanel(run));
     p.root.dataset.victim = victimState(run);
     p.root.dataset.victimLabel = labelOf(victimState(run));
+    syncTwinClock(run);
     scheduleTick();
   };
 

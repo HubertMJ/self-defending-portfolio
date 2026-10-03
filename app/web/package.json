@@ -16,7 +16,8 @@
     "lint": "tsc --noEmit && node scripts/check-dom-sinks.mjs",
     "test": "vitest run",
     "test:e2e": "npm run build && playwright test",
-    "todo-content": "node scripts/todo-content.mjs"
+    "todo-content": "node scripts/todo-content.mjs",
+    "catalogue": "node scripts/terminal-catalogue.mjs"
   },
   "devDependencies": {
     "@playwright/test": "1.63.0",

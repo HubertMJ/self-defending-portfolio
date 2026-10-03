@@ -2,15 +2,20 @@
 // adds the live panels on top, each of which degrades to its own offline state independently.
 
 import { ApiClient } from "./lib/api";
+import { Backfill } from "./lib/backfill";
 import { byId, h, prefersReducedMotion, replace } from "./lib/dom";
 import { MockBackend, mockOptionsFromUrl } from "./lib/mock";
 import { type ConnectionState, type EventSourceFactory, EventStream } from "./lib/sse";
 import { CONNECTION_WORD } from "./ui/common";
 import { mountConsole } from "./ui/console";
+import { mountDefenceMap } from "./ui/defencemap";
 import { mountPosture } from "./ui/posture";
 import { mountScenarios } from "./ui/scenarios";
+import { mountStats } from "./ui/stats";
+import { mountTerminal } from "./ui/terminal";
 import { mountLimits, setupTechMode } from "./ui/tech";
 import { mountTimeline } from "./ui/timeline";
+import { blockedReason } from "./ui/scenarios";
 
 const HIDDEN_DISCONNECT_MS = 60_000;
 
@@ -40,6 +45,22 @@ function setupThemeToggle(): void {
   matchMedia("(prefers-color-scheme: dark)").addEventListener("change", label);
 }
 
+/**
+ * An API without the terminal (today's live one answers its catalogue with a JSON 404): the one-click
+ * scenarios become the attack section, and nothing on the page offers a terminal that is not there.
+ */
+function degradeToOneClick(): void {
+  document.documentElement.dataset.terminal = "off";
+  replace(byId("hero-cta"), "Launch an attack");
+  replace(byId("attack-title"), "Launch a real attack");
+  replace(
+    byId("attack-lead"),
+    "Each attack starts a throwaway pod in an isolated ",
+    h("code", {}, "sandbox"),
+    " namespace (no service-account token, default-deny network, tight quotas, read-only root filesystem) with a little shop running inside it, runs one fixed attack, and plays the detection and the response out below as they happen. One run at a time, a few per visitor.",
+  );
+}
+
 function main(): void {
   document.documentElement.classList.add("js");
   if (prefersReducedMotion()) document.documentElement.classList.add("reduced-motion");
@@ -53,22 +74,48 @@ function main(): void {
   if (mock) {
     const banner = byId("mock-banner");
     banner.hidden = false;
+    // Into the sticky header: a page opened at #attack scrolls past where the banner sits.
+    document.querySelector(".site-header")?.append(banner);
     document.documentElement.dataset.mock = "true";
+    // The mock answers in-page, so the network never sees a request: its own call log is what the
+    // end-to-end tests read to check what the page sent.
+    (window as unknown as { sdpMock: MockBackend }).sdpMock = mock;
   }
 
   mountPosture(byId("posture-panel"), api);
+  const stats = mountStats(byId("hero-stats"), api);
+  mountDefenceMap(byId("defence-map"), api);
 
   const limits = mountLimits(byId("limits-panel"), api);
   setupTechMode(byId("tech-toggle"), (on) => limits.setEnabled(on));
 
   const runConsole = mountConsole(byId("console"), api);
 
+  // What blocks a fresh run right now (another run active, or a cooldown) — shown on the terminal's
+  // own start button. The server is the authority (409/429); this is only the up-front label.
+  let launcherState: { activeRun?: { runId: string; scenario: string; since: number }; cooldownUntil?: number } = {};
+  const terminal = mountTerminal(byId("terminal"), api, {
+    blocked: () => blockedReason(launcherState, Date.now()),
+    cooldownSeconds: () => Math.max(0, Math.ceil(((launcherState.cooldownUntil ?? 0) - Date.now()) / 1000)),
+    // A 429 starting the terminal sets the shared cooldown, so the blocked state shows on both the
+    // terminal's button and the one-click launcher (review item 11).
+    onRateLimited: (seconds) => {
+      launcherState = { ...launcherState, cooldownUntil: Date.now() + seconds * 1000 };
+    },
+    onAvailable: (available, objectives) => {
+      if (available) stats.setObjectives(objectives);
+      else degradeToOneClick();
+    },
+  });
+
+  let titles = new Map<string, string>();
   const launcher = mountScenarios(
     byId("scenario-panel"),
     byId("launch-status"),
     api,
     (scenarios) => {
-      timeline.setTitles(new Map(scenarios.map((s) => [s.id, s.title])));
+      titles = new Map(scenarios.map((s) => [s.id, s.title]));
+      timeline.setTitles(titles);
       runConsole.setScenarios(scenarios);
     },
     (runId) => {
@@ -83,12 +130,21 @@ function main(): void {
   const headerConn = byId("header-conn");
   const setHeaderConn = (state: ConnectionState) => {
     headerConn.dataset.state = state;
-    replace(headerConn, h("span", { class: "conn__dot", "aria-hidden": "true" }), `cluster ${CONNECTION_WORD[state]}`);
+    // In mock mode the header says so, so "cluster live" is never mistaken for the real cluster (item 26).
+    replace(headerConn, h("span", { class: "conn__dot", "aria-hidden": "true" }), mock ? `mock · ${CONNECTION_WORD[state]}` : `cluster ${CONNECTION_WORD[state]}`);
   };
 
   // Assigned right below; the retry callback can only fire after the stream exists.
   let stream: EventStream | undefined;
   let activeId: string | undefined;
+
+  // A run's history from /api/runs/{id} when the live feed missed part of it (lib/backfill.ts).
+  const backfill = new Backfill(
+    (id) => api.runEvents(id),
+    (ev) => timeline.push(ev),
+    Date.now,
+    (id) => terminal.historyTruncated(id),
+  );
   const timeline = mountTimeline(
     byId("timeline-panel"),
     byId("timeline-conn"),
@@ -97,9 +153,21 @@ function main(): void {
       const r = view.activeRun;
       const wasActive = activeId;
       activeId = r?.runId;
-      launcher.setActiveRun(r ? { runId: r.runId, scenario: r.scenario, since: r.states.started ?? r.states.queued ?? Date.now() } : undefined);
+      const active = r ? { runId: r.runId, scenario: r.scenario, since: r.states.started ?? r.states.queued ?? Date.now() } : undefined;
+      launcherState = { ...launcherState, activeRun: active };
+      launcher.setActiveRun(active);
       runConsole.update(view);
+      terminal.update(view);
+      // The hero's "last run" tile follows the newest run the feed has shown.
+      const newest = view.runs[0];
+      if (newest) {
+        stats.setLastRun({
+          title: titles.get(newest.scenario) ?? newest.scenario,
+          at: newest.states.started ?? newest.states.queued ?? Date.now(),
+        });
+      }
       if (wasActive && !activeId) limits.refresh();
+      backfill.view(view);
     },
     () => stream?.retryNow(),
     (runId) => {
@@ -119,6 +187,9 @@ function main(): void {
     onState: (state, { retryInMs, gaveUp }) => {
       timeline.setConnection(state, retryInMs, gaveUp);
       setHeaderConn(state);
+      // On opening after a drop or a hidden-tab stop, re-fetch the active run so output lost across
+      // the gap is recovered (the replay buffer may not reach back to its start).
+      backfill.stream(state, activeId);
     },
   });
   stream = events;
@@ -129,7 +200,10 @@ function main(): void {
   let hiddenTimer: ReturnType<typeof setTimeout> | undefined;
   document.addEventListener("visibilitychange", () => {
     if (document.hidden) {
-      hiddenTimer = setTimeout(() => events.stop(), HIDDEN_DISCONNECT_MS);
+      hiddenTimer = setTimeout(() => {
+        events.stop();
+        backfill.stopped();
+      }, HIDDEN_DISCONNECT_MS);
     } else {
       clearTimeout(hiddenTimer);
       // Restart a stopped stream; skip the backoff wait of one that is still trying.

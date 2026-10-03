@@ -25,6 +25,8 @@ export interface Scenario {
   response: ResponseAction | string;
   /** Extension: whether the scenario pod runs the victim app (absent from older APIs). */
   victim?: boolean;
+  /** Extension (phase 8): the visitor drives this one by typing commands (the terminal scenario). */
+  interactive?: boolean;
 }
 
 export const RUN_STATES = [
@@ -47,6 +49,9 @@ export interface AttackAccepted {
   state: "queued";
 }
 
+/** Extension (phase 8): a compare run has two pods; every per-pod event says which arm it is. */
+export type Arm = "guarded" | "unguarded";
+
 export interface RunEvent {
   run_id: string;
   scenario: string;
@@ -55,6 +60,13 @@ export interface RunEvent {
   detail?: string;
   /** Extension: the scenario pod's name, from `started` on. */
   pod?: string;
+  /** Extension (phase 8): both pods of a compare run, named together when they are created. */
+  pods?: { guarded: string; unguarded: string };
+  /**
+   * Extension (phase 8): on a terminal run's `detected`/`responded`, the command it is about (the one
+   * running, or ended less than 2 s before). Absent when the API could tie it to none.
+   */
+  command_seq?: number;
 }
 
 /**
@@ -87,6 +99,10 @@ export interface FalcoEvent {
   /** Extension: when the API received the alert from Falcosidekick. */
   api_received_at?: string;
   run_id?: string;
+  /** Extension (phase 8): the terminal command that was running when the alert arrived (best effort). */
+  command_seq?: number;
+  /** Extension (phase 8): which pod of a compare run this alert names. */
+  arm?: Arm;
 }
 
 export interface TalonEvent {
@@ -102,6 +118,10 @@ export interface TalonEvent {
   /** Extension: Talon's own result text (capped at 300 by the API). */
   output?: string;
   run_id?: string;
+  /** Extension (phase 8): the terminal command that was running when the action arrived (best effort). */
+  command_seq?: number;
+  /** Extension (phase 8): which pod of a compare run this action names. */
+  arm?: Arm;
 }
 
 /** Extension: one observation of the scenario pod by the API's single-pod watch. */
@@ -120,6 +140,8 @@ export interface PodEvent {
   labels_delta: Record<string, string | null>;
   deleted: boolean;
   at: string;
+  /** Extension (phase 8): which pod of a compare run this observation is of. */
+  arm?: Arm;
 }
 
 export const VICTIM_STATUSES = ["up", "defaced", "compromised", "unreachable", "gone"] as const;
@@ -135,6 +157,8 @@ export interface VictimEvent {
   banner: string;
   probe_ms: number;
   checksum: string;
+  /** Extension (phase 8): which pod of a compare run this probe is of. */
+  arm?: Arm;
 }
 
 /** Extension (optional on the server too): one Hubble flow verdict for the scenario pod, no addresses. */
@@ -148,22 +172,101 @@ export interface FlowEvent {
   drop_reason: string;
 }
 
-export type StreamEvent =
+/** Extension (phase 8): where the API is in running one of the terminal's commands. */
+export const COMMAND_STATES = ["started", "output", "exited", "killed"] as const;
+export type CommandState = (typeof COMMAND_STATES)[number];
+
+/**
+ * Extension (phase 8): one slice of a terminal command's life. `started` once, then `output` events
+ * carrying at most 1 KiB of already-scrubbed text each, then `exited` (with the code and whether it
+ * reached its objective) or `killed` (the pod went away under it). Published to every subscriber, so
+ * other visitors watch the same keystrokes read-only.
+ */
+export interface CommandEvent {
+  run_id: string;
+  seq: number;
+  /** The catalogue command id the visitor ran. */
+  id: string;
+  state: CommandState;
+  at: string;
+  /** On `output`: which stream the chunk is from. */
+  stream?: "stdout" | "stderr";
+  /** On `output`: at most 1024 bytes of text, already scrubbed by the API (no control chars, no ANSI). */
+  chunk?: string;
+  /** On `exited`: the process exit code. */
+  exit_code?: number;
+  /** On `exited`: true iff the command has an objective and exited 0. */
+  achieved?: boolean;
+  /** The per-command or per-run output cap was hit; the rest was dropped. */
+  truncated?: boolean;
+}
+
+/**
+ * One event of the feed. `id` is the hub's sequence number for it — the SSE `id:` line, and the `id`
+ * of each entry of GET /api/runs/{id} — so the same event read from the stream and from a backfill is
+ * recognisably one event, and a run's output can be put back in the order it was published.
+ */
+export type StreamEvent = (
   | { type: "run"; data: RunEvent }
   | { type: "falco"; data: FalcoEvent }
   | { type: "talon"; data: TalonEvent }
   | { type: "pod"; data: PodEvent }
   | { type: "victim"; data: VictimEvent }
-  | { type: "flow"; data: FlowEvent };
+  | { type: "flow"; data: FlowEvent }
+  | { type: "command"; data: CommandEvent }
+) & { id?: number };
 
 export type StreamEventType = StreamEvent["type"];
-export const STREAM_EVENT_TYPES: readonly StreamEventType[] = ["run", "falco", "talon", "pod", "victim", "flow"];
+export const STREAM_EVENT_TYPES: readonly StreamEventType[] = ["run", "falco", "talon", "pod", "victim", "flow", "command"];
 
 /** GET /api/scenarios/{id}/details: how the scenario runs, for the "what was executed" card. */
 export interface SourceRef {
   name: string;
   file: string;
   line: number;
+}
+
+/** The six defence layers, in depth order (edge is outermost). The defence map and the catalogue share them. */
+export const DEFENCE_LAYERS = ["edge", "host", "network", "supply-chain", "admission", "pod-security", "runtime"] as const;
+export type DefenceLayer = (typeof DEFENCE_LAYERS)[number];
+export const isDefenceLayer = (v: unknown): v is DefenceLayer => (DEFENCE_LAYERS as readonly unknown[]).includes(v);
+
+export const COMMAND_OUTCOMES = ["allowed", "prevented", "detected"] as const;
+export type CommandOutcome = (typeof COMMAND_OUTCOMES)[number];
+
+/** Extension (phase 8): one thing the visitor tries to reach in the terminal, in kill-chain order. */
+export interface Objective {
+  id: string;
+  title: string;
+}
+
+/**
+ * Extension (phase 8): one command in the terminal scenario's catalogue. The API accepts only the
+ * `id`; everything else is what the page shows and how it explains what happened. `command` (the argv
+ * that runs in the pod) is public in the repository anyway.
+ */
+export interface CatalogueCommand {
+  id: string;
+  /** What the visitor types; unique, <= 80 printable ASCII. */
+  input: string;
+  /** Other accepted spellings. */
+  aliases: string[];
+  /** The objectives[].id this counts towards, if any. */
+  objective?: string;
+  technique: string;
+  /** The argv run in container `target`. */
+  command: string[];
+  tty: boolean;
+  outcome: CommandOutcome;
+  layer: DefenceLayer;
+  /** What answers, one line. */
+  control: string;
+  /** outcome "detected" only. */
+  detection?: string;
+  /** outcome "detected" only. */
+  response?: ResponseAction | string;
+  /** One or two sentences shown after the command ran. */
+  explain: string;
 }
 
 export interface ScenarioDetails {
@@ -188,6 +291,12 @@ export interface ScenarioDetails {
   /** The API build's git commit: file links point at exactly the code that ran. */
   commit: string;
   victim: boolean;
+  /** Extension (phase 8): set on the terminal scenario's details. */
+  interactive?: boolean;
+  timeout_seconds?: number;
+  idle_seconds?: number;
+  objectives?: Objective[];
+  commands?: CatalogueCommand[];
 }
 
 /** GET /api/limits */
@@ -196,6 +305,32 @@ export interface Limits {
   global: { limit: number; window_s: number; remaining: number };
   active_run: boolean;
   stream_slots_remaining: number;
+}
+
+/** POST /api/attack/terminal → 202. `token` is returned here only, never in an event or /api/runs. */
+export interface TerminalAccepted {
+  run_id: string;
+  scenario: string;
+  state: "queued";
+  token: string;
+}
+
+/** POST /api/runs/{run_id}/commands → 202. */
+export interface CommandAccepted {
+  seq: number;
+}
+
+/** GET /api/stats: counters across every visitor's runs, persisted in a ConfigMap (ADR 0030). */
+export interface Stats {
+  since: string;
+  runs: number;
+  by_scenario: Record<string, { runs: number; detected: number; responded: number }>;
+  response_ms: { last: number; p50: number; min: number; max: number };
+  /** Runs detected with no response before the timeout — the honest number. */
+  unanswered: number;
+  commands: Record<string, { attempts: number; allowed: number; prevented: number; detected: number }>;
+  objectives: Record<string, { attempts: number; achieved: number }>;
+  terminal: { runs: number; best_objectives: number; median_survival_s: number };
 }
 
 export interface KyvernoPolicy {
@@ -312,6 +447,16 @@ export function isFlowEvent(v: unknown): v is FlowEvent {
   return isObj(v) && hasStrings(v, ["run_id", "pod", "at", "verdict"]);
 }
 
+export function isCommandEvent(v: unknown): v is CommandEvent {
+  return (
+    isObj(v) &&
+    hasStrings(v, ["run_id", "id", "at"]) &&
+    typeof v.seq === "number" &&
+    Number.isFinite(v.seq) &&
+    (COMMAND_STATES as readonly unknown[]).includes(v.state)
+  );
+}
+
 /** Caps a string the way the API promises to; the page must not trust the promise. */
 export function cap(v: unknown, max: number): string {
   const s = isStr(v) ? v : "";
@@ -319,6 +464,9 @@ export function cap(v: unknown, max: number): string {
 }
 
 const optStr = (v: unknown, max: number): string | undefined => (isStr(v) ? cap(v, max) : undefined);
+
+const optArm = (v: unknown): Arm | undefined => (v === "guarded" || v === "unguarded" ? v : undefined);
+const optSeq = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
 
 /** Only allow-listed keys, every value rendered as text, each capped. */
 function sanitizeFields(v: unknown): Record<string, string> | undefined {
@@ -344,7 +492,11 @@ function normalise(ev: StreamEvent): StreamEvent {
   switch (ev.type) {
     case "run": {
       const d = ev.data;
-      return { type: "run", data: definedOnly({ run_id: d.run_id, scenario: d.scenario, state: d.state, at: d.at, detail: optStr(d.detail, 300), pod: optStr(d.pod, 253) || undefined }) };
+      const pods =
+        isObj(d.pods) && isStr(d.pods.guarded) && isStr(d.pods.unguarded)
+          ? { guarded: cap(d.pods.guarded, 253), unguarded: cap(d.pods.unguarded, 253) }
+          : undefined;
+      return { type: "run", data: definedOnly({ run_id: d.run_id, scenario: d.scenario, state: d.state, at: d.at, detail: optStr(d.detail, 300), pod: optStr(d.pod, 253) || undefined, pods, command_seq: optSeq(d.command_seq) }) };
     }
     case "falco": {
       const d = ev.data;
@@ -353,6 +505,7 @@ function normalise(ev: StreamEvent): StreamEvent {
         data: definedOnly({
           at: d.at, rule: cap(d.rule, 200), priority: cap(d.priority, 32), namespace: cap(d.namespace, 63), pod: cap(d.pod, 253),
           output: cap(d.output, 1024), fields: sanitizeFields(d.fields), api_received_at: optStr(d.api_received_at, 64), run_id: optStr(d.run_id, 64),
+          command_seq: optSeq(d.command_seq), arm: optArm(d.arm),
         }),
       };
     }
@@ -363,6 +516,7 @@ function normalise(ev: StreamEvent): StreamEvent {
         data: definedOnly({
           at: d.at, action: cap(d.action, 100), namespace: cap(d.namespace, 63), pod: cap(d.pod, 253), status: cap(d.status, 32),
           actionner: optStr(d.actionner, 64), api_received_at: optStr(d.api_received_at, 64), output: optStr(d.output, 300), run_id: optStr(d.run_id, 64),
+          command_seq: optSeq(d.command_seq), arm: optArm(d.arm),
         }),
       };
     }
@@ -379,6 +533,7 @@ function normalise(ev: StreamEvent): StreamEvent {
         data: {
           run_id: d.run_id, pod: cap(d.pod, 253), uid: cap(d.uid, 64), phase: cap(d.phase, 32), reason: cap(d.reason, 64),
           container_id: (typeof d.container_id === "string" ? d.container_id : "").slice(0, 12), image: cap(d.image, 300), labels_delta: labels, deleted: d.deleted === true, at: d.at,
+          ...definedOnly({ arm: optArm(d.arm) }),
         },
       };
     }
@@ -388,7 +543,7 @@ function normalise(ev: StreamEvent): StreamEvent {
       const sum = isStr(d.checksum) && /^[0-9a-f]{0,16}$/i.test(d.checksum) ? d.checksum.toLowerCase() : "";
       return {
         type: "victim",
-        data: { run_id: d.run_id, pod: cap(d.pod, 253), at: d.at, status: d.status, title: cap(d.title, 80), banner: cap(d.banner, 120), probe_ms: ms, checksum: sum },
+        data: { run_id: d.run_id, pod: cap(d.pod, 253), at: d.at, status: d.status, title: cap(d.title, 80), banner: cap(d.banner, 120), probe_ms: ms, checksum: sum, ...definedOnly({ arm: optArm(d.arm) }) },
       };
     }
     case "flow": {
@@ -398,22 +553,68 @@ function normalise(ev: StreamEvent): StreamEvent {
         data: { run_id: d.run_id, pod: cap(d.pod, 253), at: d.at, direction: cap(d.direction, 16), l4: cap(d.l4, 32), verdict: cap(d.verdict, 16), drop_reason: cap(d.drop_reason, 64) },
       };
     }
+    case "command": {
+      const d = ev.data;
+      const stream = d.stream === "stdout" || d.stream === "stderr" ? d.stream : undefined;
+      // The API has already scrubbed the chunk (valid UTF-8, no control chars but \n and \t, no ANSI,
+      // ADR 0021 URL/IP scrubber). The page trusts nothing: strip any control char that slipped
+      // through so output can only ever be a text node, and cap at the contract's 1 KiB.
+      const chunk = isStr(d.chunk) ? cap(stripControl(d.chunk), 1024) : undefined;
+      return {
+        type: "command",
+        data: definedOnly({
+          run_id: d.run_id,
+          seq: d.seq,
+          id: cap(d.id, 32),
+          state: d.state,
+          at: d.at,
+          stream,
+          chunk,
+          exit_code: optSeq(d.exit_code),
+          achieved: typeof d.achieved === "boolean" ? d.achieved : undefined,
+          truncated: d.truncated === true ? true : undefined,
+        }),
+      };
+    }
   }
 }
 
+/**
+ * Mirrors the API's output scrub (ADR 0029): keep only tab and newline among control characters —
+ * drop every other C0/C1 control (carriage return included, so no ANSI) — and drop invisible format
+ * characters (bidi overrides and isolates, zero-width spaces, BOM). A text node is then all that can
+ * result; `.term__line` additionally isolates bidi so a right-to-left run cannot reorder the line.
+ */
+function stripControl(s: string): string {
+  // eslint-disable-next-line no-control-regex
+  return s.replace(/[\u0000-\u0008\u000B-\u001F\u007F-\u009F]/g, "").replace(/\p{Cf}/gu, "");
+}
+
+/** The hub's event id: a positive integer (the SSE `id:` line is text, the runs endpoint's a number). */
+function eventId(v: unknown): number | undefined {
+  const n = typeof v === "string" && /^\d{1,15}$/.test(v) ? Number(v) : v;
+  return typeof n === "number" && Number.isSafeInteger(n) && n > 0 ? n : undefined;
+}
+
 /** Parses one SSE message into a typed event, or null if it does not match the contract. */
-export function parseStreamEvent(type: string, raw: string): StreamEvent | null {
+export function parseStreamEvent(type: string, raw: string, id?: unknown): StreamEvent | null {
   let data: unknown;
   try {
     data = JSON.parse(raw);
   } catch {
     return null;
   }
-  return toStreamEvent(type, data);
+  return toStreamEvent(type, data, id);
 }
 
 /** The same check for an already decoded payload (GET /api/runs/{id} returns them as JSON objects). */
-export function toStreamEvent(type: string, data: unknown): StreamEvent | null {
+export function toStreamEvent(type: string, data: unknown, id?: unknown): StreamEvent | null {
+  const ev = typedEvent(type, data);
+  const n = eventId(id);
+  return ev && n !== undefined ? { ...ev, id: n } : ev;
+}
+
+function typedEvent(type: string, data: unknown): StreamEvent | null {
   switch (type) {
     case "run":
       return isRunEvent(data) ? normalise({ type, data }) : null;
@@ -427,6 +628,8 @@ export function toStreamEvent(type: string, data: unknown): StreamEvent | null {
       return isVictimEvent(data) ? normalise({ type, data }) : null;
     case "flow":
       return isFlowEvent(data) ? normalise({ type, data }) : null;
+    case "command":
+      return isCommandEvent(data) ? normalise({ type, data }) : null;
     default:
       return null;
   }
@@ -444,6 +647,65 @@ function sourceRef(v: unknown): SourceRef | undefined {
   if (!isObj(v) || !isStr(v.name) || !v.name) return undefined;
   const file = isRepoPath(v.file) ? v.file : "";
   return { name: cap(v.name, 200), file, line: file && isLine(v.line) ? v.line : 0 };
+}
+
+const isArgv = (v: unknown): v is string[] => Array.isArray(v) && v.every(isStr);
+
+/** A run id the page will put in a URL: the API's are 16 hex; nothing that could leave the path. */
+export const isRunId = (v: unknown): v is string => isStr(v) && /^[A-Za-z0-9_-]{1,64}$/.test(v);
+
+/** The terminal catalogue id: the only thing the API accepts, so the page validates it the same way. */
+export const isCommandId = (v: unknown): v is string => isStr(v) && /^[a-z0-9-]{1,32}$/.test(v);
+
+function parseObjectives(v: unknown): Objective[] {
+  if (!Array.isArray(v)) return [];
+  return v
+    .filter((o): o is Obj => isObj(o) && isStr(o.id) && isStr(o.title))
+    .slice(0, 40)
+    .map((o) => ({ id: cap(o.id, 40), title: cap(o.title, 80) }));
+}
+
+function parseCommand(v: unknown): CatalogueCommand | null {
+  if (!isObj(v) || !isCommandId(v.id) || !isStr(v.input)) return null;
+  const outcome = (COMMAND_OUTCOMES as readonly unknown[]).includes(v.outcome) ? (v.outcome as CommandOutcome) : "allowed";
+  return {
+    id: v.id,
+    input: cap(v.input, 80),
+    aliases: Array.isArray(v.aliases) ? v.aliases.filter(isStr).slice(0, 8).map((a) => cap(a, 80)) : [],
+    objective: isStr(v.objective) ? cap(v.objective, 40) : undefined,
+    technique: isStr(v.technique) ? cap(v.technique, 20) : "",
+    command: isArgv(v.command) ? v.command.slice(0, 20).map((a) => cap(a, 2000)) : [],
+    tty: v.tty === true,
+    outcome,
+    layer: isDefenceLayer(v.layer) ? v.layer : "runtime",
+    control: isStr(v.control) ? cap(v.control, 200) : "",
+    detection: isStr(v.detection) ? cap(v.detection, 200) : undefined,
+    response: isStr(v.response) ? cap(v.response, 40) : undefined,
+    explain: isStr(v.explain) ? cap(v.explain, 400) : "",
+  };
+}
+
+/** Printable ASCII, 1..80 chars: the shape the catalogue promises for a command's input/alias. */
+const isTypable = (s: string): boolean => s.length > 0 && s.length <= 80 && /^[\x20-\x7e]+$/.test(s);
+
+function parseCommands(v: unknown): CatalogueCommand[] {
+  if (!Array.isArray(v)) return [];
+  const out: CatalogueCommand[] = [];
+  const ids = new Set<string>();
+  // A spelling (input or alias) resolves to exactly one command, so a spelling claimed twice — or an
+  // empty / non-printable one — would make resolution ambiguous or unmatchable: drop such a command.
+  const spellings = new Set<string>();
+  for (const c of v.slice(0, 64)) {
+    const cmd = parseCommand(c);
+    if (!cmd || ids.has(cmd.id)) continue;
+    const words = [cmd.input, ...cmd.aliases].map((s) => s.toLowerCase());
+    if (!isTypable(cmd.input) || cmd.aliases.some((a) => !isTypable(a))) continue;
+    if (words.some((w) => spellings.has(w))) continue;
+    ids.add(cmd.id);
+    for (const w of words) spellings.add(w);
+    out.push(cmd);
+  }
+  return out;
 }
 
 /**
@@ -487,6 +749,11 @@ export function parseScenarioDetails(v: unknown): ScenarioDetails {
     commit: isCommit(v.commit) ? v.commit : "",
     exec_tty: isBool(v.exec_tty) ? v.exec_tty : undefined,
     victim: v.victim === true,
+    interactive: isBool(v.interactive) ? v.interactive : undefined,
+    timeout_seconds: isCount(v.timeout_seconds) ? v.timeout_seconds : undefined,
+    idle_seconds: isCount(v.idle_seconds) ? v.idle_seconds : undefined,
+    objectives: v.objectives !== undefined ? parseObjectives(v.objectives) : undefined,
+    commands: v.commands !== undefined ? parseCommands(v.commands) : undefined,
   };
 }
 
@@ -500,14 +767,52 @@ export function isLimits(v: unknown): v is Limits {
   );
 }
 
+export function isTerminalAccepted(v: unknown): v is TerminalAccepted {
+  return isObj(v) && hasStrings(v, ["run_id", "scenario", "token"]) && v.state === "queued" && /^[0-9a-f]{32}$/i.test(v.token as string);
+}
+
+export function isCommandAccepted(v: unknown): v is CommandAccepted {
+  return isObj(v) && typeof v.seq === "number" && Number.isFinite(v.seq);
+}
+
+/** GET /api/stats. Lenient: a missing or malformed section becomes its empty shape, never a throw. */
+export function parseStats(v: unknown): Stats {
+  if (!isObj(v)) throw new TypeError("stats: expected an object");
+  const count = (x: unknown): number => (isCount(x) ? x : 0);
+  // Keyed by ids the API sends: built with Object.fromEntries, which makes even a `__proto__` key an
+  // ordinary own property — an assignment would set the object's prototype instead.
+  const table = <T>(o: unknown, max: number, keyCap: number, row: (x: Obj) => T): Record<string, T> =>
+    Object.fromEntries(isObj(o) ? Object.entries(o).slice(0, max).filter((e): e is [string, Obj] => isObj(e[1])).map(([k, x]) => [cap(k, keyCap), row(x)]) : []);
+  const byScenario = table(v.by_scenario, 64, 40, (x) => ({ runs: count(x.runs), detected: count(x.detected), responded: count(x.responded) }));
+  const commands = table(v.commands, 64, 32, (x) => ({ attempts: count(x.attempts), allowed: count(x.allowed), prevented: count(x.prevented), detected: count(x.detected) }));
+  const objectives = table(v.objectives, 40, 40, (x) => ({ attempts: count(x.attempts), achieved: count(x.achieved) }));
+  const rms = isObj(v.response_ms) ? v.response_ms : {};
+  const term = isObj(v.terminal) ? v.terminal : {};
+  return {
+    since: isStr(v.since) ? v.since : "",
+    runs: count(v.runs),
+    by_scenario: byScenario,
+    response_ms: { last: count(rms.last), p50: count(rms.p50), min: count(rms.min), max: count(rms.max) },
+    unanswered: count(v.unanswered),
+    commands,
+    objectives,
+    terminal: { runs: count(term.runs), best_objectives: count(term.best_objectives), median_survival_s: count(term.median_survival_s) },
+  };
+}
+
 /** GET /api/runs/{id}: either a bare array of {type, data} or {events: [...]}; invalid entries dropped. */
+/** GET /api/runs/{id} with its `truncated` flag: the store hit its per-run cap and kept no more. */
+export function parseRunHistory(v: unknown): { events: StreamEvent[]; truncated: boolean } {
+  return { events: parseRunEvents(v), truncated: isObj(v) && v.truncated === true };
+}
+
 export function parseRunEvents(v: unknown): StreamEvent[] {
   const list = Array.isArray(v) ? v : isObj(v) && Array.isArray(v.events) ? v.events : null;
   if (!list) throw new TypeError("run: expected an event list");
   const out: StreamEvent[] = [];
   for (const e of list) {
     if (!isObj(e) || !isStr(e.type)) continue;
-    const ev = toStreamEvent(e.type, e.data);
+    const ev = toStreamEvent(e.type, e.data, e.id);
     if (ev) out.push(ev);
   }
   return out;

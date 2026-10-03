@@ -44,19 +44,41 @@ export default defineConfig({
     { name: "desktop", use: { ...devices["Desktop Chrome"] } },
     { name: "phone", use: { ...devices["Pixel 7"] } },
   ],
-  webServer: external
-    ? undefined
-    : [
-        {
-          command: "node scripts/serve.mjs --port 4173",
-          url: "http://127.0.0.1:4173/",
-          reuseExistingServer: !process.env.CI,
-        },
-        // The same site with a real streaming /api/events (see serve.mjs --stub-events).
-        {
-          command: "node scripts/serve.mjs --port 4174 --stub-events",
-          url: "http://127.0.0.1:4174/",
-          reuseExistingServer: !process.env.CI,
-        },
-      ],
+  // The stub servers serve this checkout's dist/ whatever BASE_URL points at: they stand in for an
+  // API, which a deployed image does not let a test choose.
+  webServer: [
+    ...(external
+      ? []
+      : [
+          {
+            command: "node scripts/serve.mjs --port 4173",
+            url: "http://127.0.0.1:4173/",
+            reuseExistingServer: !process.env.CI,
+          },
+        ]),
+    // The same site with a real streaming /api/events (see serve.mjs --stub-events).
+    {
+      command: "node scripts/serve.mjs --port 4174 --stub-events",
+      url: "http://127.0.0.1:4174/",
+      reuseExistingServer: !process.env.CI,
+    },
+    // The same site in front of the interactive API, mid-way through a visitor's session (serve.mjs --terminal-api).
+    {
+      command: "node scripts/serve.mjs --port 4176 --terminal-api",
+      url: "http://127.0.0.1:4176/",
+      reuseExistingServer: !process.env.CI,
+    },
+    // …and with the terminal's catalogue answering after the stream's replay.
+    {
+      command: "node scripts/serve.mjs --port 4177 --terminal-api --slow-details",
+      url: "http://127.0.0.1:4177/",
+      reuseExistingServer: !process.env.CI,
+    },
+    // The same site in front of a stub of the API deployed today (serve.mjs --live-api).
+    {
+      command: "node scripts/serve.mjs --port 4175 --live-api",
+      url: "http://127.0.0.1:4175/",
+      reuseExistingServer: !process.env.CI,
+    },
+  ],
 });

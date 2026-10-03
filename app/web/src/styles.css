@@ -219,6 +219,17 @@ main:focus {
   margin-bottom: 0.75rem;
 }
 
+/* The sections are numbered by the stylesheet, not in the copy, so a section the production build
+   drops (an About still to be written) leaves no gap in the numbering. */
+main {
+  counter-reset: section;
+}
+
+.section > .wrap > .section__head > .eyebrow::before {
+  counter-increment: section;
+  content: counter(section, decimal-leading-zero) " · ";
+}
+
 /* Placeholder copy the owner still has to write. Loud on purpose, so it cannot ship unnoticed. */
 .todo-content {
   color: var(--todo);
@@ -398,6 +409,22 @@ main:focus {
 }
 
 /* ---------- mock banner ---------- */
+
+/* In mock mode main.ts moves the banner into the sticky header, so no scroll — a link to #attack
+   included — can take it off screen. */
+.site-header .mock-banner {
+  padding-block: 0.35rem;
+  border-top: 1px solid color-mix(in srgb, var(--warning) 45%, transparent);
+  border-bottom: 0;
+  font-size: 0.82rem;
+}
+
+/* On a phone the sticky banner keeps to one line: what it is and the way out. */
+@media (max-width: 640px) {
+  .site-header .mock-banner__more {
+    display: none;
+  }
+}
 
 .mock-banner {
   margin: 0;
@@ -2549,17 +2576,6 @@ html:not([data-tech="on"]) .tech-only {
 
 /* ---------- about, projects ---------- */
 
-.about-grid {
-  display: grid;
-  gap: 2.5rem;
-}
-
-@media (min-width: 900px) {
-  .about-grid {
-    grid-template-columns: 1.2fr 1fr;
-  }
-}
-
 .prose p {
   max-width: 40rem;
   color: var(--text-muted);
@@ -2651,4 +2667,853 @@ html:not([data-tech="on"]) .tech-only {
   .conn__dot {
     forced-color-adjust: none;
   }
+}
+
+/* ---------- hero stats band (ADR 0033, E+F) ---------- */
+
+.herostats-wrap {
+  margin-top: 2rem;
+}
+
+.herostats__label,
+.herostats__objhead {
+  font: 600 0.72rem/1.4 var(--font-mono);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  margin: 0 0 0.6rem;
+}
+
+/* Columns by tile count, so a row never ends with one tile alone: 4 → 2×2, then one row of four
+   when there is room; 3 → one column, then one row; 2 → one row. */
+.herostats {
+  container-type: inline-size;
+}
+
+.herostats__tiles {
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.herostats__tiles[data-count="2"],
+.herostats__tiles[data-count="4"] {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+@container (min-width: 30rem) {
+  .herostats__tiles[data-count="3"] {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@container (min-width: 40rem) {
+  .herostats__tiles[data-count="4"] {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+.herostats__tile {
+  display: grid;
+  gap: 0.1rem;
+  padding: 0.7rem 0.85rem;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+.herostats__value {
+  font: 700 clamp(1.15rem, 4.6vw, 1.5rem)/1 var(--font-sans);
+  white-space: nowrap;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+
+.herostats__name {
+  font-size: 0.82rem;
+  color: var(--text-muted);
+}
+
+.herostats__foot {
+  font-size: 0.74rem;
+  color: var(--text-faint);
+}
+
+.herostats__objectives {
+  margin-top: 1.25rem;
+}
+
+.herostats__objlist {
+  display: grid;
+  gap: 0.3rem;
+  margin: 0 0 0.75rem;
+  padding: 0;
+  list-style: none;
+}
+
+.herostats__obj {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 0.25rem 1rem;
+  padding: 0.35rem 0.6rem;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  font-size: 0.88rem;
+}
+
+/* Never reached: said by the count's colour, not by fading the row (which took the light theme's
+   amber below 3:1). The amber is pulled towards the text colour so it reads in both themes. */
+.herostats__obj[data-never="true"] .herostats__objtitle {
+  color: var(--text-muted);
+}
+
+.herostats__obj[data-never="true"] .herostats__objcount {
+  color: color-mix(in srgb, var(--detect) 80%, var(--text));
+}
+
+.herostats__objtitle {
+  font-weight: 600;
+}
+
+.herostats__objcount {
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- attacker's terminal (ADR 0033, A) ---------- */
+
+.terminal-wrap {
+  margin-bottom: 2.5rem;
+}
+
+/* An API without the terminal (main.ts degradeToOneClick): the one-click scenarios are the attack
+   section, and nothing offers or mentions a terminal that is not there. */
+html[data-terminal="off"] .terminal-wrap,
+html[data-terminal="off"] .launcher__head,
+html[data-terminal="off"] .needs-terminal {
+  display: none;
+}
+
+.term-start {
+  padding: clamp(1.1rem, 3vw, 2rem);
+  border: 1px solid color-mix(in srgb, var(--attack) 40%, var(--border));
+  border-radius: 14px;
+  background:
+    radial-gradient(120% 120% at 0% 0%, color-mix(in srgb, var(--attack) 8%, transparent), transparent 55%),
+    var(--surface);
+}
+
+.term-start__lead {
+  max-width: 44rem;
+  color: var(--text-muted);
+  font-size: 1.02rem;
+}
+
+.term-start__lead strong,
+.term-start__lead code {
+  color: var(--text);
+}
+
+.term-start__objectives {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 0.6rem;
+  margin: 0 0 1.25rem;
+  padding: 0;
+  list-style: none;
+  counter-reset: obj;
+}
+
+.term-start__objectives li {
+  counter-increment: obj;
+  padding: 0.25rem 0.7rem 0.25rem 1.75rem;
+  position: relative;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  font: 500 0.82rem/1.5 var(--font-mono);
+  background: var(--surface);
+}
+
+.term-start__objectives li::before {
+  content: counter(obj);
+  position: absolute;
+  left: 0.5rem;
+  color: var(--attack);
+  font-weight: 700;
+}
+
+.term-start__btn {
+  width: auto;
+  min-width: 14rem;
+}
+
+.term-start__blocked {
+  margin: 0.75rem 0 0;
+  color: var(--detect);
+}
+
+.terminal {
+  display: grid;
+  gap: 1.25rem;
+}
+
+.term__grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1.25rem;
+}
+
+@media (min-width: 900px) {
+  .term__grid {
+    grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr);
+    align-items: start;
+  }
+}
+
+.term__pane {
+  display: grid;
+  /* One column no wider than the pane: an unbreakable command (the token path) must not widen it. */
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr) auto auto;
+  min-width: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: #0a0c10;
+}
+
+.term__bar {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.45rem 0.7rem;
+  background: #14171d;
+  border-bottom: 1px solid #262b34;
+  color: #c9cdd6;
+  font: 0.75rem/1.5 var(--font-mono);
+}
+
+.term__dots {
+  display: inline-flex;
+  gap: 0.3rem;
+}
+
+.term__dots i {
+  width: 0.6rem;
+  height: 0.6rem;
+  border-radius: 50%;
+  background: #3a414e;
+}
+
+.term__bartitle {
+  color: #8a8f99;
+}
+
+.term__status {
+  margin: 0 0 0 auto;
+  color: #9fe6c4;
+  font-size: 0.72rem;
+}
+
+.term__out {
+  margin: 0;
+  padding: 0.85rem 0.95rem;
+  min-height: 15rem;
+  max-height: 26rem;
+  overflow: auto;
+  color: #e6e3dc;
+  font: 0.82rem/1.5 var(--font-mono);
+  overflow-wrap: anywhere;
+}
+
+.term__out:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.term__line {
+  margin: 0 0 0.15rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.term__line--in {
+  color: #e6e3dc;
+}
+
+.term__line--in .term__prompt {
+  color: #5ee0a4;
+}
+
+.term__line--err {
+  color: #ff9d8a;
+}
+
+.term__line--sys {
+  color: #8a8f99;
+}
+
+.term__line--kill {
+  color: #ff6363;
+  font-weight: 600;
+}
+
+.term__line--win {
+  color: #5ee0a4;
+  font-weight: 600;
+}
+
+.term__explain {
+  margin: 0.2rem 0 0.9rem;
+  padding-left: 0.6rem;
+  border-left: 2px solid #262b34;
+  color: #b7bcc6;
+  font-family: var(--font-sans);
+  font-size: 0.82rem;
+}
+
+.term__cmd {
+  margin-bottom: 0.6rem;
+}
+
+.term__cmd[data-outcome="detected"] {
+  border-left: 2px solid var(--critical);
+  padding-left: 0.5rem;
+  margin-left: -0.5rem;
+}
+
+.term__form {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.7rem;
+  background: #0a0c10;
+  border-top: 1px solid #262b34;
+}
+
+.term__form .term__prompt {
+  color: #5ee0a4;
+  font: 700 0.85rem/1 var(--font-mono);
+  flex: none;
+}
+
+.term__input {
+  flex: 1;
+  min-width: 0;
+  padding: 0.4rem 0.5rem;
+  border: 1px solid #262b34;
+  border-radius: var(--radius-sm);
+  background: #12151b;
+  color: #e6e3dc;
+  font: 0.85rem/1.4 var(--font-mono);
+}
+
+.term__input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.term__input:disabled {
+  opacity: 0.5;
+}
+
+.term__send {
+  flex: none;
+}
+
+.term__hint {
+  margin: 0;
+  padding: 0.3rem 0.7rem;
+  min-height: 1.6rem;
+  background: #0a0c10;
+  color: #8a8f99;
+  font: 0.75rem/1.4 var(--font-mono);
+  overflow-wrap: anywhere;
+}
+
+.term__chips {
+  padding: 0.6rem 0.7rem 0.8rem;
+  background: #0d1016;
+  border-top: 1px solid #262b34;
+  display: grid;
+  gap: 0.6rem;
+}
+
+.term__chiphead {
+  margin: 0 0 0.3rem;
+  font: 600 0.68rem/1.4 var(--font-mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #8a8f99;
+}
+
+.term__chiprow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.term__chip {
+  padding: 0.3rem 0.6rem;
+  border: 1px solid #2f3540;
+  border-radius: 999px;
+  background: #161a21;
+  color: #d7dae1;
+  font: 500 0.78rem/1.3 var(--font-mono);
+  text-align: left;
+  max-width: 100%;
+  overflow-wrap: break-word;
+  cursor: pointer;
+}
+
+.term__chip:hover {
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.term__chip--prevented {
+  border-color: color-mix(in srgb, #f4bf4f 45%, #2f3540);
+}
+
+.term__chip--detected {
+  border-color: color-mix(in srgb, #ff6363 55%, #2f3540);
+  color: #ffc7bf;
+}
+
+.term__side {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1rem;
+  min-width: 0;
+}
+
+.term__sideheading,
+.term__objhead {
+  margin: 0;
+  font: 600 0.78rem/1.4 var(--font-mono);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.term__objlist {
+  display: grid;
+  gap: 0.3rem;
+  margin: 0.5rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.term__obj {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.3rem 0.5rem;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  font-size: 0.86rem;
+  color: var(--text-muted);
+}
+
+.term__obj[data-done="true"] {
+  color: var(--text);
+}
+
+.term__objmark {
+  color: var(--text-faint);
+}
+
+.term__obj[data-done="true"] .term__objmark {
+  color: var(--good);
+  font-weight: 800;
+}
+
+.term__summary {
+  padding: clamp(1rem, 3vw, 1.75rem);
+  border: 1px solid color-mix(in srgb, var(--respond) 40%, var(--border));
+  border-radius: 14px;
+  background: var(--surface);
+}
+
+.term__sumtitle {
+  font-size: 1.4rem;
+  font-weight: 720;
+}
+
+.term__sumlead {
+  color: var(--text-muted);
+}
+
+/* Two columns on a phone (an odd last tile takes the whole row rather than half of one), as many as
+   fit on a wide screen. */
+.term__sumstats {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+  margin: 1rem 0 1.5rem;
+}
+
+.term__sumstats > div:last-child:nth-child(odd) {
+  grid-column: 1 / -1;
+}
+
+@media (min-width: 900px) {
+  .term__sumstats {
+    grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+  }
+
+  .term__sumstats > div:last-child:nth-child(odd) {
+    grid-column: auto;
+  }
+}
+
+.term__sumstats div {
+  padding: 0.7rem 0.85rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+
+.term__sumstats dt {
+  font-size: 0.78rem;
+  color: var(--text-faint);
+}
+
+.term__sumstats dd {
+  margin: 0.15rem 0 0;
+  font: 700 1.3rem/1 var(--font-sans);
+  font-variant-numeric: tabular-nums;
+}
+
+.term__sumhead {
+  margin: 0 0 0.9rem;
+  font-size: 1rem;
+}
+
+.term__again {
+  margin-top: 1.5rem;
+  display: grid;
+  gap: 0.6rem;
+  justify-items: start;
+}
+
+/* ---------- defence map (ADR 0033, D) ---------- */
+
+.defmap__layers {
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 15rem), 1fr));
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.deflayer {
+  --c: var(--neutral);
+  padding: 0.9rem 1rem;
+  border: 1px solid var(--border);
+  border-top: 3px solid var(--c);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+.deflayer--outside {
+  background: var(--surface-2);
+}
+
+.deflayer[data-state="allowed"] {
+  --c: var(--good);
+}
+
+.deflayer[data-state="prevented"] {
+  --c: var(--warning);
+}
+
+.deflayer[data-state="detected"] {
+  --c: var(--critical);
+}
+
+.deflayer[data-state="out-of-reach"] {
+  --c: var(--border-strong);
+  opacity: 0.82;
+}
+
+.deflayer__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.4rem;
+}
+
+.deflayer__node {
+  width: 0.7rem;
+  height: 0.7rem;
+  border-radius: 50%;
+  background: var(--c);
+  flex: none;
+}
+
+.deflayer__title {
+  margin: 0;
+  font-size: 0.98rem;
+  font-weight: 650;
+}
+
+.deflayer__verdict {
+  margin-left: auto;
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+  font: 600 0.72rem/1.5 var(--font-mono);
+  background: var(--neutral-bg);
+  color: var(--text-muted);
+}
+
+.deflayer__verdict--allowed {
+  background: var(--good-bg);
+  color: var(--good);
+}
+
+.deflayer__verdict--prevented {
+  background: var(--warning-bg);
+  color: var(--warning);
+}
+
+.deflayer__verdict--detected {
+  background: var(--critical-bg);
+  color: var(--critical);
+}
+
+.deflayer__blurb {
+  margin: 0 0 0.5rem;
+  font-size: 0.86rem;
+  color: var(--text-muted);
+}
+
+.deflayer__controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.deflayer__controls li {
+  padding: 0.1rem 0.5rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  font: 500 0.72rem/1.5 var(--font-mono);
+  color: var(--text-muted);
+}
+
+.deflayer__inputs {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.deflayer__inputs code {
+  color: var(--text);
+}
+
+.deflayer__evidence {
+  margin: 0.5rem 0 0;
+  font-size: 0.78rem;
+  color: var(--text-faint);
+}
+
+/* ---------- unguarded twin (ADR 0033, C) ---------- */
+
+.twin__grid {
+  display: grid;
+  gap: 1rem;
+}
+
+@media (min-width: 760px) {
+  .twin__grid {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+.twin__arm {
+  display: grid;
+  gap: 0.6rem;
+  padding: 0.9rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.twin__arm--unguarded {
+  border-color: color-mix(in srgb, var(--critical) 45%, var(--border));
+}
+
+.twin__arm--guarded {
+  border-color: color-mix(in srgb, var(--respond) 45%, var(--border));
+}
+
+.twin__armhead h4 {
+  margin: 0;
+  font-size: 0.98rem;
+}
+
+.twin__armhead p {
+  margin: 0.1rem 0 0;
+}
+
+.twin__verdict {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.twin__chip {
+  padding: 0.15rem 0.55rem;
+  border-radius: 999px;
+  font: 600 0.74rem/1.5 var(--font-mono);
+  background: var(--neutral-bg);
+  color: var(--text-muted);
+}
+
+.twin__chip--detect {
+  background: var(--warning-bg);
+  color: var(--warning);
+}
+
+.twin__chip--respond {
+  background: var(--good-bg);
+  color: var(--good);
+}
+
+.twin__chip--none {
+  background: var(--critical-bg);
+  color: var(--critical);
+}
+
+.twin__held {
+  flex-basis: 100%;
+  font: 600 0.8rem/1.4 var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--critical);
+}
+
+.twin__dur {
+  white-space: nowrap;
+}
+
+.twin__foot {
+  margin: 0.75rem 0 0;
+}
+
+/* ---------- launcher "just show me" + scenario actions ---------- */
+
+.launcher__head {
+  margin: 2.5rem 0 1.25rem;
+}
+
+.scenario__actions {
+  display: grid;
+  gap: 0.5rem;
+  margin-top: auto;
+}
+
+.scenario__twin[aria-disabled="true"] {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .term__out {
+    scroll-behavior: auto;
+  }
+}
+
+/* ---------- ADR 0033 review fixes: terminal map/exit/fallback, defence-map entries ---------- */
+
+.term__map {
+  margin-top: 0.25rem;
+}
+
+.term__exit {
+  margin-left: 0.25rem;
+}
+
+.term-fallback {
+  padding: 1.25rem;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text-muted);
+}
+
+.term-fallback a {
+  font-weight: 600;
+}
+
+/* Each command under its own layer with its own verdict (review item 16). */
+.deflayer__entries {
+  display: grid;
+  gap: 0.3rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.deflayer__entry {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.3rem 0.5rem;
+  font-size: 0.82rem;
+}
+
+/* Breaks at the <wbr> after each "/" and ";" first; mid-word only for a segment longer than a line. */
+.deflayer__entry code {
+  overflow-wrap: break-word;
+  min-width: 0;
+}
+
+.deflayer__ended {
+  padding: 0.05rem 0.4rem;
+  border-radius: 999px;
+  background: var(--critical-bg);
+  color: var(--critical);
+  font: 600 0.72rem/1.5 var(--font-mono);
+  white-space: nowrap;
+}
+
+/* Verdict and title must not break mid-word in the narrow cards ("prevente d", review item 16). */
+.deflayer__verdict,
+.deflayer__title {
+  white-space: nowrap;
+}
+
+/* The summary result tiles and layer cards read in both themes (review item 15): they use the
+   shared tokens, so the only hazard is the terminal pane's own dark palette leaking in — the summary
+   lives outside .term__pane, so --text/--surface apply. This block just states the intent and pins
+   the tile text colour explicitly. */
+.term__summary .deflayer,
+.term__map .deflayer {
+  color: var(--text);
+}
+
+.term__sumstats dd,
+.term__sumstats dt {
+  color: var(--text);
+}
+
+.term__sumstats dt {
+  color: var(--text-faint);
+}
+
+/* A right-to-left run in attacker output must not reorder the line (ADR 0021): each line is its own
+   paragraph for the bidi algorithm, its direction taken from its own first strong character. On a
+   block, `isolate` does nothing; `plaintext` is what isolates a block's content. */
+.term__line,
+.term__explain {
+  unicode-bidi: plaintext;
 }

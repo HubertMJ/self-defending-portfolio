@@ -20,6 +20,14 @@ function retryButton(onRetry: () => void): HTMLButtonElement {
   return b;
 }
 
+/**
+ * A command line with a line-break opportunity (<wbr>) after each "/" and ";": a long one wraps at a
+ * path or statement boundary rather than mid-word. The text, and what is copied, is unchanged.
+ */
+export function breakable(line: string): (string | HTMLElement)[] {
+  return line.split(/(?<=[/;])/).flatMap((part, i) => (i ? [h("wbr"), part] : [part]));
+}
+
 /** MITRE ATT&CK technique page for an id like T1059 or T1059.004; null if the id is malformed. */
 export function attackUrl(technique: string): string | null {
   const m = /^T(\d{4})(?:\.(\d{3}))?$/.exec(technique.trim());

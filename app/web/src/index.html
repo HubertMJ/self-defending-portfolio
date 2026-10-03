@@ -44,7 +44,7 @@
 </header>
 
 <p class="mock-banner" id="mock-banner" hidden role="note">
-  <strong>Mock mode.</strong> Everything below is simulated in your browser with fixture data. Nothing touches the cluster.
+  <strong>Mock mode.</strong> <span class="mock-banner__more">Everything below is simulated in your browser with fixture data. Nothing touches the cluster.</span>
   <a href="/">Leave mock mode</a>
 </p>
 
@@ -66,9 +66,10 @@
           [TODO-CONTENT: short personal introduction]
         </p>
         <p class="hero__actions">
-          <a class="btn btn--primary" href="#attack">Try to break it</a>
+          <a class="btn btn--primary" id="hero-cta" href="#attack">Open the terminal</a>
           <a class="btn btn--ghost" href="https://github.com/HubertMJ/self-defending-portfolio" rel="noopener noreferrer">Read the source</a>
         </p>
+        <div class="herostats-wrap" id="hero-stats" hidden></div>
       </div>
       <figure class="loop" aria-label="Attack, detect, respond loop">
         <ol class="loop__steps">
@@ -84,7 +85,7 @@
   <section class="section" id="posture" aria-labelledby="posture-title">
     <div class="wrap">
       <header class="section__head">
-        <p class="eyebrow">01 · Posture</p>
+        <p class="eyebrow">Posture</p>
         <h2 id="posture-title">Live security posture</h2>
         <p class="section__lead">What admission control, image scanning, the CIS benchmark and runtime detection report about this cluster right now.</p>
       </header>
@@ -98,16 +99,28 @@
   <section class="section section--attack" id="attack" aria-labelledby="attack-title">
     <div class="wrap">
       <header class="section__head">
-        <p class="eyebrow">02 · Attack it</p>
-        <h2 id="attack-title">Launch a controlled attack</h2>
-        <p class="section__lead">
-          Each scenario starts a throwaway pod in an isolated <code>sandbox</code> namespace (no service account token,
-          default-deny network, tight quotas) and makes it do something an intruder would. One run at a time,
-          a few per visitor.
+        <p class="eyebrow">Attack it</p>
+        <h2 id="attack-title">Your hands on the pod</h2>
+        <p class="section__lead" id="attack-lead">
+          A throwaway pod in an isolated <code>sandbox</code> namespace (no service-account token,
+          default-deny network, tight quotas, read-only root filesystem) with a little shop running inside it.
+          Type commands into it and read the real output; the shop window changes beside you, and the cluster
+          ends your session when it has seen enough. One run at a time, a few per visitor.
         </p>
       </header>
+
+      <div class="terminal-wrap">
+        <div id="terminal" class="panel panel--flush" data-state="loading">
+          <p class="loading">Loading the terminal…</p>
+          <noscript><p class="offline__body">The terminal needs JavaScript. The rest of this page does not.</p></noscript>
+        </div>
+      </div>
+
       <div class="launcher">
-        <h3 class="panel-title">Scenarios</h3>
+        <header class="section__head launcher__head">
+          <h3 id="justshowme-title">Just show me</h3>
+          <p class="section__lead">Prefer one click? Each of these starts the same kind of pod and runs one fixed attack, then plays the detection and response out below. Or run one <strong>with and without the response</strong> to see the difference the cluster makes.</p>
+        </header>
         <p class="launch-status" id="launch-status" role="status" aria-live="polite"></p>
         <div class="panel panel--flush" id="scenario-panel" aria-busy="true" data-state="loading">
           <p class="loading">Loading scenarios…</p>
@@ -133,64 +146,73 @@
   <section class="section" id="how" aria-labelledby="how-title">
     <div class="wrap">
       <header class="section__head">
-        <p class="eyebrow">03 · How it works</p>
+        <p class="eyebrow">How it works</p>
         <h2 id="how-title">Defence in layers, all from git</h2>
-        <p class="section__lead">Nothing here was clicked together. Every layer below is a reviewed commit, reconciled by Argo CD.</p>
+        <p class="section__lead">Seven layers an attack has to pass. Nothing here was clicked together: every layer is a reviewed commit, reconciled by Argo CD.<span class="needs-terminal"> In the terminal above, each command lights the layer that answered it.</span></p>
       </header>
-      <ol class="layers">
-        <li class="layer"><h3>Edge</h3><p>Cloudflare Tunnel: the cluster opens no inbound port. TLS, HSTS and WAF at the edge.</p></li>
-        <li class="layer"><h3>Host</h3><p>Debian VM hardened by Ansible: SSH lockdown, nftables default-deny, sysctl, auditd.</p></li>
-        <li class="layer"><h3>Cluster</h3><p>k3s with secrets encryption and audit logging, Cilium as CNI and Gateway API, default-deny NetworkPolicies.</p></li>
-        <li class="layer"><h3>Supply chain</h3><p>Images built in CI, Trivy-gated, SBOM attested and cosign keyless signed. Kyverno refuses anything unsigned.</p></li>
-        <li class="layer"><h3>Admission</h3><p>Pod Security <code>restricted</code>, pinned digests, no <code>:latest</code>, mandatory resource limits.</p></li>
-        <li class="layer"><h3>Runtime</h3><p>Falco (modern eBPF) detects, Falcosidekick fans out, Falco Talon terminates or quarantines.</p></li>
-      </ol>
+      <div id="defence-map" class="defence-map-wrap">
+        <noscript>
+          <ol class="layers">
+            <li class="layer"><h3>Edge</h3><p>Cloudflare Tunnel: the cluster opens no inbound port. TLS, HSTS and WAF at the edge.</p></li>
+            <li class="layer"><h3>Host</h3><p>Debian VM hardened by Ansible: SSH lockdown, nftables default-deny, sysctl, auditd.</p></li>
+            <li class="layer"><h3>Network</h3><p>Cilium CNI, default-deny between pods, a quarantine policy that cuts a pod off entirely.</p></li>
+            <li class="layer"><h3>Supply chain</h3><p>Images built in CI, Trivy-gated, SBOM attested and cosign keyless signed. Kyverno refuses anything unsigned.</p></li>
+            <li class="layer"><h3>Admission</h3><p>Pod Security <code>restricted</code>, pinned digests, no <code>:latest</code>, mandatory resource limits.</p></li>
+            <li class="layer"><h3>Pod security</h3><p>Non-root, read-only root filesystem, every capability dropped, no service-account token.</p></li>
+            <li class="layer"><h3>Runtime</h3><p>Falco (modern eBPF) detects, Falcosidekick fans out, Falco Talon terminates or quarantines.</p></li>
+          </ol>
+        </noscript>
+      </div>
       <p class="section__more">Every decision has an Architecture Decision Record: <a href="https://github.com/HubertMJ/self-defending-portfolio/tree/main/docs/adr" rel="noopener noreferrer">docs/adr</a>.</p>
     </div>
   </section>
 
-  <section class="section" id="about" aria-labelledby="about-title">
-    <div class="wrap about-grid">
-      <div>
-        <header class="section__head">
-          <p class="eyebrow">04 · About</p>
-          <h2 id="about-title">About me</h2>
-        </header>
-        <div class="prose todo-content" data-todo-content="about">
-          <!-- TODO-CONTENT: 2-3 short paragraphs: background, what you are good at, what kind of role or work you want. No claims you cannot back up in an interview. -->
-          <p>[TODO-CONTENT: background and current focus]</p>
-          <p>[TODO-CONTENT: what kind of work or role you are looking for]</p>
-        </div>
-      </div>
-      <div>
-        <h3 class="panel-title">Skills shown in this repository</h3>
-        <ul class="skills" role="list">
-          <li>Kubernetes (k3s)</li>
-          <li>Cilium &amp; Gateway API</li>
-          <li>Argo CD / GitOps</li>
-          <li>Ansible</li>
-          <li>Kyverno</li>
-          <li>Falco &amp; Falco Talon</li>
-          <li>Trivy</li>
-          <li>Sigstore cosign</li>
-          <li>GitHub Actions</li>
-          <li>SOPS + age</li>
-          <li>nftables</li>
-          <li>Go</li>
-          <li>TypeScript</li>
-        </ul>
-        <p class="todo-content small" data-todo-content="skills-extra">
-          <!-- TODO-CONTENT: add skills that are not visible in this repository, or delete this line. -->
-          [TODO-CONTENT: other skills, languages, tools]
-        </p>
+  <section class="section" id="about" aria-labelledby="about-title" data-todo-section>
+    <div class="wrap">
+      <header class="section__head">
+        <p class="eyebrow">About</p>
+        <h2 id="about-title">About me</h2>
+      </header>
+      <div class="prose todo-content" data-todo-content="about">
+        <!-- TODO-CONTENT: 2-3 short paragraphs: background, what you are good at, what kind of role or work you want. No claims you cannot back up in an interview. -->
+        <p>[TODO-CONTENT: background and current focus]</p>
+        <p>[TODO-CONTENT: what kind of work or role you are looking for]</p>
       </div>
     </div>
   </section>
 
-  <section class="section" id="projects" aria-labelledby="projects-title">
+  <section class="section" id="skills" aria-labelledby="skills-title">
     <div class="wrap">
       <header class="section__head">
-        <p class="eyebrow">05 · Projects</p>
+        <p class="eyebrow">Skills</p>
+        <h2 id="skills-title">Skills shown in this repository</h2>
+      </header>
+      <ul class="skills" role="list">
+        <li>Kubernetes (k3s)</li>
+        <li>Cilium &amp; Gateway API</li>
+        <li>Argo CD / GitOps</li>
+        <li>Ansible</li>
+        <li>Kyverno</li>
+        <li>Falco &amp; Falco Talon</li>
+        <li>Trivy</li>
+        <li>Sigstore cosign</li>
+        <li>GitHub Actions</li>
+        <li>SOPS + age</li>
+        <li>nftables</li>
+        <li>Go</li>
+        <li>TypeScript</li>
+      </ul>
+      <p class="todo-content small" data-todo-content="skills-extra">
+        <!-- TODO-CONTENT: add skills that are not visible in this repository, or delete this line. -->
+        [TODO-CONTENT: other skills, languages, tools]
+      </p>
+    </div>
+  </section>
+
+  <section class="section" id="projects" aria-labelledby="projects-title" data-todo-section>
+    <div class="wrap">
+      <header class="section__head">
+        <p class="eyebrow">Projects</p>
         <h2 id="projects-title">Projects</h2>
       </header>
       <ul class="projects" role="list">

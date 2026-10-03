@@ -17,9 +17,22 @@ function guardConsole(page: Page): string[] {
   return problems;
 }
 
+/** Every request the page made to the in-page mock (`?mock=1` never reaches the network). */
+async function mockCalls(page: Page): Promise<string[]> {
+  return page.evaluate(() => (window as unknown as { sdpMock: { calls: string[] } }).sdpMock.calls.slice());
+}
+
 async function noHorizontalScroll(page: Page) {
   const [scroll, client] = await page.evaluate(() => [document.documentElement.scrollWidth, document.documentElement.clientWidth]);
   expect(scroll, "page must not scroll horizontally").toBeLessThanOrEqual(client);
+}
+
+/** Nothing inside `selector` reaches past the right edge (clipped by an overflow:hidden parent, say). */
+async function nothingPastEdge(page: Page, selector: string) {
+  const past = await page.locator(selector).evaluate((root) =>
+    [...root.querySelectorAll("*")].filter((e) => e.getBoundingClientRect().width > 0 && e.getBoundingClientRect().right > document.documentElement.clientWidth + 1).map((e) => e.className),
+  );
+  expect(past, `${selector} must fit the screen`).toEqual([]);
 }
 
 test.describe("security headers", () => {
@@ -58,6 +71,24 @@ test.describe("security headers", () => {
   });
 });
 
+test.describe("production build has no placeholder copy (FIX 2)", () => {
+  test("no TODO-CONTENT marker or dashed placeholder ships, real content stays", async ({ page, request }) => {
+    const html = await (await request.get("/")).text();
+    expect(html).not.toContain("TODO-CONTENT");
+    expect(html).not.toContain("data-todo-content");
+    expect(html).not.toMatch(/\btodo-content\b/);
+    await page.goto("/");
+    // The real content that sat next to the placeholders is still there.
+    await expect(page.getByRole("heading", { name: "Projects" })).toBeVisible();
+    await expect(page.getByRole("link", { name: "self-defending-portfolio" }).first()).toBeVisible();
+    await expect(page.locator(".todo-content")).toHaveCount(0);
+    // An About with nothing written is not shipped as a heading over nothing, nor linked to.
+    await expect(page.locator("#about")).toHaveCount(0);
+    await expect(page.locator('.site-nav a[href="#about"]')).toHaveCount(0);
+    await expect(page.getByRole("heading", { name: "Skills shown in this repository" })).toBeVisible();
+  });
+});
+
 test.describe("API offline (nothing behind /api)", () => {
   test("the portfolio renders and every live panel shows an offline state", async ({ page }) => {
     const problems = guardConsole(page);
@@ -74,6 +105,14 @@ test.describe("API offline (nothing behind /api)", () => {
 });
 
 test.describe("mock mode", () => {
+  test("the mock banner stays on screen when the page opens at #attack", async ({ page }) => {
+    await page.goto("/?mock=1#attack");
+    await expect.poll(() => page.evaluate(() => scrollY)).toBeGreaterThan(500);
+    await expect(page.locator("#mock-banner")).toBeInViewport();
+    await page.mouse.wheel(0, 3000);
+    await expect(page.locator("#mock-banner")).toBeInViewport();
+  });
+
   test("posture, scenarios and history render from fixtures", async ({ page }) => {
     const problems = guardConsole(page);
     await page.goto("/?mock=1");
@@ -99,7 +138,7 @@ test.describe("mock mode", () => {
 
     await expect(page.locator("#launch-status")).toContainText("queued as run");
     // While the run is active every launch button is locked.
-    await expect(page.locator('.scenario[data-scenario="shell-in-container"] button')).toHaveAttribute("aria-disabled", "true");
+    await expect(page.locator('.scenario[data-scenario="shell-in-container"] .btn--attack')).toHaveAttribute("aria-disabled", "true");
 
     const run = page.locator(".run").first();
     await expect(run.locator(".run__title")).toHaveText("Download tool in a container");
@@ -118,7 +157,7 @@ test.describe("mock mode", () => {
   test("a 429 locks the launcher with a countdown from Retry-After", async ({ page }) => {
     const problems = guardConsole(page);
     await page.goto("/?mock=1&mock-speed=0.1&mock-limit=1");
-    const button = page.locator('.scenario[data-scenario="shell-in-container"] button');
+    const button = page.locator('.scenario[data-scenario="shell-in-container"] .btn--attack');
     await button.click();
     await expect(page.locator(".run").first().locator(".chip--state")).toHaveText("Finished");
     await expect(button).toHaveAttribute("aria-disabled", "false");
@@ -138,26 +177,56 @@ test.describe("live run console (mock)", () => {
     const problems = guardConsole(page);
     await page.goto("/?mock=1");
     const consoleEl = page.locator("#console");
-    await page.locator('.scenario[data-scenario="shell-in-container"] button').click();
+    // The run's in-between states last a few hundred milliseconds (the kill-timer runs for about half
+    // a second), shorter than an assertion's polling can be sure to see. Every state the console
+    // passes through is recorded as it happens instead, and the sequence is checked afterwards.
+    await page.evaluate(() => {
+      const root = document.getElementById("console") as HTMLElement;
+      const seen: { victim: string; text: string; falcoLit: boolean; timer: string; who: string }[] = [];
+      const record = () => {
+        const s = {
+          victim: root.querySelector(".browser")?.getAttribute("data-status") ?? "",
+          text: root.querySelector(".browser")?.textContent ?? "",
+          falcoLit: root.querySelector('.hop[data-hop="falco"]')?.getAttribute("data-state") === "lit",
+          timer: root.querySelector(".killtimer")?.getAttribute("data-state") ?? "",
+          who: root.querySelector(".console__who")?.textContent ?? "",
+        };
+        const last = seen[seen.length - 1];
+        if (!last || JSON.stringify(last) !== JSON.stringify(s)) seen.push(s);
+      };
+      new MutationObserver(record).observe(root, { subtree: true, childList: true, attributes: true, characterData: true });
+      (window as unknown as { consoleStates: typeof seen }).consoleStates = seen;
+    });
+    await page.locator('.scenario[data-scenario="shell-in-container"] .btn--attack').click();
+    // The run takes the console over (live for its whole length), then ends.
     await expect(consoleEl).toHaveAttribute("data-state", "live");
-    await expect(consoleEl.locator(".console__who")).toHaveText("Your run");
-    // Before its first answer the shop is "booting", with the pod's phase from the pod watch.
-    await expect(consoleEl.locator(".browser")).toContainText(/Shop booting · pod (Pending|ContainerCreating|Running)/);
-    // The victim shop is up first, then defaced by the attack, then gone with its pod.
-    await expect(consoleEl.locator(".browser")).toHaveAttribute("data-status", /fresh|defaced/);
-    // The pre_exec defaces the shop before the shell Falco catches: defaced while nothing is detected.
-    await expect(consoleEl.locator(".browser")).toHaveAttribute("data-status", "defaced");
-    await expect(consoleEl.locator('.hop[data-hop="falco"]')).not.toHaveAttribute("data-state", "lit");
-    await expect(consoleEl.locator(".killtimer")).toHaveAttribute("data-state", "running");
-    await expect(consoleEl.locator(".browser")).toHaveAttribute("data-status", "gone", { timeout: 15_000 });
+    await expect(consoleEl).toHaveAttribute("data-state", "done", { timeout: 15_000 });
+    await expect(consoleEl.locator(".browser")).toHaveAttribute("data-status", "gone");
     await expect(consoleEl.locator(".hop[data-state=lit]")).toHaveCount(8, { timeout: 15_000 });
     await expect(consoleEl.locator(".killtimer")).toHaveAttribute("data-state", "stopped");
+    const states = await page.evaluate(() => (window as unknown as { consoleStates: { victim: string; text: string; falcoLit: boolean; timer: string; who: string }[] }).consoleStates);
+    // Only what the console showed once this run had taken it over (before, it showed the history).
+    const own = states.slice(states.findIndex((s) => s.who === "Your run"));
+    const changes = (xs: string[]) => xs.filter((x, i) => x !== "" && x !== xs[i - 1]);
+    expect(states.some((s) => s.who === "Your run")).toBe(true);
+    // Before its first answer the shop is "booting", with the pod's phase from the pod watch.
+    expect(own.some((s) => /Shop booting · pod (Pending|ContainerCreating|Running)/.test(s.text))).toBe(true);
+    // The shop is up first, then defaced by the pre_exec — while nothing is detected yet — then gone.
+    expect(changes(own.map((s) => s.victim))).toEqual(["waiting", "fresh", "defaced", "gone"]);
+    expect(own.some((s) => s.victim === "defaced" && !s.falcoLit)).toBe(true);
+    // The kill-timer waits, runs from the detected syscall, and stops at the response.
+    expect(changes(own.map((s) => s.timer))).toEqual(["idle", "running", "stopped"]);
     await expect(consoleEl.locator(".killtimer__value")).toHaveText(/^0\.\d{3}$/);
-    // The real latency is stated next to the slowed-down replay.
-    await expect(consoleEl.locator(".replay-badge")).toContainText(/Replayed at 1\/\d+ speed · real: \d+ ms from the detected syscall to pod deleted/);
+    // FIX 3: it played in real time; the badge states how fast that was, next to something human.
+    await expect(consoleEl.locator(".replay-badge")).toContainText(/Real time · real: \d+ ms from the detected syscall to pod deleted · (faster|about as fast|quicker|in under|in a couple)/);
     // One number, two places: the badge's real duration is the kill-timer's reading.
     const badgeMs = Number(/real: (\d+) ms/.exec((await consoleEl.locator(".replay-badge").textContent()) ?? "")?.[1]);
     expect(Number(await consoleEl.locator(".killtimer__value").textContent()) * 1000).toBeCloseTo(badgeMs, 0);
+    // The slow replay is offered, not forced; clicking it runs the dwelled playback.
+    const replayBtn = consoleEl.getByRole("button", { name: "Replay slowly" });
+    await expect(replayBtn).toBeVisible();
+    await replayBtn.click();
+    await expect(consoleEl.locator(".replay-badge")).toContainText(/Replay(ing|ed) at 1\/\d+ speed/);
     // Talon logs after the API server acted; its hop shows the API server's time as a bound.
     await expect(consoleEl.locator('.hop[data-hop="talon"] .hop__t')).toHaveText(/^≤ \+\d+ ms$/);
     await expect(consoleEl.locator('.hop[data-hop="talon"] .hop__what')).toHaveText("Talon deleted the pod");
@@ -179,12 +248,13 @@ test.describe("live run console (mock)", () => {
   test("a quarantine shows the label, the cut network and the dropped packets", async ({ page }) => {
     const problems = guardConsole(page);
     await page.goto("/?mock=1&mock-speed=0.5");
-    await page.locator('.scenario[data-scenario="network-tool"] button').click();
+    await page.locator('.scenario[data-scenario="network-tool"] .btn--attack').click();
     const consoleEl = page.locator("#console");
     await expect(consoleEl.locator(".browser")).toHaveAttribute("data-status", "unreachable");
     await expect(consoleEl.locator(".card--proof")).toContainText("sdp.hubertjablon.ski/quarantine: false → true");
-    await expect(consoleEl.locator(".card--proof")).toContainText("Packets dropped by Cilium");
+    await expect(consoleEl.locator(".card--proof")).toContainText("Cilium dropped the probe");
     await expect(consoleEl.locator('.hop[data-hop="effect"] .hop__who')).toContainText("Cilium");
+    await expect(consoleEl.locator('.hop[data-hop="effect"] .hop__what')).toHaveText("probe dropped");
     await expect(page.locator(".run").first().locator(".run__foot")).toContainText("including the time held in quarantine", { timeout: 15_000 });
     expect(problems).toEqual([]);
   });
@@ -201,10 +271,10 @@ test.describe("live run console (mock)", () => {
 
   test("the history's Show button puts that run in the console", async ({ page }) => {
     await page.goto("/?mock=1&mock-speed=0.1");
-    await page.locator('.scenario[data-scenario="sensitive-file-read"] button').click();
+    await page.locator('.scenario[data-scenario="sensitive-file-read"] .btn--attack').click();
     await expect(page.locator(".run")).toHaveCount(2);
     await expect(page.locator(".run").first().locator(".chip--state")).toHaveText("Finished");
-    await page.locator('.run[data-run="mock-history-1"] .run__show').click();
+    await page.locator('.run[data-run="a7c3e9f1b2d40658"] .run__show').click();
     await expect(page.locator("#console .console__scenario")).toHaveText("Shell in a container");
     await expect(page.locator("#console-title")).toBeFocused();
     await page.getByRole("button", { name: "Back to the latest run" }).click();
@@ -214,11 +284,162 @@ test.describe("live run console (mock)", () => {
   test("on a phone, launching takes the visitor to the live run", async ({ page, isMobile }) => {
     test.skip(!isMobile, "the scroll matters where the console is below the fold");
     await page.goto("/?mock=1");
-    const button = page.locator('.scenario[data-scenario="drop-and-execute"] button');
+    const button = page.locator('.scenario[data-scenario="drop-and-execute"] .btn--attack');
     await button.click();
     await expect(page.locator("#console-title")).toBeFocused();
     await expect(page.locator("#console-title")).toBeInViewport();
     await noHorizontalScroll(page);
+  });
+});
+
+test.describe("attacker's terminal (mock, ADR 0033)", () => {
+  test("type, read real output, change the shop, reach an objective, then get killed", async ({ page }) => {
+    const problems = guardConsole(page);
+    await page.goto("/?mock=1&mock-speed=0.3");
+    const term = page.locator("#terminal");
+    await term.getByRole("button", { name: /Open the terminal/ }).click();
+    await expect(term.locator("#term-input")).toBeVisible();
+
+    // An unknown line is answered locally and never sent anywhere.
+    await term.locator("#term-input").fill("rm -rf /");
+    await term.locator(".term__send").click();
+    await expect(term.locator(".term__out")).toContainText("not in this sandbox's catalogue");
+
+    // A real recon command streams real output back.
+    await term.getByRole("button", { name: "id", exact: true }).click();
+    await expect(term.locator(".term__out")).toContainText("uid=10001");
+    // Each output line is its own bidi paragraph: a right-to-left run cannot reorder it.
+    expect(await term.locator(".term__cmdout .term__line").first().evaluate((e) => getComputedStyle(e).unicodeBidi)).toBe("plaintext");
+
+    // Defacing the shop changes the window beside the terminal; no rule fires.
+    await term.getByRole("button", { name: /^echo pwned>/ }).click();
+    await expect(term.locator(".term__shop .browser")).toHaveAttribute("data-status", "defaced");
+
+    // Reading the flag reaches an objective.
+    await term.getByRole("button", { name: "cat /srv/shop/.flag" }).click();
+    await expect(term.locator(".term__out")).toContainText(/SDP\{[0-9a-f]{16}\}/);
+    await expect(term.locator(".term__objhead")).toContainText(/Objectives · [1-9]/);
+
+    // A detected command ends the session; the summary and the defence-map result appear.
+    await term.getByRole("button", { name: "cat /etc/shadow" }).click();
+    await expect(term.locator(".term__summary")).toBeVisible({ timeout: 15_000 });
+    await expect(term.locator(".term__sumtitle")).toHaveText("Session over");
+    await expect(term.locator(".term__summary .deflayer")).toHaveCount(7);
+    await expect(term.locator(".term__summary")).toContainText("Killed after your Enter");
+    await expect(term.locator(".term__summary a", { hasText: "Open an issue" })).toHaveAttribute("href", /\/issues$/);
+    await noHorizontalScroll(page);
+    await nothingPastEdge(page, "#terminal");
+    expect(problems).toEqual([]);
+  });
+
+  test("an unknown line is answered locally and never sent to the API", async ({ page }) => {
+    const problems = guardConsole(page);
+    await page.goto("/?mock=1&mock-speed=0.3");
+    const term = page.locator("#terminal");
+    await term.getByRole("button", { name: /Open the terminal/ }).click();
+    await expect(term.locator("#term-input")).toBeEnabled({ timeout: 10_000 }); // enabled only once pod_ready
+    await term.locator("#term-input").fill("sudo rm -rf /");
+    await term.locator(".term__send").click();
+    await expect(term.locator(".term__out")).toContainText("not in this sandbox's catalogue");
+    // Nothing was sent: the mock answers in-page, so its own call log is the record of what was.
+    const calls = await mockCalls(page);
+    expect(calls).toContain("POST /api/attack/terminal"); // the log does record what is sent
+    expect(calls.filter((c) => c.includes("/commands"))).toEqual([]);
+    expect(problems).toEqual([]);
+  });
+
+  test("commands are offered only once the pod is ready", async ({ page }) => {
+    await page.goto("/?mock=1&mock-speed=0.6");
+    const term = page.locator("#terminal");
+    await term.getByRole("button", { name: /Open the terminal/ }).click();
+    // Before pod_ready the input is disabled and the status says starting.
+    await expect(term.locator("#term-input")).toBeDisabled();
+    await expect(term.locator(".term__status")).toContainText("starting the pod");
+    await expect(term.locator("#term-input")).toBeEnabled({ timeout: 10_000 });
+  });
+
+  test("another visitor's terminal is read-only: no form, no chips, no POST", async ({ page }) => {
+    const problems = guardConsole(page);
+    await page.goto("/?mock=1&mock-speed=0.4&mock-term-visitor=300");
+    const term = page.locator("#terminal");
+    await expect(term.locator(".term__status")).toContainText("read-only", { timeout: 10_000 });
+    await expect(term.locator(".term__out")).toContainText("uid=10001", { timeout: 10_000 });
+    await expect(term.locator("#term-input")).toBeHidden();
+    await expect(term.locator(".term__chips")).toBeHidden();
+    expect((await mockCalls(page)).filter((c) => !c.startsWith("GET "))).toEqual([]);
+    expect(problems).toEqual([]);
+  });
+
+  test("falls back to the one-click demo when the API has no terminal catalogue", async ({ page }) => {
+    const problems = guardConsole(page);
+    await page.goto("/?mock=1&mock-details=0");
+    const term = page.locator("#terminal");
+    await expect(term.locator(".term-fallback")).toContainText("one-click attacks");
+    // The one-click scenarios still work as the main attack path.
+    await expect(page.locator(".scenario")).toHaveCount(4);
+    expect(problems).toEqual([]);
+  });
+});
+
+test.describe("defence map and live stats (mock, ADR 0033)", () => {
+  test("the How-it-works section is a seven-layer map with live posture evidence", async ({ page }) => {
+    const problems = guardConsole(page);
+    await page.goto("/?mock=1");
+    await expect(page.locator("#defence-map .deflayer")).toHaveCount(7);
+    await expect(page.locator('#defence-map .deflayer[data-layer="admission"]')).toContainText("admission checks passing");
+    await expect(page.locator('#defence-map .deflayer[data-layer="runtime"]')).toContainText("Falco");
+    expect(problems).toEqual([]);
+  });
+
+  test("the hero shows live counters and objectives, including ones never reached", async ({ page }) => {
+    await page.goto("/?mock=1");
+    const hero = page.locator("#hero-stats");
+    await expect(hero).toBeVisible();
+    await expect(hero.locator(".herostats__tile")).toHaveCount(4);
+    await expect(hero).toContainText("attacks");
+    await expect(hero).toContainText("detected runs answered");
+    await expect(hero.locator('.herostats__obj[data-never="true"]').first()).toContainText("not reached yet");
+    await expect(hero.locator("a", { hasText: "Open an issue" })).toHaveAttribute("href", /\/issues$/);
+    // No escapes/"got out" counter (review item 18).
+    await expect(hero).not.toContainText(/got out|call-home/i);
+    // The never-reached count is readable in both themes: 4.5:1 against its row at least.
+    for (const scheme of ["light", "dark"] as const) {
+      await page.emulateMedia({ colorScheme: scheme });
+      const ratio = await hero.locator('.herostats__obj[data-never="true"] .herostats__objcount').first().evaluate((el) => {
+        const rgb = (c: string) => {
+          const n = (c.match(/[\d.]+/g) ?? []).map(Number);
+          return c.startsWith("color(") ? n.slice(0, 3).map((x) => x * 255) : n.slice(0, 3);
+        };
+        const lum = (c: number[]) => {
+          const [r, g, b] = c.map((x) => x / 255).map((x) => (x <= 0.03928 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4));
+          return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+        };
+        let bg = el as HTMLElement;
+        while (getComputedStyle(bg).backgroundColor === "rgba(0, 0, 0, 0)") bg = bg.parentElement as HTMLElement;
+        const row = el.closest(".herostats__obj") as HTMLElement;
+        const [a, b] = [lum(rgb(getComputedStyle(el).color)), lum(rgb(getComputedStyle(bg).backgroundColor))].sort((x, y) => y - x);
+        return Number(getComputedStyle(row).opacity) * ((a + 0.05) / (b + 0.05));
+      });
+      expect(ratio, scheme).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+});
+
+test.describe("unguarded twin (mock, ADR 0033)", () => {
+  test("one click runs with and without the response, side by side", async ({ page }) => {
+    const problems = guardConsole(page);
+    await page.goto("/?mock=1&mock-speed=0.4");
+    await page.locator('.scenario[data-scenario="network-tool"] .scenario__twin').click();
+    const twin = page.locator("#console .twin");
+    await expect(twin).toBeVisible({ timeout: 8_000 });
+    await expect(twin.locator(".twin__arm")).toHaveCount(2);
+    // The guarded pod is cut off; the unguarded one stays compromised, with nothing answering.
+    await expect(twin.locator(".twin__arm--guarded .browser")).toHaveAttribute("data-status", "unreachable", { timeout: 12_000 });
+    await expect(twin.locator(".twin__arm--unguarded .browser")).toHaveAttribute("data-status", "compromised");
+    await expect(twin).toContainText("nothing answered");
+    await expect(twin).toContainText("attacker has held this pod");
+    await noHorizontalScroll(page);
+    expect(problems).toEqual([]);
   });
 });
 
@@ -227,7 +448,7 @@ test.describe("narrow screens", () => {
     await page.setViewportSize({ width: 360, height: 780 });
     await page.goto("/?mock=1&mock-speed=0.2");
     await page.locator("#tech-toggle").click();
-    await page.locator('.scenario[data-scenario="network-tool"] button').click();
+    await page.locator('.scenario[data-scenario="network-tool"] .btn--attack').click();
     await expect(page.locator("#console .browser")).toHaveAttribute("data-status", "unreachable");
     await page.locator("#console .verify > summary").click();
     await page.locator("#console .rawlog > summary").click();
@@ -259,6 +480,76 @@ test.describe("technical mode", () => {
     await noHorizontalScroll(page);
     expect(problems).toEqual([]);
   });
+});
+
+test.describe("against the API deployed today (serve.mjs --live-api: JSON 404 on the new endpoints)", () => {
+  test("the one-click scenarios are the attack section: no terminal, no twin, no stats, nothing sent", async ({ page }) => {
+    test.setTimeout(40_000);
+    const problems = guardConsole(page);
+    const requests: string[] = [];
+    page.on("request", (r) => {
+      if (r.url().includes("/api/") && !r.url().includes("/api/events")) requests.push(`${r.method()} ${new URL(r.url()).pathname}`);
+    });
+    await page.goto("http://127.0.0.1:4175/");
+    await expect(page.locator(".scenario")).toHaveCount(4);
+    // The page learnt there is no terminal: the hero and the section say what is there instead.
+    await expect(page.locator("#hero-cta")).toHaveText("Launch an attack");
+    await expect(page.locator("#attack-title")).toHaveText("Launch a real attack");
+    await expect(page.locator(".terminal-wrap")).toBeHidden();
+    await expect(page.locator(".launcher__head")).toBeHidden();
+    await expect(page.getByText("Open the terminal")).toHaveCount(0);
+    await expect(page.locator("#how .section__lead")).not.toContainText("terminal", { useInnerText: true });
+    // That API ignores ?compare=1 and would start an ordinary run: no twin is offered.
+    await expect(page.locator(".scenario__twin")).toHaveCount(0);
+    await expect(page.locator(".scenario .btn--attack")).toHaveCount(4);
+    await expect(page.locator("#hero-stats")).toBeHidden();
+    await page.waitForTimeout(3000);
+    // Loading the page posts nothing, and asks for the missing endpoints once each, not on a loop.
+    expect(requests.filter((r) => r.startsWith("POST"))).toEqual([]);
+    expect(requests.filter((r) => r === "GET /api/stats").length).toBeLessThanOrEqual(1);
+    expect(requests.filter((r) => r === "GET /api/scenarios/terminal/details").length).toBeLessThanOrEqual(1);
+    expect(requests.filter((r) => r.startsWith("GET /api/runs/")).length).toBeLessThanOrEqual(1);
+    await noHorizontalScroll(page);
+    expect(problems).toEqual([]);
+  });
+});
+
+test.describe("a terminal session replayed as the API publishes it (serve.mjs --terminal-api)", () => {
+  for (const [label, base] of [["", "http://127.0.0.1:4176/"], [" (the catalogue answering after the replay)", "http://127.0.0.1:4177/"]]) {
+  test(`joined mid-session: backfilled in order, watched read-only, summarised from the API's own events${label}`, async ({ page }) => {
+    const problems = guardConsole(page);
+    const backfills: string[] = [];
+    const posts: string[] = [];
+    page.on("request", (r) => {
+      if (/\/api\/runs\/[0-9a-f]{16}$/.test(r.url())) backfills.push(r.url());
+      if (r.method() !== "GET") posts.push(`${r.method()} ${r.url()}`);
+    });
+    await page.goto(base);
+    const term = page.locator("#terminal");
+    // The replay held only the run's later events; the page still knows it is a live terminal run.
+    await expect(term.locator(".term__status")).toContainText("read-only");
+    // The backfill fills in what came before, in the order the API published it.
+    await expect(term.locator(".term__cmd[data-seq]")).toHaveCount(3, { timeout: 10_000 });
+    expect(await term.locator(".term__cmd[data-seq]").evaluateAll((els) => els.map((e) => e.getAttribute("data-seq")))).toEqual(["1", "2", "3"]);
+    await expect(term.locator('.term__cmd[data-seq="1"] .term__cmdout')).toContainText("Connection refused");
+    // Then the session ends live: the summary is read from the run's own responses.
+    const summary = term.locator(".term__summary");
+    await expect(summary).toBeVisible({ timeout: 10_000 });
+    await expect(summary.locator(".term__sumlead")).toContainText("Quarantined after wget");
+    await expect(summary.locator(".term__sumlead")).toContainText("under them after cat /etc/shadow");
+    const stat = (label: string) => summary.locator(".term__sumstats div", { has: page.locator("dt", { hasText: label }) }).locator("dd");
+    await expect(stat("Quarantined after their Enter")).toHaveText("220 ms");
+    await expect(stat("Killed after their Enter")).toHaveText("150 ms");
+    await expect(stat("Falco to response")).toHaveText("110 ms");
+    const ended = summary.locator(".deflayer__entry", { has: page.locator(".deflayer__ended") }).locator("code");
+    await expect(ended).toHaveText(["cat /etc/shadow"]);
+    expect(backfills).toHaveLength(1);
+    expect(posts).toEqual([]); // a watcher sends nothing
+    await expect(term.locator(".term__obj")).toHaveCount(5); // the catalogue's objectives, filled in
+    await noHorizontalScroll(page);
+    expect(problems).toEqual([]);
+  });
+  }
 });
 
 test.describe("real EventSource against a streaming server", () => {
@@ -365,11 +656,11 @@ test.describe("accessibility basics", () => {
   test("reduced motion skips the replay: hops light as their events arrive", async ({ page }) => {
     await page.emulateMedia({ reducedMotion: "reduce" });
     await page.goto("/?mock=1&mock-speed=0.3");
-    await page.locator('.scenario[data-scenario="shell-in-container"] button').click();
+    await page.locator('.scenario[data-scenario="shell-in-container"] .btn--attack').click();
     const consoleEl = page.locator("#console");
     // At 0.3x the whole chain is ~0.3 s; a 600 ms dwell per hop would need several seconds.
     await expect(consoleEl.locator(".hop[data-state=lit]")).toHaveCount(8, { timeout: 2_500 });
-    await expect(consoleEl.locator(".replay-badge")).toContainText("Shown in real time");
-    await expect(consoleEl.getByRole("button", { name: "Replay" })).toBeHidden();
+    await expect(consoleEl.locator(".replay-badge")).toContainText("Real time");
+    await expect(consoleEl.getByRole("button", { name: "Replay slowly" })).toBeHidden();
   });
 });

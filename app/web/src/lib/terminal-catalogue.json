@@ -1,0 +1,275 @@
+{
+  "timeout_seconds": 120,
+  "idle_seconds": 30,
+  "objectives": [
+    {
+      "id": "recon",
+      "title": "Look around"
+    },
+    {
+      "id": "tamper",
+      "title": "Deface the shop"
+    },
+    {
+      "id": "credentials",
+      "title": "Steal credentials"
+    },
+    {
+      "id": "execution",
+      "title": "Run your own code"
+    },
+    {
+      "id": "exfiltration",
+      "title": "Phone home"
+    }
+  ],
+  "commands": [
+    {
+      "id": "whoami",
+      "input": "id",
+      "aliases": [
+        "whoami"
+      ],
+      "objective": "recon",
+      "technique": "T1033",
+      "command": [
+        "id"
+      ],
+      "tty": false,
+      "outcome": "allowed",
+      "layer": "runtime",
+      "control": "Falco is watching; plain recon matches no rule",
+      "explain": "You are an unprivileged user (uid 10001) in a hardened pod. Falco sees this and lets it pass - looking around is not, by itself, an attack."
+    },
+    {
+      "id": "hostname",
+      "input": "hostname",
+      "aliases": [],
+      "objective": "recon",
+      "technique": "T1082",
+      "command": [
+        "hostname"
+      ],
+      "tty": false,
+      "outcome": "allowed",
+      "layer": "runtime",
+      "control": "Falco is watching; plain recon matches no rule",
+      "explain": "The pod name, nothing more. No node name, no cluster detail - the pod was built without that information to leak."
+    },
+    {
+      "id": "ps",
+      "input": "ps",
+      "aliases": [
+        "ps aux"
+      ],
+      "objective": "recon",
+      "technique": "T1057",
+      "command": [
+        "ps"
+      ],
+      "tty": false,
+      "outcome": "allowed",
+      "layer": "runtime",
+      "control": "Falco is watching; plain recon matches no rule",
+      "explain": "Only the shop server and your own command run here: one container, one job, nothing else to pivot to."
+    },
+    {
+      "id": "ls-shop",
+      "input": "ls -la /srv/shop",
+      "aliases": [],
+      "objective": "recon",
+      "technique": "T1083",
+      "command": [
+        "ls",
+        "-la",
+        "/srv/shop"
+      ],
+      "tty": false,
+      "outcome": "allowed",
+      "layer": "runtime",
+      "control": "Falco is watching; plain recon matches no rule",
+      "explain": "The shop's files, writable by you because this directory is the one writable spot in the pod. Note the .flag - that is a goal."
+    },
+    {
+      "id": "caps",
+      "input": "grep Cap /proc/self/status",
+      "aliases": [],
+      "objective": "recon",
+      "technique": "T1082",
+      "command": [
+        "grep",
+        "Cap",
+        "/proc/self/status"
+      ],
+      "tty": false,
+      "outcome": "allowed",
+      "layer": "pod-security",
+      "control": "Pod Security: runs non-root, holds no Linux capabilities",
+      "explain": "CapEff is all zeros: the pod runs as a non-root user and holds no Linux capabilities at all. That is why the next few tricks will not work."
+    },
+    {
+      "id": "deface",
+      "input": "echo pwned>/srv/shop/index.html;echo '{\"status\":\"defaced\"}'>/srv/shop/state.json",
+      "aliases": [
+        "deface"
+      ],
+      "objective": "tamper",
+      "technique": "T1491.001",
+      "command": [
+        "sh",
+        "-c",
+        "echo pwned>/srv/shop/index.html;echo '{\"status\":\"defaced\"}'>/srv/shop/state.json"
+      ],
+      "tty": false,
+      "outcome": "allowed",
+      "layer": "runtime",
+      "control": "Falco is watching; an app rewriting its own files is not drift",
+      "explain": "The shop window next to you just changed - you rewrote its page and its status. Nothing stopped you: writing to your own working directory is normal for an app, so no rule here watches for it."
+    },
+    {
+      "id": "read-flag",
+      "input": "cat /srv/shop/.flag",
+      "aliases": [],
+      "objective": "credentials",
+      "technique": "T1552.001",
+      "command": [
+        "cat",
+        "/srv/shop/.flag"
+      ],
+      "tty": false,
+      "outcome": "allowed",
+      "layer": "runtime",
+      "control": "Falco is watching; reading a file you can already open is not flagged",
+      "explain": "You found this run's flag. Reading it was allowed - but detection is not prevention, and reading a secret inside the pod is not the same as getting it out past a default-deny network."
+    },
+    {
+      "id": "read-shadow",
+      "input": "cat /etc/shadow",
+      "aliases": [],
+      "objective": "credentials",
+      "technique": "T1003.008",
+      "command": [
+        "cat",
+        "/etc/shadow"
+      ],
+      "tty": false,
+      "outcome": "detected",
+      "layer": "runtime",
+      "control": "Falco rule Read sensitive file untrusted -> terminate",
+      "detection": "Read sensitive file untrusted",
+      "response": "terminate",
+      "explain": "Falco caught an untrusted program opening the password database and Talon deleted the pod. What you got was worthless anyway: every account in the image is locked, there is no hash in the file."
+    },
+    {
+      "id": "touch-bin",
+      "input": "touch /bin/backdoor",
+      "aliases": [],
+      "technique": "T1543",
+      "command": [
+        "touch",
+        "/bin/backdoor"
+      ],
+      "tty": false,
+      "outcome": "prevented",
+      "layer": "pod-security",
+      "control": "Read-only root filesystem (pod hardening, not required by PSS)",
+      "explain": "\"Read-only file system.\" The container's root filesystem is mounted read-only, so you cannot plant a backdoor in /bin. Nothing had to kill you - the write simply never happened."
+    },
+    {
+      "id": "read-token",
+      "input": "cat /var/run/secrets/kubernetes.io/serviceaccount/token",
+      "aliases": [],
+      "technique": "T1528",
+      "command": [
+        "cat",
+        "/var/run/secrets/kubernetes.io/serviceaccount/token"
+      ],
+      "tty": false,
+      "outcome": "prevented",
+      "layer": "pod-security",
+      "control": "Pod Security: no ServiceAccount token mounted",
+      "explain": "\"No such file or directory.\" There is no token to steal: the pod was created with none, so it cannot talk to the Kubernetes API no matter what you run."
+    },
+    {
+      "id": "chown-root",
+      "input": "chown 0 /srv/shop/index.html",
+      "aliases": [],
+      "technique": "T1222.002",
+      "command": [
+        "chown",
+        "0",
+        "/srv/shop/index.html"
+      ],
+      "tty": false,
+      "outcome": "prevented",
+      "layer": "pod-security",
+      "control": "Pod Security: non-root user, no CAP_CHOWN",
+      "explain": "\"Operation not permitted.\" Changing a file's owner needs CAP_CHOWN, which only root holds; the pod runs as a non-root user with no capabilities, so a whole class of tricks is off the table before any rule has to fire."
+    },
+    {
+      "id": "beacon",
+      "input": "wget -q -T 2 -O- http://127.0.0.1:9/",
+      "aliases": [
+        "wget"
+      ],
+      "objective": "exfiltration",
+      "technique": "T1071.001",
+      "command": [
+        "wget",
+        "-q",
+        "-T",
+        "2",
+        "-O-",
+        "http://127.0.0.1:9/"
+      ],
+      "tty": false,
+      "outcome": "detected",
+      "layer": "network",
+      "control": "Falco rule SDP network tool in sandbox -> quarantine",
+      "detection": "SDP network tool in sandbox",
+      "response": "quarantine",
+      "explain": "A network tool started: Falco flagged it and Talon quarantined the pod. The run goes on - you still have a shell - but Cilium has cut every connection, both ways, so the shop next to you just went unreachable. You are trapped with nothing to call out to."
+    },
+    {
+      "id": "shell",
+      "input": "sh -i",
+      "aliases": [
+        "bash -i"
+      ],
+      "objective": "execution",
+      "technique": "T1059.004",
+      "command": [
+        "sh",
+        "-i"
+      ],
+      "tty": true,
+      "outcome": "detected",
+      "layer": "runtime",
+      "control": "Falco rule Terminal shell in container -> terminate",
+      "detection": "Terminal shell in container",
+      "response": "terminate",
+      "explain": "A second interactive shell with a terminal attached is exactly the signature Falco watches for; Talon deleted the pod within a second or two. This ends your run."
+    },
+    {
+      "id": "drop-run",
+      "input": "cp /bin/busybox /srv/shop/busybox && /srv/shop/busybox echo",
+      "aliases": [
+        "drop and execute"
+      ],
+      "objective": "execution",
+      "technique": "T1105",
+      "command": [
+        "sh",
+        "-c",
+        "cp /bin/busybox /srv/shop/busybox && exec /srv/shop/busybox echo 'dropped and ran'"
+      ],
+      "tty": false,
+      "outcome": "detected",
+      "layer": "runtime",
+      "control": "Falco rule SDP execution from shop volume -> terminate",
+      "detection": "SDP execution from shop volume",
+      "response": "terminate",
+      "explain": "You copied a binary into the writable shop volume and ran it. The stock drift rule misses this - that volume is not the container's overlay layer - so a custom rule watches for execution from it. Falco caught it and Talon deleted the pod."
+    }
+  ]
+}

@@ -15,7 +15,7 @@
 // Everything here is pure (timestamps in, numbers out) so it can be unit tested without a DOM.
 
 import type { RunView } from "./timeline";
-import { QUARANTINE_LABEL, ts } from "./timeline";
+import { QUARANTINE_LABEL, guardedFalco, guardedTalon, ts } from "./timeline";
 
 export const MIN_DWELL_MS = 600;
 /** In a replay, a long real gap (pod scheduling, image pull) is shortened to this. */
@@ -54,17 +54,22 @@ const first = <T>(xs: readonly T[], p: (x: T) => boolean): T | undefined => xs.f
 
 /** The eight hops of a run, from whatever events it has. Missing data leaves a hop without `at`. */
 export function runHops(run: RunView): Hop[] {
-  const quarantine = run.quarantinedAt !== undefined || run.talon.some((t) => /label|quarantine/i.test(`${t.actionner ?? ""} ${t.action}`));
+  // The pipeline is the guarded arm's story: its pods, its Falco alert, its Talon action.
+  const gt = guardedTalon(run);
+  const quarantine = run.quarantinedAt !== undefined || (gt !== undefined && /label|quarantine/i.test(`${gt.actionner ?? ""} ${gt.action}`));
   const created = first(run.pods, () => true);
   const running = first(run.pods, (p) => /^running$/i.test(p.phase) && !p.deleted);
-  const falco = run.falco[0];
-  const talon = run.talon[0];
+  const falco = guardedFalco(run);
+  const talon = gt;
   const terminating = first(run.pods, (p) => /terminating/i.test(p.phase) || p.deleted);
   const labelled = first(run.pods, (p) => p.labels_delta[QUARANTINE_LABEL] === "true");
   const deleted = first(run.pods, (p) => p.deleted || /^deleted$/i.test(p.phase));
-  const dropped = first(run.flows, (f) => /drop/i.test(f.verdict));
-  const unreachable = first(run.victim, (v) => v.status === "unreachable");
-  const gone = first(run.victim, (v) => v.status === "gone");
+  // Hop 8 of a quarantine is the first probe that failed *after* the label landed — a transient
+  // timeout before it must not light the cut early (FIX 1 / review item 6).
+  // Both are the guarded pod's: on a compare run the unguarded twin's probes never stand for the cut.
+  const guardedVictim = run.victim.filter((v) => v.arm !== "unguarded");
+  const unreachable = first(guardedVictim, (v) => v.status === "unreachable" && (run.quarantinedAt === undefined || ts(v.at) >= run.quarantinedAt));
+  const gone = first(guardedVictim, (v) => v.status === "gone");
 
   const hop = (h: Omit<Hop, "at" | "raw">, raw: string | undefined, fallback?: number): Hop => {
     const at = raw ? ts(raw) : fallback;
@@ -91,7 +96,9 @@ export function runHops(run: RunView): Hop[] {
       ? hop({ key: "act", stage: "respond", who: "kube-apiserver", what: "quarantine label set", source: labelled ? "pod watch" : "run: responded" }, labelled?.at ?? stateRaw("responded"))
       : hop({ key: "act", stage: "respond", who: "kube-apiserver", what: "pod deleted", source: terminating ? "pod watch" : "run: responded" }, terminating?.at ?? stateRaw("responded")),
     quarantine
-      ? hop({ key: "effect", stage: "respond", who: "Cilium", what: "traffic dropped", source: dropped ? "hubble flow" : "victim probe" }, dropped?.at ?? unreachable?.at)
+      ? // FIX 1: the cut shows the moment the API's own probe of the pod stops getting an answer.
+        // There are no Hubble flow events; the first `unreachable` after the label is the evidence.
+        hop({ key: "effect", stage: "respond", who: "Cilium", what: "probe dropped", source: "API probe" }, unreachable?.at)
       : hop({ key: "effect", stage: "respond", who: "kubelet", what: "pod gone", source: deleted ? "pod watch" : "victim probe" }, deleted?.at ?? gone?.at),
   ];
   // Talon's event is stamped when Talon logs the action's result, i.e. after the API server has

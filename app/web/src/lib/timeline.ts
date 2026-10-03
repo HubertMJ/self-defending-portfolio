@@ -12,6 +12,8 @@
 // by time window.
 
 import {
+  type Arm,
+  type CommandEvent,
   type FalcoEvent,
   type FlowEvent,
   type PodEvent,
@@ -33,6 +35,34 @@ export interface VictimSpan extends VictimEvent {
   count: number;
 }
 
+/**
+ * One command of a terminal run, assembled from its `command` events: the output accumulated by
+ * stream, how it ended, and whether it reached an objective. The visitor's own keystroke and its
+ * answer, in order.
+ */
+export interface CommandRun {
+  seq: number;
+  id: string;
+  startedAt?: number;
+  endedAt?: number;
+  /** The output in the order the API published it (by event id), each chunk with its stream. */
+  chunks: OutputChunk[];
+  stdout: string;
+  stderr: string;
+  exitCode?: number;
+  achieved: boolean;
+  /** The pod went away under the command (no exit code): the cluster ended the run. */
+  killed: boolean;
+  truncated: boolean;
+}
+
+export interface OutputChunk {
+  /** The hub's event id; absent from a server that sends none (then arrival order stands). */
+  eventId?: number;
+  stream: "stdout" | "stderr";
+  text: string;
+}
+
 export interface RunView {
   runId: string;
   scenario: string;
@@ -43,11 +73,23 @@ export interface RunView {
   pod?: string;
   falco: FalcoEvent[];
   talon: TalonEvent[];
-  /** Pod watch observations, oldest first. */
+  /** Pod watch observations of the run's (guarded) pod, oldest first. */
   pods: PodEvent[];
+  /** Compare run: the unguarded arm's pod observations, kept apart so they never drive the pipeline. */
+  unguardedPods: PodEvent[];
   /** Victim probe results, oldest first, consecutive repeats collapsed. */
   victim: VictimSpan[];
   flows: FlowEvent[];
+  /** Terminal run: one entry per command the visitor ran, in order of first appearance. */
+  commands: CommandRun[];
+  /**
+   * Every `responded` the run reported, oldest first. A terminal run can have several (a quarantine,
+   * then a terminate): each names its action (the run event's detail, "" when the API tied the
+   * response to no command) and, when the API knew it, the command it answered.
+   */
+  responses: { at: number; action: string; seq?: number }[];
+  /** Compare run: the two pods created together (the run's states follow the guarded arm). */
+  armPods?: { guarded: string; unguarded: string };
   /** Every event attributed to this run, oldest first: the raw view of Technical Mode. */
   events: StreamEvent[];
   podUid?: string;
@@ -120,8 +162,11 @@ export function buildTimeline(events: readonly StreamEvent[], now: number = Date
         falco: [],
         talon: [],
         pods: [],
+        unguardedPods: [],
         victim: [],
         flows: [],
+        commands: [],
+        responses: [],
         events: [],
         timings: {},
         active: true,
@@ -129,7 +174,15 @@ export function buildTimeline(events: readonly StreamEvent[], now: number = Date
       runs.set(data.run_id, run);
     }
     if (data.pod && !run.pod) run.pod = data.pod;
+    if (data.pods && !run.armPods) {
+      run.armPods = data.pods;
+      run.pod ??= data.pods.guarded;
+    }
     const at = ts(data.at);
+    if (data.state === "responded") {
+      run.responses.push({ at, action: data.detail ?? "", seq: data.command_seq });
+      run.responses.sort((a, b) => a.at - b.at);
+    }
     const prev = run.states[data.state];
     if (prev === undefined || at < prev) run.states[data.state] = at;
     if (STATE_ORDER[data.state] >= STATE_ORDER[run.current]) {
@@ -139,7 +192,9 @@ export function buildTimeline(events: readonly StreamEvent[], now: number = Date
   }
 
   const list = [...runs.values()];
-  const start = (r: RunView) => r.states.started ?? r.states.queued ?? 0;
+  // A run joined mid-session may show no queued/started at all (only, say, `responded`): its earliest
+  // reported state stands in, so it reads as the live run it is rather than as one from 1970.
+  const start = (r: RunView) => r.states.started ?? r.states.queued ?? minDefined(...Object.values(r.states)) ?? 0;
   const end = (r: RunView) => {
     const t = minDefined(r.states.finished, r.states.failed, r.states.timeout);
     return t === undefined ? Infinity : t + GRACE_MS;
@@ -157,11 +212,12 @@ export function buildTimeline(events: readonly StreamEvent[], now: number = Date
     }
     const data = ev.data;
     const at = ts(data.at);
+    const pod = "pod" in data ? data.pod : undefined;
     // An explicit run id wins, then a pod already tied to a run, then the newest run whose window
     // contains the event.
     const runId = "run_id" in data ? data.run_id : undefined;
     let owner = runId ? runs.get(runId) : undefined;
-    owner ??= byPod.get(data.pod);
+    owner ??= pod ? byPod.get(pod) : undefined;
     if (!owner) {
       owner = list
         .filter((r) => start(r) <= at && at <= end(r))
@@ -171,8 +227,8 @@ export function buildTimeline(events: readonly StreamEvent[], now: number = Date
       unmatched.push(ev);
       continue;
     }
-    if (!owner.pod && data.pod) owner.pod = data.pod;
-    if (data.pod && !byPod.has(data.pod)) byPod.set(data.pod, owner);
+    if (!owner.pod && pod) owner.pod = pod;
+    if (pod && !byPod.has(pod)) byPod.set(pod, owner);
     owner.events.push(ev);
     switch (ev.type) {
       case "falco":
@@ -190,14 +246,31 @@ export function buildTimeline(events: readonly StreamEvent[], now: number = Date
       case "flow":
         owner.flows.push(ev.data);
         break;
+      case "command":
+        addCommand(owner, ev.data, ev.id);
+        break;
+    }
+  }
+
+  // Output is shown in the order the API published it. Events are attributed in timestamp order,
+  // which a backfilled chunk with the same millisecond as a live one does not settle; the event id
+  // does, whenever every chunk of the command carries one.
+  for (const r of list) {
+    for (const c of r.commands) {
+      if (c.chunks.every((x) => x.eventId !== undefined)) c.chunks.sort((a, b) => (a.eventId as number) - (b.eventId as number));
+      c.stdout = c.chunks.filter((x) => x.stream === "stdout").map((x) => x.text).join("");
+      c.stderr = c.chunks.filter((x) => x.stream === "stderr").map((x) => x.text).join("");
     }
   }
 
   for (const r of list) {
     r.active = !TERMINAL_STATES.has(r.current) && now - start(r) < STALE_RUN_MS;
     const started = r.states.started ?? r.states.queued;
-    const detected = minDefined(r.states.detected, r.falco[0] && ts(r.falco[0].at));
-    const responded = minDefined(r.states.responded, r.talon[0] && ts(r.talon[0].at));
+    // The run's states and latencies follow the guarded arm; an unguarded alert never pairs with them.
+    const gf = guardedFalco(r);
+    const gt = guardedTalon(r);
+    const detected = minDefined(r.states.detected, gf && ts(gf.at));
+    const responded = minDefined(r.states.responded, gt && ts(gt.at));
     const finished = minDefined(r.states.finished, r.states.failed, r.states.timeout);
     // Detection is measured from the attack command: "pod_ready" when the API reports it (then
     // "started" is the pod's creation, seconds earlier), else "started", which used to be the exec.
@@ -217,6 +290,13 @@ export function buildTimeline(events: readonly StreamEvent[], now: number = Date
 }
 
 function addPod(run: RunView, p: PodEvent): void {
+  // The run's identity, pipeline and pod panel are the guarded arm's; the unguarded arm's pod
+  // observations are kept apart (they feed only the twin's own window) so they never overwrite the
+  // guarded pod's UID, image, container or quarantine time.
+  if (p.arm === "unguarded") {
+    run.unguardedPods.push(p);
+    return;
+  }
   run.pods.push(p);
   if (p.uid) run.podUid = p.uid;
   if (p.image) run.image = p.image;
@@ -224,16 +304,60 @@ function addPod(run: RunView, p: PodEvent): void {
   if (run.quarantinedAt === undefined && p.labels_delta[QUARANTINE_LABEL] === "true") run.quarantinedAt = ts(p.at);
 }
 
+/** The guarded arm's Falco/Talon events (or all, on an ordinary run): what the pipeline may use. */
+export function guardedFalco(run: RunView): FalcoEvent | undefined {
+  return run.falco.find((f) => f.arm !== "unguarded");
+}
+export function guardedTalon(run: RunView): TalonEvent | undefined {
+  return run.talon.find((t) => t.arm !== "unguarded");
+}
+
 function addVictim(run: RunView, v: VictimEvent): void {
   const last = run.victim[run.victim.length - 1];
   const at = ts(v.at);
-  if (last && last.status === v.status && last.checksum === v.checksum && last.pod === v.pod) {
+  // The arm is part of the identity: a compare run interleaves two pods' probes, and collapsing
+  // across arms would merge the guarded pod's state with the unguarded one's.
+  if (last && last.status === v.status && last.checksum === v.checksum && last.pod === v.pod && last.arm === v.arm) {
     last.until = at;
     last.count += 1;
     if (v.probe_ms >= 0) last.probe_ms = v.probe_ms;
     return;
   }
   run.victim.push({ ...v, until: at, count: 1 });
+}
+
+function addCommand(run: RunView, c: CommandEvent, eventId: number | undefined): void {
+  let cmd = run.commands.find((x) => x.seq === c.seq);
+  if (!cmd) {
+    cmd = { seq: c.seq, id: c.id, chunks: [], stdout: "", stderr: "", achieved: false, killed: false, truncated: false };
+    run.commands.push(cmd);
+    run.commands.sort((a, b) => a.seq - b.seq);
+  }
+  const at = ts(c.at);
+  if (c.truncated) cmd.truncated = true;
+  switch (c.state) {
+    case "started":
+      cmd.startedAt = at;
+      break;
+    case "output":
+      if (typeof c.chunk === "string") cmd.chunks.push({ eventId, stream: c.stream === "stderr" ? "stderr" : "stdout", text: c.chunk });
+      break;
+    case "exited":
+      cmd.endedAt = at;
+      if (typeof c.exit_code === "number") cmd.exitCode = c.exit_code;
+      if (c.achieved) cmd.achieved = true;
+      break;
+    case "killed":
+      cmd.endedAt = at;
+      cmd.killed = true;
+      break;
+  }
+}
+
+/** Compare run: the latest victim span seen for one arm (the twin view draws one window per arm). */
+export function victimByArm(run: RunView, arm: Arm): VictimSpan | undefined {
+  for (let i = run.victim.length - 1; i >= 0; i--) if (run.victim[i].arm === arm) return run.victim[i];
+  return undefined;
 }
 
 /** Human-readable duration: "840 ms", "2.4 s", "1 min 12 s". */

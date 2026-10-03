@@ -36,6 +36,7 @@ decision are appended as dated amendments in the same file.
 | [0030](0030-stats-and-persistence.md) | Cross-visitor stats from a hub tap, persisted in one `portfolio-stats` ConfigMap (get/update only) that survives a rollout | 5 | accepted |
 | [0031](0031-unguarded-twin-namespace.md) | The unguarded twin namespace (`sandbox-unguarded`): every preventive layer of `sandbox`, no automatic response, so the response's worth is visible by contrast | 5 | accepted |
 | [0032](0032-terminal-scenario-and-quarantine-latency.md) | The attacker's terminal (a fifth, interactive scenario run by command id) and bringing quarantine isolation under 3 s (per-run labels out of the Cilium identity, 500 ms grace period) | 5 | accepted |
+| [0033](0033-interactive-terminal-defence-map-twin.md) | The front end becomes interactive: an attacker's terminal, a defence map, an unguarded twin and live stats; real-time-first playback, probe-based quarantine proof, placeholder copy stripped from production | 8 | accepted |
 
 Phases 5 and 6 were built on parallel branches and merged together; the numbers they had reserved
 are all in use except 0020 (phase 6 documentation needed no decision of its own), which is released.
