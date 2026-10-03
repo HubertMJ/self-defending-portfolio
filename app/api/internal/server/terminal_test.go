@@ -551,3 +551,37 @@ func waitRunState(t *testing.T, e *env, runID, state string) {
 	}
 	t.Fatalf("run %s never reached %q", runID, state)
 }
+
+// refusingRunner is the real runner except that Start refuses every scenario, as it refuses one it
+// cannot run.
+type refusingRunner struct{ *runner.Runner }
+
+func (refusingRunner) Start(scenarios.Scenario, func()) (string, error) {
+	return "", runner.ErrInteractive
+}
+
+// When the runner refuses a scenario after the slot was taken, the server gives the slot back: the
+// answer is 400, and the next attack is not told another one is running.
+func TestRefusedStartReleasesSlot(t *testing.T) {
+	path := t.TempDir() + "/scenarios.yaml"
+	if err := os.WriteFile(path, []byte(terminalCatalogue), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	run := runner.New(fake.NewClientset(), noopExec{}, events.NewHub(10), nil, runner.Config{})
+	attacks := limits.NewAttacks(limits.DefaultAttackConfig(), nil)
+	srv := New(Config{Scenarios: scenarios.NewStore(path, nil), Runner: refusingRunner{run}, Hub: events.NewHub(10),
+		Posture: stubPosture{}, Attacks: attacks, Requests: limits.NewRequests(1000, time.Minute, 1000, nil),
+		Streams: limits.NewConns(2, 10), AllowedOrigin: "https://hubertjablon.ski"})
+	e := &env{public: httptest.NewServer(srv.Public()), attacks: attacks}
+	defer e.public.Close()
+	for i := range 2 {
+		resp := e.post(t, "/api/attack/shell-in-container", "198.51.100.30", nil)
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Fatalf("attack %d: %d, want 400", i, resp.StatusCode)
+		}
+		if n := attacks.Active(); n != 0 {
+			t.Fatalf("attack %d: %d slots still held after a refused start", i, n)
+		}
+	}
+}
