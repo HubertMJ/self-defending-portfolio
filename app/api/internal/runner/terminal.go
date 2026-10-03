@@ -220,6 +220,7 @@ func (r *Runner) runTerminal(ctx context.Context, rn *run, sc scenarios.Scenario
 			}
 			return StateFinished, "deadline"
 		case <-rn.gone:
+			r.awaitAnswer(ctx, rn)
 			return StateFinished, "killed"
 		case <-rn.leave:
 			return StateFinished, "left"
@@ -420,8 +421,44 @@ func responseKind(actionner string) string {
 // a command already answered, or one tied to no command when every detection of its kind has been
 // answered. A terminate response deletes the pod, which ends the run as `killed`;
 // a quarantine leaves the pod running.
+// awaitAnswer holds a killed run's end until the detection the kill answers has its `responded`, or
+// ResponseWait passes. The pod watch reports Talon's delete before Talon's own notification reaches
+// the API (10 ms apart live); without the wait the run finishes first and the response that explains
+// the kill is dropped, so the page never learns how long after the visitor's Enter the pod died.
+func (r *Runner) awaitAnswer(ctx context.Context, rn *run) {
+	t := time.NewTimer(r.cfg.ResponseWait)
+	defer t.Stop()
+	for rn.hasUnanswered() {
+		select {
+		case <-rn.answered:
+		case <-t.C:
+			return
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
+func (rn *run) hasUnanswered() bool {
+	rn.tmu.Lock()
+	defer rn.tmu.Unlock()
+	for _, d := range rn.detections {
+		if !d.answered {
+			return true
+		}
+	}
+	return false
+}
+
 func (r *Runner) terminalResponded(rn *run, actionner string) {
 	kind := responseKind(actionner)
+	defer func() {
+		// Wake a killed run waiting for this answer (awaitAnswer); never blocks.
+		select {
+		case rn.answered <- struct{}{}:
+		default:
+		}
+	}()
 	rn.tmu.Lock()
 	seq, response := -1, kind
 	for i := len(rn.detections) - 1; i >= 0; i-- {

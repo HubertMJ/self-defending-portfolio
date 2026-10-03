@@ -154,3 +154,11 @@ The unguarded twin's extra linger, `compare_hold_seconds` (default 12), is an AP
 setting (`COMPARE_HOLD_SECONDS`), not a catalogue field: it governs how the API runs a compare, not
 what an attack is. It belongs to the twin mechanism of ADR 0031, which is the cluster branch's and not on
 this branch, so the API, which owns the value, records it here.
+
+## Amendment 2026-10-03: a killed run waits for Talon's notification
+
+Live, the pod watch reported Talon's delete 10 ms before Talon's own notification reached the API; the run
+had already published `finished` and the `responded` that explains the kill was dropped, so the page could
+not say how long after the visitor's Enter the pod died, and the stats recorded no response time for it. A
+terminal run whose pod is deleted under it now waits, while a detection is still unanswered, up to
+`ResponseWait` (2 s) for that answer before it ends. A kill with nothing left to answer ends at once.

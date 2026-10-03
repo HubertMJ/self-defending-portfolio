@@ -714,3 +714,61 @@ func TestTerminalDetectedRuleCapped(t *testing.T) {
 		}
 	}
 }
+
+// Live, the pod watch reports Talon's delete a few milliseconds before Talon's notification reaches
+// the API. The run must not finish in between: its `responded` would be dropped and the page could
+// not say how long after the visitor's Enter the pod died.
+func TestTerminalKillWaitsForTalonsAnswer(t *testing.T) {
+	c := fake.NewClientset()
+	readyOnCreate(c)
+	rec := newRecorder()
+	ex := &fakeExec{stdout: "root:*:...\n", code: 0}
+	r := terminalRunner(c, ex, rec)
+	release, done := released()
+	sc := terminalScenario()
+	id, token := r.StartTerminal(sc, release)
+	pod := podName(sc.ID, id)
+	rec.waitFor(t, StatePodReady)
+	seq := sendCommand(t, r, id, token, "read-shadow")
+	deadline := time.Now().Add(time.Second)
+	for r.CommandSeqFor("sandbox", pod) != seq && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	r.ObserveFalco("sandbox", pod, "Read sensitive file untrusted")
+	rec.waitFor(t, StateDetected)
+	// The watch sees the deletion first; Talon's notification follows 150 ms later.
+	_ = c.CoreV1().Pods("sandbox").Delete(context.Background(), pod, metav1.DeleteOptions{})
+	time.Sleep(150 * time.Millisecond)
+	r.ObserveTalon("sandbox", pod, "success", "kubernetes:terminate")
+	ev := rec.waitFor(t, StateFinished)
+	if ev.Detail != "killed" {
+		t.Fatalf("finish detail = %q", ev.Detail)
+	}
+	<-done
+	order := rec.order()
+	i, j := strings.Index(order, "run:responded"), strings.Index(order, "run:finished")
+	if i < 0 || j < 0 || i > j {
+		t.Fatalf("responded must precede finished: %s", order)
+	}
+}
+
+// A kill with nothing left to answer ends at once rather than waiting ResponseWait.
+func TestTerminalKillWithoutDetectionEndsAtOnce(t *testing.T) {
+	c := fake.NewClientset()
+	readyOnCreate(c)
+	rec := newRecorder()
+	r := terminalRunner(c, &fakeExec{stdout: "x\n", code: 0}, rec)
+	r.cfg.ResponseWait = 5 * time.Second
+	release, done := released()
+	sc := terminalScenario()
+	id, _ := r.StartTerminal(sc, release)
+	pod := podName(sc.ID, id)
+	rec.waitFor(t, StatePodReady)
+	start := time.Now()
+	_ = c.CoreV1().Pods("sandbox").Delete(context.Background(), pod, metav1.DeleteOptions{})
+	rec.waitFor(t, StateFinished)
+	<-done
+	if d := time.Since(start); d > 2*time.Second {
+		t.Fatalf("a kill with no unanswered detection waited %s", d)
+	}
+}

@@ -126,6 +126,11 @@ type Config struct {
 	// DeleteWait is how long the end of a run waits for the pod watch to report the deletion, so
 	// the `pod` event saying Deleted comes before the run's final state.
 	DeleteWait time.Duration
+	// ResponseWait is how long a terminal run whose pod was deleted under it waits for Talon's
+	// notification before it ends: live, the pod watch reports the deletion a few milliseconds
+	// before the webhook that explains it arrives, and a run that has already finished would
+	// drop that response. Only while a detection is still unanswered. Default 2 s.
+	ResponseWait time.Duration
 	// VictimPort, VictimInterval and VictimTimeout drive the victim poller: the app's port, how
 	// often it is read, and the limit for one read (ADR 0021: 8080, 500 ms, 300 ms).
 	VictimPort     int
@@ -219,6 +224,7 @@ type run struct {
 	flag      string          // SDP_FLAG set on the pod this run
 	cmds      chan commandReq // unbuffered: the loop receives a command only while it can run it
 	loopDone  chan struct{}   // closed when the terminal loop stops accepting commands
+	answered  chan struct{}   // a detection was answered (buffered 1): the kill's end waits on it
 	leave     chan struct{}   // closed by Leave (the visitor pressed "leave")
 	leaveOnce sync.Once
 
@@ -288,6 +294,9 @@ func New(client kubernetes.Interface, exec Execer, pub Publisher, log *slog.Logg
 	if cfg.DeleteWait <= 0 {
 		cfg.DeleteWait = 3 * time.Second
 	}
+	if cfg.ResponseWait <= 0 {
+		cfg.ResponseWait = 2 * time.Second
+	}
 	if cfg.VictimPort <= 0 {
 		cfg.VictimPort = 8080
 	}
@@ -345,6 +354,7 @@ func (r *Runner) StartTerminal(sc scenarios.Scenario, release func()) (string, s
 	rn.flag = newFlag()
 	rn.cmds = make(chan commandReq)
 	rn.loopDone = make(chan struct{})
+	rn.answered = make(chan struct{}, 1)
 	rn.leave = make(chan struct{})
 	r.launch(rn, sc, release)
 	return rn.id, rn.token
