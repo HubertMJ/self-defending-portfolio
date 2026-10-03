@@ -160,8 +160,9 @@ jobs:
       # GIT_SHA and CI_RUN_ID go to the api and web images only: the page shows what each was built
       # from and links the commit and the run (ADR 0035), and the api links its rule and policy
       # references to the exact commit (ADR 0021). The one place this file names images, because a
-      # build argument no Dockerfile declares is a warning on every other build, and a commit baked
-      # into an image that has no use for it would only change its digest on every push.
+      # build argument no Dockerfile declares is a warning on every other build, and a declared one
+      # invalidates the build cache from its ARG onward on every push - a cost only an image that uses
+      # the value should pay. (Digests change on every build anyway, through the run-id label.)
       - name: build and push
         id: build
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
