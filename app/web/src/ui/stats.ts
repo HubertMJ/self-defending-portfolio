@@ -94,7 +94,8 @@ export interface StatsHandle {
   setObjectives(objectives: Objective[]): void;
 }
 
-export function mountStats(root: HTMLElement, api: ApiClient): StatsHandle {
+/** `onData`: every fresh snapshot (the evidence card reads its last_run_at). */
+export function mountStats(root: HTMLElement, api: ApiClient, onData?: (s: Stats) => void): StatsHandle {
   let timer: ReturnType<typeof setTimeout> | undefined;
   let objectives: Objective[] = [];
   let snapshot: Stats | undefined;
@@ -129,6 +130,7 @@ export function mountStats(root: HTMLElement, api: ApiClient): StatsHandle {
       failures = 0;
       snapshot = res.value;
       draw();
+      onData?.(res.value);
       timer = setTimeout(() => void refresh(), 60_000);
       return;
     }

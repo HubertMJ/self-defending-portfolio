@@ -5,16 +5,20 @@ import { ApiClient } from "./lib/api";
 import { Backfill } from "./lib/backfill";
 import { byId, h, prefersReducedMotion, replace } from "./lib/dom";
 import { installMock } from "./lib/mock-hook";
+import { isRunId } from "./lib/contract";
 import { type ConnectionState, type EventSourceFactory, EventStream } from "./lib/sse";
+import type { TimelineView } from "./lib/timeline";
 import { CONNECTION_WORD } from "./ui/common";
 import { mountConsole } from "./ui/console";
 import { mountDefenceMap } from "./ui/defencemap";
+import { mountEvidence } from "./ui/evidence";
 import { mountPosture } from "./ui/posture";
 import { mountScenarios } from "./ui/scenarios";
 import { mountStats } from "./ui/stats";
 import { mountTerminal } from "./ui/terminal";
 import { mountLimits, setupTechMode } from "./ui/tech";
 import { mountTimeline } from "./ui/timeline";
+import { mountVerify } from "./ui/verify";
 import { blockedReason } from "./ui/scenarios";
 
 const HIDDEN_DISCONNECT_MS = 60_000;
@@ -71,8 +75,51 @@ function main(): void {
   const api = new ApiClient(mock ? { fetch: mock.fetch } : {});
   const factory: EventSourceFactory | undefined = mock ? mock.eventSource : undefined;
 
-  mountPosture(byId("posture-panel"), api);
-  const stats = mountStats(byId("hero-stats"), api);
+  // Evidence by default (ADR 0035): the newest run in the hero, the ticker and liveness in #evidence.
+  // Once the replay is in (the first tick, or 3 s after the stream opened), a page whose feed holds no
+  // run loads the newest the run store keeps, so the card shows the last real attack.
+  const evidence = mountEvidence(
+    byId("evidence-card"),
+    { ticker: byId("ticker"), liveness: byId("liveness"), detail: byId("evidence-detail") },
+    () => {
+      if (latestView.runs.length) return;
+      evidence.setLoading(true);
+      void api.runs().then((r) => {
+        const newest = r.ok ? r.value[0] : undefined;
+        if (newest) {
+          verify.set({ latestRunId: newest.run_id });
+          backfill.load(newest.run_id);
+          // The run arrives as ordinary timeline events and replaces this state; should the store have
+          // lost it meanwhile, the card falls back to "no attack since …" rather than loading forever.
+          setTimeout(() => evidence.setLoading(false), 8000);
+        } else evidence.setLoading(false);
+      });
+    },
+  );
+  let latestView: TimelineView = { runs: [], unmatched: [] };
+
+  const verify = mountVerify(byId("verify-strip"), byId("verify-panel"));
+  const posture = mountPosture(byId("posture-panel"), api, (p) => evidence.setPosture(p));
+  // Provenance follows the posture refresh (the API derives its digests from the same pod list).
+  const loadProvenance = async () => {
+    const r = await api.provenance();
+    if (r.ok) {
+      verify.set({ provenance: r.value });
+      posture.setCommit(r.value.api.commit);
+      if (r.value.api.started_at) evidence.setApiStart(r.value.api.started_at);
+      setTimeout(() => void loadProvenance(), 60_000);
+    } else {
+      verify.set({ provenance: null });
+      // An API without the endpoint (a JSON or plain 404) is not asked again.
+      if (r.status !== 404) setTimeout(() => void loadProvenance(), 120_000);
+    }
+  };
+  void loadProvenance();
+  void api.buildInfo().then((r) => verify.set({ build: r.ok ? r.value : null }));
+
+  const stats = mountStats(byId("hero-stats"), api, (s) => {
+    if (s.last_run_at) evidence.setLastRunAt(s.last_run_at);
+  });
   mountDefenceMap(byId("defence-map"), api);
 
   const limits = mountLimits(byId("limits-panel"), api);
@@ -82,6 +129,7 @@ function main(): void {
   // an end event (lib/timeline.ts staleRunMs).
   const runConsole = mountConsole(byId("console"), api, (scenario, d) => {
     if (d.timeout_seconds !== undefined) timeline.setScenarioTimeout(scenario, d.timeout_seconds);
+    evidence.setDetails(scenario, d);
   });
 
   // What blocks a fresh run right now (another run active, or a cooldown) — shown on the terminal's
@@ -95,10 +143,15 @@ function main(): void {
     onRateLimited: (seconds) => {
       launcherState = { ...launcherState, cooldownUntil: Date.now() + seconds * 1000 };
     },
-    onAvailable: (available, objectives, timeoutSeconds) => {
+    onAvailable: (available, objectives, timeoutSeconds, commands) => {
       if (available) stats.setObjectives(objectives);
       else degradeToOneClick();
       if (timeoutSeconds !== undefined) timeline.setScenarioTimeout("terminal", timeoutSeconds);
+      if (commands?.length) {
+        // Why a finished terminal run shows no detection is read from its commands' outcomes (ADR 0035).
+        timeline.setOutcomes(new Map(commands.map((c) => [c.id, c.outcome])));
+        evidence.setCatalogue(commands);
+      }
     },
   });
 
@@ -110,6 +163,7 @@ function main(): void {
     (scenarios) => {
       titles = new Map(scenarios.map((s) => [s.id, s.title]));
       timeline.setTitles(titles);
+      evidence.setTitles(titles);
       runConsole.setScenarios(scenarios);
     },
     (runId) => {
@@ -152,9 +206,12 @@ function main(): void {
       launcher.setActiveRun(active);
       runConsole.update(view);
       terminal.update(view);
+      latestView = view;
+      evidence.update(view);
       // The hero's "last run" tile follows the newest run the feed has shown.
       const newest = view.runs[0];
       if (newest) {
+        if (isRunId(newest.runId)) verify.set({ latestRunId: newest.runId });
         stats.setLastRun({
           title: titles.get(newest.scenario) ?? newest.scenario,
           at: newest.states.started ?? newest.states.queued ?? Date.now(),
@@ -172,15 +229,19 @@ function main(): void {
   );
 
   const events = new EventStream({
-    url: api.url("/events"),
+    // ?tick=1: the server's clock after the replay and every 15 s (ADR 0035); an older API ignores it.
+    url: api.url("/events?tick=1"),
     // Only in mock mode; otherwise the stream's own default, the browser's EventSource.
     ...(factory ? { factory } : {}),
     onEvent: (ev) => timeline.push(ev),
+    onTick: (t) => evidence.tick(t),
     // EventSource cannot read why a connect was refused; this asks once per refusal (Retry-After).
     probe: () => api.streamRetryAfterMs(),
     onState: (state, { retryInMs, gaveUp }) => {
       timeline.setConnection(state, retryInMs, gaveUp);
       setHeaderConn(state);
+      evidence.setConnection(state);
+      if (state === "open") evidence.streamOpened();
       // On opening after a drop or a hidden-tab stop, re-fetch the active run so output lost across
       // the gap is recovered (the replay buffer may not reach back to its start).
       backfill.stream(state, activeId);

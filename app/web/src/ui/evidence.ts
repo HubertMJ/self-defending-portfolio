@@ -6,7 +6,7 @@
 // page says since when, and the only thing that changes on its own is the server's clock (the opt-in
 // SSE tick) and "x minutes ago" next to an absolute UTC time.
 
-import { type CatalogueCommand, type CommandOutcome, FALCO_FIELDS, type FalcoEvent, type Posture, type ScenarioDetails, type StreamEvent, type TalonEvent, type Tick, isRunId } from "../lib/contract";
+import { type CatalogueCommand, FALCO_FIELDS, type FalcoEvent, type Posture, type ScenarioDetails, type StreamEvent, type TalonEvent, type Tick, isRunId } from "../lib/contract";
 import { h, relativeTime, replace, timeEl, utc, utcClock, when } from "../lib/dom";
 import { humanAction } from "../lib/pipeline";
 import { cosignVerifyCommand, digestOf, oneLine, shortDigest } from "../lib/provenance";
