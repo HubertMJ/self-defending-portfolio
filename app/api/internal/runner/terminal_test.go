@@ -456,7 +456,7 @@ func TestTerminalLateAlertIsDetected(t *testing.T) {
 			<-done
 
 			o := rec.order()
-			if strings.Index(o, "run:detected") < 0 || strings.Index(o, "run:detected") > strings.Index(o, "run:responded") {
+			if !strings.Contains(o, "run:detected") || strings.Index(o, "run:detected") > strings.Index(o, "run:responded") {
 				t.Fatalf("responded without a detection before it: %s", o)
 			}
 			var got []int
