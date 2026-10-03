@@ -50,6 +50,11 @@ export interface MockOptions {
   visitorAfterMs?: number;
   /** Start a terminal run "from another visitor" this long after load, to watch it read-only. */
   termVisitorAfterMs?: number;
+  /**
+   * Talon never answers a terminal command (Falco still detects): a TTY shell then runs into its own
+   * 10 s bound and `exited` with no code, as the API reports a command it cut short.
+   */
+  noResponse?: boolean;
 }
 
 const REPLAY = 100;
@@ -137,6 +142,7 @@ export class MockBackend {
   private readonly streamRetryAfter: number;
   private streamStall: boolean;
   private readonly noDetails: boolean;
+  private readonly noResponse: boolean;
 
   constructor(opts: MockOptions = {}) {
     this.speed = opts.speed ?? 1;
@@ -146,6 +152,7 @@ export class MockBackend {
     this.streamRetryAfter = opts.streamRetryAfter ?? 2;
     this.streamStall = opts.streamStall ?? false;
     this.noDetails = opts.noDetails ?? false;
+    this.noResponse = opts.noResponse ?? false;
     if (opts.history ?? true) this.seedHistory();
     if (opts.visitorAfterMs !== undefined) {
       setTimeout(() => {
@@ -614,6 +621,11 @@ export class MockBackend {
     const fields = { ...falcoFields(SCENARIOS[0], t.pod), "proc.name": cmd.command[0], "proc.cmdline": cmd.command.join(" "), "k8s.pod.name": t.pod };
     at(falcoMs, () => ({ type: "falco", data: { at: new Date(Date.now() - 25 * this.speed).toISOString(), rule: cmd.detection ?? "", priority: quarantine ? "Warning" : "Critical", namespace: "sandbox", pod: t.pod, output: `${cmd.detection} | command=${cmd.command.join(" ")} k8s_pod_name=${t.pod}`.slice(0, 1024), fields, api_received_at: new Date().toISOString(), command_seq: seq } }));
     at(falcoMs + 5, () => this.termRun(t, "detected", cmd.detection ?? "", seq));
+    if (this.noResponse) {
+      // Nothing answers: a TTY shell runs until its 10 s bound (TTYCommandTimeout) cuts it short.
+      if (cmd.tty) at(10_000, () => (done(), cmdEv("exited")));
+      return;
+    }
     at(talonMs, () => ({ type: "talon", data: { at: new Date(Date.now() - 10 * this.speed).toISOString(), action: quarantine ? "Quarantine Pod" : "Terminate Pod", actionner: quarantine ? "kubernetes:label" : "kubernetes:terminate", namespace: "sandbox", pod: t.pod, status: "success", output: quarantine ? `the pod '${t.pod}' in the namespace 'sandbox' has been labeled` : `the pod '${t.pod}' in the namespace 'sandbox' has been terminated`, api_received_at: new Date().toISOString(), command_seq: seq } }));
     at(talonMs + 10, () => this.termRun(t, "responded", cmd.response ?? "", seq));
     if (quarantine) {
@@ -741,5 +753,6 @@ export function mockOptionsFromUrl(search: string): MockOptions | null {
     noDetails: q.get("mock-details") === "0",
     visitorAfterMs: num("mock-visitor"),
     termVisitorAfterMs: num("mock-term-visitor"),
+    noResponse: q.get("mock-no-response") === "1",
   };
 }

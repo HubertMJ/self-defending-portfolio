@@ -288,7 +288,7 @@ describe("a command that exited without an exit code (review 2, item 2)", () => 
     f.cmd(1, "whoami", "started", 3000);
     f.cmd(1, "whoami", "exited", 8010); // no exit_code: the API's own timeout
     t.show(f);
-    expect(foot(t.root, 1)).toContain("timed out");
+    expect(foot(t.root, 1)).toContain("timed out: a command gets 5 seconds");
     expect(sideLayer(t.root, "runtime")).toBe("allowed");
     expect((t.root.querySelector(".term__send") as HTMLButtonElement).disabled).toBe(false);
   });
@@ -304,6 +304,25 @@ describe("a command that exited without an exit code (review 2, item 2)", () => 
     t.show(f);
     expect(foot(t.root, 1)).toContain("the session was left");
     expect(text(t.root.querySelector(".term__sumlead"))).toContain("You left");
+  });
+
+  it("a TTY shell is cut at its own 10 s bound, and says so (final review, item 3)", async () => {
+    const t = await harness();
+    const f = new Feed().open();
+    f.cmd(1, "shell", "started", 3000);
+    f.cmd(1, "shell", "exited", 13_010);
+    t.show(f, T0 + 14_000);
+    expect(foot(t.root, 1)).toContain("timed out: a command with a terminal gets 10 seconds");
+  });
+
+  it("left: told by the run's own reason, though `finished` follows the pod's deletion seconds later (item 7)", async () => {
+    const t = await harness();
+    const f = new Feed().open();
+    f.cmd(1, "ps", "started", 3000);
+    f.cmd(1, "ps", "exited", 3200);
+    f.run("finished", 7300, "left"); // after the cleanup's delete and its wait
+    t.show(f);
+    expect(foot(t.root, 1)).toContain("the session was left");
   });
 
   it("idle and deadline end the session with their own reason", async () => {

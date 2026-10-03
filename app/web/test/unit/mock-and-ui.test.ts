@@ -431,6 +431,25 @@ describe("MockBackend terminal (ADR 0033)", () => {
     expect((await again).status).toBe(409);
   });
 
+  it("with no response, a TTY shell runs into its 10 s bound and exits with no code", async () => {
+    const mock = new MockBackend({ speed: 1, history: false, noResponse: true });
+    const api = new ApiClient({ fetch: mock.fetch });
+    const src = mock.eventSource("/api/events");
+    const seen: Record<string, unknown>[] = [];
+    for (const t of ["run", "command", "talon"]) src.addEventListener(t, (m) => seen.push({ type: t, ...JSON.parse(m.data) }));
+    await vi.advanceTimersByTimeAsync(100);
+    const res = await settle(api.attackTerminal(), 1200);
+    if (res.kind !== "accepted") throw new Error(res.kind);
+    await settle(api.runCommand(res.run.run_id, res.run.token, "shell"));
+    await vi.advanceTimersByTimeAsync(9000);
+    expect(seen.some((e) => e.type === "command" && e.state === "exited")).toBe(false);
+    await vi.advanceTimersByTimeAsync(2000);
+    const exited = seen.find((e) => e.type === "command" && e.state === "exited")!;
+    expect("exit_code" in exited).toBe(false);
+    expect(seen.some((e) => e.type === "talon")).toBe(false);
+    expect(seen.some((e) => e.type === "run" && e.state === "detected")).toBe(true);
+  });
+
   it("the per-run command cap is a 429 whose body says so", async () => {
     const { mock, token, runId } = await start();
     for (let i = 0; i < 30; i++) {

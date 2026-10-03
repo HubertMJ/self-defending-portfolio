@@ -608,17 +608,21 @@ export function mountTerminal(
 
   /**
    * Why a command `exited` with no exit code. The API sends that when it cut the exec short: the
-   * command's 5 s limit, the visitor leaving, or the run's end (idle, the deadline) under a command
-   * that was still running.
+   * command's own bound (5 s, or 10 s for a TTY command such as `sh -i`), the visitor leaving, or the
+   * run's end (idle, the deadline) under a command that was still running. The run's end is told by
+   * the run itself — over, for one of those reasons, with this its last command — not by a time
+   * window, since `finished` follows the pod's deletion by a few seconds.
    */
   const noCodeReason = (c: CommandRun): string => {
     const run = myRun();
-    const end = run && (run.states.finished ?? run.states.failed ?? run.states.timeout);
-    const endedWithRun = run !== undefined && !run.active && end !== undefined && c.endedAt !== undefined && end - c.endedAt < 3000;
-    if (endedWithRun && run.detail === "left") return "— stopped: the session was left while it ran —";
-    if (endedWithRun) return "— stopped: it ended with the session —";
+    const last = run?.commands[run.commands.length - 1] === c;
+    const why = run && !run.active && last ? run.detail : undefined;
+    if (why === "left") return "— stopped: the session was left while it ran —";
+    if (why === "idle" || why === "deadline") return "— stopped: it ended with the session —";
+    const tty = catalogue?.commands.find((x) => x.id === c.id)?.tty === true;
+    const bound = tty ? 10 : 5;
     const ranFor = c.startedAt !== undefined && c.endedAt !== undefined ? c.endedAt - c.startedAt : 0;
-    if (ranFor >= 4500) return "— timed out: a command gets 5 seconds —";
+    if (ranFor >= bound * 1000 - 500) return `— timed out: ${tty ? "a command with a terminal" : "a command"} gets ${bound} seconds —`;
     return "— stopped before it reported an exit code —";
   };
 
