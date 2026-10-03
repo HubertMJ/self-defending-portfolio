@@ -164,7 +164,8 @@ export function cosignCommand(image: string): string {
   return [`cosign verify ${image}`, `  --certificate-identity ${COSIGN_IDENTITY}`, `  --certificate-oidc-issuer ${COSIGN_ISSUER}`].join(" \\\n");
 }
 
-export function mountConsole(root: HTMLElement, api: ApiClient): ConsoleHandle {
+/** onDetails: a scenario's details as they load (their timeout bounds how long its runs may last). */
+export function mountConsole(root: HTMLElement, api: ApiClient, onDetails?: (scenario: string, details: ScenarioDetails) => void): ConsoleHandle {
   const reduced = prefersReducedMotion();
   const own = new Set<string>();
   const scenarios = new Map<string, Scenario>();
@@ -235,6 +236,7 @@ export function mountConsole(root: HTMLElement, api: ApiClient): ConsoleHandle {
     details.set(scenario, "loading");
     void api.scenarioDetails(scenario).then((r) => {
       details.set(scenario, r);
+      if (r.ok) onDetails?.(scenario, r.value);
       render();
     });
   };

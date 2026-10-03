@@ -2886,8 +2886,9 @@ html[data-terminal="off"] .needs-terminal {
 
 .term__bar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 0.6rem;
+  gap: 0.25rem 0.6rem;
   padding: 0.45rem 0.7rem;
   background: #14171d;
   border-bottom: 1px solid #262b34;
@@ -2908,6 +2909,24 @@ html[data-terminal="off"] .needs-terminal {
 }
 
 .term__bartitle {
+  color: #8a8f99;
+}
+
+/* The session's two countdowns: "m:ss" in the bar's monospaced face, so a tick moves nothing. Kept
+   in place but invisible before pod_ready; after the end, the status says why it ended instead. */
+.term__clock {
+  display: inline-flex;
+  gap: 0.6rem;
+  color: #e6e3dc;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.term__clock[data-live="false"] {
+  visibility: hidden;
+}
+
+.term__idleleft {
   color: #8a8f99;
 }
 
@@ -3421,9 +3440,16 @@ html[data-terminal="off"] .needs-terminal {
   margin-top: auto;
 }
 
-.scenario__twin[aria-disabled="true"] {
+.scenario__alt[aria-disabled="true"] {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+.scenario__launchnote {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  line-height: 1.45;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -3440,6 +3466,13 @@ html[data-terminal="off"] .needs-terminal {
 
 .term__exit {
   margin-left: 0.25rem;
+  /* The bar is dark in both themes: the ghost button's theme colours vanish on it in the light one. */
+  color: #e6e3dc;
+  border-color: #4a5160;
+}
+
+.term__exit:hover {
+  background: #262b34;
 }
 
 .term-fallback {

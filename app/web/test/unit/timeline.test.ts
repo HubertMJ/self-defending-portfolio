@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { FalcoEvent, RunState, StreamEvent, TalonEvent } from "../../src/lib/contract";
-import { STALE_RUN_MS, buildTimeline, formatDuration } from "../../src/lib/timeline";
+import { buildTimeline, formatDuration } from "../../src/lib/timeline";
 
 const T0 = Date.parse("2026-10-01T12:00:00.000Z");
 const at = (ms: number) => new Date(T0 + ms).toISOString();
@@ -66,9 +66,36 @@ describe("buildTimeline", () => {
   });
 
   it("does not let a lost terminal event keep a run active forever", () => {
-    const v = buildTimeline([run("r1", "queued", 0), run("r1", "started", 500)], T0 + STALE_RUN_MS + 1000);
+    // No details for the scenario: the contract's 300 s ceiling plus the 60 s margin.
+    const v = buildTimeline([run("r1", "queued", 0), run("r1", "started", 500)], T0 + 361_000);
     expect(v.runs[0].active).toBe(false);
     expect(v.activeRun).toBeUndefined();
+    expect(buildTimeline([run("r1", "queued", 0)], T0 + 359_000).activeRun?.runId).toBe("r1");
+  });
+
+  describe("how long a run without an end event counts as running (ADR 0033, 2026-10-03 limits)", () => {
+    const term = (state: RunState, ms: number): StreamEvent => ({ type: "run", data: { run_id: "t1", scenario: "terminal", state, at: at(ms), pod: "terminal-t1" } });
+    const open = [term("queued", 0), term("pod_ready", 2000)];
+
+    it("a terminal session four minutes in is still the live run (its timeout is 300 s)", () => {
+      const v = buildTimeline(open, T0 + 240_000, new Map([["terminal", 300]]));
+      expect(v.activeRun?.runId).toBe("t1");
+      expect(v.runs[0].staleAfterMs).toBe(360_000);
+      expect(buildTimeline(open, T0 + 359_000, new Map([["terminal", 300]])).activeRun?.runId).toBe("t1");
+      expect(buildTimeline(open, T0 + 361_000, new Map([["terminal", 300]])).activeRun).toBeUndefined();
+    });
+
+    it("a terminal run never gets less than 300 s + 60 s, whatever its details say or without them", () => {
+      expect(buildTimeline(open, T0 + 300_000, new Map([["terminal", 120]])).activeRun?.runId).toBe("t1");
+      expect(buildTimeline(open, T0 + 300_000).activeRun?.runId).toBe("t1");
+    });
+
+    it("a one-click run follows its own scenario's timeout plus the margin", () => {
+      const events = [run("r1", "queued", 0), run("r1", "started", 500)];
+      const timeouts = new Map([["shell-in-container", 90]]);
+      expect(buildTimeline(events, T0 + 149_000, timeouts).activeRun?.runId).toBe("r1");
+      expect(buildTimeline(events, T0 + 151_000, timeouts).activeRun).toBeUndefined();
+    });
   });
 
   it("keeps the furthest state and its detail, even if an earlier one arrives late", () => {

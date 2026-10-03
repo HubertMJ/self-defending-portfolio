@@ -10,7 +10,7 @@
 
 import type { ApiClient } from "../lib/api";
 import { type CatalogueCommand, type Objective, type Posture, type ScenarioDetails, isRunId } from "../lib/contract";
-import { h, prefersReducedMotion, replace } from "../lib/dom";
+import { type Child, h, prefersReducedMotion, replace } from "../lib/dom";
 import type { CommandRun, RunView, TimelineView } from "../lib/timeline";
 import { formatDuration, ts } from "../lib/timeline";
 import { litFromCommands, renderDefenceMap } from "./defencemap";
@@ -27,8 +27,9 @@ interface Catalogue {
   details: ScenarioDetails;
   commands: CatalogueCommand[];
   objectives: Objective[];
-  idleSeconds: number;
-  timeoutSeconds: number;
+  /** The run's limits from the details; undefined only from an API that does not send them. */
+  idleSeconds?: number;
+  timeoutSeconds?: number;
 }
 
 /** Resolve a typed line to a catalogue command: exact input or alias, trimmed, case-insensitive. */
@@ -54,8 +55,8 @@ export function mountTerminal(
     blocked?: () => string | null;
     cooldownSeconds?: () => number;
     onRateLimited?: (seconds: number) => void;
-    /** Whether this API has the terminal, with its objectives: told once the catalogue has loaded or failed to. */
-    onAvailable?: (available: boolean, objectives: Objective[]) => void;
+    /** Whether this API has the terminal, with its objectives and run timeout: told once the catalogue has loaded or failed to. */
+    onAvailable?: (available: boolean, objectives: Objective[], timeoutSeconds?: number) => void;
   } = {},
 ): TerminalHandle {
   const reduced = prefersReducedMotion();
@@ -90,9 +91,18 @@ export function mountTerminal(
     map: HTMLElement;
     summary: HTMLElement;
     status: HTMLElement;
+    clock: HTMLElement;
+    left: HTMLElement;
+    idleLeft: HTMLElement;
     send: HTMLButtonElement;
     exit: HTMLButtonElement;
   } | null = null;
+
+  // The bar's two countdowns, ticked once a second while the session is live. Run timestamps are the
+  // API's clock; `skew` is the page's clock minus the API's, estimated as the least lag seen between
+  // an event's `at` and the moment the page saw it, so a visitor's wrong clock does not move them.
+  let clockTimer: ReturnType<typeof setInterval> | undefined;
+  let skew = Infinity;
 
   // Posture (for the result map's evidence) is fetched once, lazily, the first time it is needed —
   // not eagerly on load, where the posture panel and the defence map already fetch it (item 14).
@@ -122,8 +132,10 @@ export function mountTerminal(
         details: r.value,
         commands: r.value.commands ?? [],
         objectives: r.value.objectives ?? [],
-        idleSeconds: r.value.idle_seconds ?? 30,
-        timeoutSeconds: r.value.timeout_seconds ?? 120,
+        // No default: an API that sends no limits gets no countdowns and words without numbers
+        // (the staleness bound then falls back to the contract's ceiling, timeline.ts staleRunMs).
+        idleSeconds: r.value.idle_seconds,
+        timeoutSeconds: r.value.timeout_seconds,
       };
       if (mode === "session") {
         // Another visitor's run reached the page first and is already shown read-only: fill in what
@@ -135,7 +147,7 @@ export function mountTerminal(
       } else {
         renderIdle();
       }
-      hooks.onAvailable?.(true, catalogue.objectives);
+      hooks.onAvailable?.(true, catalogue.objectives, catalogue.timeoutSeconds);
     } else if (r.ok || (r.status === 404 && r.json)) {
       renderUnavailable();
     } else {
@@ -185,6 +197,8 @@ export function mountTerminal(
   const renderIdle = () => {
     if (!catalogue) return;
     mode = "idle";
+    clearInterval(clockTimer);
+    clockTimer = undefined;
     const label = h("span", { class: "btn__label" }, "Open the terminal");
     const btn = h("button", { type: "button", class: "btn btn--attack term-start__btn" }, h("span", { class: "btn__icon", "aria-hidden": "true" }, "▶"), label);
     btn.addEventListener("click", () => void start());
@@ -307,6 +321,10 @@ export function mountTerminal(
     const map = h("div", { class: "term__map" });
     const summary = h("div", { class: "term__summary", hidden: true });
     const status = h("p", { class: "term__status", role: "status", "aria-live": "polite" });
+    // role=timer is not live: a screen reader reads it when asked, never every second.
+    const left = h("span", { class: "term__left", title: "Time left before the session limit deletes the pod" });
+    const idleLeft = h("span", { class: "term__idleleft", title: "Time left before the session ends for want of a command" });
+    const clock = h("span", { class: "term__clock", role: "timer", "data-live": "false" }, left, idleLeft);
     const exit = h("button", { type: "button", class: "btn btn--ghost btn--small term__exit" }, "Leave");
     exit.addEventListener("click", () => void leave());
 
@@ -331,7 +349,7 @@ export function mountTerminal(
     });
     input.addEventListener("input", () => showHint(catalogue ? completions(catalogue, input.value) : []));
 
-    els = { out, form, input, hint, said, chips, shop, objectives, map, summary, status, send, exit };
+    els = { out, form, input, hint, said, chips, shop, objectives, map, summary, status, clock, left, idleLeft, send, exit };
     replace(
       root,
       h(
@@ -343,7 +361,7 @@ export function mountTerminal(
           h(
             "section",
             { class: "term__pane", "aria-label": "Attacker's terminal" },
-            h("div", { class: "term__bar" }, h("span", { class: "term__dots", "aria-hidden": "true" }, h("i"), h("i"), h("i")), h("span", { class: "term__bartitle" }, "sh — scenario pod"), status, watching ? null : exit),
+            h("div", { class: "term__bar" }, h("span", { class: "term__dots", "aria-hidden": "true" }, h("i"), h("i"), h("i")), h("span", { class: "term__bartitle" }, "sh — scenario pod"), clock, status, watching ? null : exit),
             out,
             form,
             hint,
@@ -544,6 +562,8 @@ export function mountTerminal(
     if (!els) return;
     const run = myRun();
     if (!run) return;
+    const newest = run.events[run.events.length - 1];
+    if (newest) skew = Math.min(skew, Date.now() - ts(newest.data.at));
     // Enable input the moment the pod is ready; keep it disabled (and chips inert) before that.
     const nowReady = run.states.pod_ready !== undefined;
     if (nowReady && !ready && !watching) enableInput();
@@ -554,7 +574,75 @@ export function mountTerminal(
     renderObjectives(run);
     renderMap(run);
     renderStatus(run);
+    tickClock();
     if (!run.active && !endedShown) renderSummary(run);
+  };
+
+  /**
+   * Session time left (the API's deadline runs from the run's start, before the pod exists) and idle
+   * time left (from pod_ready, then from each command's start: the API's idle timer restarts when a
+   * command arrives, not when it ends). Shown from pod_ready to the end, to watchers too; "m:ss" in a
+   * monospaced bar, so a tick never moves anything.
+   */
+  const tickClock = () => {
+    if (!els || !catalogue) return;
+    const run = myRun();
+    const readyAt = run?.states.pod_ready;
+    const live = run !== undefined && readyAt !== undefined && run.active && !over();
+    const { timeoutSeconds: limit, idleSeconds: idle } = catalogue;
+    if (!live || (limit === undefined && idle === undefined)) {
+      if (clockTimer !== undefined) clearInterval(clockTimer);
+      clockTimer = undefined;
+      // Before pod_ready the clock keeps its place, invisible; after the end, the status says why.
+      els.clock.dataset.live = "false";
+      els.clock.hidden = run !== undefined && (!run.active || over());
+      return;
+    }
+    const now = Date.now() - (Number.isFinite(skew) ? skew : 0);
+    const begun = run.states.queued ?? run.states.started ?? readyAt;
+    const lastStart = Math.max(readyAt, ...run.commands.map((c) => c.startedAt ?? 0));
+    // Patched only when the text changes; what a screen reader gets is worded for hearing.
+    const set = (el: HTMLElement, text: string, ...kids: Child[]) => {
+      if (el.dataset.text === text) return;
+      el.dataset.text = text;
+      replace(el, ...kids);
+    };
+    const hidden = (t: string) => h("span", { class: "visually-hidden" }, t);
+    if (limit !== undefined) {
+      const v = clockText(begun + limit * 1000 - now);
+      set(els.left, v, hidden("Session time: "), `${v} left`);
+    }
+    if (idle !== undefined) {
+      const v = clockText(lastStart + idle * 1000 - now);
+      set(els.idleLeft, v, hidden("Idle limit in "), h("span", { "aria-hidden": "true" }, "idle "), v);
+    }
+    els.clock.dataset.live = "true";
+    els.clock.hidden = false;
+    clockTimer ??= setInterval(tickClock, 1000);
+  };
+
+  /** Why the run ended, from its `detail`, in the words the bar and the summary share. */
+  const endReason = (run: RunView): string | undefined => {
+    if (run.current !== "finished") return undefined;
+    const idle = catalogue?.idleSeconds;
+    switch (run.detail) {
+      case "idle":
+        return `ended after ${idle !== undefined ? `${idle} s` : "the idle limit"} without a command`;
+      case "deadline":
+        return `reached ${sessionLimit()}`;
+      case "left":
+        return watching ? "the visitor left" : "you left";
+      case "killed":
+        return "the cluster deleted the pod";
+    }
+    return undefined;
+  };
+
+  /** "the 5-minute session limit" from the details' timeout_seconds. */
+  const sessionLimit = (): string => {
+    const t = catalogue?.timeoutSeconds;
+    if (t === undefined) return "the session's time limit";
+    return t % 60 === 0 ? `the ${t / 60}-minute session limit` : `the ${t}-second session limit`;
   };
 
   const enableInput = () => {
@@ -635,12 +723,13 @@ export function mountTerminal(
 
   const renderStatus = (run: RunView) => {
     if (!els) return;
-    const text = watching
-      ? ownRunLost()
-        ? "read-only — the start timed out"
-        : "watching another visitor — read-only"
-      : !run.active
-        ? "session over"
+    const why = endReason(run);
+    const text = !run.active
+      ? why ? `session over — ${why}` : "session over"
+      : watching
+        ? ownRunLost()
+          ? "read-only — the start timed out"
+          : "watching another visitor — read-only"
         : run.quarantinedAt !== undefined
           ? "quarantined — still yours, but cut off"
           : !ready
@@ -750,9 +839,9 @@ export function mountTerminal(
           ? ["Quarantined after ", input(quarantine.cmd) ?? "a command", `, ${you} kept the shell; then the cluster deleted the pod under ${other ? "them" : "you"} after `, input(ender?.cmd) ?? "a later command", "."]
           : [`The cluster deleted the pod under ${other ? "them" : "you"} after `, input(ender?.cmd) ?? "a command", " — marked below."]
         : detail === "idle"
-          ? [`${You} went quiet; the pod was reclaimed after the idle timeout.`]
+          ? [`${You} went quiet: the session ${endReason(run)}, and the pod was reclaimed.`]
           : detail === "deadline"
-            ? [`The pod reached its ${catalogue.timeoutSeconds}-second deadline.`]
+            ? [`The session ran to ${sessionLimit()}, and the pod was reclaimed.`]
             : detail === "left"
               ? [`${You} left; the pod was cleaned up.`]
               : quarantine
@@ -861,9 +950,11 @@ export function mountTerminal(
 
   // The visitor closing the tab ends their run, freeing the single slot at once rather than after the
   // idle timeout (review item 10). keepalive lets the DELETE outlive the page.
-  const onPageHide = () => {
-    // Once only, and only while the run is live: not after it ended (the API would answer 409), and
-    // not again when a page restored from the back/forward cache is hidden a second time.
+  const onPageHide = (e: Event) => {
+    // Only a page that is really unloading: one going into the back/forward cache (persisted) may
+    // come back to its session, so it keeps the run, and the idle timer frees the slot if it does not.
+    if ((e as PageTransitionEvent).persisted !== false) return;
+    // Once only, and only while the run is live: not after it ended (the API would answer 409).
     if (session && !watching && !over()) void leave();
   };
   if (typeof addEventListener === "function") addEventListener("pagehide", onPageHide);
@@ -877,6 +968,12 @@ export function mountTerminal(
   };
 
   return { update, historyTruncated };
+}
+
+/** "4:32": minutes and seconds left, never below zero. */
+function clockText(ms: number): string {
+  const s = Math.max(0, Math.ceil(ms / 1000));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 }
 
 function stat(label: string, value: string): HTMLElement {

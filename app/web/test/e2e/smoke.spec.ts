@@ -132,7 +132,8 @@ test.describe("mock mode", () => {
     const problems = guardConsole(page);
     await page.goto("/?mock=1&mock-speed=0.5");
     const card = page.locator('.scenario[data-scenario="network-tool"]');
-    const button = card.getByRole("button", { name: /Launch attack/ });
+    // The guarded pod alone: one run, one pod, as the timeline below reads it.
+    const button = card.getByRole("button", { name: "Guarded pod only" });
     await expect(button).toHaveAttribute("aria-disabled", "false");
     await button.click();
 
@@ -197,7 +198,7 @@ test.describe("live run console (mock)", () => {
       new MutationObserver(record).observe(root, { subtree: true, childList: true, attributes: true, characterData: true });
       (window as unknown as { consoleStates: typeof seen }).consoleStates = seen;
     });
-    await page.locator('.scenario[data-scenario="shell-in-container"] .btn--attack').click();
+    await page.locator('.scenario[data-scenario="shell-in-container"] .scenario__alt').click();
     // The run takes the console over (live for its whole length), then ends.
     await expect(consoleEl).toHaveAttribute("data-state", "live");
     await expect(consoleEl).toHaveAttribute("data-state", "done", { timeout: 15_000 });
@@ -248,7 +249,7 @@ test.describe("live run console (mock)", () => {
   test("a quarantine shows the label, the cut network and the dropped packets", async ({ page }) => {
     const problems = guardConsole(page);
     await page.goto("/?mock=1&mock-speed=0.5");
-    await page.locator('.scenario[data-scenario="network-tool"] .btn--attack').click();
+    await page.locator('.scenario[data-scenario="network-tool"] .scenario__alt').click();
     const consoleEl = page.locator("#console");
     await expect(consoleEl.locator(".browser")).toHaveAttribute("data-status", "unreachable");
     await expect(consoleEl.locator(".card--proof")).toContainText("sdp.hubertjablon.ski/quarantine: false → true");
@@ -271,7 +272,7 @@ test.describe("live run console (mock)", () => {
 
   test("the history's Show button puts that run in the console", async ({ page }) => {
     await page.goto("/?mock=1&mock-speed=0.1");
-    await page.locator('.scenario[data-scenario="sensitive-file-read"] .btn--attack').click();
+    await page.locator('.scenario[data-scenario="sensitive-file-read"] .scenario__alt').click();
     await expect(page.locator(".run")).toHaveCount(2);
     await expect(page.locator(".run").first().locator(".chip--state")).toHaveText("Finished");
     await page.locator('.run[data-run="a7c3e9f1b2d40658"] .run__show').click();
@@ -330,6 +331,49 @@ test.describe("attacker's terminal (mock, ADR 0033)", () => {
     await noHorizontalScroll(page);
     await nothingPastEdge(page, "#terminal");
     expect(problems).toEqual([]);
+  });
+
+  test("the bar counts down the 5-minute session and the 90 s idle limit without moving, and says why it ended", async ({ page }) => {
+    const problems = guardConsole(page);
+    await page.goto("/?mock=1");
+    const term = page.locator("#terminal");
+    await term.getByRole("button", { name: /Open the terminal/ }).click();
+    const bar = term.locator(".term__bar");
+    await expect(bar.locator(".term__clock")).toHaveAttribute("data-live", "true", { timeout: 10_000 });
+    await expect(bar.locator(".term__left")).toHaveText(/^Session time: 4:5\d left$/);
+    await expect(bar.locator(".term__idleleft")).toHaveText(/^Idle limit in idle 1:[23]\d$/);
+    // A tick changes the numbers and nothing else: every item of the bar stays where it was.
+    const boxes = () => bar.evaluate((b) => [...b.children].map((e) => JSON.stringify(e.getBoundingClientRect())));
+    const before = { boxes: await boxes(), text: await bar.locator(".term__left").textContent() };
+    await expect(bar.locator(".term__left")).not.toHaveText(before.text ?? "", { timeout: 2_500 });
+    expect(await boxes()).toEqual(before.boxes);
+    // The bar is dark in both themes; Leave reads on it in both.
+    for (const scheme of ["light", "dark"] as const) {
+      await page.emulateMedia({ colorScheme: scheme });
+      const ratio = await bar.locator(".term__exit").evaluate((el) => {
+        const lum = (c: string) => {
+          const [r, g, b] = (c.match(/[\d.]+/g) ?? []).slice(0, 3).map(Number).map((x) => x / 255).map((x) => (x <= 0.03928 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4));
+          return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+        };
+        const [a, b] = [lum(getComputedStyle(el).color), lum(getComputedStyle(el.closest(".term__bar") as HTMLElement).backgroundColor)].sort((x, y) => y - x);
+        return (a + 0.05) / (b + 0.05);
+      });
+      expect(ratio, scheme).toBeGreaterThanOrEqual(4.5);
+    }
+    await bar.getByRole("button", { name: "Leave" }).click();
+    await expect(term.locator(".term__status")).toHaveText("session over — you left");
+    await expect(term.locator(".term__sumlead")).toContainText("You left");
+    await expect(bar.locator(".term__clock")).toBeHidden();
+    expect(problems).toEqual([]);
+  });
+
+  test("a session left without a command ends at the idle limit, and the bar and the summary say so", async ({ page }) => {
+    // At 0.03x the mock's 90 s idle limit is 2.7 s; the words come from the details, not the clock.
+    await page.goto("/?mock=1&mock-speed=0.03");
+    const term = page.locator("#terminal");
+    await term.getByRole("button", { name: /Open the terminal/ }).click();
+    await expect(term.locator(".term__status")).toHaveText("session over — ended after 90 s without a command", { timeout: 10_000 });
+    await expect(term.locator(".term__sumlead")).toContainText("ended after 90 s without a command");
   });
 
   test("an unknown line is answered locally and never sent to the API", async ({ page }) => {
@@ -426,12 +470,19 @@ test.describe("defence map and live stats (mock, ADR 0033)", () => {
 });
 
 test.describe("unguarded twin (mock, ADR 0033)", () => {
-  test("one click runs with and without the response, side by side", async ({ page }) => {
+  test("the card's main button runs with and without the response, side by side", async ({ page }) => {
     const problems = guardConsole(page);
     await page.goto("/?mock=1&mock-speed=0.4");
-    await page.locator('.scenario[data-scenario="network-tool"] .scenario__twin').click();
+    const card = page.locator('.scenario[data-scenario="network-tool"]');
+    // The main button runs both pods; the card says so, and offers the guarded pod alone beside it.
+    await expect(card.locator(".btn--attack")).toHaveText(/Launch side by side/);
+    await expect(card.locator(".scenario__alt")).toHaveText("Guarded pod only");
+    await expect(card.locator(".scenario__launchnote")).toContainText("an unguarded twin where Falco sees it and nothing answers");
+    await card.locator(".btn--attack").click();
     const twin = page.locator("#console .twin");
     await expect(twin).toBeVisible({ timeout: 8_000 });
+    const posts = await page.evaluate(() => (window as unknown as { sdpMock: { calls: string[] } }).sdpMock.calls.filter((c) => c.startsWith("POST ")));
+    expect(posts).toEqual(["POST /api/attack/network-tool?compare=1"]);
     await expect(twin.locator(".twin__arm")).toHaveCount(2);
     // The guarded pod is cut off; the unguarded one stays compromised, with nothing answering.
     await expect(twin.locator(".twin__arm--guarded .browser")).toHaveAttribute("data-status", "unreachable", { timeout: 12_000 });
@@ -448,7 +499,7 @@ test.describe("narrow screens", () => {
     await page.setViewportSize({ width: 360, height: 780 });
     await page.goto("/?mock=1&mock-speed=0.2");
     await page.locator("#tech-toggle").click();
-    await page.locator('.scenario[data-scenario="network-tool"] .btn--attack').click();
+    await page.locator('.scenario[data-scenario="network-tool"] .scenario__alt').click();
     await expect(page.locator("#console .browser")).toHaveAttribute("data-status", "unreachable");
     await page.locator("#console .verify > summary").click();
     await page.locator("#console .rawlog > summary").click();
@@ -499,9 +550,11 @@ test.describe("against the API deployed today (serve.mjs --live-api: JSON 404 on
     await expect(page.locator(".launcher__head")).toBeHidden();
     await expect(page.getByText("Open the terminal")).toHaveCount(0);
     await expect(page.locator("#how .section__lead")).not.toContainText("terminal", { useInnerText: true });
-    // That API ignores ?compare=1 and would start an ordinary run: no twin is offered.
-    await expect(page.locator(".scenario__twin")).toHaveCount(0);
+    // That API ignores ?compare=1 and would start an ordinary run: the one plain button, no twin.
+    await expect(page.locator(".scenario__alt")).toHaveCount(0);
+    await expect(page.locator(".scenario__launchnote")).toHaveCount(0);
     await expect(page.locator(".scenario .btn--attack")).toHaveCount(4);
+    await expect(page.locator(".scenario .btn--attack").first()).toHaveText(/Launch attack/);
     await expect(page.locator("#hero-stats")).toBeHidden();
     await page.waitForTimeout(3000);
     // Loading the page posts nothing, and asks for the missing endpoints once each, not on a loop.
@@ -656,7 +709,7 @@ test.describe("accessibility basics", () => {
   test("reduced motion skips the replay: hops light as their events arrive", async ({ page }) => {
     await page.emulateMedia({ reducedMotion: "reduce" });
     await page.goto("/?mock=1&mock-speed=0.3");
-    await page.locator('.scenario[data-scenario="shell-in-container"] .btn--attack').click();
+    await page.locator('.scenario[data-scenario="shell-in-container"] .scenario__alt').click();
     const consoleEl = page.locator("#console");
     // At 0.3x the whole chain is ~0.3 s; a 600 ms dwell per hop would need several seconds.
     await expect(consoleEl.locator(".hop[data-state=lit]")).toHaveCount(8, { timeout: 2_500 });

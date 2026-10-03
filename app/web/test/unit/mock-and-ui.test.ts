@@ -116,6 +116,11 @@ describe("launcher helpers", () => {
     expect(blockedReason({ pending: "x" }, now)).toMatch(/Starting/);
     expect(blockedReason({ activeRun: { runId: "r", scenario: "x", since: now - 1000 } }, now)).toMatch(/in progress/);
     expect(blockedReason({ activeRun: { runId: "r", scenario: "x", since: now - 10 * 60_000 } }, now)).toBeNull();
+    // The lock lasts as long as the run may (timeline.ts staleRunMs): a terminal session four
+    // minutes in still holds it, with or without the bound the timeline computed for it.
+    expect(blockedReason({ activeRun: { runId: "r", scenario: "terminal", since: now - 240_000 } }, now)).toMatch(/in progress/);
+    expect(blockedReason({ activeRun: { runId: "r", scenario: "terminal", since: now - 240_000, staleMs: 360_000 } }, now)).toMatch(/in progress/);
+    expect(blockedReason({ activeRun: { runId: "r", scenario: "x", since: now - 160_000, staleMs: 150_000 } }, now)).toBeNull();
     expect(blockedReason({ cooldownUntil: now + 5000 }, now)).toMatch(/Rate limited/);
     expect(blockedReason({ cooldownUntil: now - 1 }, now)).toBeNull();
   });
@@ -308,6 +313,27 @@ describe("MockBackend terminal (ADR 0033)", () => {
     expect(states).toContain("pod_ready");
     const victims = seen.filter((e) => e.type === "victim").map((e) => JSON.parse(e.raw).status);
     expect(victims).toEqual(["up"]);
+  });
+
+  it("ends the session after 90 s without a command, counted again from each command, and at 300 s at the latest", async () => {
+    const finished = (seen: { type: string; raw: string }[]) => seen.filter((e) => e.type === "run").map((e) => JSON.parse(e.raw)).find((d) => d.state === "finished")?.detail;
+    const quiet = await start();
+    await vi.advanceTimersByTimeAsync(88_000); // 89.3 s since the start
+    expect(finished(quiet.seen)).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(finished(quiet.seen)).toBe("idle");
+
+    const busy = await start();
+    // A quiet command every 80 s (at 81, 161 and 241 s) keeps the session from going idle…
+    for (let i = 0; i < 3; i++) {
+      await vi.advanceTimersByTimeAsync(79_700);
+      expect((await busy.settle(busy.api.runCommand(busy.runId, busy.token, "whoami"))).kind).toBe("accepted");
+    }
+    await vi.advanceTimersByTimeAsync(58_000); // 299.3 s
+    expect(finished(busy.seen)).toBeUndefined();
+    // …until its 300 s deadline, which comes before the idle limit (241 + 90 s).
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(finished(busy.seen)).toBe("deadline");
   });
 
   it("runs an allowed command: started → output → exited, achieved for an objective", async () => {

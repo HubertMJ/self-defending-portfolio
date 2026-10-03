@@ -188,3 +188,35 @@ has a test that fails without it.
   time with a detection unanswered", one response-time figure); in the summary each time says where
   it counts from (after the Enter, after the exit); every layer of the result map has a status pill;
   long command lines wrap after `/` and `;`.
+
+## Amendment 2026-10-03: session limits on screen, the staleness bound, pagehide, compare by default
+
+The API now gives the terminal scenario `timeout_seconds: 300` and `idle_seconds: 90` and sends both
+in `GET /api/scenarios/terminal/details` (ADR 0029 and 0032 amendments). The page follows.
+
+- **Countdown.** The terminal's bar shows two countdowns from the details' values, as text in the
+  bar's monospaced face, ticked once a second with nothing around them moving: session time left (the
+  API's deadline runs from the run's start, before the pod exists) and idle time left (from
+  `pod_ready`, then from each command's `started`: the API's idle timer restarts when a command
+  arrives, not when it ends). They appear at `pod_ready`, are shown to watchers of another visitor's
+  run as well, and read the API's clock, not the visitor's: the offset is the least lag seen between an
+  event's `at` and its arrival. When the session ends, the bar and the summary name the reason from
+  the run's `detail` — "ended after 90 s without a command" (`idle`), "the 5-minute session limit"
+  (`deadline`), "you left" / "the visitor left" (`left`), "the cluster deleted the pod" (`killed`).
+  The 30 s / 120 s fallbacks are gone: an API that sends no limits gets no countdowns and words
+  without numbers.
+- **Staleness bound.** A run without an end event counts as running for its scenario's
+  `timeout_seconds` (from its details, as the terminal and the console load them) plus 60 s; with no
+  details, the contract's 300 s ceiling plus 60 s; and a terminal run never less than 300 + 60 s. The
+  fixed 180 s bound would have declared a live five-minute session over at three minutes: the
+  terminal closed its input and showed the summary, and the launcher unlocked. The launcher's own
+  lock follows the same bound.
+- **pagehide.** The leave `DELETE` goes out only when the page is really unloading
+  (`event.persisted === false`). A page put into the back/forward cache keeps its run, so a visitor
+  who comes back finds their session; if they never do, the API's idle timer frees the slot.
+- **Compare as the default.** When the API knows `?compare=1` (its scenarios carry `interactive`), a
+  one-click card's main button, "Launch side by side", runs the attack in both pods, guarded and
+  unguarded, and a small "Guarded pod only" button beside it runs the defended pod alone; the card
+  says what each does. Against an API without compare the card keeps its one "Launch attack" button.
+- **Mock.** `?mock=1` follows all of it: its catalogue is regenerated from `scenarios.yaml` (300 s,
+  idle 90 s), its terminal ends on those limits, and its one-click cards launch side by side.

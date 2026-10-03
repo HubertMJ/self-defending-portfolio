@@ -106,6 +106,8 @@ export interface RunView {
     totalMs?: number;
   };
   active: boolean;
+  /** Without an end event, the run counts as over this long after its start (staleRunMs). */
+  staleAfterMs: number;
 }
 
 export interface TimelineView {
@@ -140,14 +142,28 @@ function minDefined(...xs: (number | undefined)[]): number | undefined {
   return d.length ? Math.min(...d) : undefined;
 }
 
-/**
- * A run with no terminal state this long after it started is treated as over: scenario pods have a
- * 120 s deadline, so the API either lost the run or the terminal event was lost. Without this, one
- * dropped event would keep the launch buttons disabled until the page is reloaded.
- */
-export const STALE_RUN_MS = 180_000;
+/** The contract's ceiling on a scenario run's lifetime (the API's scenarios.MaxTimeout). */
+export const MAX_RUN_MS = 300_000;
+/** How long past its scenario's timeout a run without an end event still counts as running. */
+export const STALE_MARGIN_MS = 60_000;
 
-export function buildTimeline(events: readonly StreamEvent[], now: number = Date.now()): TimelineView {
+/**
+ * A run with no terminal state this long after it started is treated as over: past its scenario's
+ * timeout (from GET /api/scenarios/{id}/details) plus a margin, the API either lost the run or the
+ * terminal event was lost. Without this, one dropped event would keep the launch buttons disabled
+ * until the page is reloaded. An unknown timeout takes the contract's ceiling, and a terminal run is
+ * never given less than that ceiling plus the margin: its session runs to the end of its deadline.
+ */
+export function staleRunMs(scenario: string, timeoutSeconds?: number): number {
+  const bound = timeoutSeconds !== undefined && timeoutSeconds > 0 ? timeoutSeconds * 1000 + STALE_MARGIN_MS : MAX_RUN_MS + STALE_MARGIN_MS;
+  return scenario === "terminal" ? Math.max(bound, MAX_RUN_MS + STALE_MARGIN_MS) : bound;
+}
+
+/**
+ * @param timeouts each scenario's `timeout_seconds` from its details, where the page has them; a run
+ * of a scenario not in it gets the contract's ceiling (staleRunMs).
+ */
+export function buildTimeline(events: readonly StreamEvent[], now: number = Date.now(), timeouts: ReadonlyMap<string, number> = new Map()): TimelineView {
   const runs = new Map<string, RunView>();
   const runEvents = events.filter((e): e is { type: "run"; data: RunEvent } => e.type === "run");
 
@@ -170,6 +186,7 @@ export function buildTimeline(events: readonly StreamEvent[], now: number = Date
         events: [],
         timings: {},
         active: true,
+        staleAfterMs: staleRunMs(data.scenario),
       };
       runs.set(data.run_id, run);
     }
@@ -264,7 +281,8 @@ export function buildTimeline(events: readonly StreamEvent[], now: number = Date
   }
 
   for (const r of list) {
-    r.active = !TERMINAL_STATES.has(r.current) && now - start(r) < STALE_RUN_MS;
+    r.staleAfterMs = staleRunMs(r.scenario, timeouts.get(r.scenario));
+    r.active = !TERMINAL_STATES.has(r.current) && now - start(r) < r.staleAfterMs;
     const started = r.states.started ?? r.states.queued;
     // The run's states and latencies follow the guarded arm; an unguarded alert never pairs with them.
     const gf = guardedFalco(r);
