@@ -4,7 +4,7 @@
 // techniques, rules and responses -- so mock mode shows what the live page shows; the live page always
 // renders whatever /api/scenarios returns.
 
-import type { CatalogueCommand, Objective, Posture, Scenario, ScenarioDetails, SourceRef, Stats, VictimStatus } from "./contract";
+import type { BuildInfo, CatalogueCommand, Objective, Posture, Provenance, Scenario, ScenarioDetails, SourceRef, Stats, VictimStatus } from "./contract";
 import catalogue from "./terminal-catalogue.json";
 
 /** Names this module's data in the mock's responses; a marker the production bundle must not contain (ADR 0035). */
@@ -304,5 +304,32 @@ export function stats(now: number = Date.now()): Stats {
       exfiltration: { attempts: 18, achieved: 0 },
     },
     terminal: { runs: 37, best_objectives: 4, median_survival_s: 48 },
+  };
+}
+
+/** The mock's GET /api/provenance (ADR 0035): made-up digests, labelled as the mock's by the banner. */
+export function provenance(now: number = Date.now()): Provenance {
+  return {
+    generated_at: new Date(now).toISOString(),
+    api: { commit: "a7cc041e5d2b9f30c1a4e6b8d0f2a3c5e7f9b1d3", ci_run_id: "18000000001", started_at: new Date(now - 3 * 3600_000).toISOString(), images: [`ghcr.io/hubertmj/self-defending-portfolio/api@sha256:${"a".repeat(64)}`] },
+    web: { images: [`ghcr.io/hubertmj/self-defending-portfolio/web@sha256:${"c".repeat(64)}`] },
+    images_observed_at: new Date(now - 30_000).toISOString(),
+  };
+}
+
+export const BUILD_INFO: BuildInfo = { commit: "a7cc041e5d2b9f30c1a4e6b8d0f2a3c5e7f9b1d3", ci_run_id: "18000000001" };
+
+/** The ADR 0035 additions to the mock's /api/stats and /api/posture, on top of stats() and posture(). */
+export function statsWindow(now: number = Date.now()): Pick<Stats, "last_run_at" | "last_24h"> {
+  return { last_run_at: new Date(now - 40 * 60_000).toISOString(), last_24h: { since: new Date(now - 3 * 3600_000).toISOString(), runs: 6, detected: 5, responded: 5, falco_alerts: 17, talon_actions: 9 } };
+}
+
+export function postureAdditions(now: number = Date.now()): Posture {
+  const p = posture(now);
+  return {
+    ...p,
+    kyverno: { ...p.kyverno, violations: [{ policy: "pod-security-restricted", rule: "restricted", kind: "Pod", namespace: "sandbox", count: 2, running: true, file: "" }], violations_truncated: false },
+    trivy: { ...p.trivy, last_scan: new Date(now - 2 * 3600_000).toISOString() },
+    falco: { ...p.falco, counted_since: new Date(now - 3 * 3600_000).toISOString() },
   };
 }
