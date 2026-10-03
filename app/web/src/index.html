@@ -69,8 +69,10 @@
           <a class="btn btn--primary" id="hero-cta" href="#attack">Open the terminal</a>
           <a class="btn btn--ghost" href="https://github.com/HubertMJ/self-defending-portfolio" rel="noopener noreferrer">Read the source</a>
         </p>
+        <div class="verifystrip" id="verify-strip" hidden></div>
         <div class="herostats-wrap" id="hero-stats" hidden></div>
       </div>
+      <div class="evcard-wrap" id="evidence-card">
       <figure class="loop" aria-label="Attack, detect, respond loop">
         <ol class="loop__steps">
           <li class="loop__step loop__step--attack"><span class="loop__k">01</span><span class="loop__t">Attack</span><span class="loop__d">a scenario pod misbehaves in <code>sandbox</code></span></li>
@@ -79,6 +81,36 @@
         </ol>
         <figcaption>Every step is streamed to this page as it happens.</figcaption>
       </figure>
+      </div>
+    </div>
+  </section>
+
+  <section class="section section--evidence" id="evidence" aria-labelledby="evidence-title">
+    <div class="wrap">
+      <header class="section__head">
+        <p class="eyebrow">Evidence</p>
+        <h2 id="evidence-title">What the cluster recorded</h2>
+        <p class="section__lead">The latest events as the API published them, newest first, with absolute times in UTC. Nothing here is generated in your browser: when nothing happens, it says since when.</p>
+      </header>
+      <p class="liveness" id="liveness"></p>
+      <p class="visually-hidden" id="ticker-live" role="status"></p>
+      <div class="ticker-wrap" id="ticker">
+        <noscript><p class="offline__body">The live evidence needs JavaScript. The rest of this page does not.</p></noscript>
+      </div>
+      <div class="evdetail-wrap" id="evidence-detail"></div>
+    </div>
+  </section>
+
+  <section class="section" id="verify" aria-labelledby="verify-title">
+    <div class="wrap">
+      <header class="section__head">
+        <p class="eyebrow">Verify</p>
+        <h2 id="verify-title">Verify it yourself</h2>
+        <p class="section__lead">Which commit each running image was built from, by which CI run, the cosign command to check its signature, and every public endpoint this page reads.</p>
+      </header>
+      <div class="panel" id="verify-panel">
+        <p class="small">Every image is built and signed in CI from <a href="https://github.com/HubertMJ/self-defending-portfolio" rel="noopener noreferrer">the public repository</a>; with JavaScript this panel names the exact commits and digests.</p>
+      </div>
     </div>
   </section>
 

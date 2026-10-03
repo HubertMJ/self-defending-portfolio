@@ -10,12 +10,13 @@
   },
   "scripts": {
     "build": "node scripts/build.mjs",
-    "dev": "node scripts/build.mjs --watch",
+    "build:mock": "node scripts/build.mjs --mock",
+    "dev": "node scripts/build.mjs --watch --mock",
     "serve": "node scripts/serve.mjs",
     "typecheck": "tsc --noEmit",
     "lint": "tsc --noEmit && node scripts/check-dom-sinks.mjs",
     "test": "vitest run",
-    "test:e2e": "npm run build && playwright test",
+    "test:e2e": "npm run build && npm run build:mock && playwright test",
     "todo-content": "node scripts/todo-content.mjs",
     "catalogue": "node scripts/terminal-catalogue.mjs"
   },

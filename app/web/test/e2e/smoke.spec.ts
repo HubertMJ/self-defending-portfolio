@@ -240,7 +240,8 @@ test.describe("live run console (mock)", () => {
     await expect(consoleEl.locator(".card--exec a").first()).toHaveAttribute("href", /^https:\/\/github\.com\/HubertMJ\/self-defending-portfolio\/blob\/[0-9a-f]{7,40}\//);
     await consoleEl.getByText("Verify it yourself").click();
     await expect(consoleEl.locator(".verify")).toContainText("cosign verify ghcr.io/hubertmj/self-defending-portfolio/scenario@sha256:");
-    await expect(consoleEl.locator(".verify")).toContainText("build-images.yml@refs/heads/main");
+    // The one identity every image is verified against (lib/provenance.ts, scripts/verify-image.sh; ADR 0035).
+    await expect(consoleEl.locator(".verify")).toContainText(String.raw`--certificate-identity-regexp '^https://github\.com/HubertMJ/self-defending-portfolio/\.github/workflows/(build-images|build-web)\.yml@refs/heads/main$'`);
     await expect(consoleEl.locator(".utc tbody tr")).toHaveCount(8);
     await noHorizontalScroll(page);
     expect(problems).toEqual([]);
@@ -716,4 +717,111 @@ test.describe("accessibility basics", () => {
     await expect(consoleEl.locator(".replay-badge")).toContainText("Real time");
     await expect(consoleEl.getByRole("button", { name: "Replay slowly" })).toBeHidden();
   });
+});
+
+test.describe("credibility on the production bundle (ADR 0035; serve.mjs --terminal-api, not ?mock)", () => {
+  const CRED = "http://127.0.0.1:4176/";
+
+  test("above the fold: the verify strip and the evidence card; on a phone the card follows the counters", async ({ page, isMobile }) => {
+    const problems = guardConsole(page);
+    if (!isMobile) await page.setViewportSize({ width: 1280, height: 720 });
+    await page.goto(CRED);
+    const strip = page.locator("#verify-strip");
+    const card = page.locator("#evidence-card .evcard");
+    await expect(strip.locator('[data-image="api"]')).toContainText("0448cff");
+    await expect(card).toBeVisible();
+    await expect(card.locator(".evlist__item").first()).toContainText("UTC");
+    await expect(page.locator("#hero-stats")).toBeVisible();
+    // The card is never folded away.
+    expect(await card.evaluate((el) => el.closest("details:not([open])") === null)).toBe(true);
+    const box = await page.evaluate(() => {
+      const r = (s: string) => (document.querySelector(s) as HTMLElement).getBoundingClientRect();
+      return { scrollY: window.scrollY, strip: r("#verify-strip").bottom, card: r("#evidence-card").top, stats: r("#hero-stats").bottom, next: (document.querySelector("#hero-stats")?.parentElement?.nextElementSibling as HTMLElement | null)?.id };
+    });
+    expect(box.scrollY).toBe(0);
+    if (!isMobile) {
+      expect(box.strip).toBeLessThanOrEqual(720);
+      expect(box.card).toBeLessThan(720);
+    } else {
+      // Stacked: the card comes right after the copy, whose last child is #hero-stats.
+      expect(box.next).toBe("evidence-card");
+      expect(box.card).toBeGreaterThanOrEqual(box.stats);
+      expect(box.card - box.stats).toBeLessThan(80);
+    }
+    expect(problems).toEqual([]);
+  });
+
+  test("the server time follows the ticks; loading the page sends nothing but GETs", async ({ page }) => {
+    test.setTimeout(40_000);
+    const problems = guardConsole(page);
+    const nonGet: string[] = [];
+    page.on("request", (r) => {
+      if (r.url().includes("/api/") && r.method() !== "GET") nonGet.push(`${r.method()} ${r.url()}`);
+    });
+    await page.goto(CRED);
+    const server = page.locator("#liveness .liveness__server");
+    await expect(server).toBeVisible();
+    const first = await server.getAttribute("datetime");
+    // The tick's `at`, rendered as UTC: the attribute is the instant, the text its UTC form.
+    expect(Math.abs(Date.parse(first as string) - Date.now())).toBeLessThan(5000);
+    await expect(server).toHaveText(/^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d UTC$/);
+    await expect.poll(() => server.getAttribute("datetime"), { timeout: 6000 }).not.toBe(first);
+    await expect(page.locator("#liveness")).toContainText("API up");
+    await expect(page.locator("#ticker .ticker__item").first()).toBeVisible();
+    await expect(page.locator("#posture-panel .tile").first()).toContainText("stale config, nothing running violates");
+    await page.waitForTimeout(10_000);
+    expect(nonGet).toEqual([]);
+    expect(problems).toEqual([]);
+  });
+
+  test("ticks without new events change no element of the ticker (nothing re-announced, focus kept)", async ({ page }) => {
+    test.setTimeout(40_000);
+    await page.goto(CRED);
+    await expect(page.locator("#liveness .liveness__server")).toBeVisible();
+    // The replayed session ends live about 2.5 s after the connect; after that only ticks arrive.
+    await page.waitForTimeout(4000);
+    await page.evaluate(() => {
+      const w = window as unknown as { tickerMutations: number };
+      w.tickerMutations = 0;
+      new MutationObserver((records) => (w.tickerMutations += records.filter((r) => r.type === "childList").length)).observe(document.getElementById("ticker") as HTMLElement, { childList: true, subtree: true });
+    });
+    const server = page.locator("#liveness .liveness__server");
+    const before = await server.getAttribute("datetime");
+    await page.waitForTimeout(10_000);
+    expect(await server.getAttribute("datetime")).not.toBe(before); // ticks did arrive
+    expect(await page.evaluate(() => (window as unknown as { tickerMutations: number }).tickerMutations)).toBe(0);
+  });
+
+  test("no horizontal scroll at 360 px with the live policy names", async ({ page }) => {
+    await page.setViewportSize({ width: 360, height: 780 });
+    await page.goto(CRED);
+    await expect(page.locator("#posture-panel table", { hasText: "autogen-validate-registries" })).toBeAttached();
+    await expect(page.locator("#evidence-card .evcard")).toBeVisible();
+    await noHorizontalScroll(page);
+  });
+
+  test("?mock=1 on the production bundle is an ordinary query: no banner, no mock, the real header", async ({ page }) => {
+    await page.goto(`${CRED}?mock=1`);
+    await expect(page.locator("#header-conn")).toContainText("cluster");
+    await expect(page.locator("#mock-banner")).toHaveCount(0);
+    expect(await page.evaluate(() => (window as unknown as { sdpMock?: unknown }).sdpMock === undefined)).toBe(true);
+    expect(await page.evaluate(() => document.documentElement.dataset.mock)).toBeUndefined();
+  });
+
+  for (const [label, base] of [["the interactive API before ADR 0035 (--terminal-api --no-cred)", "http://127.0.0.1:4178/"], ["the API deployed before the terminal (--live-api)", "http://127.0.0.1:4175/"]]) {
+    test(`degrades on ${label}: provenance unavailable, liveness without server time, posture as before`, async ({ page }) => {
+      const problems = guardConsole(page);
+      await page.goto(base);
+      await expect(page.locator("#verify-strip")).toContainText("API provenance unavailable");
+      await expect(page.locator("#verify-panel")).toContainText("API provenance unavailable");
+      await expect(page.locator("#posture-panel .tile")).toHaveCount(4);
+      await expect(page.locator("#posture-panel .tile__list")).toHaveCount(0);
+      await expect(page.locator("#posture-panel")).toContainText("Runtime, last 24 h");
+      // No tick from an older API: the line appears 3 s after the stream opened, without a server time.
+      await expect(page.locator("#liveness")).toContainText("posture refreshed", { timeout: 8000 });
+      await expect(page.locator("#liveness")).not.toContainText("server time");
+      await expect(page.locator("#evidence-card .evcard")).toBeVisible();
+      expect(problems).toEqual([]);
+    });
+  }
 });

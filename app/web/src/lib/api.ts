@@ -6,8 +6,11 @@
 
 import {
   type AttackAccepted,
+  type BuildInfo,
   type Limits,
   type Posture,
+  type Provenance,
+  type RunSummary,
   type Scenario,
   type ScenarioDetails,
   type Stats,
@@ -18,7 +21,10 @@ import {
   isLimits,
   isRunId,
   isTerminalAccepted,
+  parseBuildInfo,
   parsePosture,
+  parseProvenance,
+  parseRunList,
   parseRunHistory,
   parseScenarioDetails,
   parseScenarios,
@@ -136,11 +142,12 @@ export class ApiClient {
     }
   }
 
-  private async request(path: string, init: RequestInit = {}): Promise<Response> {
+  /** `path` is under the API's base unless `absolute` (a same-origin static file such as /build.json). */
+  private async request(path: string, init: RequestInit = {}, absolute = false): Promise<Response> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
     try {
-      return await this.fetchImpl(this.url(path), {
+      return await this.fetchImpl(absolute ? path : this.url(path), {
         ...init,
         // Same-origin API; no cookies exist, but never send any that might appear later.
         credentials: "omit",
@@ -153,10 +160,10 @@ export class ApiClient {
     }
   }
 
-  private async getJson<T>(path: string, guard: (v: unknown) => T): Promise<Result<T>> {
+  private async getJson<T>(path: string, guard: (v: unknown) => T, absolute = false): Promise<Result<T>> {
     let res: Response;
     try {
-      res = await this.request(path);
+      res = await this.request(path, {}, absolute);
     } catch (e) {
       return { ok: false, error: "offline", message: describe(e) };
     }
@@ -196,6 +203,21 @@ export class ApiClient {
   /** Extension endpoint: the counters across every visitor's runs. */
   stats(): Promise<Result<Stats>> {
     return this.getJson("/stats", parseStats);
+  }
+
+  /** Extension endpoint (ADR 0035): the commit, CI run and image digests of what is running. */
+  provenance(): Promise<Result<Provenance>> {
+    return this.getJson("/provenance", parseProvenance);
+  }
+
+  /** Extension endpoint (ADR 0035): the runs the store keeps, newest first. */
+  runs(): Promise<Result<RunSummary[]>> {
+    return this.getJson("/runs", parseRunList);
+  }
+
+  /** GET /build.json: the web image's own commit and CI run, served by nginx next to the page (ADR 0035). */
+  buildInfo(): Promise<Result<BuildInfo>> {
+    return this.getJson("/build.json", parseBuildInfo, true);
   }
 
   /** GET /api/runs/{id}: the stored events of a run, for backfilling a session joined mid-way. */

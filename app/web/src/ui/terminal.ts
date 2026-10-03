@@ -56,7 +56,7 @@ export function mountTerminal(
     cooldownSeconds?: () => number;
     onRateLimited?: (seconds: number) => void;
     /** Whether this API has the terminal, with its objectives and run timeout: told once the catalogue has loaded or failed to. */
-    onAvailable?: (available: boolean, objectives: Objective[], timeoutSeconds?: number) => void;
+    onAvailable?: (available: boolean, objectives: Objective[], timeoutSeconds?: number, commands?: CatalogueCommand[]) => void;
   } = {},
 ): TerminalHandle {
   const reduced = prefersReducedMotion();
@@ -147,7 +147,7 @@ export function mountTerminal(
       } else {
         renderIdle();
       }
-      hooks.onAvailable?.(true, catalogue.objectives, catalogue.timeoutSeconds);
+      hooks.onAvailable?.(true, catalogue.objectives, catalogue.timeoutSeconds, catalogue.commands);
     } else if (r.ok || (r.status === 404 && r.json)) {
       renderUnavailable();
     } else {

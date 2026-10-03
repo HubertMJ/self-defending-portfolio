@@ -14,6 +14,7 @@
 import {
   type Arm,
   type CommandEvent,
+  type CommandOutcome,
   type FalcoEvent,
   type FlowEvent,
   type PodEvent,
@@ -376,6 +377,39 @@ function addCommand(run: RunView, c: CommandEvent, eventId: number | undefined):
 export function victimByArm(run: RunView, arm: Arm): VictimSpan | undefined {
   for (let i = run.victim.length - 1; i >= 0; i--) if (run.victim[i].arm === arm) return run.victim[i];
   return undefined;
+}
+
+/**
+ * Why a run that is over shows no detection (ADR 0035, B2-4). "(pending)" is true only while the run
+ * is active; afterwards a terminal run is judged by the catalogue outcome of the commands it ran:
+ *
+ *   recon        every command `allowed`: nothing was meant to trip Falco
+ *   prevented    `allowed`/`prevented` only, at least one `prevented`: a preventive layer answered
+ *   no-commands  the visitor ran nothing
+ *   missed       a `detected`-outcome command ran and no detection arrived: shown, never hidden
+ *   not-reached  the catalogue is unknown (or misses a command), or a scripted run ended undetected
+ *
+ * undefined when the run was detected (a Falco alert or the run's own `detected`).
+ */
+export type NoDetection = "pending" | "recon" | "prevented" | "no-commands" | "missed" | "not-reached";
+
+export function noDetection(run: RunView, outcomes?: ReadonlyMap<string, CommandOutcome>): NoDetection | undefined {
+  if (guardedFalco(run) || run.states.detected !== undefined) return undefined;
+  if (run.active) return "pending";
+  if (run.scenario !== "terminal") return "not-reached";
+  if (run.commands.length === 0) return "no-commands";
+  const known = outcomes && outcomes.size ? run.commands.map((c) => outcomes.get(c.id)) : [];
+  if (known.length === 0 || known.some((o) => o === undefined)) return "not-reached";
+  if (known.includes("detected")) return "missed";
+  return known.includes("prevented") ? "prevented" : "recon";
+}
+
+/**
+ * The run's pod name where the page may publish it (ADR 0021): a sandbox scenario pod, i.e. every
+ * Falco/Talon event of the run that names a namespace names `sandbox`. Otherwise undefined.
+ */
+export function publishedPod(run: RunView): string | undefined {
+  return run.pod && [...run.falco, ...run.talon].every((e) => !e.namespace || e.namespace === "sandbox") ? run.pod : undefined;
 }
 
 /** Human-readable duration: "840 ms", "2.4 s", "1 min 12 s". */

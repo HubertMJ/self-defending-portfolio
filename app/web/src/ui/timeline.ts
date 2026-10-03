@@ -1,12 +1,12 @@
 // The live timeline: each run as attack -> Falco detection -> Talon response, with latencies, fed
 // by SSE /api/events through EventStream (reconnect + replay dedup live there).
 
-import type { StreamEvent } from "../lib/contract";
-import { clockTime, h, replace } from "../lib/dom";
+import { type CommandOutcome, type StreamEvent, isRunId } from "../lib/contract";
+import { h, replace, timeEl, utcClock } from "../lib/dom";
 import { humanAction } from "../lib/pipeline";
 import type { ConnectionState } from "../lib/sse";
-import { type RunView, type TimelineView, buildTimeline, formatDuration, guardedFalco, guardedTalon, ts } from "../lib/timeline";
-import { CONNECTION_LONG } from "./common";
+import { type NoDetection, type RunView, type TimelineView, buildTimeline, formatDuration, guardedFalco, guardedTalon, noDetection, publishedPod, ts } from "../lib/timeline";
+import { CONNECTION_LONG, extLink } from "./common";
 
 // A run with victim probes every 500 ms produces a few hundred events; keep a handful of runs' worth.
 const MAX_LOG = 1500;
@@ -31,28 +31,57 @@ export interface TimelineHandle {
   setShown(runId: string | undefined): void;
   /** A scenario's `timeout_seconds` from its details: how long its runs may last (staleRunMs). */
   setScenarioTimeout(scenario: string, seconds: number): void;
+  /** The terminal catalogue's outcome per command id: why a finished run shows no detection. */
+  setOutcomes(outcomes: ReadonlyMap<string, CommandOutcome>): void;
 }
+
+/**
+ * A stage's dot: "true" reached, "false" not (yet), "na" not applicable to this run (a neutral mark,
+ * not an unreached one), "missed" expected and absent (critical: a miss is shown, not hidden).
+ */
+type Reached = "true" | "false" | "na" | "missed";
 
 function stage(opts: {
   key: "attack" | "detect" | "respond";
   title: string;
-  reached: boolean;
+  reached: Reached;
+  /** Read after the title by screen readers when the stage is not reached: "pending" or "not reached". */
+  note?: string;
   at?: number;
+  now: number;
   delta?: string;
   what?: Node | string;
 }): HTMLElement {
   return h(
     "li",
-    { class: `stage stage--${opts.key}`, "data-reached": String(opts.reached) },
+    { class: `stage stage--${opts.key}`, "data-reached": opts.reached },
     h("span", { class: "stage__dot", "aria-hidden": "true" }),
-    h("span", { class: "stage__title" }, opts.title, opts.reached ? null : h("span", { class: "visually-hidden" }, " (pending)")),
+    h("span", { class: "stage__title" }, opts.title, opts.note ? h("span", { class: "visually-hidden" }, ` (${opts.note})`) : null),
     opts.delta ? h("span", { class: "stage__delta" }, opts.delta) : null,
-    opts.at ? h("time", { class: "stage__at", datetime: new Date(opts.at).toISOString() }, clockTime(opts.at)) : null,
+    opts.at ? timeEl(opts.at, utcClock(opts.at, opts.now, { ms: true }), { class: "stage__at" }) : null,
     opts.what ? h("span", { class: "stage__what" }, opts.what) : null,
   );
 }
 
-export function renderRun(run: RunView, title: string, openDetails: Set<string>, onShow?: (runId: string) => void, shown?: string): HTMLElement {
+/** What an unreached detect/respond stage says, by why nothing was detected (lib/timeline.ts noDetection). */
+const UNDETECTED: Record<NoDetection, { reached: Reached; title: string; note?: string; what?: string }> = {
+  pending: { reached: "false", title: "Falco detected", note: "pending" },
+  recon: { reached: "na", title: "No detection expected", what: "recon only - no detection expected" },
+  prevented: { reached: "na", title: "No detection expected", what: "recon and commands blocked by a preventive layer" },
+  "no-commands": { reached: "na", title: "No commands run" },
+  missed: { reached: "missed", title: "Detection expected, none arrived" },
+  "not-reached": { reached: "false", title: "Falco detected", note: "not reached" },
+};
+
+export function renderRun(
+  run: RunView,
+  title: string,
+  openDetails: Set<string>,
+  onShow?: (runId: string) => void,
+  shown?: string,
+  outcomes?: ReadonlyMap<string, CommandOutcome>,
+  now: number = Date.now(),
+): HTMLElement {
   const interactive = run.scenario === "terminal";
   const falco = guardedFalco(run);
   const talon = guardedTalon(run);
@@ -60,6 +89,7 @@ export function renderRun(run: RunView, title: string, openDetails: Set<string>,
   const detectedAt = falco ? ts(falco.at) : run.states.detected;
   const respondedAt = talon ? ts(talon.at) : run.states.responded;
   const failed = run.current === "failed" || run.current === "timeout";
+  const verdict = noDetection(run, outcomes);
 
   const details = h(
     "details",
@@ -69,10 +99,10 @@ export function renderRun(run: RunView, title: string, openDetails: Set<string>,
       "ul",
       { class: "run__events" },
       run.falco.map((f) =>
-        h("li", {}, h("span", { class: "tag tag--detect" }, "falco"), ` ${clockTime(ts(f.at))} `, h("strong", {}, f.priority), ` ${f.rule}`, h("code", { class: "run__output" }, f.output)),
+        h("li", {}, h("span", { class: "tag tag--detect" }, "falco"), " ", timeEl(f.at, utcClock(f.at, now, { ms: true })), " ", h("strong", {}, f.priority), ` ${f.rule}`, h("code", { class: "run__output" }, f.output)),
       ),
       run.talon.map((t) =>
-        h("li", {}, h("span", { class: "tag tag--respond" }, "talon"), ` ${clockTime(ts(t.at))} ${humanAction(t.action, t.actionner)} `, h("code", {}, t.actionner ?? t.action), ` on ${t.namespace}/${t.pod}: `, h("strong", {}, t.status)),
+        h("li", {}, h("span", { class: "tag tag--respond" }, "talon"), " ", timeEl(t.at, utcClock(t.at, now, { ms: true })), ` ${humanAction(t.action, t.actionner)} `, h("code", {}, t.actionner ?? t.action), ` on ${t.namespace}/${t.pod}: `, h("strong", {}, t.status)),
       ),
       run.falco.length + run.talon.length === 0 ? h("li", {}, "No Falco or Talon events for this run yet.") : null,
     ),
@@ -94,30 +124,46 @@ export function renderRun(run: RunView, title: string, openDetails: Set<string>,
     h(
       "ol",
       { class: "stages", "aria-label": "Run stages" },
-      stage({ key: "attack", title: "Attack", reached: startedAt !== undefined, at: startedAt, what: run.pod ? h("code", {}, run.pod) : "starting the pod…" }),
       stage({
-        key: "detect",
-        title: "Falco detected",
-        reached: detectedAt !== undefined,
-        at: detectedAt,
-        // On a terminal run the gap to the first detected command is the visitor's dwell time, not a
-        // detection latency, so it is not shown as one.
-        delta: !interactive && run.timings.detectMs !== undefined ? `+${formatDuration(run.timings.detectMs)}` : undefined,
-        what: falco ? falco.rule : run.states.detected ? run.detail : undefined,
+        key: "attack",
+        title: "Attack",
+        reached: startedAt !== undefined ? "true" : "false",
+        note: startedAt !== undefined ? undefined : run.active ? "pending" : "not reached",
+        at: startedAt,
+        now,
+        what: publishedPod(run) ? h("code", {}, publishedPod(run)) : run.pod ? "pod outside the sandbox" : "starting the pod…",
       }),
-      stage({
-        key: "respond",
-        title: "Talon responded",
-        reached: respondedAt !== undefined,
-        at: respondedAt,
-        delta: !interactive && run.timings.respondMs !== undefined ? `+${formatDuration(run.timings.respondMs)}` : undefined,
-        what: talon ? `${humanAction(talon.action, talon.actionner)}${talon.status === "success" ? "" : ` (${talon.status})`}` : undefined,
-      }),
+      detectedAt !== undefined
+        ? stage({
+            key: "detect",
+            title: "Falco detected",
+            reached: "true",
+            at: detectedAt,
+            now,
+            // On a terminal run the gap to the first detected command is the visitor's dwell time, not a
+            // detection latency, so it is not shown as one.
+            delta: !interactive && run.timings.detectMs !== undefined ? `+${formatDuration(run.timings.detectMs)}` : undefined,
+            what: falco ? falco.rule : run.states.detected ? run.detail : undefined,
+          })
+        : stage({ key: "detect", now, ...UNDETECTED[verdict ?? "not-reached"] }),
+      respondedAt !== undefined
+        ? stage({
+            key: "respond",
+            title: "Talon responded",
+            reached: "true",
+            at: respondedAt,
+            now,
+            delta: !interactive && run.timings.respondMs !== undefined ? `+${formatDuration(run.timings.respondMs)}` : undefined,
+            what: talon ? `${humanAction(talon.action, talon.actionner)}${talon.status === "success" ? "" : ` (${talon.status})`}` : undefined,
+          })
+        : verdict === "recon" || verdict === "prevented" || verdict === "no-commands"
+          ? stage({ key: "respond", now, reached: "na", title: "No response needed" })
+          : stage({ key: "respond", now, reached: "false", title: "Talon responded", note: run.active ? "pending" : "not reached" }),
     ),
     h(
       "p",
       { class: "run__foot" },
-      h("span", {}, "Run ", h("code", {}, run.runId)),
+      h("span", {}, "Run ", h("code", {}, run.runId), isRunId(run.runId) ? [" · ", extLink(`/api/runs/${encodeURIComponent(run.runId)}`, "raw JSON")] : null),
       run.timings.totalMs !== undefined
         ? h(
             "span",
@@ -185,6 +231,7 @@ export function mountTimeline(
   let renderQueued = false;
   let shown: string | undefined;
   const timeouts = new Map<string, number>();
+  let outcomes: ReadonlyMap<string, CommandOutcome> = new Map();
   // The one countdown of the connection line. Replaced, never stacked: every setConnection clears it.
   let countdownTimer: ReturnType<typeof setInterval> | undefined;
 
@@ -200,7 +247,7 @@ export function mountTimeline(
     if (view.runs.length === 0) {
       replace(root, h("p", { class: "empty" }, "No runs yet. Launch an attack and it appears here as it happens."));
     } else {
-      replace(root, h("ol", { class: "runs", role: "list" }, view.runs.map((r) => renderRun(r, titleOf(r.scenario), openDetails, onShow, shown))));
+      replace(root, h("ol", { class: "runs", role: "list" }, view.runs.map((r) => renderRun(r, titleOf(r.scenario), openDetails, onShow, shown, outcomes))));
     }
     if (focusKey) [...root.querySelectorAll<HTMLElement>("[data-focus-key]")].find((el) => el.dataset.focusKey === focusKey)?.focus();
     // Announce transitions of the newest run while it is active, plus the terminal state of a run
@@ -279,6 +326,10 @@ export function mountTimeline(
     setScenarioTimeout(scenario, seconds) {
       if (timeouts.get(scenario) === seconds) return;
       timeouts.set(scenario, seconds);
+      schedule();
+    },
+    setOutcomes(o) {
+      outcomes = o;
       schedule();
     },
   };

@@ -17,15 +17,19 @@ import type { Arm, CommandEvent, PodEvent, RunEvent, RunState, StreamEvent, Vict
 import type { FetchLike } from "./api";
 import type { EventSourceLike } from "./sse";
 import {
+  BUILD_INFO,
   SCENARIOS,
   SCENARIO_IMAGE,
   TERMINAL_COMMANDS,
   TERMINAL_OUTPUT,
+  FIXTURE_MARKER,
   falcoFields,
   falcoOutput,
-  posture,
+  postureAdditions,
+  provenance,
   scenarioDetails,
   stats,
+  statsWindow,
   terminalDetails,
   victimScript,
 } from "./fixtures";
@@ -59,15 +63,22 @@ export interface MockOptions {
 
 const REPLAY = 100;
 
+/**
+ * Says "this answer is the mock's" on every response it makes. Also a marker the production bundle
+ * must not contain (test/unit/bundle.test.ts, ADR 0035): it is used, so the --mock build keeps it.
+ */
+export const MOCK_MARKER = "sdp-in-page-mock-backend";
+
 function json(status: number, body: unknown, headers: Record<string, string> = {}): Response {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { "Content-Type": "application/json", ...headers },
+    headers: { "Content-Type": "application/json", "X-Sdp-Mock": `${MOCK_MARKER}; ${FIXTURE_MARKER}`, ...headers },
   });
 }
 
 class MockEventSource implements EventSourceLike {
   readyState = 0;
+  ticker?: ReturnType<typeof setInterval>;
   onopen: ((ev: Event) => unknown) | null = null;
   onerror: ((ev: Event) => unknown) | null = null;
   private readonly listeners = new Map<string, ((ev: MessageEvent) => void)[]>();
@@ -86,6 +97,13 @@ class MockEventSource implements EventSourceLike {
     for (const l of this.listeners.get(ev.type) ?? []) l(msg);
   }
 
+  /** An `event: tick` frame: no id, a clock reading the page keeps out of the run log. */
+  tick(startedAt: string): void {
+    if (this.readyState !== 1) return;
+    const msg = new MessageEvent("tick", { data: JSON.stringify({ at: new Date().toISOString(), started_at: startedAt }) });
+    for (const l of this.listeners.get("tick") ?? []) l(msg);
+  }
+
   open(): void {
     this.readyState = 1;
     this.onopen?.(new Event("open"));
@@ -94,12 +112,14 @@ class MockEventSource implements EventSourceLike {
   /** A refused or dead connection, as the browser reports it: CLOSED, then one error event. */
   fail(): void {
     this.readyState = 2;
+    clearInterval(this.ticker);
     this.backend.detach(this);
     this.onerror?.(new Event("error"));
   }
 
   close(): void {
     this.readyState = 2;
+    clearInterval(this.ticker);
     this.backend.detach(this);
   }
 }
@@ -128,6 +148,8 @@ export const MOCK_HISTORY_RUN = "a7c3e9f1b2d40658";
 export class MockBackend {
   /** Every request the page made, as "METHOD /path?query", oldest first. */
   readonly calls: string[] = [];
+  /** When this mock "API" started: its provenance and ticks report it. */
+  readonly startedAt = new Date(Date.now() - 3 * 3600_000).toISOString();
   private eventId = 0;
   private readonly speed: number;
   private readonly limit: number;
@@ -196,9 +218,15 @@ export class MockBackend {
         : new Response("", { status: 200, headers: { "Content-Type": "text/event-stream" } });
     }
     if (method === "GET" && path === "/api/scenarios") return json(200, SCENARIOS);
-    if (method === "GET" && path === "/api/posture") return json(200, posture());
+    if (method === "GET" && path === "/api/posture") return json(200, postureAdditions());
     if (method === "GET" && path === "/api/limits") return json(200, this.limits());
-    if (method === "GET" && path === "/api/stats") return json(200, stats());
+    if (method === "GET" && path === "/api/stats") return json(200, { ...stats(), ...statsWindow() });
+    if (method === "GET" && path === "/api/provenance") {
+      const p = provenance();
+      return json(200, { ...p, api: { ...p.api, started_at: this.startedAt } });
+    }
+    if (method === "GET" && path === "/build.json") return json(200, BUILD_INFO);
+    if (method === "GET" && path === "/api/runs") return json(200, { runs: this.runList(), kept: 50 });
 
     const details = /^\/api\/scenarios\/([^/]+)\/details$/.exec(path);
     if (method === "GET" && details) {
@@ -283,12 +311,39 @@ export class MockBackend {
       return src;
     }
     this.sources.add(src);
+    // ?tick=1 (ADR 0035): the server's clock after the replay, then every 15 s, as the API sends it.
+    const tick = new URL(url, "http://mock.invalid").searchParams.get("tick") === "1";
     setTimeout(() => {
       src.open();
       for (const ev of this.buffer) src.emit(ev);
+      if (tick) src.tick(this.startedAt);
     }, 60 * this.speed);
+    if (tick) src.ticker = setInterval(() => src.tick(this.startedAt), 15_000);
     return src;
   };
+
+  /** GET /api/runs from the replay buffer: one summary per run, newest first. */
+  private runList() {
+    const runs = new Map<string, { run_id: string; scenario: string; state: RunState; started_at: string; ended_at: string | null; detected: boolean; responded: boolean; events: number; truncated: boolean }>();
+    for (const e of this.buffer) {
+      if (!("run_id" in e.data)) continue;
+      const id = e.data.run_id as string;
+      if (e.type !== "run" && !runs.has(id)) continue;
+      const r = runs.get(id) ?? { run_id: id, scenario: "", state: "queued" as RunState, started_at: "", ended_at: null, detected: false, responded: false, events: 0, truncated: false };
+      r.events += 1;
+      if (e.type === "run") {
+        const d = e.data as RunEvent;
+        r.scenario = d.scenario;
+        r.state = d.state;
+        if (!r.started_at) r.started_at = d.at;
+        if (d.state === "detected") r.detected = true;
+        if (d.state === "responded") r.responded = true;
+        if (d.state === "finished" || d.state === "failed" || d.state === "timeout") r.ended_at = d.at;
+      }
+      runs.set(id, r);
+    }
+    return [...runs.values()].reverse();
+  }
 
   detach(src: MockEventSource): void {
     this.sources.delete(src);
