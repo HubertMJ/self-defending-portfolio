@@ -219,3 +219,23 @@ describe("the shop window without a title or banner (the terminal's real deface)
     expect(el.querySelector(".defaced__sum")).toBeNull(); // no checksum, no "→ undefined"
   });
 });
+
+describe("hero stats band (review 2, item 5)", () => {
+  it("is not redrawn when the feed reports the same last run again", async () => {
+    const { mountStats } = await import("../../src/ui/stats");
+    const { ApiClient } = await import("../../src/lib/api");
+    const body = JSON.stringify(stats());
+    const api = new ApiClient({ fetch: async () => new Response(body, { status: 200, headers: { "Content-Type": "application/json" } }) });
+    const root = document.createElement("div");
+    const handle = mountStats(root, api);
+    await new Promise((r) => setTimeout(r, 10));
+    const last = { title: "Read /etc/shadow", at: Date.now() - 1000, respondMs: 140 };
+    handle.setLastRun(last);
+    const drawn = root.firstElementChild;
+    expect(drawn).not.toBeNull();
+    handle.setLastRun({ ...last });
+    expect(root.firstElementChild).toBe(drawn);
+    handle.setLastRun({ ...last, respondMs: 150 });
+    expect(root.firstElementChild).not.toBe(drawn);
+  });
+});

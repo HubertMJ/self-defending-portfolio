@@ -46,7 +46,7 @@ function completions(cat: Catalogue, prefix: string): string[] {
 export function mountTerminal(
   root: HTMLElement,
   api: ApiClient,
-  hooks: { onStarted?: (runId: string) => void; blocked?: () => string | null; onRateLimited?: (seconds: number) => void } = {},
+  hooks: { onStarted?: (runId: string) => void; blocked?: () => string | null; cooldownSeconds?: () => number; onRateLimited?: (seconds: number) => void } = {},
 ): TerminalHandle {
   const reduced = prefersReducedMotion();
   let catalogue: Catalogue | null = null;
@@ -125,12 +125,20 @@ export function mountTerminal(
   };
 
   // ---- idle (not started) ----
+  // Built once when the terminal goes idle, then patched in place: rebuilding it on every event of the
+  // feed replaced the button under the visitor's keyboard focus and wiped the note under it.
+  let idle: { label: HTMLElement; btn: HTMLButtonElement; note: HTMLElement; shown: string | null; clock?: ReturnType<typeof setInterval> } | null = null;
+
+  /** Why the start button is blocked right now ("Starting…", another run, a cooldown), or null. */
+  const blockedNow = (): string | null => (starting ? "Starting…" : (hooks.blocked?.() ?? null));
+
   const renderIdle = () => {
     if (!catalogue) return;
     mode = "idle";
-    const blocked = hooks.blocked?.() ?? null;
-    const btn = h("button", { type: "button", class: "btn btn--attack term-start__btn", "aria-disabled": String(starting || blocked !== null) }, h("span", { class: "btn__icon", "aria-hidden": "true" }, "▶"), h("span", { class: "btn__label" }, starting ? "Starting…" : blocked ?? "Open the terminal"));
+    const label = h("span", { class: "btn__label" }, "Open the terminal");
+    const btn = h("button", { type: "button", class: "btn btn--attack term-start__btn" }, h("span", { class: "btn__icon", "aria-hidden": "true" }, "▶"), label);
     btn.addEventListener("click", () => void start());
+    const note = h("p", { class: "small term-start__blocked", role: "status" });
     replace(
       root,
       h(
@@ -143,25 +151,65 @@ export function mountTerminal(
           catalogue.objectives.map((o) => h("li", {}, o.title)),
         ),
         btn,
-        blocked ? h("p", { class: "small term-start__blocked" }, blocked === "Open the terminal" ? "" : blocked) : null,
+        note,
       ),
     );
+    if (idle?.clock !== undefined) clearInterval(idle.clock);
+    idle = { label, btn, note, shown: null };
+    syncIdle();
+  };
+
+  /** Patches the start button's label and state; a note stays until what blocked the start changes. */
+  const syncIdle = () => {
+    if (!idle) return;
+    if (mode !== "idle") {
+      clearInterval(idle.clock);
+      idle = null;
+      return;
+    }
+    const blocked = blockedNow();
+    const text = blocked ?? "Open the terminal";
+    if (idle.label.textContent !== text) idle.label.textContent = text;
+    idle.btn.setAttribute("aria-disabled", String(blocked !== null));
+    if (blocked !== idle.shown) {
+      if (blocked === null) setNote("");
+      idle.shown = blocked;
+    }
+    // A cooldown ends on its own, with no event to say so: re-check every second while blocked.
+    if (blocked !== null && idle.clock === undefined) idle.clock = setInterval(syncIdle, 1000);
+    else if (blocked === null && idle.clock !== undefined) {
+      clearInterval(idle.clock);
+      idle.clock = undefined;
+    }
+  };
+
+  const setNote = (msg: string) => {
+    if (idle && idle.note.textContent !== msg) idle.note.textContent = msg;
   };
 
   const start = async () => {
-    if (!catalogue || starting || (hooks.blocked?.() ?? null) !== null) return;
+    if (!catalogue || starting) return;
+    const blocked = blockedNow();
+    if (blocked !== null) {
+      // A press on a blocked button says why, rather than doing nothing.
+      const wait = hooks.cooldownSeconds?.() ?? 0;
+      setNote(wait > 0 ? `Rate limit reached: you can start again in ${wait} s.` : "Another run is in progress — only one runs at a time. The button unlocks when it finishes.");
+      return;
+    }
     starting = true;
-    renderIdle();
+    syncIdle();
     const r = await api.attackTerminal();
     starting = false;
     if (r.kind === "accepted") {
       if (!VALID_RUN_ID.test(r.run.run_id)) {
         // The server accepted a run but named it something we will not put in a URL; say so plainly
         // rather than sending a request that could escape the run path.
-        renderIdle();
-        appendStartNote("The server accepted a run but returned an unusable id. Reload and try again.");
+        syncIdle();
+        setNote("The server accepted a run but returned an unusable id. Reload and try again.");
         return;
       }
+      if (idle?.clock !== undefined) clearInterval(idle.clock);
+      idle = null;
       session = { runId: r.run.run_id, token: r.run.token };
       watching = undefined; // this run is mine, not one I am watching
       resetSessionState();
@@ -171,16 +219,13 @@ export function mountTerminal(
       renderUnavailable();
     } else {
       if (r.kind === "rate-limited") hooks.onRateLimited?.(r.retryAfterSeconds);
-      renderIdle();
-      const msg =
-        r.kind === "busy" ? "Another run is in progress — only one runs at a time. Try again when it finishes." : r.kind === "rate-limited" ? `Rate limit reached: try again in ${Math.ceil(r.retryAfterSeconds)} s.` : r.kind === "error" ? `The server refused the request (HTTP ${r.status}).` : "The attack API is not reachable right now.";
-      appendStartNote(msg);
+      syncIdle();
+      // The note is set after the sync, so the cooldown it explains does not clear it.
+      if (idle) idle.shown = blockedNow();
+      setNote(
+        r.kind === "busy" ? "Another run is in progress — only one runs at a time. Try again when it finishes." : r.kind === "rate-limited" ? `Rate limit reached: try again in ${Math.ceil(r.retryAfterSeconds)} s.` : r.kind === "error" ? `The server refused the request (HTTP ${r.status}).` : "The attack API is not reachable right now.",
+      );
     }
-  };
-
-  const appendStartNote = (msg: string) => {
-    const note = root.querySelector(".term-start");
-    if (note) note.appendChild(h("p", { class: "small term-start__blocked" }, msg));
   };
 
   const resetSessionState = () => {
@@ -670,8 +715,8 @@ export function mountTerminal(
     if (session || watching) {
       patchFromView();
     } else if (mode === "idle") {
-      // Refresh the start button's blocked state as other runs come and go (item 11).
-      renderIdle();
+      // Refresh the start button's blocked state as other runs come and go — in place.
+      syncIdle();
     }
   };
 

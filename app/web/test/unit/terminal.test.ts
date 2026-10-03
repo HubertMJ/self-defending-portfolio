@@ -18,7 +18,7 @@ const T0 = Date.parse("2026-10-02T12:00:00Z");
 class Feed {
   events: StreamEvent[] = [];
   private id = 100;
-  constructor(readonly runId = RUN, readonly pod = POD) {}
+  constructor(readonly runId = RUN, readonly pod = POD, readonly scenario = "terminal") {}
   private push(type: string, data: Record<string, unknown>): StreamEvent {
     const ev = toStreamEvent(type, data, ++this.id);
     if (!ev) throw new Error(`not a valid ${type} event: ${JSON.stringify(data)}`);
@@ -28,7 +28,7 @@ class Feed {
   at = (ms: number) => new Date(T0 + ms).toISOString();
   run(state: string, ms: number, detail = "", extra: Record<string, unknown> = {}) {
     // RunEvent.Detail is not omitempty: the API always sends it, "" when there is none.
-    return this.push("run", { run_id: this.runId, scenario: "terminal", state, at: this.at(ms), detail, ...(state === "queued" ? {} : { pod: this.pod }), ...extra });
+    return this.push("run", { run_id: this.runId, scenario: this.scenario, state, at: this.at(ms), detail, ...(state === "queued" ? {} : { pod: this.pod }), ...extra });
   }
   cmd(seq: number, id: string, state: string, ms: number, extra: Record<string, unknown> = {}) {
     return this.push("command", { run_id: this.runId, seq, id, state, at: this.at(ms), ...extra });
@@ -76,7 +76,9 @@ const flush = async () => {
   await new Promise((r) => setTimeout(r, 0));
 };
 
-async function harness(opts: { start?: boolean; commandStatus?: (id: string) => [number, unknown, Record<string, string>?] } = {}): Promise<Harness> {
+type Hooks = Parameters<typeof mountTerminal>[2];
+
+async function harness(opts: { start?: boolean; hooks?: Hooks; attackStatus?: () => [number, unknown, Record<string, string>?]; commandStatus?: (id: string) => [number, unknown, Record<string, string>?] } = {}): Promise<Harness> {
   const calls: Harness["calls"] = [];
   let seq = 0;
   const fetch: FetchLike = async (input, init) => {
@@ -87,7 +89,13 @@ async function harness(opts: { start?: boolean; commandStatus?: (id: string) => 
       new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json", ...headers } });
     if (path === "/api/scenarios/terminal/details") return json(200, terminalDetails());
     if (path === "/api/posture") return json(404, { error: "not found" });
-    if (method === "POST" && path === "/api/attack/terminal") return json(202, { run_id: RUN, scenario: "terminal", state: "queued", token: TOKEN });
+    if (method === "POST" && path === "/api/attack/terminal") {
+      if (opts.attackStatus) {
+        const [status, body, headers] = opts.attackStatus();
+        return json(status, body, headers);
+      }
+      return json(202, { run_id: RUN, scenario: "terminal", state: "queued", token: TOKEN });
+    }
     if (method === "POST" && path.endsWith("/commands")) {
       const id = (JSON.parse(String(init?.body)) as { id: string }).id;
       if (opts.commandStatus) {
@@ -101,7 +109,7 @@ async function harness(opts: { start?: boolean; commandStatus?: (id: string) => 
   };
   const root = document.createElement("div");
   document.body.replaceChildren(root);
-  const term = mountTerminal(root, new ApiClient({ fetch }));
+  const term = mountTerminal(root, new ApiClient({ fetch }), opts.hooks);
   await flush();
   if (opts.start ?? true) {
     (root.querySelector(".term-start__btn") as HTMLButtonElement).click();
@@ -299,5 +307,43 @@ describe("a command that exited without an exit code (review 2, item 2)", () => 
       expect(stat(t.root, "Killed after your Enter")).toBeUndefined();
       expect(ended(t.root)).toEqual([]);
     }
+  });
+});
+
+describe("the start panel between sessions (review 2, item 5)", () => {
+  it("is patched in place: the focused button and its note survive every event of the feed", async () => {
+    let busy = false;
+    const t = await harness({ start: false, hooks: { blocked: () => (busy ? "A run is in progress" : null) }, attackStatus: () => [409, { error: "another attack is running; watch it on the live feed" }] });
+    const btn = t.root.querySelector(".term-start__btn") as HTMLButtonElement;
+    btn.focus();
+    btn.click();
+    await flush();
+    expect(text(t.root.querySelector(".term-start__blocked"))).toContain("Another run is in progress");
+    // Another visitor's one-click run streams in: events arrive, the start stays blocked.
+    busy = true;
+    const other = new Feed("1111222233334444", "network-tool-1111222233", "network-tool").open();
+    for (let i = 0; i < 5; i++) t.show(other);
+    expect(t.root.querySelector(".term-start__btn")).toBe(btn);
+    expect(document.activeElement).toBe(btn);
+    expect(btn.getAttribute("aria-disabled")).toBe("true");
+    expect(text(btn)).toContain("A run is in progress");
+    expect(text(t.root.querySelector(".term-start__blocked"))).toContain("Another run is in progress");
+  });
+
+  it("unlocks by itself when a cooldown ends on a quiet page, and a blocked press says why", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
+    vi.setSystemTime(T0);
+    const until = T0 + 3000;
+    const left = () => Math.max(0, Math.ceil((until - Date.now()) / 1000));
+    const t = await harness({ start: false, hooks: { blocked: () => (left() > 0 ? "Rate limited" : null), cooldownSeconds: left } });
+    const btn = t.root.querySelector(".term-start__btn") as HTMLButtonElement;
+    expect(text(btn)).toContain("Rate limited");
+    btn.click();
+    await flush();
+    expect(text(t.root.querySelector(".term-start__blocked"))).toContain("you can start again in 3 s");
+    expect(t.calls.some((c) => c.path === "/api/attack/terminal")).toBe(false);
+    vi.advanceTimersByTime(3100); // no event, no update() call
+    expect(text(btn)).toContain("Open the terminal");
+    expect(btn.getAttribute("aria-disabled")).toBe("false");
   });
 });

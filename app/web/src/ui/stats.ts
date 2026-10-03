@@ -121,6 +121,8 @@ export function mountStats(root: HTMLElement, api: ApiClient): StatsHandle {
   return {
     refresh: () => void refresh(),
     setLastRun(l) {
+      // Called on every event of the feed; the band is redrawn only when the tile would change.
+      if (last && last.title === l.title && last.at === l.at && last.respondMs === l.respondMs) return;
       last = l;
       draw();
     },
