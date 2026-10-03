@@ -12,8 +12,9 @@ the spec unchanged - and writes them next to the other renders, so a scenario th
 fails `make validate` instead of a visitor's click.
 
 It also checks each entry against the phase 5/6 contract (fields, types, the fixed ids, response values,
-timeout <= 120 s, images from the scenario repository pinned by digest, exec shape) and exits non-zero
-with every problem listed.
+timeout <= 300 s - the bound require-sandbox-deadline enforces, 120 s until the ADR 0017 amendment of
+2026-10-03 - an idle time below the timeout, a victim that outlives its deadline, images from the scenario
+repository pinned by digest, exec shape) and exits non-zero with every problem listed.
 
 The image placeholder. Until the first build of app/scenario on main there is no signed scenario
 digest, and the scenarios carry an all-zero placeholder. verify-portfolio-images would (correctly)
@@ -35,7 +36,16 @@ import yaml
 
 FIXED_IDS = {"shell-in-container", "network-tool", "sensitive-file-read"}
 RESPONSES = {"terminate", "quarantine"}
-MAX_TIMEOUT = 120
+# The longest a scenario pod may live: the API's scenarios.MaxTimeout and require-sandbox-deadline's
+# activeDeadlineSeconds bound (ADR 0017/0031 amendments: 300 s, so the terminal leaves time to read).
+MAX_TIMEOUT = 300
+# The victim server (app/scenario/victim) exits on its own after `-lifetime`, 120 s unless the pod's
+# command says otherwise. A victim that exits before the pod's deadline ends the run early - the shop
+# goes down and the pod completes, which would read as a response that never happened - so a scenario
+# whose timeout is longer must pass a lifetime at least as long (ADR 0022 amendment).
+VICTIM_BINARY = "/usr/local/bin/victim"
+VICTIM_DEFAULT_LIFETIME = 120
+LIFETIME_RE = re.compile(r"^(\d+)(s|m)$")
 REQUIRED = {
     "id": str,
     "title": str,
@@ -78,8 +88,9 @@ def check_commands(entry: dict, where: str) -> list:
     if entry.get("interactive") is not True:
         problems.append(f"{where}: terminal must set `interactive: true`")
     idle = entry.get("idle_seconds")
-    if not isinstance(idle, int) or isinstance(idle, bool) or not 0 < idle <= entry.get("timeout_seconds", 0):
-        problems.append(f"{where}: idle_seconds must be an int 1..timeout_seconds")
+    # Strictly below the timeout, as the API requires: an idle timer at or past the deadline never fires.
+    if not isinstance(idle, int) or isinstance(idle, bool) or not 0 < idle < entry.get("timeout_seconds", 0):
+        problems.append(f"{where}: idle_seconds must be an int 1..timeout_seconds-1 (below the timeout)")
     if entry.get("detection") != "" or entry.get("response") != "":
         problems.append(f"{where}: detection and response must be empty strings for the terminal")
     if "exec" in entry and entry["exec"] is not None:
@@ -167,6 +178,28 @@ def signed_stand_in(hello_kustomization: Path) -> str:
     return f"{image['name']}@{image['digest']}"
 
 
+def victim_lifetime(container: dict, where: str) -> tuple:
+    """(seconds the victim in this container lives, problem or None); (None, None) if it runs no victim."""
+    command = container.get("command")
+    if command is None:
+        return VICTIM_DEFAULT_LIFETIME, None  # the image's CMD: the victim with its default lifetime
+    if not (isinstance(command, list) and command and command[0] == VICTIM_BINARY):
+        return None, None
+    value = None
+    for i, arg in enumerate(command[1:], 1):
+        for flag in ("-lifetime", "--lifetime"):
+            if arg == flag:
+                value = command[i + 1] if i + 1 < len(command) else ""
+            elif isinstance(arg, str) and arg.startswith(flag + "="):
+                value = arg[len(flag) + 1:]
+    if value is None:
+        return VICTIM_DEFAULT_LIFETIME, None
+    m = LIFETIME_RE.match(str(value))
+    if not m:
+        return None, f"{where}: victim -lifetime {value!r} must be whole seconds or minutes (e.g. 300s)"
+    return int(m.group(1)) * (60 if m.group(2) == "m" else 1), None
+
+
 def check(entry: dict, index: int) -> list:
     where = f"scenario #{index} ({entry.get('id', '?')})"
     problems = []
@@ -208,6 +241,14 @@ def check(entry: dict, index: int) -> list:
     for c in containers + (pod.get("initContainers") or []):
         if not IMAGE_RE.match(str(c.get("image", ""))):
             problems.append(f"{where}: image {c.get('image')!r} is not the scenario image pinned by digest")
+    if entry.get("victim") is True:
+        for c in containers:
+            lifetime, problem = victim_lifetime(c, where)
+            if problem:
+                problems.append(problem)
+            elif lifetime is not None and lifetime < entry["timeout_seconds"]:
+                problems.append(f"{where}: the victim exits after {lifetime} s, before the {entry['timeout_seconds']} s "
+                                f"timeout; pass `-lifetime {entry['timeout_seconds']}s` in its command")
     return problems
 
 
