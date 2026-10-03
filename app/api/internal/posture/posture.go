@@ -41,6 +41,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -852,6 +853,32 @@ const (
 	maxBenchRemedy = 300
 )
 
+// benchCut shortens a kube-bench text to at most n runes, the ellipsis included, never inside a
+// word: after the last sentence end (a period and white space) if that keeps at least 60% of n,
+// else at the last white space, else (one token longer than the cap) hard. Non-printable
+// characters are dropped first, as webhook.Truncate does (ADR 0035).
+func benchCut(s string, n int) string {
+	s = webhook.Printable(s)
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	for i := n - 3; 5*(i+1) >= 3*n; i-- { // r[:i+1] ends with the period, " …" follows
+		if r[i] == '.' && unicode.IsSpace(r[i+1]) {
+			return string(r[:i+1]) + " …"
+		}
+	}
+	for i := n - 1; i > 0; i-- { // r[:i] ends before a space, "…" follows
+		if unicode.IsSpace(r[i]) {
+			if w := strings.TrimRightFunc(string(r[:i]), unicode.IsSpace); w != "" {
+				return w + "…"
+			}
+			break
+		}
+	}
+	return string(r[:n-1]) + "…"
+}
+
 // ErrNoBenchJSON is returned for a log without a kube-bench JSON document.
 var ErrNoBenchJSON = errors.New("no kube-bench JSON document in the log")
 
@@ -871,7 +898,7 @@ func parseKubeBench(log []byte, node string) (KubeBench, error) {
 		if node != "" {
 			s = strings.ReplaceAll(s, node, "[node]")
 		}
-		return webhook.Truncate(s, n)
+		return benchCut(s, n)
 	}
 	kb := KubeBench{Failing: []BenchCheck{}}
 	found := false
