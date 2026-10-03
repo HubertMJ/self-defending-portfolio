@@ -235,7 +235,9 @@ func (c *Collector) recordRun(data []byte) {
 			return // a late event for a run that already finished: do not resurrect it
 		}
 		sc, _ := c.scenarios.Get(e.Scenario) // one lookup per run, not per event
-		rs = &runState{scenario: e.Scenario, sc: sc, interactive: sc.Interactive, start: e.At,
+		// hour is set again from the queued event; until then it is the current hour, and only the
+		// counted guard keeps a run never seen queued out of the window.
+		rs = &runState{scenario: e.Scenario, sc: sc, interactive: sc.Interactive, start: e.At, hour: unixHour(c.now()),
 			detectedAt: map[int]time.Time{}, answered: map[int]bool{},
 			objAttempted: map[string]bool{}, objAchieved: map[string]bool{}}
 		c.active[e.RunID] = rs

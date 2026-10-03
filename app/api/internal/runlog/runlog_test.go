@@ -200,6 +200,7 @@ func TestList(t *testing.T) {
 	feed(h, "run", map[string]string{"run_id": "r4", "state": "finished", "at": at(45)})
 	feed(h, "command", map[string]string{"run_id": "r4", "id": "whoami", "state": "started"})
 	feed(h, "falco", map[string]string{"pod": "pr3", "rule": "y"})
+	feed(h, "command", map[string]string{"run_id": "r3", "id": "whoami", "state": "exited"})
 
 	list := s.List()
 	var ids []string
@@ -217,7 +218,7 @@ func TestList(t *testing.T) {
 		r4.StartedAt == nil || r4.StartedAt.Format("15:04:05") != "18:00:40" || r4.Events != 8 || r4.Scenario != "network-tool" || r4.Truncated {
 		t.Fatalf("r4 = %+v", r4)
 	}
-	if r3.State != "started" || r3.Detected || r3.EndedAt != nil || r3.Events != 3 {
+	if r3.State != "started" || r3.Detected || r3.EndedAt != nil || r3.Events != 4 {
 		t.Fatalf("r3 = %+v (a falco event must not make it detected)", r3)
 	}
 	b, _ := json.Marshal(r3)
