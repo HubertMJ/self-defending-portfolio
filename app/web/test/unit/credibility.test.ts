@@ -7,7 +7,7 @@ import { utc, utcClock, when } from "../../src/lib/dom";
 import { posture, stats, TERMINAL_OBJECTIVES } from "../../src/lib/fixtures";
 import { COSIGN_IDENTITY_REGEXP, COSIGN_ISSUER, ciRunUrl, commitUrl, cosignVerifyCommand, isPinnedImageRef, rekorSearchUrl } from "../../src/lib/provenance";
 import { mountConsole } from "../../src/ui/console";
-import { buildTimeline, noDetection } from "../../src/lib/timeline";
+import { buildTimeline, noDetection, publishedPod } from "../../src/lib/timeline";
 import { mountEvidence, renderEvidenceCard, renderEvidenceDetail, renderNoAttack, renderTicker, tickerItems } from "../../src/ui/evidence";
 import { admissionTone, renderPostureData } from "../../src/ui/posture";
 import { renderStats } from "../../src/ui/stats";
@@ -550,5 +550,87 @@ describe("code review (REQUEST_CHANGES) fixes", () => {
         vi.useRealTimers();
       }
     });
+  });
+});
+
+describe("a side-by-side run on the card, in the history and in the console (ADR 0031)", () => {
+  const R = "0a0b0c0d0e0f1011";
+  const UPOD = "scenario-network-tool-abc-u";
+  const runEv = (state: string, ms: number, extra: Record<string, unknown> = {}) => ev("run", { run_id: R, scenario: "network-tool", state, at: at(ms), ...extra });
+  const sideBySide = (end: boolean, ns = "sandbox-unguarded"): StreamEvent[] => [
+    runEv("queued", 0),
+    runEv("started", 50, { pods: { guarded: POD, unguarded: UPOD } }),
+    ev("falco", { at: at(1000), rule: "SDP network tool in sandbox", priority: "Warning", namespace: "sandbox", pod: POD, output: "o", arm: "guarded" }),
+    runEv("detected", 1005, { detail: "SDP network tool in sandbox" }),
+    ev("falco", { at: at(1010), rule: "SDP network tool in sandbox", priority: "Warning", namespace: ns, pod: UPOD, output: "o", arm: "unguarded" }),
+    ev("talon", { at: at(1100), action: "Quarantine Pod", actionner: "kubernetes:label", namespace: "sandbox", pod: POD, status: "success", output: "labeled", arm: "guarded" }),
+    runEv("responded", 1110, { detail: "quarantine" }),
+    ...(end ? [runEv("finished", 3000)] : []),
+  ];
+  const view = (end: boolean, ns?: string) => buildTimeline(sideBySide(end, ns), T + 2000);
+
+  it("names the guarded pod once the twin's Falco event (sandbox-unguarded) is in; any other namespace still hides it", () => {
+    const run = view(true).runs[0];
+    expect(run.falco).toHaveLength(2);
+    expect(publishedPod(run)).toBe(POD);
+    const pod = (el: HTMLElement) => [...el.querySelectorAll("dt")].find((d) => d.textContent === "Pod")?.nextElementSibling?.textContent;
+    expect(pod(renderEvidenceCard(run, { title: "x", now: T + 4000 }))).toBe(POD);
+    expect(pod(renderEvidenceDetail(run, { title: "x", now: T + 4000 }))).toBe(POD);
+    const attack = renderRun(run, "x", new Set(), undefined, undefined, undefined, T + 4000).querySelector(".stage--attack") as HTMLElement;
+    expect(attack.textContent).toContain(POD);
+    expect(attack.textContent).not.toContain("not a sandbox pod");
+    const other = view(true, "portfolio-api").runs[0];
+    expect(publishedPod(other)).toBeUndefined();
+    expect(renderEvidenceCard(other, { title: "x", now: T + 4000 }).textContent).not.toContain(POD);
+    const hidden = renderRun(other, "x", new Set(), undefined, undefined, undefined, T + 4000).querySelector(".stage--attack") as HTMLElement;
+    expect(hidden.textContent).not.toContain(POD);
+    expect(hidden.textContent).toContain("pod name withheld: not a sandbox pod");
+    expect(hidden.textContent).not.toContain("outside the sandbox");
+  });
+
+  it("labels each Falco/Talon event with its pod, from the namespace; an unknown namespace gets no label", () => {
+    const card = renderEvidenceCard(view(true).runs[0], { title: "x", now: T + 4000 });
+    const items = [...card.querySelectorAll(".evlist__item")];
+    expect(items.map((i) => i.querySelector(".tag--arm")?.textContent)).toEqual(["guarded", "twin, unguarded", "guarded"]);
+    expect(items.map((i) => i.querySelector(".tag--arm")?.getAttribute("data-arm"))).toEqual(["guarded", "unguarded", "guarded"]);
+    expect(items[1].textContent).toBe(`falco twin, unguarded SDP network tool in sandbox (Warning) at 18:01:58.133 UTC`);
+    const detail = renderEvidenceDetail(view(true).runs[0], { title: "x", now: T + 4000 });
+    expect([...detail.querySelectorAll(".tag--arm")].map((t) => t.textContent)).toEqual(["guarded", "twin, unguarded", "guarded"]);
+    for (const ns of ["portfolio-api", "constructor", "__proto__", ""]) {
+      const other = renderEvidenceCard(view(true, ns).runs[0], { title: "x", now: T + 4000 });
+      expect(other.querySelectorAll(".tag--arm")).toHaveLength(2);
+      expect(other.querySelectorAll(".evlist__item")[1].querySelector(".tag--arm")).toBeNull();
+    }
+  });
+
+  it("the header follows the run's state, as the chip does", () => {
+    const card = (events: StreamEvent[]) => renderEvidenceCard(buildTimeline(events, T + 2000).runs[0], { title: "x", now: T + 2000 });
+    const head = (el: HTMLElement) => [el.querySelector(".evcard__eyebrow")?.textContent, el.querySelector(".evcard__head .chip")?.textContent];
+    // Contained, the run not over yet (the twin is still held): no longer "in progress".
+    const contained = card(sideBySide(false));
+    expect(buildTimeline(sideBySide(false), T + 2000).runs[0].active).toBe(true);
+    expect(head(contained)).toEqual(["Attack contained", "Contained"]);
+    expect(head(card(sideBySide(true)))).toEqual(["Latest attack, as recorded", "Finished"]);
+    // Detected, not yet answered: still in progress.
+    expect(head(card(sideBySide(false).slice(0, 4)))).toEqual(["Attack in progress", "Detected"]);
+    expect(head(card([...sideBySide(false).slice(0, 4), runEv("failed", 1500, { detail: "x" })]))).toEqual(["Latest attack, as recorded", "Failed"]);
+  });
+
+  it("the console names the pod only where the page may publish it", async () => {
+    const api = new ApiClient({ fetch: async () => new Response("{}", { status: 404, headers: { "Content-Type": "application/json" } }) });
+    const consoleOf = (ns?: string) => {
+      const root = document.createElement("section");
+      document.body.append(root);
+      mountConsole(root, api).update(view(true, ns));
+      return root;
+    };
+    const twin = consoleOf();
+    expect(twin.querySelector(".console__sub")?.textContent).toContain(`pod ${POD}`);
+    expect(twin.querySelector(".verify")?.textContent).toContain(POD);
+    const other = consoleOf("portfolio-api");
+    expect(other.querySelector(".console__sub")?.textContent).not.toContain(POD);
+    expect(other.querySelector(".verify")?.textContent).not.toContain(POD);
+    expect(twin.querySelector(".card--pod")?.textContent).toContain(POD);
+    expect(other.querySelector(".card--pod")?.textContent).not.toContain(POD);
   });
 });

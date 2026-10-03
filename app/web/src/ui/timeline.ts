@@ -131,7 +131,7 @@ export function renderRun(
         note: startedAt !== undefined ? undefined : run.active ? "pending" : "not reached",
         at: startedAt,
         now,
-        what: publishedPod(run) ? h("code", {}, publishedPod(run)) : run.pod ? "pod outside the sandbox" : "starting the pod…",
+        what: publishedPod(run) ? h("code", {}, publishedPod(run)) : run.pod ? "pod name withheld: not a sandbox pod" : "starting the pod…",
       }),
       detectedAt !== undefined
         ? stage({

@@ -866,3 +866,29 @@ test.describe("credibility on the production bundle (ADR 0035; serve.mjs --termi
     });
   }
 });
+
+test.describe("a side-by-side run, contained with the twin still held (serve.mjs --terminal-api --twin)", () => {
+  test("the card says contained, names the guarded pod and labels each event by pod; the history and the console name the pod", async ({ page }) => {
+    const problems = guardConsole(page);
+    await page.goto("http://127.0.0.1:4179/");
+    const pod = "scenario-network-tool-7e57aaaaaa";
+    const card = page.locator("#evidence-card .evcard");
+    // The chip says contained and the run is still going (the twin is held): the header agrees with the chip.
+    await expect(card.locator(".evcard__head .chip")).toHaveText("Contained");
+    await expect(card.locator(".evcard__eyebrow")).toHaveText("Attack contained");
+    // The twin's Falco event (sandbox-unguarded) does not take the pod's name off the card.
+    await expect(card.locator(".evcard__facts > div", { has: page.locator("dt", { hasText: /^Pod$/ }) }).locator("dd")).toHaveText(pod);
+    await expect(card.locator(".evlist__item")).toHaveCount(3);
+    await expect(card.locator(".evlist__item .tag--arm")).toHaveText(["guarded", "twin, unguarded", "guarded"]);
+    await expect(card.locator(".evlist__item").nth(1)).toHaveAttribute("data-type", "falco");
+    await expect(page.locator("#evidence .evdetail .tag--arm")).toHaveText(["guarded", "twin, unguarded", "guarded"]);
+    const attack = page.locator('#timeline .run[data-run="7e57aaaaaaaaaaaa"] .stage--attack');
+    await expect(attack).toContainText(pod);
+    await expect(attack).not.toContainText("not a sandbox pod");
+    await expect(page.locator("#console .twin")).toBeVisible();
+    await expect(page.locator("#console .console__sub")).toContainText(`pod ${pod}`);
+    await expect(page.locator("#console .card--pod dd").first()).toHaveText(pod);
+    await noHorizontalScroll(page);
+    expect(problems).toEqual([]);
+  });
+});

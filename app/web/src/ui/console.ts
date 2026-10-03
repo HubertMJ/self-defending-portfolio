@@ -20,7 +20,7 @@ import type { ApiClient, Result } from "../lib/api";
 import type { Scenario, ScenarioDetails } from "../lib/contract";
 import { type Child, h, prefersReducedMotion, replace, utcClock } from "../lib/dom";
 import { type Hop, type Schedule, TIMER_END, TIMER_START, humanAction, runHops, scheduleHops, timerReading } from "../lib/pipeline";
-import { type RunView, type TimelineView, QUARANTINE_LABEL, formatDuration, guardedFalco, guardedTalon, ts } from "../lib/timeline";
+import { type RunView, type TimelineView, QUARANTINE_LABEL, formatDuration, guardedFalco, guardedTalon, publishedPod, ts } from "../lib/timeline";
 import { cosignVerifyCommand, isPinnedImageRef, oneLine } from "../lib/provenance";
 import { copyButton, extLink, sourceUrl } from "./common";
 import { heldMs, heldText, renderTwin } from "./twin";
@@ -456,7 +456,7 @@ export function mountConsole(root: HTMLElement, api: ApiClient, onDetails?: (sce
         selected && selected !== view.activeRun?.runId && view.runs[0]?.runId !== selected ? "From the history. " : run.active ? "Happening now. " : "Most recent run. ",
         "Run ",
         h("code", {}, run.runId),
-        run.pod ? [" · pod ", h("code", {}, run.pod)] : null,
+        publishedPod(run) ? [" · pod ", h("code", {}, publishedPod(run))] : null,
         selected ? [" ", followButton()] : null,
       ),
       failed && run.detail ? h("p", { class: "console__fail" }, run.detail) : null,
@@ -486,7 +486,7 @@ export function mountConsole(root: HTMLElement, api: ApiClient, onDetails?: (sce
       h(
         "dl",
         { class: "facts" },
-        h("div", {}, h("dt", {}, "Name"), h("dd", {}, run.pod ? h("code", {}, run.pod) : "–")),
+        h("div", {}, h("dt", {}, "Name"), h("dd", {}, publishedPod(run) ? h("code", {}, publishedPod(run)) : "–")),
         h("div", {}, h("dt", {}, "UID"), h("dd", {}, run.podUid ? h("code", { title: run.podUid }, run.podUid) : "–")),
         h("div", {}, h("dt", {}, "Image"), h("dd", {}, run.image ? h("code", { title: run.image }, shortDigest(run.image)) : "–")),
         h("div", {}, h("dt", {}, "Container"), h("dd", {}, run.containerId ? h("code", {}, run.containerId) : "–")),
@@ -619,7 +619,7 @@ export function mountConsole(root: HTMLElement, api: ApiClient, onDetails?: (sce
             "dl",
             { class: "facts facts--wide" },
             h("div", {}, h("dt", {}, "Run id"), h("dd", {}, h("code", {}, run.runId))),
-            h("div", {}, h("dt", {}, "Pod"), h("dd", {}, run.pod ? h("code", {}, run.pod) : "–")),
+            h("div", {}, h("dt", {}, "Pod"), h("dd", {}, publishedPod(run) ? h("code", {}, publishedPod(run)) : "–")),
             h("div", {}, h("dt", {}, "Pod UID"), h("dd", {}, run.podUid ? h("code", {}, run.podUid) : "–")),
             h("div", {}, h("dt", {}, "Raw run"), h("dd", {}, h("a", { href: runUrl }, runUrl), " (JSON, kept for the last 50 runs)")),
           ),
@@ -721,14 +721,14 @@ export function mountConsole(root: HTMLElement, api: ApiClient, onDetails?: (sce
     const hops = runHops(run);
     const d = details.get(run.scenario);
     const dKey = d === undefined || d === "loading" ? "l" : d.ok ? "ok" : "no";
-    patch(p, "head", `${run.current}|${run.active}|${own.has(run.runId)}|${run.pod}|${selected}|${scenarios.size}|${view.activeRun?.runId}`, () => headPanel(run));
+    patch(p, "head", `${run.current}|${run.active}|${own.has(run.runId)}|${publishedPod(run)}|${selected}|${scenarios.size}|${view.activeRun?.runId}`, () => headPanel(run));
     const vKey = run.victim.map((v) => `${v.arm ?? ""}${v.status}${v.checksum}${v.until}`).join(",");
     const twin = run.armPods !== undefined;
     patch(p, "victim", `${twin ? `twin|${run.unguardedPods.length}|` : ""}${vKey}|${run.active}|${run.pod}|${run.pods[run.pods.length - 1]?.phase}`, () => (twin ? renderTwin(run) : renderVictim(run, run.active && !own.has(run.runId))));
-    patch(p, "pod", `${run.pods.length}|${run.pod}`, () => podPanel(run));
+    patch(p, "pod", `${run.pods.length}|${publishedPod(run)}`, () => podPanel(run));
     patch(p, "executed", `${dKey}|${scenarios.size}`, () => executedPanel(run));
     patch(p, "proof", `${run.pods.length}|${vKey}|${run.flows.length}|${run.talon.length}|${scenarios.size}`, () => proofPanel(run));
-    patch(p, "verify", `${dKey}|${hops.map((x) => x.raw).join()}|${run.podUid}`, () => verifyPanel(run, hops));
+    patch(p, "verify", `${dKey}|${hops.map((x) => x.raw).join()}|${run.podUid}|${publishedPod(run)}`, () => verifyPanel(run, hops));
     patch(p, "raw", `${run.events.length}`, () => rawPanel(run));
     p.root.dataset.victim = victimState(run);
     p.root.dataset.victimLabel = labelOf(victimState(run));

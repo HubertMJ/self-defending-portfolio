@@ -404,12 +404,16 @@ export function noDetection(run: RunView, outcomes?: ReadonlyMap<string, Command
   return known.includes("prevented") ? "prevented" : "recon";
 }
 
+/** The namespaces of our scenario pods, both public (ADR 0031): the guarded sandbox and its unguarded twin. */
+export const SANDBOX_NAMESPACES: ReadonlySet<string> = new Set(["sandbox", "sandbox-unguarded"]);
+
 /**
  * The run's pod name where the page may publish it (ADR 0021): a sandbox scenario pod, i.e. every
- * Falco/Talon event of the run that names a namespace names `sandbox`. Otherwise undefined.
+ * Falco/Talon event of the run that names a namespace names `sandbox` or the twin's
+ * `sandbox-unguarded`. Any other namespace: undefined.
  */
 export function publishedPod(run: RunView): string | undefined {
-  return run.pod && [...run.falco, ...run.talon].every((e) => !e.namespace || e.namespace === "sandbox") ? run.pod : undefined;
+  return run.pod && [...run.falco, ...run.talon].every((e) => !e.namespace || SANDBOX_NAMESPACES.has(e.namespace)) ? run.pod : undefined;
 }
 
 /** Human-readable duration: "840 ms", "2.4 s", "1 min 12 s". */
