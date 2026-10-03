@@ -14,7 +14,7 @@ import { h, prefersReducedMotion, replace } from "../lib/dom";
 import type { CommandRun, RunView, TimelineView } from "../lib/timeline";
 import { formatDuration, ts } from "../lib/timeline";
 import { litFromCommands, renderDefenceMap } from "./defencemap";
-import { offlinePanel } from "./common";
+import { breakable, offlinePanel } from "./common";
 import { renderVictim } from "./victim";
 
 export interface TerminalHandle {
@@ -421,7 +421,7 @@ export function mountTerminal(
               "div",
               { class: "term__chiprow" },
               cmds.map((c) => {
-                const b = h("button", { type: "button", class: `term__chip term__chip--${c.outcome}`, title: c.explain, disabled: true }, c.input);
+                const b = h("button", { type: "button", class: `term__chip term__chip--${c.outcome}`, title: c.explain, disabled: true }, breakable(c.input));
                 b.addEventListener("click", () => void submit(c.input));
                 return b;
               }),
@@ -524,7 +524,7 @@ export function mountTerminal(
     if (els.input) els.input.focus();
   };
 
-  const promptEcho = (input: string) => h("p", { class: "term__line term__line--in" }, h("span", { class: "term__prompt", "aria-hidden": "true" }, "sandbox$ "), input);
+  const promptEcho = (input: string) => h("p", { class: "term__line term__line--in" }, h("span", { class: "term__prompt", "aria-hidden": "true" }, "sandbox$ "), breakable(input));
 
   // ---- rendering the live session from the timeline view ----
   const myRun = (): RunView | undefined => {
@@ -737,7 +737,7 @@ export function mountTerminal(
     const killedRun = detail === "killed";
     const ender = enderOf(run);
     const quarantine = responseOf(run, "quarantine");
-    const input = (c?: CommandRun) => (c ? h("code", {}, catalogue?.commands.find((x) => x.id === c.id)?.input ?? c.id) : null);
+    const input = (c?: CommandRun) => (c ? h("code", {}, breakable(catalogue?.commands.find((x) => x.id === c.id)?.input ?? c.id)) : null);
     // A watcher reads the same summary about someone else: "the visitor", not "you".
     const other = watching !== undefined;
     const you = other ? "the visitor" : "you";

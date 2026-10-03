@@ -701,3 +701,15 @@ describe("a run history the API had to cut short (final review, item 7)", () => 
     expect(notes).toHaveLength(1);
   });
 });
+
+describe("long command lines (final review, item 7)", () => {
+  it("offer a line break after each '/' and ';', with the text itself unchanged", async () => {
+    const t = await harness();
+    t.show(new Feed().open());
+    const deface = chips(t.root).find((b) => b.textContent?.startsWith("echo pwned"))!;
+    expect(deface.textContent).toBe(`echo pwned>/srv/shop/index.html;echo '{"status":"defaced"}'>/srv/shop/state.json`);
+    const wbr = deface.querySelectorAll("wbr");
+    expect(wbr.length).toBe(7); // 6 slashes, 1 semicolon
+    for (const w of wbr) expect(w.previousSibling?.textContent).toMatch(/[/;]$/);
+  });
+});

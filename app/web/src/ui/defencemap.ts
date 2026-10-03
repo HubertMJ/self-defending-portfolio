@@ -11,6 +11,7 @@ import type { CommandOutcome, DefenceLayer, Posture } from "../lib/contract";
 import { DEFENCE_LAYERS } from "../lib/contract";
 import { h, replace } from "../lib/dom";
 import type { ApiClient, Result } from "../lib/api";
+import { breakable } from "./common";
 
 export interface LayerMeta {
   id: DefenceLayer;
@@ -151,7 +152,7 @@ function layerCard(meta: LayerMeta, posture: Posture | undefined, lit: LitLayer 
             h(
               "li",
               { class: `deflayer__entry deflayer__entry--${e.outcome}` },
-              h("code", {}, e.input),
+              h("code", {}, breakable(e.input)),
               h("span", { class: `deflayer__verdict deflayer__verdict--${e.outcome}` }, OUTCOME_WORD[e.outcome]),
               e.ended ? h("span", { class: "deflayer__ended" }, "ended the session") : null,
             ),
