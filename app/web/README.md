@@ -49,11 +49,13 @@ calls the API. Extra knobs: `&mock-speed=0.2` (faster runs), `&mock-limit=1` (hi
 `&mock-stream-refuse=3&mock-stream-retry-after=2` (the event stream is refused with 429 first),
 `&mock-stream-stall=1` (the first accepted stream delivers nothing and dies), `&mock-visitor=500`
 (another visitor starts a quarantine run after 500 ms, watched read-only), `&mock-term-visitor=500`
-(another visitor starts a *terminal* run, watched read-only) and `&mock-details=0`
+(another visitor starts a *terminal* run, watched read-only), `&mock-no-response=1` (Talon never
+answers a terminal command, so `sh -i` runs into its 10 s bound) and `&mock-details=0`
 (no /api/scenarios/{id}/details, as an API without the extension). `serve.mjs --stub-events` replays
 one full run with every event type over a real event stream; `--live-api` answers like the API
 deployed today (a JSON 404 for the terminal and `/api/stats`, `?compare=1` ignored); `--terminal-api` replays another
-visitor's terminal session joined mid-way, exactly as the interactive API publishes it.
+visitor's terminal session joined mid-way, exactly as the interactive API publishes it (with
+`--slow-details`, its catalogue answers 1.5 s late).
 
 The terminal, the unguarded twin (the "With & without the response" button on a one-click card) and
 the hero's live counters are all simulated in mock mode from `src/lib/fixtures.ts`, so the whole

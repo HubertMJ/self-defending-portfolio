@@ -88,8 +88,9 @@ band hides; no compare → no twin button. How the page meets today's API is in 
   end to end, including the detect→respond chain, the quarantine that keeps the run going and the
   terminate that ends it, so the whole front end is exercised by `npm test` and `npm run test:e2e`
   without a cluster. The mock's terminal catalogue is not written here: `scripts/terminal-catalogue.mjs`
-  generates `src/lib/terminal-catalogue.json` from the cluster's `scenarios.yaml`, and the unit tests
-  fail when the two drift (run with `SDP_SCENARIOS_YAML` pointing at that file).
+  generates `src/lib/terminal-catalogue.json` from the cluster's `scenarios.yaml`. The drift check is
+  opt-in, not part of CI: that file is not in this side's tree, so the unit test that compares the two
+  runs only when `SDP_SCENARIOS_YAML` points at a copy of it (as does the script's `--check`).
 - One more image is not added; the bundle grows by the new modules (a few KB) and mock mode still
   ships, visibly labelled, reaching nothing a visitor could not already reach.
 - What the web session could not verify, and integration must: the live API actually emitting
@@ -147,8 +148,9 @@ has a test that fails without it.
 - **Output in publication order.** A command's output is kept by event id and the timeline drops a
   duplicate by id with its payload, so two identical lines both show; a block whose history changed (a
   backfilled chunk, a command the live feed missed) is rebuilt in seq order, not appended at the end.
-- **A code-less exit is an end.** It frees the input, lights its layer and says why: timed out, or
-  stopped with the session.
+- **A code-less exit is an end.** It frees the input, lights its layer and says why: timed out (a
+  command gets 5 s, one with a terminal 10 s), or stopped by the session's end, told by the run's own
+  reason rather than a time window.
 - **One command at a time, whichever comes first.** The lock clears when the sent command has ended,
   whether its end or its 202 arrives first; a second tap before the 202 sends nothing; chips, Run and
   Leave rest before `pod_ready` and after the end; `pagehide` sends one DELETE, never after the end.
@@ -158,14 +160,19 @@ has a test that fails without it.
   deleted N later, and the hero says what "reached" means (the command exited 0 — detection is not
   prevention) next to the median session length; objectives are counted in runs.
 - **Mid-session joins.** A run the feed shows without `queued`/`started` takes its earliest state as
-  its start, so it is the live run (watcher view, launcher locked), and is backfilled; a failed
-  backfill waits 30 s, then twice as long each time (`src/lib/backfill.ts`); reopening the stream
-  after a hidden-tab stop backfills the active run.
-- **Against today's API** (no terminal catalogue, no `/api/stats`, no compare): the hero button reads
+  its start, so it is the live run (watcher view, launcher locked), and is backfilled; a backfill the
+  run store answers with a 404 is final, another failure waits 30 s, then twice as long each time
+  (`src/lib/backfill.ts`); reopening the stream after a hidden-tab stop backfills the active run; a
+  history the store cut short (`truncated`) is said in the terminal. A catalogue that arrives after a
+  watched run is already on screen fills that view in rather than replacing it.
+- **Against today's API** (its JSON 404 for the terminal's catalogue; no `/api/stats`, no compare):
+  the hero button reads
   "Launch an attack", the attack section is the one-click scenarios, and nothing offers or mentions the
   terminal; the twin button appears only when the scenarios carry `interactive` (the field the
   interactive API added, and the sign that `?compare=1` is understood); `/api/stats` is not asked again
   after a 404 and the hero takes the objectives from the terminal's catalogue instead of fetching it.
+  Any other failure to load the catalogue (the network, a 5xx, the request limiter's 429) is passing:
+  the terminal shows an offline state that retries, and the page is not degraded.
 - **Quiet updates.** The start panel and the hero band are patched only when they change, so focus and
   notes survive the feed; a cooldown unlocks the start button on its own; a blocked press says why;
   Tab completes only when it changes the line; hints reach a screen reader through a region that is
@@ -174,4 +181,10 @@ has a test that fails without it.
   the stripper on `src/index.html`; the e2e suite reads the mock's own call log for "nothing was sent"
   (an in-page mock never reaches the network), runs the page against `serve.mjs --live-api` (today's
   API) and against `serve.mjs --terminal-api`, which replays a session joined mid-way exactly as the
-  API publishes it, backfill included.
+  API publishes it, backfill included — also with the catalogue answering after the replay
+  (`--slow-details`). The console's run is checked from the sequence of states it went through,
+  recorded as they happen, not by polling windows shorter than a second.
+- **Wording.** The hero's tiles say what they count ("detected runs answered", runs that "ran out of
+  time with a detection unanswered", one response-time figure); in the summary each time says where
+  it counts from (after the Enter, after the exit); every layer of the result map has a status pill;
+  long command lines wrap after `/` and `;`.
