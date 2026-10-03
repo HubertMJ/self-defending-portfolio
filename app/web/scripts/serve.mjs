@@ -3,8 +3,9 @@
 // drift between the two), the same cache headers, and the same text/plain 404 for /api/*. Used by
 // `npm run serve`, the dev loop and the Playwright suite. Not used in the image.
 //
-//   node scripts/serve.mjs [--port 4173] [--stub-events | --live-api | --terminal-api]
-//   then open http://localhost:4173/?mock=1 for mock mode, or / for the offline state.
+//   node scripts/serve.mjs [--port 4173] [--dir dist|dist-mock] [--stub-events | --live-api | --terminal-api]
+//   then open http://localhost:4173/?mock=1 for mock mode (with --dir dist-mock, the `npm run build:mock`
+//   output: the production dist/ has no mock, ADR 0035), or / for the offline state.
 //
 // --stub-events serves GET /api/events the way the API does (same headers, the retry + 2 KiB
 // preamble, a replayed run, a heartbeat comment every 2 s), so the Playwright suite can drive the
@@ -36,7 +37,10 @@ import { extname, join, normalize, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
-const dist = join(root, "dist");
+const dirArg = process.argv.indexOf("--dir");
+const dir = dirArg > 0 ? process.argv[dirArg + 1] : "dist";
+if (dir !== "dist" && dir !== "dist-mock") throw new Error(`serve.mjs: --dir must be dist or dist-mock, not ${dir}`);
+const dist = join(root, dir);
 const portArg = process.argv.indexOf("--port");
 const port = Number(portArg > 0 ? process.argv[portArg + 1] : process.env.PORT ?? 4173);
 const liveApi = process.argv.includes("--live-api");
@@ -261,4 +265,4 @@ const server = createServer(async (req, res) => {
   }
 });
 
-server.listen(port, "127.0.0.1", () => console.log(`serving dist/ on http://127.0.0.1:${port}`));
+server.listen(port, "127.0.0.1", () => console.log(`serving ${dir}/ on http://127.0.0.1:${port}`));

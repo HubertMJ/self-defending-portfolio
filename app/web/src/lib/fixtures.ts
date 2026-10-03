@@ -7,6 +7,9 @@
 import type { CatalogueCommand, Objective, Posture, Scenario, ScenarioDetails, SourceRef, Stats, VictimStatus } from "./contract";
 import catalogue from "./terminal-catalogue.json";
 
+/** Names this module's data in the mock's responses; a marker the production bundle must not contain (ADR 0035). */
+export const FIXTURE_MARKER = "sdp-fixture-data-not-from-the-cluster";
+
 export const SCENARIOS: Scenario[] = [
   {
     id: "shell-in-container",

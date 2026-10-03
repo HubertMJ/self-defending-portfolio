@@ -4,7 +4,7 @@
 import { ApiClient } from "./lib/api";
 import { Backfill } from "./lib/backfill";
 import { byId, h, prefersReducedMotion, replace } from "./lib/dom";
-import { MockBackend, mockOptionsFromUrl } from "./lib/mock";
+import { installMock } from "./lib/mock-hook";
 import { type ConnectionState, type EventSourceFactory, EventStream } from "./lib/sse";
 import { CONNECTION_WORD } from "./ui/common";
 import { mountConsole } from "./ui/console";
@@ -66,21 +66,10 @@ function main(): void {
   if (prefersReducedMotion()) document.documentElement.classList.add("reduced-motion");
   setupThemeToggle();
 
-  const mockOpts = mockOptionsFromUrl(location.search);
-  const mock = mockOpts ? new MockBackend(mockOpts) : null;
+  // Always null in the production bundle: the mock is not in it (lib/mock-hook.ts, ADR 0035).
+  const mock = installMock(location.search);
   const api = new ApiClient(mock ? { fetch: mock.fetch } : {});
   const factory: EventSourceFactory | undefined = mock ? mock.eventSource : undefined;
-
-  if (mock) {
-    const banner = byId("mock-banner");
-    banner.hidden = false;
-    // Into the sticky header: a page opened at #attack scrolls past where the banner sits.
-    document.querySelector(".site-header")?.append(banner);
-    document.documentElement.dataset.mock = "true";
-    // The mock answers in-page, so the network never sees a request: its own call log is what the
-    // end-to-end tests read to check what the page sent.
-    (window as unknown as { sdpMock: MockBackend }).sdpMock = mock;
-  }
 
   mountPosture(byId("posture-panel"), api);
   const stats = mountStats(byId("hero-stats"), api);

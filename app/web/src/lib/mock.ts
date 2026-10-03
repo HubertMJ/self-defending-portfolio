@@ -21,6 +21,7 @@ import {
   SCENARIO_IMAGE,
   TERMINAL_COMMANDS,
   TERMINAL_OUTPUT,
+  FIXTURE_MARKER,
   falcoFields,
   falcoOutput,
   posture,
@@ -59,10 +60,16 @@ export interface MockOptions {
 
 const REPLAY = 100;
 
+/**
+ * Says "this answer is the mock's" on every response it makes. Also a marker the production bundle
+ * must not contain (test/unit/bundle.test.ts, ADR 0035): it is used, so the --mock build keeps it.
+ */
+export const MOCK_MARKER = "sdp-in-page-mock-backend";
+
 function json(status: number, body: unknown, headers: Record<string, string> = {}): Response {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { "Content-Type": "application/json", ...headers },
+    headers: { "Content-Type": "application/json", "X-Sdp-Mock": `${MOCK_MARKER}; ${FIXTURE_MARKER}`, ...headers },
   });
 }
 
