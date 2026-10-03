@@ -346,79 +346,126 @@ func (r *Runner) commandEvent(rn *run, ev CommandEvent) CommandEvent {
 	return ev
 }
 
+// detection is one `detected` run event a terminal run published: the command it was tied to (0:
+// none), the Falco rule (the published detail), the response the catalogue gives that command
+// ("terminate"/"quarantine"; "" when it has none, or for no command), and whether a `responded` has
+// been paired with it.
+type detection struct {
+	seq      int
+	rule     string
+	response string
+	answered bool
+}
+
 // terminalDetected publishes a `detected` run event for the command the alert is about, once per
 // command, carrying its seq so the page can tie the detection to the keystroke. The detail is the
 // Falco rule that fired (the honest name, even for an `allowed`/`prevented` command that has no rule
-// of its own in the catalogue); it falls back to the command's catalogue detection if no rule was
-// passed.
+// of its own in the catalogue), capped like every other Falco field; it falls back to the command's
+// catalogue detection if no rule was passed.
 //
 // A Falco alert for the run's pod is always a detection; only the command it is tied to is best
 // effort. An alert that correlates to no command (it arrived more than the 2 s window after the
-// command ended) is published once per run without a command_seq, rather than dropped - dropping it
-// let Talon's later response be published with no detection before it.
+// command ended) is published once per run without a command_seq, rather than dropped - unless the
+// run has already detected the same rule: then it is that command's alert again, arriving late, and
+// a second, command-less detection of it would read as a new one nobody answered.
 func (r *Runner) terminalDetected(rn *run, rule string) {
+	rule = webhook.Truncate(rule, webhook.MaxFieldValue)
 	rn.tmu.Lock()
 	seq, id := rn.activeSeqLocked(r.now())
-	switch {
-	case seq == 0 && rn.detectedZero, seq != 0 && rn.detectedSeq == seq:
-		rn.tmu.Unlock()
-		return
-	case seq == 0:
-		rn.detectedZero = true
-	default:
-		rn.detectedSeq = seq
+	var cmd scenarios.Command
+	if seq != 0 {
+		cmd, _ = rn.sc.CommandByID(id)
+		if rule == "" {
+			rule = cmd.Detection
+		}
 	}
+	for _, d := range rn.detections {
+		if d.seq == seq || (seq == 0 && rule != "" && d.rule == rule) {
+			rn.tmu.Unlock()
+			return
+		}
+	}
+	// A response that came before this alert (Talon can beat Falcosidekick to the API) already
+	// answered it.
+	rn.detections = append(rn.detections, detection{seq: seq, rule: rule, response: cmd.Response,
+		answered: rn.earlyResponded[seq]})
 	rn.tmu.Unlock()
-	if seq == 0 {
-		r.publishCmd(rn, StateDetected, rule, 0)
-		return
-	}
-	if rule == "" {
-		cmd, _ := rn.sc.CommandByID(id)
-		rule = cmd.Detection
-	}
 	r.publishCmd(rn, StateDetected, rule, seq)
 }
 
-// terminalResponded publishes a `responded` run event once per command, backfilling `detected`
-// first if the response beat the alert (so a terminal run never shows responded before detected). A
-// terminate response then deletes the pod, which ends the run as `killed`; a quarantine leaves the
-// pod running.
-func (r *Runner) terminalResponded(rn *run) {
+// responseKind is the catalogue response a Talon actionner carries out: the label actionner is the
+// quarantine, the terminate actionner the terminate; "" for anything else.
+func responseKind(actionner string) string {
+	switch actionner {
+	case "kubernetes:label":
+		return "quarantine"
+	case "kubernetes:terminate":
+		return "terminate"
+	}
+	return ""
+}
+
+// terminalResponded publishes a `responded` run event, paired with the detection it answers: the
+// most recent detection of the run with no response yet whose command's catalogue response is what
+// Talon did (actionner; any detection when either side does not say). Not the command running when
+// the notification arrives: Talon answers an alert, and the visitor may well have typed the next
+// command by then - pairing by "running now" tied a quarantine of `beacon` to whatever came next.
+// Talon's notification names no Falco rule, so the kind of action is what there is to match on.
+//
+// With no such detection - Talon beat Falco's alert to the API, or answered an alert the API never
+// got - the response is published tied to the command running or just ended (best effort), and no
+// detection is made up for it: a `detected` invented at the instant of the response is a 0 ms
+// "response time" and, when it lands on another command, an unanswered detection. The alert, if it
+// comes, is then recorded as already answered. A repeat publishes nothing: a second notification for
+// a command already answered, or one tied to no command when every detection of its kind has been
+// answered. A terminate response deletes the pod, which ends the run as `killed`;
+// a quarantine leaves the pod running.
+func (r *Runner) terminalResponded(rn *run, actionner string) {
+	kind := responseKind(actionner)
 	rn.tmu.Lock()
-	seq, id := rn.activeSeqLocked(r.now())
-	var needDetect bool
-	if seq != 0 {
-		if rn.respondedSeq == seq {
+	seq, response := -1, kind
+	for i := len(rn.detections) - 1; i >= 0; i-- {
+		d := &rn.detections[i]
+		if !d.answered && (kind == "" || d.response == "" || d.response == kind) {
+			d.answered = true
+			seq = d.seq
+			if response == "" {
+				response = d.response
+			}
+			break
+		}
+	}
+	if seq < 0 {
+		var id string
+		seq, id = rn.activeSeqLocked(r.now())
+		repeat := rn.earlyResponded[seq]
+		for i := range rn.detections {
+			d := &rn.detections[i]
+			if d.seq == seq {
+				repeat = repeat || d.answered
+				d.answered = true
+			}
+			// Tied to no command, with every detection of its kind already answered: Talon
+			// answering a late repeat of an alert it has answered (a repeat alert is folded into
+			// its command's detection by terminalDetected), not something new.
+			if seq == 0 && d.answered && (kind == "" || d.response == "" || d.response == kind) {
+				repeat = true
+			}
+		}
+		if repeat {
 			rn.tmu.Unlock()
 			return
 		}
-		rn.respondedSeq = seq
-		needDetect = rn.detectedSeq != seq
-		rn.detectedSeq = seq
-	} else {
-		// A response that correlated to no command (it arrived more than the 2 s window after the
-		// command ended): still record the run was answered, just without a command_seq. Once only,
-		// so a retrying Talon cannot spam the feed. It needs a detection before it only if the run
-		// has none at all: an earlier command's `detected` already says the run was seen, and a
-		// backfilled one here would pair the response with a detection made up at the same instant.
-		if rn.respondedZero {
-			rn.tmu.Unlock()
-			return
+		if rn.earlyResponded == nil {
+			rn.earlyResponded = map[int]bool{}
 		}
-		rn.respondedZero = true
-		needDetect = !rn.detectedZero && rn.detectedSeq == 0
-		rn.detectedZero = true
+		rn.earlyResponded[seq] = true
+		if response == "" && seq != 0 {
+			cmd, _ := rn.sc.CommandByID(id)
+			response = cmd.Response
+		}
 	}
 	rn.tmu.Unlock()
-	var detection, response string
-	if seq != 0 {
-		cmd, _ := rn.sc.CommandByID(id)
-		detection, response = cmd.Detection, cmd.Response
-	}
-	if needDetect {
-		r.publishCmd(rn, StateDetected, detection, seq)
-	}
 	r.publishCmd(rn, StateResponded, response, seq)
 }
 

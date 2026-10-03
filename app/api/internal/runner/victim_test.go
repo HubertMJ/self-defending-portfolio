@@ -165,7 +165,7 @@ func TestVictimTerminatedByTalon(t *testing.T) {
 	// Talon deletes the pod, then reports.
 	_ = c.CoreV1().Pods("sandbox").Delete(context.Background(), pod, metav1.DeleteOptions{})
 	waitOrder(t, rec, "victim:gone")
-	r.ObserveTalon("sandbox", pod, "success")
+	r.ObserveTalon("sandbox", pod, "success", "")
 	<-done
 	o := rec.order()
 	if strings.Count(o, "victim:gone") != 1 || !strings.HasSuffix(o, "run:finished") ||
@@ -197,7 +197,7 @@ func TestVictimQuarantinedIsUnreachableNotGone(t *testing.T) {
 	app.srv.CloseClientConnections()
 	_ = app.srv.Listener.Close()
 	waitOrder(t, rec, "victim:unreachable")
-	r.ObserveTalon("sandbox", podName(sc.ID, id), "success")
+	r.ObserveTalon("sandbox", podName(sc.ID, id), "success", "")
 	<-done
 	if o := rec.order(); strings.Contains(o, "victim:gone") {
 		t.Fatalf("the API's own cleanup reported as a kill: %s", o)
@@ -216,7 +216,7 @@ func TestNoVictimProbeWithoutFlag(t *testing.T) {
 	id := start(t, r, sc, release)
 	rec.waitFor(t, StatePodReady)
 	time.Sleep(60 * time.Millisecond)
-	r.ObserveTalon("sandbox", podName(sc.ID, id), "success")
+	r.ObserveTalon("sandbox", podName(sc.ID, id), "success", "")
 	<-done
 	if n := len(rec.of("victim")); n != 0 {
 		t.Fatalf("%d victim events for a scenario without the app", n)
@@ -248,7 +248,7 @@ func TestVictimStartingAndDyingAreNotUnreachable(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 	_ = c.CoreV1().Pods("sandbox").Delete(context.Background(), pod, metav1.DeleteOptions{})
 	waitOrder(t, rec, "victim:gone")
-	r.ObserveTalon("sandbox", pod, "success")
+	r.ObserveTalon("sandbox", pod, "success", "")
 	<-done
 	if o := rec.order(); strings.Contains(o, "victim:unreachable") || strings.Count(o, "victim:") != 2 {
 		t.Fatalf("order: %s", o)

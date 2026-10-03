@@ -46,7 +46,7 @@ type Runner interface {
 	CommandSeqFor(namespace, pod string) int
 	ArmFor(namespace, pod string) string
 	ObserveFalco(namespace, pod, rule string)
-	ObserveTalon(namespace, pod, status string)
+	ObserveTalon(namespace, pod, status, actionner string)
 }
 
 // Poster is what the server needs from internal/posture.
@@ -339,7 +339,7 @@ func (s *Server) talon(w http.ResponseWriter, r *http.Request) {
 		if err := s.cfg.Hub.Publish("talon", ev); err != nil {
 			s.cfg.Log.Error("publish talon", "err", err)
 		}
-		s.cfg.Runner.ObserveTalon(ev.Namespace, ev.Pod, ev.Status)
+		s.cfg.Runner.ObserveTalon(ev.Namespace, ev.Pod, ev.Status, ev.Actionner)
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

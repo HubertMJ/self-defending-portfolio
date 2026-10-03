@@ -222,23 +222,24 @@ type run struct {
 	leave     chan struct{}   // closed by Leave (the visitor pressed "leave")
 	leaveOnce sync.Once
 
-	tmu           sync.Mutex
-	over          bool      // the run has ended; no new command is accepted
-	ready         bool      // the pod is Ready; commands are accepted only between ready and over
-	running       bool      // a command is executing right now
-	seq           int       // last seq handed out
-	count         int       // commands accepted so far (capped per run)
-	curSeq        int       // the running command's seq (0 when none running)
-	curCmdID      string    // the running command's id
-	lastSeq       int       // the last finished command's seq
-	lastCmdID     string    // the last finished command's id
-	lastEnded     time.Time // when the last command finished (for the 2 s command_seq window)
-	detectedSeq   int       // the seq a `detected` run event was last published for
-	respondedSeq  int       // the seq a `responded` run event was last published for
-	detectedZero  bool      // a detection correlated to no command was already published
-	respondedZero bool      // a response correlated to no command was already published
-	runOut        int       // bytes of command output published across the run (32 KiB budget)
-	runOutEvents  int       // `output` events published across the run (runOutEvents budget)
+	tmu       sync.Mutex
+	over      bool      // the run has ended; no new command is accepted
+	ready     bool      // the pod is Ready; commands are accepted only between ready and over
+	running   bool      // a command is executing right now
+	seq       int       // last seq handed out
+	count     int       // commands accepted so far (capped per run)
+	curSeq    int       // the running command's seq (0 when none running)
+	curCmdID  string    // the running command's id
+	lastSeq   int       // the last finished command's seq
+	lastCmdID string    // the last finished command's id
+	lastEnded time.Time // when the last command finished (for the 2 s command_seq window)
+	// detections are the `detected` run events published, in order, each paired with at most one
+	// `responded`; earlyResponded marks the seqs a response was published for before any detection
+	// (terminalResponded).
+	detections     []detection
+	earlyResponded map[int]bool
+	runOut         int // bytes of command output published across the run (32 KiB budget)
+	runOutEvents   int // `output` events published across the run (runOutEvents budget)
 }
 
 // commandReq is one resolved command the server asked the run goroutine to execute.
@@ -420,7 +421,9 @@ func (r *Runner) ObserveFalco(namespace, pod, rule string) {
 }
 
 // ObserveTalon correlates a successful Talon action with the active run whose pod it names.
-func (r *Runner) ObserveTalon(namespace, pod, status string) {
+// actionner is the Talon actionner that acted (kubernetes:label, kubernetes:terminate); a terminal
+// run uses it to pair the response with the detection it answers.
+func (r *Runner) ObserveTalon(namespace, pod, status, actionner string) {
 	if status != "success" {
 		return
 	}
@@ -435,7 +438,7 @@ func (r *Runner) ObserveTalon(namespace, pod, status string) {
 		})
 		return
 	}
-	r.terminalResponded(rn)
+	r.terminalResponded(rn, actionner)
 }
 
 // podKey indexes a run by the pod's namespace and name together: a compare run's guarded and

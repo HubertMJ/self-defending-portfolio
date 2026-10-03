@@ -24,7 +24,7 @@ func TestQuarantineNoVictimShortLinger(t *testing.T) {
 	id := start(t, r, sc, release)
 	pod := podName(sc.ID, id)
 	rec.waitFor(t, StatePodReady)
-	r.ObserveTalon("sandbox", pod, "success")
+	r.ObserveTalon("sandbox", pod, "success", "")
 	respondedAt := rec.waitFor(t, StateResponded).At
 	finishedAt := rec.waitFor(t, StateFinished).At
 	<-done
@@ -53,7 +53,7 @@ func TestQuarantineLingerEndsOnGone(t *testing.T) {
 	id := start(t, r, sc, release)
 	pod := podName(sc.ID, id)
 	rec.waitFor(t, StatePodReady)
-	r.ObserveTalon("sandbox", pod, "success")
+	r.ObserveTalon("sandbox", pod, "success", "")
 	respondedAt := rec.waitFor(t, StateResponded).At
 	// Something else deletes the pod mid-linger: the run must not wait the 30 s cap.
 	go func() {
@@ -85,7 +85,7 @@ func TestQuarantineLingersFromUnreachable(t *testing.T) {
 	id := start(t, r, sc, release)
 	pod := podName(sc.ID, id)
 	waitOrder(t, rec, "victim:defaced")
-	r.ObserveTalon("sandbox", pod, "success")
+	r.ObserveTalon("sandbox", pod, "success", "")
 	respondedAt := rec.waitFor(t, StateResponded).At
 	// The quarantine policy cuts the pod: the app stops answering.
 	app.srv.CloseClientConnections()
@@ -137,7 +137,7 @@ func TestQuarantineCutBeforeLingerCounts(t *testing.T) {
 	id := start(t, r, sc, release)
 	pod := podName(sc.ID, id)
 	waitOrder(t, rec, "victim:defaced")
-	r.ObserveTalon("sandbox", pod, "success") // the run goroutine now blocks publishing `responded`
+	r.ObserveTalon("sandbox", pod, "success", "") // the run goroutine now blocks publishing `responded`
 	app.srv.CloseClientConnections()
 	_ = app.srv.Listener.Close()
 	waitOrder(t, rec, "victim:unreachable") // the cut is on record before the linger has begun

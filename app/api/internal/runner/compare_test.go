@@ -56,7 +56,7 @@ func TestCompareTwoArms(t *testing.T) {
 	// The guarded arm responds (terminate): its pod is deleted; the unguarded one is held CompareHold,
 	// then the API deletes it - which the watch reports as a `pod` Deleted event for that arm.
 	_ = c.CoreV1().Pods("sandbox").Delete(context.Background(), guardedPod, metav1.DeleteOptions{})
-	r.ObserveTalon("sandbox", guardedPod, "success")
+	r.ObserveTalon("sandbox", guardedPod, "success", "")
 	finished := rec.waitFor(t, StateFinished)
 	waitArm(t, rec, "unguarded", true) // the twin was cleaned up
 	<-done
@@ -111,7 +111,7 @@ func TestCompareFallsBackWithoutTwin(t *testing.T) {
 	// cannot race the first Get on the fake clientset (a test-only client-go hazard).
 	rec.waitFor(t, StatePodReady)
 	_ = c.CoreV1().Pods("sandbox").Delete(context.Background(), podName(sc.ID, id), metav1.DeleteOptions{})
-	r.ObserveTalon("sandbox", podName(sc.ID, id), "success")
+	r.ObserveTalon("sandbox", podName(sc.ID, id), "success", "")
 	rec.waitFor(t, StateFinished)
 	<-done
 	if hasPodsMap(rec) {
@@ -202,7 +202,7 @@ func TestCompareTwinDeleteIsNotGone(t *testing.T) {
 	waitVictim(t, rec, "guarded", VictimUp)
 	waitVictim(t, rec, "unguarded", VictimUp)
 	_ = c.CoreV1().Pods("sandbox").Delete(context.Background(), guardedPod, metav1.DeleteOptions{})
-	r.ObserveTalon("sandbox", guardedPod, "success")
+	r.ObserveTalon("sandbox", guardedPod, "success", "")
 	rec.waitFor(t, StateFinished)
 	<-done
 	waitVictim(t, rec, "guarded", VictimGone)

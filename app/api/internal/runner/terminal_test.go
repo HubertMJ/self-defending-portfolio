@@ -135,7 +135,7 @@ func TestTerminalDetectedTerminateKillsRun(t *testing.T) {
 	rec.waitFor(t, StateDetected)
 	// Talon terminates: the pod is deleted, which ends the run as killed.
 	_ = c.CoreV1().Pods("sandbox").Delete(context.Background(), pod, metav1.DeleteOptions{})
-	r.ObserveTalon("sandbox", pod, "success")
+	r.ObserveTalon("sandbox", pod, "success", "")
 	ev := rec.waitFor(t, StateFinished)
 	if ev.Detail != "killed" {
 		t.Fatalf("finish detail = %q", ev.Detail)
@@ -185,7 +185,7 @@ func TestTerminalCommandKilledState(t *testing.T) {
 	waitCommand(t, rec, seq, CommandStarted)
 	// Talon terminates: the pod goes away under the running command.
 	_ = c.CoreV1().Pods("sandbox").Delete(context.Background(), pod, metav1.DeleteOptions{})
-	r.ObserveTalon("sandbox", pod, "success")
+	r.ObserveTalon("sandbox", pod, "success", "")
 	waitCommand(t, rec, seq, CommandKilled)
 	rec.waitFor(t, StateFinished)
 	<-done
@@ -264,7 +264,7 @@ func TestTerminalQuarantineThenTerminate(t *testing.T) {
 	s1 := sendCommand(t, r, id, token, "beacon")
 	waitCommand(t, rec, s1, CommandExited)
 	r.ObserveFalco("sandbox", pod, "SDP network tool in sandbox")
-	r.ObserveTalon("sandbox", pod, "success")
+	r.ObserveTalon("sandbox", pod, "success", "")
 	rec.waitFor(t, StateResponded)
 
 	// The run is still alive: another command runs.
@@ -276,7 +276,7 @@ func TestTerminalQuarantineThenTerminate(t *testing.T) {
 	waitCommand(t, rec, s3, CommandExited)
 	r.ObserveFalco("sandbox", pod, "Read sensitive file untrusted")
 	_ = c.CoreV1().Pods("sandbox").Delete(context.Background(), pod, metav1.DeleteOptions{})
-	r.ObserveTalon("sandbox", pod, "success")
+	r.ObserveTalon("sandbox", pod, "success", "")
 	ev := rec.waitFor(t, StateFinished)
 	if ev.Detail != "killed" {
 		t.Fatalf("finish detail = %q", ev.Detail)
@@ -396,20 +396,21 @@ func runStates(rec *recorder, state string) []RunEvent {
 }
 
 // A Falco alert that arrives more than 2 s after the command ended still becomes `detected` (without
-// a command_seq), and Talon's response after it is not preceded by a second, made-up detection; a
-// response with no alert at all gets one backfilled; a late response after a correlated detection
-// gets none. Before, the late alert was dropped and `responded` was published alone, so the stats
-// counted a run as answered but never detected.
+// a command_seq), and Talon's response is paired with it. A late response after a correlated
+// detection is paired with that command, not with "no command". A response with no alert at all is
+// published without a detection: none is made up for it. Before, the late alert was dropped and
+// `responded` was published alone, so the stats counted a run as answered but never detected.
 func TestTerminalLateAlertIsDetected(t *testing.T) {
 	cases := []struct {
 		name          string
 		falcoInWindow bool // the alert arrives while the command runs (correlated)
 		falcoLate     bool // the alert arrives after the window
 		wantDetected  []int
+		wantResponded int
 	}{
-		{"late alert, late response", false, true, []int{0}},
-		{"no alert, late response", false, false, []int{0}},
-		{"correlated alert, late response", true, false, []int{1}},
+		{"late alert, late response", false, true, []int{0}, 0},
+		{"no alert, late response", false, false, nil, 0},
+		{"correlated alert, late response", true, false, []int{1}, 1},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -449,14 +450,14 @@ func TestTerminalLateAlertIsDetected(t *testing.T) {
 				r.ObserveFalco("sandbox", pod, "SDP network tool in sandbox")
 				r.ObserveFalco("sandbox", pod, "SDP network tool in sandbox") // once per run
 			}
-			r.ObserveTalon("sandbox", pod, "success")
+			r.ObserveTalon("sandbox", pod, "success", "")
 			rec.waitFor(t, StateResponded)
 			_ = r.Leave(id, token)
 			rec.waitFor(t, StateFinished)
 			<-done
 
 			o := rec.order()
-			if !strings.Contains(o, "run:detected") || strings.Index(o, "run:detected") > strings.Index(o, "run:responded") {
+			if tc.wantDetected != nil && (!strings.Contains(o, "run:detected") || strings.Index(o, "run:detected") > strings.Index(o, "run:responded")) {
 				t.Fatalf("responded without a detection before it: %s", o)
 			}
 			var got []int
@@ -471,8 +472,8 @@ func TestTerminalLateAlertIsDetected(t *testing.T) {
 					t.Fatalf("late detection detail = %q, want the rule", d)
 				}
 			}
-			if rs := runStates(rec, StateResponded); len(rs) != 1 || rs[0].CommandSeq != 0 {
-				t.Fatalf("responded = %+v", rs)
+			if rs := runStates(rec, StateResponded); len(rs) != 1 || rs[0].CommandSeq != tc.wantResponded {
+				t.Fatalf("responded = %+v, want one with command_seq %d", rs, tc.wantResponded)
 			}
 		})
 	}
