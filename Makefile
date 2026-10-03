@@ -11,6 +11,7 @@ validate:        ## render every kustomization under cluster/ and validate it ag
 	@scripts/check-secrets-encrypted.sh
 	@scripts/check-cilium-values.sh
 	@scripts/check-web-csp.sh
+	@scripts/check-web-identity.sh
 	@scripts/check-image-digests.sh
 	@DOCKER="$(DOCKER)" scripts/validate-cluster.sh
 

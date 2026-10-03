@@ -45,6 +45,19 @@ COPY nginx.conf /etc/nginx/nginx.conf
 COPY security-headers.conf /etc/nginx/security-headers.conf
 COPY --from=build /src/dist/ /usr/share/nginx/html/
 
+# The commit and the Actions run this image was built from (build-images.yml passes github.sha and
+# github.run_id), served as /build.json so the page can show and link them (ADR 0035). Declared here,
+# after the package upgrade and the bundle copy, so a new commit invalidates only this layer and the
+# ones after it; the build stage and every earlier layer stay cached. A value of the wrong shape is
+# written as "" rather than trusted: the file is public and the page renders it. A local build
+# without the arguments publishes empty strings.
+ARG GIT_SHA=""
+ARG CI_RUN_ID=""
+RUN commit=""; run=""; \
+    case "$GIT_SHA" in *[!0-9a-f]*) ;; *) if [ "${#GIT_SHA}" -eq 40 ]; then commit=$GIT_SHA; fi ;; esac; \
+    case "$CI_RUN_ID" in *[!0-9]*) ;; *) if [ "${#CI_RUN_ID}" -ge 1 ] && [ "${#CI_RUN_ID}" -le 20 ]; then run=$CI_RUN_ID; fi ;; esac; \
+    printf '{"commit":"%s","ci_run_id":"%s"}\n' "$commit" "$run" > /usr/share/nginx/html/build.json
+
 # Owned by root, readable by all: the content must not be writable by the uid serving it.
 RUN chown -R root:root /usr/share/nginx/html \
  && chmod -R a=rX /usr/share/nginx/html \
