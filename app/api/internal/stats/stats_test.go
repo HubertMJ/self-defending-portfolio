@@ -194,3 +194,33 @@ func TestResponseMinHandlesZero(t *testing.T) {
 		t.Fatalf("response_ms = %+v, want min 0 max 900", m)
 	}
 }
+
+// A terminal run's response is measured against the detection of the same command: an unanswered
+// detection at 2 s and a 400 ms response to another command at 102 s record 400, not 100400. A
+// response tied to no detection records nothing.
+func TestResponsePairedByCommand(t *testing.T) {
+	c := New(newStore(t), nil)
+	base := time.Unix(1000, 0).UTC()
+	run := func(state string, at time.Duration, seq int) {
+		c.Record(ev("run", map[string]any{"run_id": "t", "scenario": "terminal", "state": state,
+			"at": base.Add(at), "command_seq": seq}))
+	}
+	run("queued", 0, 0)
+	run("detected", 2*time.Second, 1) // no response ever comes for command 1
+	run("detected", 102*time.Second, 9)
+	run("responded", 102400*time.Millisecond, 9)
+	run("responded", 110*time.Second, 4) // command 4 was never detected: not measured
+	run("finished", 111*time.Second, 0)
+	if got := c.Snapshot().ResponseMS; got != (ResponseMS{Last: 400, P50: 400, Min: 400, Max: 400}) {
+		t.Fatalf("response_ms = %+v, want 400 throughout", got)
+	}
+
+	// A response with no detection of its own at all records no latency.
+	c2 := New(newStore(t), nil)
+	c2.Record(ev("run", map[string]any{"run_id": "u", "scenario": "terminal", "state": "queued", "at": base}))
+	c2.Record(ev("run", map[string]any{"run_id": "u", "scenario": "terminal", "state": "detected", "at": base, "command_seq": 2}))
+	c2.Record(ev("run", map[string]any{"run_id": "u", "scenario": "terminal", "state": "responded", "at": base.Add(time.Second)}))
+	if got := c2.Snapshot().ResponseMS; got != (ResponseMS{}) {
+		t.Fatalf("unpaired response recorded %+v", got)
+	}
+}

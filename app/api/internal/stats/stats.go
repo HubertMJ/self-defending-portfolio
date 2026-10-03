@@ -124,11 +124,16 @@ type Collector struct {
 // runState is the in-flight view of one run, discarded when the run ends. The scenario is resolved
 // once, when the run is first seen, so Record does no catalogue I/O under the hub lock per event.
 type runState struct {
-	scenario     string
-	sc           scenarios.Scenario
-	interactive  bool
-	start        time.Time
-	detectedAt   time.Time
+	scenario    string
+	sc          scenarios.Scenario
+	interactive bool
+	start       time.Time
+	// detectedAt is when each command of the run was first detected, keyed by command_seq (0: a
+	// scripted run, or a terminal detection tied to no command); a response is measured only against
+	// the detection of the same key. answered marks the keys whose response was measured. Both are
+	// bounded by the commands a run accepts.
+	detectedAt   map[int]time.Time
+	answered     map[int]bool
 	detected     bool
 	responded    bool
 	counted      bool            // counted into Runs/ByScenario already
@@ -158,10 +163,11 @@ func (c *Collector) Record(ev events.Event) {
 
 func (c *Collector) recordRun(data []byte) {
 	var e struct {
-		RunID    string    `json:"run_id"`
-		Scenario string    `json:"scenario"`
-		State    string    `json:"state"`
-		At       time.Time `json:"at"`
+		RunID      string    `json:"run_id"`
+		Scenario   string    `json:"scenario"`
+		State      string    `json:"state"`
+		At         time.Time `json:"at"`
+		CommandSeq int       `json:"command_seq"`
 	}
 	if json.Unmarshal(data, &e) != nil || e.RunID == "" {
 		return
@@ -175,6 +181,7 @@ func (c *Collector) recordRun(data []byte) {
 		}
 		sc, _ := c.scenarios.Get(e.Scenario) // one lookup per run, not per event
 		rs = &runState{scenario: e.Scenario, sc: sc, interactive: sc.Interactive, start: e.At,
+			detectedAt: map[int]time.Time{}, answered: map[int]bool{},
 			objAttempted: map[string]bool{}, objAchieved: map[string]bool{}}
 		c.active[e.RunID] = rs
 	}
@@ -190,9 +197,11 @@ func (c *Collector) recordRun(data []byte) {
 			c.dirty = true
 		}
 	case "detected":
+		if _, seen := rs.detectedAt[e.CommandSeq]; !seen {
+			rs.detectedAt[e.CommandSeq] = e.At
+		}
 		if !rs.detected {
 			rs.detected = true
-			rs.detectedAt = e.At
 			c.scenarioStat(rs.scenario).Detected++
 			c.dirty = true
 		}
@@ -200,9 +209,15 @@ func (c *Collector) recordRun(data []byte) {
 		if !rs.responded {
 			rs.responded = true
 			c.scenarioStat(rs.scenario).Responded++
-			if rs.detected && !e.At.Before(rs.detectedAt) {
-				c.addResponse(e.At.Sub(rs.detectedAt).Milliseconds())
-			}
+			c.dirty = true
+		}
+		// The latency is the response to *this* detection: the one with the same command_seq (a
+		// terminal run may detect several commands, and an unanswered one at 2 s followed by a
+		// response to another at 102 s is not a 100 s response). No detection with that key - the
+		// response could not be tied to one - and nothing is recorded.
+		if at, ok := rs.detectedAt[e.CommandSeq]; ok && !rs.answered[e.CommandSeq] && !e.At.Before(at) {
+			rs.answered[e.CommandSeq] = true
+			c.addResponse(e.At.Sub(at).Milliseconds())
 			c.dirty = true
 		}
 	case "finished", "failed", "timeout":
