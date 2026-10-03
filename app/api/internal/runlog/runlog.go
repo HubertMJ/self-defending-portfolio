@@ -9,9 +9,15 @@
 // an event is not ours to choose (a Falco output line, a command line):
 //
 //   - the last 50 runs;
-//   - per run, at most 500 events and 256 KiB of event data (a run produces a few dozen events of
-//     well under 1 KiB; the caps are for a misbehaving rule that fires in a loop) - past either,
-//     later events are not kept and the run is marked truncated;
+//   - per run, at most 500 events and 256 KiB of event data (a scripted run produces a few dozen
+//     events of well under 1 KiB, a terminal run at most a few hundred - its `output` events are
+//     capped at 300 a run, ADR 0029; the caps are for a misbehaving rule that fires in a loop) - past
+//     either, later events are not kept and the run is marked truncated;
+//   - of those, a tenth of the events and an eighth of the bytes (50 events, 32 KiB) are reserved for
+//     the run's terminal-state events: the final `run` event (finished, failed, timeout) and each
+//     command's `exited`/`killed`. Other events stop at the rest, so however many alerts or output
+//     chunks a run produced, its record still ends with how each command and the run itself ended
+//     (a run accepts at most 30 commands, so 31 such events, a few KiB, fit the reserve);
 //   - all runs together, 8 MiB: past it the oldest runs are dropped first, and a run that would
 //     exceed it on its own is truncated.
 //
@@ -58,10 +64,13 @@ type Store struct {
 	maxEvents int
 	maxBytes  int // per run
 	maxTotal  int // all runs
-	total     int
-	order     []string // run ids, oldest first
-	runs      map[string]*Run
-	pods      map[string]string // pod name -> run id
+	// reserveEvents/reserveBytes of the per-run caps are kept for terminal-state events.
+	reserveEvents int
+	reserveBytes  int
+	total         int
+	order         []string // run ids, oldest first
+	runs          map[string]*Run
+	pods          map[string]string // pod name -> run id
 }
 
 // New keeps the last maxRuns runs, up to maxEvents events and maxBytes bytes of event data each,
@@ -80,7 +89,20 @@ func New(maxRuns, maxEvents, maxBytes, maxTotal int) *Store {
 		maxTotal = DefaultTotalBytes
 	}
 	return &Store{maxRuns: maxRuns, maxEvents: maxEvents, maxBytes: maxBytes, maxTotal: maxTotal,
+		reserveEvents: maxEvents / 10, reserveBytes: maxBytes / 8,
 		runs: map[string]*Run{}, pods: map[string]string{}}
+}
+
+// terminalState reports whether an event records how a run or one of its commands ended - what the
+// per-run reserve is kept for.
+func terminalState(typ, state string) bool {
+	switch typ {
+	case "run":
+		return state == "finished" || state == "failed" || state == "timeout"
+	case "command":
+		return state == "exited" || state == "killed"
+	}
+	return false
 }
 
 // Record files ev under its run: by run_id when the event has one (run, pod, victim), else by the
@@ -91,6 +113,7 @@ func (s *Store) Record(ev events.Event) {
 		RunID    string `json:"run_id"`
 		Scenario string `json:"scenario"`
 		Pod      string `json:"pod"`
+		State    string `json:"state"`
 	}
 	if json.Unmarshal(ev.Data, &key) != nil {
 		return
@@ -123,7 +146,11 @@ func (s *Store) Record(ev events.Event) {
 		s.pods[key.Pod] = id
 	}
 	size := len(ev.Data)
-	if len(run.Events) >= s.maxEvents || run.bytes+size > s.maxBytes {
+	maxEvents, maxBytes := s.maxEvents, s.maxBytes
+	if !terminalState(ev.Type, key.State) {
+		maxEvents, maxBytes = maxEvents-s.reserveEvents, maxBytes-s.reserveBytes
+	}
+	if len(run.Events) >= maxEvents || run.bytes+size > maxBytes {
 		run.Truncated = true
 		return
 	}

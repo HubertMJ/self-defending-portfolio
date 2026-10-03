@@ -92,9 +92,11 @@ func run(log *slog.Logger) error {
 		return err
 	}
 	scenarioStore := scenarios.NewStore(env("SCENARIOS_FILE", "/etc/portfolio-api/scenarios/scenarios.yaml"), log)
-	// The replay buffer covers the run in progress for a visitor who arrives mid-run: a run with its
-	// pod and victim evidence publishes a few dozen events (ADR 0021). Complete runs are in the run
-	// store, and the cross-visitor counters, both fed by the same tap so neither misses an event.
+	// The replay buffer covers a scripted run in progress for a visitor who arrives mid-run: such a
+	// run, with its pod and victim evidence, publishes a few dozen events (ADR 0021). A terminal
+	// session can publish a few hundred, so a viewer joining it mid-session gets its last 100 events
+	// and the page fetches the whole session from the run store (ADR 0029), which - like the
+	// cross-visitor counters - is fed by the same tap, so neither misses an event.
 	hub := events.NewHub(100)
 	runs := runlog.New(0, 0, 0, 0) // the defaults: 50 runs, 500 events and 256 KiB each, 8 MiB in all
 	statsCollector := stats.New(scenarioStore, nil)

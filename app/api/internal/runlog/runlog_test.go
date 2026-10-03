@@ -111,3 +111,32 @@ func TestByteBudgets(t *testing.T) {
 		t.Fatalf("lone run: truncated=%v total=%d", run.Truncated, s.total)
 	}
 }
+
+// However many other events a run produces, its terminal-state events - each command's end and the
+// run's final state - are kept: they have a reserve the rest cannot use. The run record therefore
+// ends with the final `run` event, and the per-run caps still hold.
+func TestTerminalStateEventsAreReserved(t *testing.T) {
+	s := New(10, 20, 0, 0) // a reserve of 2 events
+	rec := func(id uint64, typ, data string) { s.Record(events.Event{ID: id, Type: typ, Data: []byte(data)}) }
+	rec(1, "run", `{"run_id":"r","pod":"p","state":"started"}`)
+	for i := range 40 { // a rule firing in a loop, and output
+		rec(uint64(2+i), "falco", `{"pod":"p","rule":"loop"}`)
+		rec(uint64(100+i), "command", `{"run_id":"r","seq":1,"state":"output","chunk":"x"}`)
+	}
+	run, _ := s.Get("r")
+	if len(run.Events) != 18 || !run.Truncated {
+		t.Fatalf("other events: %d kept, truncated=%v; want 18 (20 minus the reserve of 2)", len(run.Events), run.Truncated)
+	}
+	rec(200, "command", `{"run_id":"r","seq":1,"state":"killed"}`)
+	rec(201, "run", `{"run_id":"r","state":"finished","detail":"killed"}`)
+	rec(202, "falco", `{"pod":"p","rule":"late"}`)
+	rec(203, "run", `{"run_id":"r","state":"timeout"}`) // past the whole cap: dropped
+	run, _ = s.Get("r")
+	if len(run.Events) != 20 {
+		t.Fatalf("%d events kept, want the cap of 20", len(run.Events))
+	}
+	if last := string(run.Events[19].Data); !strings.Contains(last, `"finished"`) ||
+		!strings.Contains(string(run.Events[18].Data), `"killed"`) {
+		t.Fatalf("the run does not end with its command's end and its final state: %s / %s", run.Events[18].Data, last)
+	}
+}
