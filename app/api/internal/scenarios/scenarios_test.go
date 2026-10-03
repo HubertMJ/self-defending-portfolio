@@ -422,3 +422,105 @@ func TestTerminalCommandValidationExtra(t *testing.T) {
 		}
 	}
 }
+
+// fields of one generated catalogue entry, for the bounds test.
+type entry struct {
+	title, scenarioDetection                             string
+	cmdDetection, technique, control, explain, objective string
+	input, env                                           string
+}
+
+func (e entry) yaml() string {
+	if e.scenarioDetection != "" { // a scripted scenario
+		return `
+- id: shell
+  title: "` + e.title + `"
+  detection: "` + e.scenarioDetection + `"
+  response: terminate
+  pod: {containers: [{name: victim, image: ` + img + `}]}
+  exec: {command: [id]}`
+	}
+	return `
+- id: terminal
+  title: "` + e.title + `"
+  interactive: true
+  objectives: [{id: recon, title: "` + e.objective + `"}]
+  commands:
+    - {id: a, input: "` + e.input + `", objective: recon, command: [cat, /etc/shadow], outcome: detected, layer: runtime,
+       technique: "` + e.technique + `", control: "` + e.control + `", explain: "` + e.explain + `",
+       detection: "` + e.cmdDetection + `", response: terminate}
+  pod: {containers: [{name: target, image: ` + img + `` + e.env + `}]}`
+}
+
+// Every human-readable catalogue field the page shows is bounded: at its bound it is accepted, one
+// character more and the entry is refused. And the per-run flag cannot be pinned by the catalogue, by
+// value or through valueFrom.
+func TestCatalogueBounds(t *testing.T) {
+	ok := entry{title: "T", cmdDetection: "Read sensitive file untrusted", technique: "T1003.008", control: "Falco",
+		explain: "x", objective: "Look", input: "cat /etc/shadow"}
+	cases := []struct {
+		name string
+		set  func(e *entry, s string)
+		max  int
+	}{
+		{"title", func(e *entry, s string) { e.title = s }, maxTitle},
+		{"scenario detection", func(e *entry, s string) { e.scenarioDetection = s }, maxDetection},
+		{"command detection", func(e *entry, s string) { e.cmdDetection = s }, maxDetection},
+		{"technique", func(e *entry, s string) { e.technique = s }, maxTechnique},
+		{"control", func(e *entry, s string) { e.control = s }, maxControl},
+		{"explain", func(e *entry, s string) { e.explain = s }, maxExplain},
+		{"objective title", func(e *entry, s string) { e.objective = s }, maxObjectiveTitle},
+		{"input", func(e *entry, s string) { e.input = s }, MaxCommandInput},
+	}
+	for _, c := range cases {
+		for _, n := range []int{c.max, c.max + 1} {
+			e := ok
+			c.set(&e, strings.Repeat("a", n))
+			list, errs := Parse([]byte(e.yaml()))
+			if valid := len(errs) == 0 && len(list) == 1; valid != (n == c.max) {
+				t.Errorf("%s of %d characters (bound %d): valid=%v errs=%v", c.name, n, c.max, valid, errs)
+			}
+		}
+	}
+	for name, env := range map[string]string{
+		"by value":     `, env: [{name: SDP_FLAG, value: "SDP{0000000000000000}"}]`,
+		"by valueFrom": `, env: [{name: SDP_FLAG, valueFrom: {fieldRef: {fieldPath: metadata.name}}}]`,
+	} {
+		e := ok
+		e.env = env
+		if list, errs := Parse([]byte(e.yaml())); len(errs) != 1 || len(list) != 0 {
+			t.Errorf("SDP_FLAG pinned %s: list=%d errs=%v", name, len(list), errs)
+		}
+	}
+}
+
+// The real catalogue. testdata/scenarios-real.yaml is a copy of the cluster branch's
+// cluster/infra/sandbox/scenarios/scenarios.yaml (taken with
+// `git show origin/interactive-cluster:cluster/infra/sandbox/scenarios/scenarios.yaml`); refresh it
+// whenever that catalogue changes, or this test checks a file production no longer serves. Every
+// entry must validate, and the terminal must load with its 14 commands and 5 objectives.
+func TestRealCatalogue(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("testdata", "scenarios-real.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	list, errs := Parse(data)
+	if len(errs) != 0 {
+		t.Fatalf("the real catalogue has invalid entries: %v", errs)
+	}
+	var terminal *Scenario
+	for i := range list {
+		if list[i].ID == "terminal" {
+			terminal = &list[i]
+		}
+	}
+	if terminal == nil || !terminal.Interactive {
+		t.Fatalf("no interactive terminal among %d scenarios", len(list))
+	}
+	if len(terminal.Commands) != 14 || len(terminal.Objectives) != 5 {
+		t.Fatalf("terminal: %d commands and %d objectives, want 14 and 5", len(terminal.Commands), len(terminal.Objectives))
+	}
+	if len(list) != 5 {
+		t.Fatalf("%d scenarios loaded, want the four one-click ones and the terminal", len(list))
+	}
+}

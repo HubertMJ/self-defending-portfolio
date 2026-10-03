@@ -54,6 +54,10 @@ const (
 	maxControl        = 200
 	maxExplain        = 2000
 	maxObjectiveTitle = 120
+	// The scenario title and a detection (a Falco rule name, on the scenario or a command) are shown
+	// on the page as well; the real ones are under 50 characters.
+	maxTitle     = 120
+	maxDetection = 120
 )
 
 // flagEnv is the environment variable the runner sets per terminal run; the catalogue must not
@@ -272,6 +276,12 @@ func (s *Scenario) validate() error {
 	if strings.TrimSpace(s.Title) == "" {
 		return errors.New("title is empty")
 	}
+	if !printableText(s.Title, maxTitle) {
+		return fmt.Errorf("title is not printable or is over %d characters", maxTitle)
+	}
+	if s.Detection != "" && !printableText(s.Detection, maxDetection) {
+		return fmt.Errorf("detection is not printable or is over %d characters", maxDetection)
+	}
 	if s.Interactive {
 		// A terminal scenario carries no scripted attack of its own: its detection/response are
 		// empty (each command has its own), and it runs no exec/pre_exec.
@@ -461,6 +471,9 @@ func (c Command) validate(objectives, inputs map[string]bool) error {
 	if c.Outcome == "detected" {
 		if strings.TrimSpace(c.Detection) == "" {
 			return errors.New("a detected command needs a detection (the Falco rule)")
+		}
+		if !printableText(c.Detection, maxDetection) {
+			return fmt.Errorf("detection is not printable or is over %d characters", maxDetection)
 		}
 		if c.Response != "terminate" && c.Response != "quarantine" {
 			return fmt.Errorf("a detected command's response %q is not terminate or quarantine", c.Response)
