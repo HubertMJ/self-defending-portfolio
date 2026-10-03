@@ -22,6 +22,15 @@ async function mockCalls(page: Page): Promise<string[]> {
   return page.evaluate(() => (window as unknown as { sdpMock: { calls: string[] } }).sdpMock.calls.slice());
 }
 
+/** Appends a wide fallback font to the page's stylesheet as it is served (see the credibility tests). */
+async function wideFonts(page: Page) {
+  const wide = '\n* { font-family: "DejaVu Sans", Verdana, sans-serif !important; letter-spacing: 0.03em !important; }\ncode, pre, kbd, samp, .term, .chip, .facts--mono, .btn--small, .brand { font-family: "DejaVu Sans Mono", monospace !important; }\n';
+  await page.route(/\/assets\/styles-[^/]*\.css$/, async (route) => {
+    const res = await route.fetch();
+    await route.fulfill({ response: res, body: (await res.text()) + wide });
+  });
+}
+
 async function noHorizontalScroll(page: Page) {
   const [scroll, client] = await page.evaluate(() => [document.documentElement.scrollWidth, document.documentElement.clientWidth]);
   expect(scroll, "page must not scroll horizontally").toBeLessThanOrEqual(client);
@@ -792,13 +801,45 @@ test.describe("credibility on the production bundle (ADR 0035; serve.mjs --termi
     expect(await page.evaluate(() => (window as unknown as { tickerMutations: number }).tickerMutations)).toBe(0);
   });
 
-  test("no horizontal scroll at 360 px with the live policy names", async ({ page }) => {
-    await page.setViewportSize({ width: 360, height: 780 });
-    await page.goto(CRED);
-    await expect(page.locator("#posture-panel table", { hasText: "autogen-validate-registries" })).toBeAttached();
-    await expect(page.locator("#evidence-card .evcard")).toBeVisible();
-    await noHorizontalScroll(page);
-  });
+  // The site uses the visitor's system fonts, and a CI runner's (or a visitor's) can be much wider
+  // than the ones this suite usually runs with. The same invariants hold with a deliberately wide
+  // fallback forced in: DejaVu Sans (Verdana, else the default sans) with extra letter spacing,
+  // appended to the stylesheet on its way in (an injected <style> would break the page's CSP).
+  for (const wide of [false, true]) {
+    const fonts = wide ? " (a wide font forced in)" : "";
+
+    test(`no horizontal scroll at 360 and 320 px with the live policy names${fonts}`, async ({ page }) => {
+      if (wide) await wideFonts(page);
+      for (const width of [360, 320]) {
+        await page.setViewportSize({ width, height: 780 });
+        await page.goto(CRED);
+        if (wide) expect(await page.evaluate(() => getComputedStyle(document.body).fontFamily)).toContain("DejaVu Sans");
+        await expect(page.locator("#posture-panel table", { hasText: "autogen-validate-registries" })).toBeAttached();
+        await expect(page.locator("#evidence-card .evcard")).toBeVisible();
+        await expect(page.locator("#console .hop").first()).toBeVisible();
+        await noHorizontalScroll(page);
+      }
+    });
+
+    test(`the strip stays above the fold at 1280x720 with headroom${fonts}`, async ({ page, isMobile }) => {
+      test.skip(isMobile, "a desktop viewport");
+      if (wide) await wideFonts(page);
+      await page.setViewportSize({ width: 1280, height: 720 });
+      await page.goto(CRED);
+      if (wide) expect(await page.evaluate(() => getComputedStyle(document.body).fontFamily)).toContain("DejaVu Sans");
+      await expect(page.locator("#verify-strip [data-image=\"api\"]")).toBeVisible();
+      await expect(page.locator("#evidence-card .evcard")).toBeVisible();
+      const m = await page.evaluate(() => ({
+        strip: (document.getElementById("verify-strip") as HTMLElement).getBoundingClientRect().bottom,
+        card: (document.getElementById("evidence-card") as HTMLElement).getBoundingClientRect().top,
+        titleLines: Math.round((document.getElementById("hero-title") as HTMLElement).getBoundingClientRect().height / parseFloat(getComputedStyle(document.getElementById("hero-title") as HTMLElement).lineHeight)),
+      }));
+      // 660 with whatever fonts are installed leaves room for a wider one; the wide font must still fit 720.
+      expect(m.strip).toBeLessThanOrEqual(wide ? 720 : 660);
+      expect(m.card).toBeLessThan(720);
+      expect(m.titleLines, "the name stays on one line").toBe(1);
+    });
+  }
 
   test("?mock=1 on the production bundle is an ordinary query: no banner, no mock, the real header", async ({ page }) => {
     await page.goto(`${CRED}?mock=1`);
