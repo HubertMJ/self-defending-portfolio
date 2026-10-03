@@ -207,11 +207,11 @@ func TestPostureViolationFiles(t *testing.T) {
 }
 
 // tickEnv is a bare server for the stream tests: its own hub, a fixed clock.
-func tickEnv(t *testing.T) (*events.Hub, *httptest.Server) {
+func tickEnv(t *testing.T, heartbeat time.Duration) (*events.Hub, *httptest.Server) {
 	t.Helper()
 	hub := events.NewHub(10)
 	clk := time.Date(2026, 10, 3, 19, 0, 0, 123000000, time.UTC)
-	srv := New(Config{Hub: hub, Streams: limits.NewConns(4, 10), Heartbeat: 40 * time.Millisecond,
+	srv := New(Config{Hub: hub, Streams: limits.NewConns(4, 10), Heartbeat: heartbeat,
 		Now: func() time.Time { return clk }, StartedAt: time.Date(2026, 10, 3, 18, 55, 0, 0, time.UTC)})
 	ts := httptest.NewServer(srv.Public())
 	t.Cleanup(ts.Close)
@@ -242,9 +242,13 @@ func readStream(t *testing.T, url, lastID string, n int) string {
 const tickFrameWant = "event: tick\ndata: {\"at\":\"2026-10-03T19:00:00.123Z\",\"started_at\":\"2026-10-03T18:55:00Z\"}\n\n"
 
 func TestEventStreamTick(t *testing.T) {
-	hub, ts := tickEnv(t)
-	_ = hub.Publish("run", map[string]string{"run_id": "r1", "state": "queued"})
-	_ = hub.Publish("run", map[string]string{"run_id": "r1", "state": "started"})
+	hub, ts := tickEnv(t, 40*time.Millisecond)
+	// slow never beats within a read's 3 s: a tick there can only be the one right after the replay.
+	slowHub, slow := tickEnv(t, time.Hour)
+	for _, h := range []*events.Hub{hub, slowHub} {
+		_ = h.Publish("run", map[string]string{"run_id": "r1", "state": "queued"})
+		_ = h.Publish("run", map[string]string{"run_id": "r1", "state": "started"})
+	}
 	f1 := "id: 1\nevent: run\ndata: {\"run_id\":\"r1\",\"state\":\"queued\"}\n\n"
 	f2 := "id: 2\nevent: run\ndata: {\"run_id\":\"r1\",\"state\":\"started\"}\n\n"
 
@@ -260,7 +264,7 @@ func TestEventStreamTick(t *testing.T) {
 	}
 	// Resuming after event 1 with ticks: only event 2 is replayed, then the tick.
 	resumed := streamPreamble + f2 + tickFrameWant
-	if got := readStream(t, ts.URL+"/api/events?tick=1", "1", len(resumed)); got != resumed {
+	if got := readStream(t, slow.URL+"/api/events?tick=1", "1", len(resumed)); got != resumed {
 		t.Fatalf("resumed tick stream =\n%q\nwant\n%q", got, resumed)
 	}
 	if got := readStream(t, ts.URL+"/api/events?tick=yes", "", len(plain)); got != plain {

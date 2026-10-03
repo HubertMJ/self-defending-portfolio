@@ -158,6 +158,12 @@ func TestWindowSanitising(t *testing.T) {
 		t.Fatalf("window_since %s last_run_at %s, want both clamped to %s", a.WindowSince, a.LastRunAt, t0)
 	}
 
+	// validateAgg clamps on its own, whatever the merge with the running collector does afterwards.
+	direct := agg{WindowSince: t0.Add(time.Hour), LastRunAt: t0.Add(time.Hour)}
+	if err := validateAgg(&direct, t0); err != nil || !direct.WindowSince.Equal(t0) || !direct.LastRunAt.Equal(t0) {
+		t.Fatalf("validateAgg: %v window_since %s last_run_at %s, want both %s", err, direct.WindowSince, direct.LastRunAt, t0)
+	}
+
 	inRange := func(n int) []map[string]any {
 		bs := make([]map[string]any, n)
 		for i := range bs {

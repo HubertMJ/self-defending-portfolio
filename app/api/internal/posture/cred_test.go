@@ -272,6 +272,10 @@ func TestDeployedImages(t *testing.T) {
 	kube := fake.NewClientset(
 		runningPod("portfolio-api", "api-1", own+"api@"+digestN('b')),
 		runningPod("portfolio-api", "api-2", own+"api@"+digestN('a')),
+		runningPod("portfolio-api", "api-4", own+"api@"+digestN('7')),
+		runningPod("portfolio-api", "api-5", own+"api@"+digestN('5')),
+		runningPod("portfolio-api", "api-6", own+"api@"+digestN('9')),
+		runningPod("portfolio-api", "api-7", own+"api@"+digestN('0')),
 		runningPod("portfolio-api", "api-3", own+"api@"+digestN('b')), // same digest: once
 		runningPod("hello", "hello-1", own+"web@"+digestN('d')),
 		runningPod("hello", "hello-2", own+"web@"+digestN('d')),
@@ -291,7 +295,8 @@ func TestDeployedImages(t *testing.T) {
 	now := clk
 	a := New(Config{Dynamic: newDyn(), Kube: kube, Now: func() time.Time { return now }})
 	d := a.Get(context.Background()).Deployed
-	wantAPI := []string{own + "api@" + digestN('a'), own + "api@" + digestN('b')}
+	wantAPI := []string{own + "api@" + digestN('0'), own + "api@" + digestN('5'), own + "api@" + digestN('7'),
+		own + "api@" + digestN('9'), own + "api@" + digestN('a'), own + "api@" + digestN('b')}
 	wantWeb := []string{own + "web@" + digestN('d')}
 	if !reflect.DeepEqual(d.API, wantAPI) || !reflect.DeepEqual(d.Web, wantWeb) || d.ObservedAt == nil || !d.ObservedAt.Equal(clk) {
 		t.Fatalf("deployed = %+v", d)
