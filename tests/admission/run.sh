@@ -2,6 +2,8 @@
 # Phase 3's Definition of Done, as an executable assertion: an image this project's workflow did not
 # sign does not get into the cluster. Since phase 4 (plan commit 9, ADR 0012) also: a privileged Pod
 # and a Pod without requests and limits do not get in either (workload-policy-pods.yaml, in `default`).
+# Since ADR 0031 also: a Pod in `sandbox` or `sandbox-unguarded` without a deadline of at most 120 s does
+# not get in, and one at 120 s does (sandbox-deadline-pods.yaml; its offline twin is ./offline.sh).
 #
 # Everything here is `kubectl apply --dry-run=server`, which runs the full admission chain -- the
 # built-in Pod Security admission plugin and then Kyverno's webhook -- and discards the object. No Pod
@@ -9,7 +11,10 @@
 #
 # Each test Pod declares which policy is expected to reject it in the annotation
 # tests.hubertjablon.ski/expect-policy, so this script needs no table of its own and a new case is a
-# new Pod document in one of the manifests.
+# new Pod document in one of the manifests. A Pod annotated tests.hubertjablon.ski/expect-admitted: "true"
+# must instead be admitted. `image: SCENARIO_IMAGE` in a manifest is replaced by the scenario image
+# pinned in cluster/infra/sandbox/scenarios/scenarios.yaml (signed by the build workflow), or by
+# $SCENARIO_IMAGE when set.
 #
 #   KUBECONFIG=... tests/admission/run.sh
 #   KUBECONFIG=... SIGNED_IMAGE=ghcr.io/hubertmj/self-defending-portfolio/web@sha256:... tests/admission/run.sh
@@ -23,7 +28,8 @@ cd "$(dirname "$0")"
 
 KUBECTL=${KUBECTL:-kubectl}
 NAMESPACE=${NAMESPACE:-hello}
-MANIFESTS=(unsigned-pod.yaml latest-pod.yaml workload-policy-pods.yaml)
+MANIFESTS=(unsigned-pod.yaml latest-pod.yaml workload-policy-pods.yaml sandbox-deadline-pods.yaml)
+SCENARIO_IMAGE=${SCENARIO_IMAGE:-$(sed -n 's/^ *image: &scenario-image //p' ../../cluster/infra/sandbox/scenarios/scenarios.yaml)}
 
 WORK_DIR=$(mktemp -d)
 trap 'rm -rf "$WORK_DIR"' EXIT
@@ -43,6 +49,14 @@ step "preflight"
 
 $KUBECTL get namespace "$NAMESPACE" >/dev/null 2>&1 \
   || { echo "run.sh: namespace $NAMESPACE does not exist; is the hello Application synced?" >&2; exit 1; }
+for ns in sandbox sandbox-unguarded; do
+  $KUBECTL get namespace "$ns" >/dev/null 2>&1 \
+    || { echo "run.sh: namespace $ns does not exist; are the sandbox Applications synced?" >&2; exit 1; }
+done
+case "$SCENARIO_IMAGE" in
+  *@sha256:*) ;;
+  *) echo "run.sh: no scenario image digest for the sandbox Pods (set SCENARIO_IMAGE=name@sha256:...)" >&2; exit 1 ;;
+esac
 
 if ! $KUBECTL -n kyverno rollout status deploy/kyverno-admission-controller --timeout=60s >/dev/null 2>&1; then
   echo "run.sh: the Kyverno admission controller is not ready; nothing below would be meaningful" >&2
@@ -82,22 +96,36 @@ done
 # multi-document apply reports only the first rejection and would hide a second policy that silently
 # stopped working.
 
-step "every unsigned, foreign or mutable-tag Pod is rejected"
+step "every unsigned, foreign, mutable-tag or unbounded Pod is rejected; a bounded sandbox Pod is admitted"
 
 doc_count=0
+admitted_count=0
 for manifest in "${MANIFESTS[@]}"; do
   awk -v out="$WORK_DIR" -v base="${manifest%.yaml}" '
     /^---[[:space:]]*$/ { n++; next }
     { print > (out "/" base "." n ".yaml") }
   ' n=0 "$manifest"
 done
+sed -i "s#SCENARIO_IMAGE#$SCENARIO_IMAGE#" "$WORK_DIR"/*.yaml
 
 for doc in "$WORK_DIR"/*.yaml; do
   expected=$(sed -n 's#^[[:space:]]*tests\.hubertjablon\.ski/expect-policy:[[:space:]]*##p' "$doc")
+  name=$(sed -n 's/^  name:[[:space:]]*//p' "$doc" | head -1)
+  if grep -qE '^[[:space:]]*tests\.hubertjablon\.ski/expect-admitted:[[:space:]]*"?true"?$' "$doc"; then
+    # The other half of a bound: at the limit, the whole chain admits it. A dry run still counts
+    # against the namespace's ResourceQuota, so a full sandbox refuses it with a quota message.
+    admitted_count=$((admitted_count + 1))
+    if output=$($KUBECTL apply --dry-run=server -f "$doc" 2>&1); then
+      pass "$name admitted"
+    else
+      fail "$name was REJECTED; it should have been admitted"
+      printf '        %s\n' "$output"
+    fi
+    continue
+  fi
   # awk emits a file per inter-document gap, so a leading `---` leaves one fragment holding only the
   # file's header comment. No annotation, nothing to assert.
   [ -n "$expected" ] || continue
-  name=$(sed -n 's/^  name:[[:space:]]*//p' "$doc" | head -1)
   doc_count=$((doc_count + 1))
 
   if output=$($KUBECTL apply --dry-run=server -f "$doc" 2>&1); then
@@ -111,7 +139,8 @@ for doc in "$WORK_DIR"/*.yaml; do
   fi
 done
 
-[ "$doc_count" -ge 5 ] || fail "expected at least 5 test Pods, found $doc_count (did a manifest lose its annotation?)"
+[ "$doc_count" -ge 9 ] || fail "expected at least 9 test Pods, found $doc_count (did a manifest lose its annotation?)"
+[ "$admitted_count" -ge 2 ] || fail "expected at least 2 Pods to be admitted, found $admitted_count"
 
 # ---------------------------------------------------------------------------- the admission
 #

@@ -1,0 +1,248 @@
+# require-sandbox-deadline (ADR 0031): a Pod in `sandbox` or the unguarded twin `sandbox-unguarded` is
+# refused unless it sets a positive activeDeadlineSeconds of at most 120. One violation per refused Pod
+# (no deadline; 121), in each namespace, and the bound itself (120) admitted in each - a policy that
+# refused every sandbox pod would be an outage of the demo, not a working bound.
+#
+# Read by two runners, each off the annotations, as for the other manifests here:
+#   tests/admission/run.sh      against the live cluster, `kubectl apply --dry-run=server`: the full
+#                               admission chain, so everything but the deadline must be valid there -
+#                               PSS restricted (both namespaces enforce it), resources inside the
+#                               sandbox LimitRange, and a signed image from this project's registry
+#                               (verify-portfolio-images and restrict-image-registries cover both
+#                               namespaces). The admitted Pods count against the namespace's
+#                               ResourceQuota of 3 pods even in a dry run: run it when the sandbox is
+#                               not full.
+#   tests/admission/offline.sh  without a cluster: the Kyverno CLI, at the controller's version, judges
+#                               each Pod against this one policy.
+# `image: SCENARIO_IMAGE` is replaced by both runners with the scenario image pinned in
+# cluster/infra/sandbox/scenarios/scenarios.yaml (signed by the build workflow), so a digest bump
+# needs no edit here. The command is /bin/false and nothing is ever scheduled: a dry run discards the
+# object.
+#
+# tests.hubertjablon.ski/expect-admitted: "true" marks a Pod that must be admitted.
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: admission-test-deadline-missing
+  namespace: sandbox
+  labels:
+    app.kubernetes.io/name: admission-test
+  annotations:
+    tests.hubertjablon.ski/expect-policy: require-sandbox-deadline
+spec:
+  # The one violation: no activeDeadlineSeconds at all.
+  restartPolicy: Never
+  automountServiceAccountToken: false
+  enableServiceLinks: false
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 10001
+    runAsGroup: 10001
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: probe
+      image: SCENARIO_IMAGE
+      command: ["/bin/false"]
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: ["ALL"]
+      resources:
+        requests:
+          cpu: 10m
+          memory: 16Mi
+        limits:
+          cpu: 100m
+          memory: 32Mi
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: admission-test-deadline-missing-twin
+  namespace: sandbox-unguarded
+  labels:
+    app.kubernetes.io/name: admission-test
+  annotations:
+    tests.hubertjablon.ski/expect-policy: require-sandbox-deadline
+spec:
+  # The same, in the unguarded twin.
+  restartPolicy: Never
+  automountServiceAccountToken: false
+  enableServiceLinks: false
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 10001
+    runAsGroup: 10001
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: probe
+      image: SCENARIO_IMAGE
+      command: ["/bin/false"]
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: ["ALL"]
+      resources:
+        requests:
+          cpu: 10m
+          memory: 16Mi
+        limits:
+          cpu: 100m
+          memory: 32Mi
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: admission-test-deadline-121
+  namespace: sandbox
+  labels:
+    app.kubernetes.io/name: admission-test
+  annotations:
+    tests.hubertjablon.ski/expect-policy: require-sandbox-deadline
+spec:
+  # The one violation: one second over the 120 s bound.
+  activeDeadlineSeconds: 121
+  restartPolicy: Never
+  automountServiceAccountToken: false
+  enableServiceLinks: false
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 10001
+    runAsGroup: 10001
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: probe
+      image: SCENARIO_IMAGE
+      command: ["/bin/false"]
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: ["ALL"]
+      resources:
+        requests:
+          cpu: 10m
+          memory: 16Mi
+        limits:
+          cpu: 100m
+          memory: 32Mi
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: admission-test-deadline-121-twin
+  namespace: sandbox-unguarded
+  labels:
+    app.kubernetes.io/name: admission-test
+  annotations:
+    tests.hubertjablon.ski/expect-policy: require-sandbox-deadline
+spec:
+  # The same, in the unguarded twin.
+  activeDeadlineSeconds: 121
+  restartPolicy: Never
+  automountServiceAccountToken: false
+  enableServiceLinks: false
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 10001
+    runAsGroup: 10001
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: probe
+      image: SCENARIO_IMAGE
+      command: ["/bin/false"]
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: ["ALL"]
+      resources:
+        requests:
+          cpu: 10m
+          memory: 16Mi
+        limits:
+          cpu: 100m
+          memory: 32Mi
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: admission-test-deadline-120
+  namespace: sandbox
+  labels:
+    app.kubernetes.io/name: admission-test
+  annotations:
+    tests.hubertjablon.ski/expect-admitted: "true"
+spec:
+  # At the bound: admitted.
+  activeDeadlineSeconds: 120
+  restartPolicy: Never
+  automountServiceAccountToken: false
+  enableServiceLinks: false
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 10001
+    runAsGroup: 10001
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: probe
+      image: SCENARIO_IMAGE
+      command: ["/bin/false"]
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: ["ALL"]
+      resources:
+        requests:
+          cpu: 10m
+          memory: 16Mi
+        limits:
+          cpu: 100m
+          memory: 32Mi
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: admission-test-deadline-120-twin
+  namespace: sandbox-unguarded
+  labels:
+    app.kubernetes.io/name: admission-test
+  annotations:
+    tests.hubertjablon.ski/expect-admitted: "true"
+spec:
+  # At the bound, in the twin: admitted.
+  activeDeadlineSeconds: 120
+  restartPolicy: Never
+  automountServiceAccountToken: false
+  enableServiceLinks: false
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 10001
+    runAsGroup: 10001
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: probe
+      image: SCENARIO_IMAGE
+      command: ["/bin/false"]
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: ["ALL"]
+      resources:
+        requests:
+          cpu: 10m
+          memory: 16Mi
+        limits:
+          cpu: 100m
+          memory: 32Mi
