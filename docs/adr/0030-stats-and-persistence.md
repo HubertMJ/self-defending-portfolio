@@ -79,3 +79,32 @@ no-ops so the API runs the same without them.
   because of this ConfigMap, and a corrupted blob falls back to zero rather than failing start-up; an unreadable one is not overwritten. The
   earlier "in memory only" open item (ADR 0015) is narrowed: the cross-visitor counters now persist; the
   rate-limit windows and the per-run history still do not.
+
+## Amendment 2026-10-03: hourly buckets for the 24 h window, and the last run's time (ADR 0035)
+
+**Context.** The posture's 24 h Falco/Talon counters lived in memory (ADR 0015) and reset on every rollout,
+next to this ADR's persisted totals, so the page contradicted itself. The hero's "last run" also came only
+from the live feed, so after a restart it showed nothing although runs had happened.
+
+**Decision.** The blob gains `Hourly` (one bucket per unix hour with runs, detected, responded, Falco
+alerts and Talon actions), `WindowSince` (when this window started counting) and `LastRunAt` (the time of
+the most recent `queued` run event; one timestamp, no identifier). `/api/stats` publishes `last_run_at` and
+`last_24h` (`since` and the five sums over the current hour and the 23 before it); the posture's 24 h counts
+read the same buckets, so the two pages cannot disagree beyond the documented in-flight exception (ADR
+0035). A run's runs, detected and responded are all counted in the hour it was queued, so
+`runs >= detected >= responded` holds in every window; alerts and actions are counted in the hour they
+arrive. Buckets older than the window are pruned on every write; nothing else about writing changes (one
+object, `get`/`update`, written only after a successful read, at most once a minute when dirty).
+
+Loading **sanitises** the new fields instead of rejecting the blob: buckets outside
+[current hour - 23, current hour + 1] are dropped, duplicate hours are summed, a future `WindowSince` or
+`LastRunAt` is clamped to now. The blob is still rejected as invalid (and so counts as unparseable) for a
+negative count, a count above 2^40, or more than 25 buckets after sanitising. A late first read sums
+buckets by hour and keeps the earliest `WindowSince` and the latest `LastRunAt`. A blob written before this
+amendment loads with every all-time field unchanged, no buckets and `WindowSince` = now.
+
+**Consequences.** The 24 h numbers survive a rollout and are labelled with `since` (23 to 24 hours, hour
+granularity). Rolling back to an API without these fields is safe for the totals - it ignores unknown
+fields - but its next write drops `Hourly`, `WindowSince` and `LastRunAt`, so the window starts again when
+the newer API returns. The blob grows by at most 25 small buckets. The open item narrows again: the
+rate-limit windows and the per-run history are what remain in memory.
