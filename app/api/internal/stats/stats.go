@@ -407,10 +407,13 @@ func (c *Collector) Marshal() ([]byte, error) {
 	return json.Marshal(c.a)
 }
 
-// Load replaces the counters from a previous Marshal. A blank or unparseable or invalid blob leaves
-// the fresh (zero) counters in place and returns an error for the caller to log - a corrupted
-// ConfigMap must not panic or poison the counters. The since timestamp is kept so the page can say
-// how long the totals have been collected.
+// Load adds the counters from a previous Marshal to what this collector has counted so far. At
+// start-up that is nothing, so the persisted totals are installed as they are; when the first read
+// only succeeds later (configmap.go retries it), the runs counted in the meantime are kept on top of
+// the persisted totals rather than overwritten. A blank or unparseable or invalid blob changes
+// nothing and returns an error for the caller to log - a corrupted ConfigMap must not panic or
+// poison the counters. The persisted since timestamp is kept so the page can say how long the
+// totals have been collected.
 func (c *Collector) Load(data []byte) error {
 	if len(data) == 0 {
 		return nil
@@ -427,9 +430,55 @@ func (c *Collector) Load(data []byte) error {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.a = &a
-	c.dirty = false
+	c.a = mergeAgg(&a, c.a)
 	return nil
+}
+
+// mergeAgg returns the persisted aggregate p with cur - counted since start-up, so more recent - added
+// to it: counters summed, the best kept, the latency extremes combined, and cur's samples appended
+// after p's within the ring caps.
+func mergeAgg(p, cur *agg) *agg {
+	if cur.Since.Before(p.Since) {
+		p.Since = cur.Since
+	}
+	p.Runs += cur.Runs
+	p.Unanswered += cur.Unanswered
+	p.TerminalRuns += cur.TerminalRuns
+	p.BestObjectives = max(p.BestObjectives, cur.BestObjectives)
+	for k, v := range cur.ByScenario {
+		if o := p.ByScenario[k]; o != nil {
+			v = &ScenarioStat{Runs: o.Runs + v.Runs, Detected: o.Detected + v.Detected, Responded: o.Responded + v.Responded}
+		}
+		p.ByScenario[k] = v
+	}
+	for k, v := range cur.Commands {
+		if o := p.Commands[k]; o != nil {
+			v = &CommandStat{Attempts: o.Attempts + v.Attempts, Allowed: o.Allowed + v.Allowed,
+				Prevented: o.Prevented + v.Prevented, Detected: o.Detected + v.Detected}
+		}
+		p.Commands[k] = v
+	}
+	for k, v := range cur.Objectives {
+		if o := p.Objectives[k]; o != nil {
+			v = &ObjectiveStat{Attempts: o.Attempts + v.Attempts, Achieved: o.Achieved + v.Achieved}
+		}
+		p.Objectives[k] = v
+	}
+	if cur.RespCount > 0 {
+		if p.RespCount == 0 || cur.RespMin < p.RespMin {
+			p.RespMin = cur.RespMin
+		}
+		p.RespMax = max(p.RespMax, cur.RespMax)
+		p.RespLast = cur.RespLast
+		p.RespCount += cur.RespCount
+	}
+	for _, v := range cur.RespSamples {
+		p.RespSamples = appendCapped(p.RespSamples, v, maxResponseSamples)
+	}
+	for _, v := range cur.SurvivalSamples {
+		p.SurvivalSamples = appendCapped(p.SurvivalSamples, v, maxSurvivalSamples)
+	}
+	return p
 }
 
 // validateAgg rejects a persisted aggregate that would break Snapshot or carry nonsense: a nil map
