@@ -53,15 +53,15 @@ where the replay reached the pod's own port but not the browser.
 scenario's template plus what the runner insists on: labels `sdp.hubertjablon.ski/run-id`,
 `.../scenario`, `app.kubernetes.io/managed-by: portfolio-api` and `sdp.hubertjablon.ski/quarantine:
 "false"` (Talon's label patch is a JSON Patch `replace`, ADR 0013), `restartPolicy: Never`,
-`activeDeadlineSeconds` = the scenario timeout (at most 120 s), no ServiceAccount token, no service
-links. Ready -> `started`, and `exec.command` runs through `pods/exec` (WebSocket with SPDY fallback,
-a TTY when the scenario asks, because Falco's "Terminal shell in container" needs one). A Falco alert
-naming the pod -> `detected`; a successful Talon action naming it -> `responded`; the pod is deleted
-(a quarantined one after 5 s, so the isolation is observable) -> `finished`. No response within the
-timeout -> `timeout`; a pod that is refused or never Ready -> `failed`. Every path ends with the pod
-deleted and the slot released; pods left by a crash are deleted at the next start-up, and
-`activeDeadlineSeconds` ends them even if the API never comes back. Correlation is by pod name,
-unique per run; nothing else is needed.
+`activeDeadlineSeconds` = the scenario timeout (at most 120 s; 300 s since ADR 0017's 2026-10-03
+amendment), no ServiceAccount token, no service links. Ready -> `started`, and `exec.command` runs
+through `pods/exec` (WebSocket with SPDY fallback, a TTY when the scenario asks, because Falco's
+"Terminal shell in container" needs one). A Falco alert naming the pod -> `detected`; a successful Talon
+action naming it -> `responded`; the pod is deleted (a quarantined one after 5 s, so the isolation is
+observable) -> `finished`. No response within the timeout -> `timeout`; a pod that is refused or never
+Ready -> `failed`. Every path ends with the pod deleted and the slot released; pods left by a crash are
+deleted at the next start-up, and `activeDeadlineSeconds` ends them even if the API never comes back.
+Correlation is by pod name, unique per run; nothing else is needed.
 
 **Webhooks, not watches.** Falcosidekick already receives every alert and Talon already knows every
 action; one more output each (`webhook`, to absolute names with a trailing dot, so the resolver asks
@@ -122,9 +122,9 @@ that fails keeps its last value rather than failing the page.
 
 ## Consequences
 - An anonymous visitor can cause, at most, three scenario pods per 10 minutes, thirty per hour for
-  everyone, never two at once, each gone within 120 s, each confined by Pod Security `restricted`,
-  signed images only, the sandbox quota, default-deny networking and Falco/Talon. The API itself can
-  create pods only in `sandbox`.
+  everyone, never two at once, each gone within 120 s (300 s since ADR 0017's 2026-10-03 amendment),
+  each confined by Pod Security `restricted`, signed images only, the sandbox quota, default-deny
+  networking and Falco/Talon. The API itself can create pods only in `sandbox`.
 - The live feed is as trustworthy as the CiliumNetworkPolicies on 8081 and on Falcosidekick/Talon. A
   Cilium policy outage would let any pod forge feed entries (not actions: the API acts only on its
   own runs, and only by deleting their pods).

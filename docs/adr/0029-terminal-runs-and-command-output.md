@@ -29,13 +29,14 @@ allowed/prevented/detected, a defence-map `layer`, and - only when detected - a 
 terminal's completion; the API never matches them, so a malformed one is a catalogue error, not a visitor's
 problem. The four scripted scenarios are unchanged and stay as the one-click demo.
 
-**The run keeps its pod and runs commands on request.** `POST /api/attack/terminal` creates the pod as any
-run does (`sandbox`, PSS restricted, no token, `activeDeadlineSeconds` = `timeout_seconds` ≤ 120 s) and
-returns `202 {run_id, scenario, state, token}`. The **token** is 32 hex, random, returned only here - never in
-an event or in `/api/runs/{id}` - and held in memory on the run; it is the capability to drive that run. Per
-run the API sets env `SDP_FLAG` = `SDP{` + 16 hex + `}` on the `target` container (the victim writes it to
-`/srv/shop/.flag`, 0600, and never serves it); it is the run's own secret, overriding any value the catalogue
-pins, so one visitor cannot read another's and the catalogue cannot fix it to a known string.
+**The run keeps its pod and runs commands on request.** `POST /api/attack/terminal` creates the pod as any run
+does (`sandbox`, PSS restricted, no token, `activeDeadlineSeconds` = `timeout_seconds` ≤ 120 s; 300 s since
+the 2026-10-03 amendment below) and returns `202 {run_id, scenario, state, token}`. The **token** is 32 hex,
+random, returned only here - never in an event or in `/api/runs/{id}` - and held in memory on the run; it is
+the capability to drive that run. Per run the API sets env `SDP_FLAG` = `SDP{` + 16 hex + `}` on the `target`
+container (the victim writes it to `/srv/shop/.flag`, 0600, and never serves it); it is the run's own secret,
+overriding any value the catalogue pins, so one visitor cannot read another's and the catalogue cannot fix it
+to a known string.
 
 **Commands.** `POST /api/runs/{run_id}/commands`, `Authorization: Bearer <token>`, body `{"id":"read-shadow"}`
 → `202 {seq}`. The token is compared in constant time. `401` wrong/missing token, `404` unknown run or command
@@ -111,9 +112,9 @@ delete the pod before the cut is visible.
 
 ## Consequences
 - An anonymous visitor can now exec into a `sandbox` pod - but only commands the catalogue lists, by id, one
-  at a time, at most 30 per run, each non-TTY exec capped at 5 s, the whole run capped at 120 s, and only
-  while holding a token the API handed to that one run. The RBAC is unchanged: `pods/exec create` in
-  `sandbox`, which the scripted scenarios already needed.
+  at a time, at most 30 per run, each non-TTY exec capped at 5 s, the whole run capped at 120 s (300 s since
+  the 2026-10-03 amendment below), and only while holding a token the API handed to that one run. The RBAC is
+  unchanged: `pods/exec create` in `sandbox`, which the scripted scenarios already needed.
 - The API streams attacker-controlled bytes to every subscriber. The caps (1 KiB per event; 4 KiB and 64
   events per command; 32 KiB and 300 events per run; lines over 2 KiB dropped), the sanitiser (valid UTF-8, no
   control characters but newline/tab, no invisible format characters) and the ADR 0021 scrubber, applied to
@@ -162,3 +163,23 @@ had already published `finished` and the `responded` that explains the kill was 
 not say how long after the visitor's Enter the pod died, and the stats recorded no response time for it. A
 terminal run whose pod is deleted under it now waits, while a detection is still unanswered, up to
 `ResponseWait` (2 s) for that answer before it ends. A kill with nothing left to answer ends at once.
+
+## Amendment 2026-10-03: a terminal run lasts up to 300 s and goes idle after 90 s
+
+The terminal's `timeout_seconds` is now 300 and its `idle_seconds` 90 (were 120 and 30; ADR 0032 amendment,
+the bound itself in ADR 0017's). Visitors' runs, the owner's own included, ended `idle` while they were reading
+the explanation of the command they had just run, and the 120 s cap left room for only a few moves. Nothing
+in the runner changes: the deadline (`ctx`, from `Timeout()`) and the idle timer (from `Idle()`) were already
+read from the catalogue, and the command bounds - 5 s per non-TTY command, 10 s for a TTY one, capped by the
+idle time when that is shorter - do not depend on the session length, so they stay. Neither does the per-run
+cap of 30 commands, nor the output caps. `GET /api/scenarios/terminal/details` sends the two values as before
+(`timeout_seconds`, `idle_seconds`), now 300 and 90.
+
+What changes is what the catalogue may say. The API's validation now refuses an entry whose `timeout_seconds`
+is over the 300 s bound (it used to cap it silently) and an interactive entry whose idle time, defaults
+included, is not below its timeout - an idle timer that can never fire would end every quiet run as `deadline`
+instead of `idle`. Both are unit-tested (`TestTimeoutAndIdleBounds`), and the real catalogue's copy in
+`testdata/` is checked to load with 300 and 90.
+
+The cost, accepted by the owner: one run at a time for everyone (ADR 0015), so a visitor who arrives during
+someone else's terminal session may wait up to five minutes, watching it read-only, before starting their own.
