@@ -85,7 +85,7 @@
   <section class="section" id="posture" aria-labelledby="posture-title">
     <div class="wrap">
       <header class="section__head">
-        <p class="eyebrow">01 · Posture</p>
+        <p class="eyebrow">Posture</p>
         <h2 id="posture-title">Live security posture</h2>
         <p class="section__lead">What admission control, image scanning, the CIS benchmark and runtime detection report about this cluster right now.</p>
       </header>
@@ -99,7 +99,7 @@
   <section class="section section--attack" id="attack" aria-labelledby="attack-title">
     <div class="wrap">
       <header class="section__head">
-        <p class="eyebrow">02 · Attack it</p>
+        <p class="eyebrow">Attack it</p>
         <h2 id="attack-title">Your hands on the pod</h2>
         <p class="section__lead" id="attack-lead">
           A throwaway pod in an isolated <code>sandbox</code> namespace (no service-account token,
@@ -146,7 +146,7 @@
   <section class="section" id="how" aria-labelledby="how-title">
     <div class="wrap">
       <header class="section__head">
-        <p class="eyebrow">03 · How it works</p>
+        <p class="eyebrow">How it works</p>
         <h2 id="how-title">Defence in layers, all from git</h2>
         <p class="section__lead">Seven layers an attack has to pass. Nothing here was clicked together: every layer is a reviewed commit, reconciled by Argo CD.<span class="needs-terminal"> In the terminal above, each command lights the layer that answered it.</span></p>
       </header>
@@ -167,48 +167,52 @@
     </div>
   </section>
 
-  <section class="section" id="about" aria-labelledby="about-title">
-    <div class="wrap about-grid">
-      <div>
-        <header class="section__head">
-          <p class="eyebrow">04 · About</p>
-          <h2 id="about-title">About me</h2>
-        </header>
-        <div class="prose todo-content" data-todo-content="about">
-          <!-- TODO-CONTENT: 2-3 short paragraphs: background, what you are good at, what kind of role or work you want. No claims you cannot back up in an interview. -->
-          <p>[TODO-CONTENT: background and current focus]</p>
-          <p>[TODO-CONTENT: what kind of work or role you are looking for]</p>
-        </div>
+  <section class="section" id="about" aria-labelledby="about-title" data-todo-section>
+    <div class="wrap">
+      <header class="section__head">
+        <p class="eyebrow">About</p>
+        <h2 id="about-title">About me</h2>
+      </header>
+      <div class="prose todo-content" data-todo-content="about">
+        <!-- TODO-CONTENT: 2-3 short paragraphs: background, what you are good at, what kind of role or work you want. No claims you cannot back up in an interview. -->
+        <p>[TODO-CONTENT: background and current focus]</p>
+        <p>[TODO-CONTENT: what kind of work or role you are looking for]</p>
       </div>
-      <div>
-        <h3 class="panel-title">Skills shown in this repository</h3>
-        <ul class="skills" role="list">
-          <li>Kubernetes (k3s)</li>
-          <li>Cilium &amp; Gateway API</li>
-          <li>Argo CD / GitOps</li>
-          <li>Ansible</li>
-          <li>Kyverno</li>
-          <li>Falco &amp; Falco Talon</li>
-          <li>Trivy</li>
-          <li>Sigstore cosign</li>
-          <li>GitHub Actions</li>
-          <li>SOPS + age</li>
-          <li>nftables</li>
-          <li>Go</li>
-          <li>TypeScript</li>
-        </ul>
-        <p class="todo-content small" data-todo-content="skills-extra">
-          <!-- TODO-CONTENT: add skills that are not visible in this repository, or delete this line. -->
-          [TODO-CONTENT: other skills, languages, tools]
-        </p>
-      </div>
+    </div>
+  </section>
+
+  <section class="section" id="skills" aria-labelledby="skills-title">
+    <div class="wrap">
+      <header class="section__head">
+        <p class="eyebrow">Skills</p>
+        <h2 id="skills-title">Skills shown in this repository</h2>
+      </header>
+      <ul class="skills" role="list">
+        <li>Kubernetes (k3s)</li>
+        <li>Cilium &amp; Gateway API</li>
+        <li>Argo CD / GitOps</li>
+        <li>Ansible</li>
+        <li>Kyverno</li>
+        <li>Falco &amp; Falco Talon</li>
+        <li>Trivy</li>
+        <li>Sigstore cosign</li>
+        <li>GitHub Actions</li>
+        <li>SOPS + age</li>
+        <li>nftables</li>
+        <li>Go</li>
+        <li>TypeScript</li>
+      </ul>
+      <p class="todo-content small" data-todo-content="skills-extra">
+        <!-- TODO-CONTENT: add skills that are not visible in this repository, or delete this line. -->
+        [TODO-CONTENT: other skills, languages, tools]
+      </p>
     </div>
   </section>
 
   <section class="section" id="projects" aria-labelledby="projects-title" data-todo-section>
     <div class="wrap">
       <header class="section__head">
-        <p class="eyebrow">05 · Projects</p>
+        <p class="eyebrow">Projects</p>
         <h2 id="projects-title">Projects</h2>
       </header>
       <ul class="projects" role="list">

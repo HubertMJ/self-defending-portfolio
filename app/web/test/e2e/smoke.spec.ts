@@ -69,6 +69,10 @@ test.describe("production build has no placeholder copy (FIX 2)", () => {
     await expect(page.getByRole("heading", { name: "Projects" })).toBeVisible();
     await expect(page.getByRole("link", { name: "self-defending-portfolio" }).first()).toBeVisible();
     await expect(page.locator(".todo-content")).toHaveCount(0);
+    // An About with nothing written is not shipped as a heading over nothing, nor linked to.
+    await expect(page.locator("#about")).toHaveCount(0);
+    await expect(page.locator('.site-nav a[href="#about"]')).toHaveCount(0);
+    await expect(page.getByRole("heading", { name: "Skills shown in this repository" })).toBeVisible();
   });
 });
 

@@ -219,6 +219,17 @@ main:focus {
   margin-bottom: 0.75rem;
 }
 
+/* The sections are numbered by the stylesheet, not in the copy, so a section the production build
+   drops (an About still to be written) leaves no gap in the numbering. */
+main {
+  counter-reset: section;
+}
+
+.section > .wrap > .section__head > .eyebrow::before {
+  counter-increment: section;
+  content: counter(section, decimal-leading-zero) " · ";
+}
+
 /* Placeholder copy the owner still has to write. Loud on purpose, so it cannot ship unnoticed. */
 .todo-content {
   color: var(--todo);
@@ -2548,17 +2559,6 @@ html:not([data-tech="on"]) .tech-only {
 }
 
 /* ---------- about, projects ---------- */
-
-.about-grid {
-  display: grid;
-  gap: 2.5rem;
-}
-
-@media (min-width: 900px) {
-  .about-grid {
-    grid-template-columns: 1.2fr 1fr;
-  }
-}
 
 .prose p {
   max-width: 40rem;

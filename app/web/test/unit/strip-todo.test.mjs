@@ -1,5 +1,10 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { stripTodoContent } from "../../scripts/strip-todo-content.mjs";
+
+// The page itself, as the production build gets it.
+const page = readFileSync(join(process.cwd(), "src", "index.html"), "utf8");
 
 describe("stripTodoContent (FIX 2, ADR 0033 review item 25)", () => {
   it("removes an element that still holds a marker", () => {
@@ -38,11 +43,20 @@ describe("stripTodoContent (FIX 2, ADR 0033 review item 25)", () => {
     expect(out).not.toContain("TODO-CONTENT");
   });
 
-  it("does not lose a written sibling paragraph when another is still a placeholder", () => {
-    // Each paragraph carries its own marker, so only the unwritten one is removed.
-    const html =
-      '<div><p class="todo-content" data-todo-content="a">Written paragraph.</p><p class="todo-content" data-todo-content="b">[TODO-CONTENT: more]</p></div>';
-    expect(stripTodoContent(html)).toBe("<div><p>Written paragraph.</p></div>");
+  it("fails on a marker in the same text as written copy, and on a written child that holds one", () => {
+    expect(() => stripTodoContent('<p class="todo-content" data-todo-content="x">I build platforms. [TODO-CONTENT: more]</p>')).toThrow(/same text/);
+    expect(() => stripTodoContent('<div class="todo-content" data-todo-content="x"><p>Written.</p><p>Also written [TODO-CONTENT: more]</p></div>')).toThrow(/one element/);
+  });
+
+  it("fails on a single-quoted todo-content class and on a marker outside any marked element", () => {
+    expect(() => stripTodoContent("<p class='todo-content' data-todo-content=\"x\">Written.</p>")).toThrow(/double quotes/);
+    expect(() => stripTodoContent("<main><p>Hello [TODO-CONTENT: stray]</p></main>")).toThrow(/left in the output/);
+    expect(() => stripTodoContent("<main><!-- TODO-CONTENT: a note --><p>Hi</p></main>")).toThrow(/left in the output/);
+  });
+
+  it("fails rather than leave a link to a section it removed", () => {
+    const html = '<a href="#about">read about me</a><section id="about" data-todo-section><header><h2>About</h2></header><p class="todo-content" data-todo-content="a">[TODO-CONTENT: x]</p></section>';
+    expect(() => stripTodoContent(html)).toThrow(/#about/);
   });
 
   it("fails loudly on an element it cannot balance, rather than shipping later placeholders", () => {
@@ -54,5 +68,41 @@ describe("stripTodoContent (FIX 2, ADR 0033 review item 25)", () => {
   it("is a no-op when there is nothing to strip", () => {
     const html = '<main><h1>Hi</h1><p>All real content.</p></main>';
     expect(stripTodoContent(html)).toBe(html);
+  });
+});
+
+describe("stripTodoContent on src/index.html (review 2, item 9)", () => {
+  const sectionIds = (html) => [...html.matchAll(/<section[^>]*\sid="([^"]+)"/g)].map((m) => m[1]);
+  const navLinks = (html) => [...html.matchAll(/<nav[\s\S]*?<\/nav>/g)].flatMap((n) => [...n[0].matchAll(/href="#([^"]+)"/g)].map((m) => m[1]));
+
+  it("ships no placeholder, and no About section or About link while nothing of it is written", () => {
+    const out = stripTodoContent(page);
+    expect(out).not.toMatch(/todo-content/i);
+    expect(sectionIds(out)).not.toContain("about");
+    expect(navLinks(out)).not.toContain("about");
+    // Everything else stays: the sections, the skills list, the real project card, every other link.
+    expect(sectionIds(out)).toEqual(["top", "posture", "attack", "console", "how", "skills", "projects"]);
+    expect(navLinks(out)).toEqual(["posture", "attack", "how"]);
+    expect(out).toContain("<li>Kubernetes (k3s)</li>");
+    expect(out).toContain("self-defending-portfolio</a></h3>");
+    expect(out).not.toContain("[TODO");
+  });
+
+  it("keeps a written About paragraph when the other is still a placeholder, and the section with its link", () => {
+    const out = stripTodoContent(page.replace("<p>[TODO-CONTENT: background and current focus]</p>", "<p>I build and harden platforms.</p>"));
+    expect(out).toContain("<p>I build and harden platforms.</p>");
+    expect(out).not.toContain("what kind of work or role");
+    expect(sectionIds(out)).toContain("about");
+    expect(navLinks(out)).toContain("about");
+    expect(out).not.toMatch(/todo-content/i);
+  });
+
+  it("keeps a project card's written lines and drops its unwritten tag line", () => {
+    const out = stripTodoContent(
+      page.replace("<h3>[TODO-CONTENT: project name]</h3>\n          <p>[TODO-CONTENT: what it does and what you did]</p>", "<h3>edge-proxy</h3>\n          <p>A proxy I wrote.</p>"),
+    );
+    expect(out).toContain("<h3>edge-proxy</h3>");
+    expect(out).toContain("<p>A proxy I wrote.</p>");
+    expect(out).not.toMatch(/todo-content|TODO-CONTENT/i);
   });
 });
