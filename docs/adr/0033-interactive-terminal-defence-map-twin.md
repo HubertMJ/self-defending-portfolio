@@ -62,10 +62,12 @@ A line invites anyone who gets further than the page says is possible to open an
   label, labelled "probe dropped" with source "API probe". There are no Hubble flow events and none
   are planned; the proof panel and the pipeline no longer depend on them.
 - **FIX 2** — the production build (`scripts/strip-todo-content.mjs`, wired into `build.mjs`) removes
-  every element whose `data-todo-content` text is still a `[TODO-CONTENT: …]` placeholder, and a
-  `data-todo-section` left with nothing but its heading. The watch build keeps them and
-  `npm run todo-content` still lists them from source, so the owner's unwritten copy never ships but
-  is never lost.
+  every `data-todo-content` element with nothing written in it, keeps what is written in a partly
+  written one (each child element still holding a `[TODO-CONTENT: …]` marker goes), and removes a
+  `data-todo-section` left with nothing but its heading together with its navigation link; the
+  stylesheet numbers the sections, so a removed one leaves no gap. The watch build keeps everything
+  and `npm run todo-content` still lists the placeholders from source, so the owner's unwritten copy
+  never ships but is never lost.
 - **FIX 3** — a live run plays in real time first (every hop lights as its event arrives), so the
   visitor sees how fast the cluster actually is; when it is over the console states the real duration
   next to something human ("about as fast as a blink") and offers the slowed, dwelled replay on a
@@ -76,7 +78,7 @@ Every new wire shape (the `command` event, the catalogue fields, `arm`/`command_
 existing events, `/api/stats`, the terminal and command accept bodies) is typed with a runtime guard,
 additive and optional, so an older API drops cleanly to the page it always rendered: no catalogue →
 the terminal says it is unavailable and the one-click demo still works; no `/api/stats` → the hero
-band hides; no compare → the twin button simply never produces a twin.
+band hides; no compare → no twin button. How the page meets today's API is in the second amendment below.
 
 ## Consequences
 - The page now drives a stateful session (a per-run token it holds only in memory, one command at a
@@ -85,8 +87,9 @@ band hides; no compare → the twin button simply never produces a twin.
 - Mock mode (`src/lib/mock.ts`, `src/lib/fixtures.ts`) simulates the terminal, the twin and the stats
   end to end, including the detect→respond chain, the quarantine that keeps the run going and the
   terminate that ends it, so the whole front end is exercised by `npm test` and `npm run test:e2e`
-  without a cluster. The terminal catalogue fixture follows the contract's schema; the real catalogue
-  is written by the cluster side.
+  without a cluster. The mock's terminal catalogue is not written here: `scripts/terminal-catalogue.mjs`
+  generates `src/lib/terminal-catalogue.json` from the cluster's `scenarios.yaml`, and the unit tests
+  fail when the two drift (run with `SDP_SCENARIOS_YAML` pointing at that file).
 - One more image is not added; the bundle grows by the new modules (a few KB) and mock mode still
   ships, visibly labelled, reaching nothing a visitor could not already reach.
 - What the web session could not verify, and integration must: the live API actually emitting
@@ -105,22 +108,70 @@ integration review of this branch was worked item by item.
   scenario's own (five objectives, fourteen commands); a terminate command `exits` first (its own
   process finishes — `cat /etc/shadow` reaches its objective) and the *run* then ends `killed`, while
   only a TTY shell is `killed` mid-command; commands are refused with 409 until `pod_ready`; `leave`
-  answers 202.
-- **Summary from the run, not a command state.** "Killed N ms after your Enter" is the response time
-  (the guarded Talon action, by `command_seq`) minus the start of the command it acted on, with
-  Falco-to-response beside it; the outcome line reads from the run's `detail`.
+  answers 202 while the run is live and 409 once it is over.
+- **Summary from the run, not a command state.** "Killed N ms after your Enter" is the time of the
+  run's last `responded` with action `terminate` minus the start of the command it names
+  (`command_seq`; without one, the last command started before it), with Falco-to-response beside it;
+  a quarantine earlier in the run is its own line; a time that is not positive is left out; the
+  outcome line reads from the run's `detail`.
 - **Compare never mixes arms.** The pipeline, kill-timer, pod panel and proof use only `arm:"guarded"`
   (or unarmed) events; the unguarded arm's pods are kept apart and feed only its own window, whose
-  "held for" timer ticks from its first compromise to the run's end.
-- **Hop 8 and the proof** take the first `unreachable` *after* the quarantine label, never an earlier
-  transient timeout.
+  "held for" counter ticks every second from that pod's first compromise until the API deletes it.
+- **Hop 8 and the proof** take the guarded pod's first `unreachable` *after* the quarantine label,
+  never an earlier transient timeout and never the twin's probe.
 - **The defence map lights during the session**, each command under its own layer with its own
   verdict, "ended the session" only on the command that did; it is legible in both themes.
-- **The terminal degrades**: no catalogue → a quiet pointer to the one-click demo (not a loud error);
-  mid-session joins and reconnects backfill from `/api/runs/{id}`, deduped so nothing counts twice;
-  leaving (an explicit button, and `pagehide`) ends the run at once.
+- **The terminal degrades**: no catalogue → the one-click scenarios become the attack section (see
+  the second amendment); mid-session joins and reconnects backfill from `/api/runs/{id}`, deduped so
+  nothing counts twice; leaving (an explicit button, `exit`, and `pagehide`) ends the run at once.
 - **Honesty and hardening**: the hero drops the escapes/"got out" tile for the objective counters and
   the last real run; output is appended (never re-announced) and matches the API's control/format-char
-  scrub with bidi isolation; `run_id` is validated before it reaches a URL; `parseCommands` rejects a
-  catalogue with a duplicate or unusable spelling; the placeholder stripper fails the build loudly on
-  anything it cannot balance. The new components are covered by unit and end-to-end tests.
+  scrub, each line its own bidi paragraph (`unicode-bidi: plaintext`); `run_id` is validated before it
+  reaches a URL; `parseCommands` rejects a catalogue with a duplicate or unusable spelling; the
+  placeholder stripper fails the build on anything it cannot handle. The new components are covered by
+  unit tests that drive them with the API's own event sequences and by end-to-end runs (below).
+
+## Amendment 2026-10-03: second review
+
+The second review drove the terminal with the real API's event sequences and found the page wrong
+exactly where the mock had differed from the API. The mock now emits those sequences, and each fix
+has a test that fails without it.
+
+- **The mock is the API's sequence, not a likeness of it.** Every event carries the hub's id (on the
+  stream and in `/api/runs/{id}`); run events always carry `detail`, and a terminal run's
+  `detected`/`responded` carry `command_seq`; a command the API cut short (its 5 s limit, a leave, the
+  run's end) `exited` with no code; a victim event is published only when the probe's view changes, so
+  the held twin sends nothing until the API deletes it 12 s after the guarded response, and only then
+  does the run finish; the per-run 429 says "too many commands in this run"; the stats fixture counts
+  objectives per run, as the API does.
+- **Output in publication order.** A command's output is kept by event id and the timeline drops a
+  duplicate by id with its payload, so two identical lines both show; a block whose history changed (a
+  backfilled chunk, a command the live feed missed) is rebuilt in seq order, not appended at the end.
+- **A code-less exit is an end.** It frees the input, lights its layer and says why: timed out, or
+  stopped with the session.
+- **One command at a time, whichever comes first.** The lock clears when the sent command has ended,
+  whether its end or its 202 arrives first; a second tap before the 202 sends nothing; chips, Run and
+  Leave rest before `pod_ready` and after the end; `pagehide` sends one DELETE, never after the end.
+- **What the visitor reads.** Watchers get a third-person banner and summary; a failed or timed-out
+  run says why; "Survived" counts from `pod_ready`; the two 429s are told apart by their body; a start
+  that timed out explains the read-only run that may follow; each reached objective says the pod was
+  deleted N later, and the hero says what "reached" means (the command exited 0 — detection is not
+  prevention) next to the median session length; objectives are counted in runs.
+- **Mid-session joins.** A run the feed shows without `queued`/`started` takes its earliest state as
+  its start, so it is the live run (watcher view, launcher locked), and is backfilled; a failed
+  backfill waits 30 s, then twice as long each time (`src/lib/backfill.ts`); reopening the stream
+  after a hidden-tab stop backfills the active run.
+- **Against today's API** (no terminal catalogue, no `/api/stats`, no compare): the hero button reads
+  "Launch an attack", the attack section is the one-click scenarios, and nothing offers or mentions the
+  terminal; the twin button appears only when the scenarios carry `interactive` (the field the
+  interactive API added, and the sign that `?compare=1` is understood); `/api/stats` is not asked again
+  after a 404 and the hero takes the objectives from the terminal's catalogue instead of fetching it.
+- **Quiet updates.** The start panel and the hero band are patched only when they change, so focus and
+  notes survive the feed; a cooldown unlocks the start button on its own; a blocked press says why;
+  Tab completes only when it changes the line; hints reach a screen reader through a region that is
+  always live.
+- **Tests that can fail.** Unit tests drive `mountTerminal`, `renderTwin` (with a ticking clock) and
+  the stripper on `src/index.html`; the e2e suite reads the mock's own call log for "nothing was sent"
+  (an in-page mock never reaches the network), runs the page against `serve.mjs --live-api` (today's
+  API) and against `serve.mjs --terminal-api`, which replays a session joined mid-way exactly as the
+  API publishes it, backfill included.
