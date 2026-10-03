@@ -217,7 +217,9 @@ func (r *Runner) runTerminal(ctx context.Context, rn *run, sc scenarios.Scenario
 		case <-idleTimer.C:
 			return StateFinished, "idle"
 		case req := <-rn.cmds:
-			r.runCommand(ctx, rn, req, log)
+			// Idle counts from the command's start, not its end: a command that hangs is not
+			// activity. The command itself is bounded by the idle time too (runCommand), so idle
+			// still ends a run whose last command never returns.
 			if !idleTimer.Stop() {
 				select {
 				case <-idleTimer.C:
@@ -225,6 +227,7 @@ func (r *Runner) runTerminal(ctx context.Context, rn *run, sc scenarios.Scenario
 				}
 			}
 			idleTimer.Reset(idle)
+			r.runCommand(ctx, rn, req, idle, log)
 		}
 	}
 }
@@ -232,8 +235,10 @@ func (r *Runner) runTerminal(ctx context.Context, rn *run, sc scenarios.Scenario
 // runCommand execs one command and publishes its events. The command's context is cancelled when
 // the run's deadline passes (ctx), when the visitor leaves, or when the pod is killed under it, so a
 // command - a TTY shell included, whose empty stdin never yields EOF - never outlives the run or a
-// leave. A non-TTY command is additionally cut off after CommandTimeout.
-func (r *Runner) runCommand(ctx context.Context, rn *run, req commandReq, log *slog.Logger) {
+// leave. It is also cut off after its own bound - CommandTimeout (5 s), or TTYCommandTimeout (10 s)
+// for a TTY command, which only a pod deletion is expected to end - or the run's idle time if that
+// is shorter, since idle counts from the command's start.
+func (r *Runner) runCommand(ctx context.Context, rn *run, req commandReq, idle time.Duration, log *slog.Logger) {
 	seq, cmd := req.seq, req.cmd
 	rn.tmu.Lock()
 	rn.curSeq, rn.curCmdID = seq, cmd.ID
@@ -243,12 +248,15 @@ func (r *Runner) runCommand(ctx context.Context, rn *run, req commandReq, log *s
 
 	cctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	cmdCtx := cctx // the timeout context, a child of cctx, for a non-TTY command
-	if !cmd.TTY {
-		var c2 context.CancelFunc
-		cmdCtx, c2 = context.WithTimeout(cctx, r.cfg.CommandTimeout)
-		defer c2()
+	bound := r.cfg.CommandTimeout
+	if cmd.TTY {
+		bound = r.cfg.TTYCommandTimeout
 	}
+	if idle < bound {
+		bound = idle
+	}
+	cmdCtx, cancelBound := context.WithTimeout(cctx, bound) // the command's own bound, a child of cctx
+	defer cancelBound()
 	// Leave and a kill end the command too (ctx already ends it at the run deadline).
 	stop := make(chan struct{})
 	defer close(stop)
@@ -273,9 +281,9 @@ func (r *Runner) runCommand(ctx context.Context, rn *run, req commandReq, log *s
 		log.Info("terminal command exec ended", "seq", seq, "id", cmd.ID, "err", err)
 	}
 
-	// Did the command end because of its own non-TTY timeout (cctx still live), or because the
-	// visitor left? Neither is a kill, and neither should wait for a pod deletion.
-	timedOut := !cmd.TTY && cctx.Err() == nil && cmdCtx.Err() != nil
+	// Did the command end because of its own bound (cctx still live), or because the visitor left?
+	// Neither is a kill, and neither should wait for a pod deletion.
+	timedOut := cctx.Err() == nil && cmdCtx.Err() != nil
 	left := isClosed(rn.leave)
 
 	// Otherwise the pod going away under the command is a kill, not an exit: if the exec ended
@@ -308,8 +316,8 @@ func (r *Runner) runCommand(ctx context.Context, rn *run, req commandReq, log *s
 		end.ExitCode = &code
 		end.Achieved = cmd.Objective != "" && code == 0
 	default:
-		// Cut short (the 5 s non-TTY timeout, a leave, or a transport error) before the shell
-		// reported a status: `exited` with no exit_code rather than a synthetic -1.
+		// Cut short (the command's bound, a leave, or a transport error) before the shell reported
+		// a status: `exited` with no exit_code rather than a synthetic -1.
 		end.State = CommandExited
 	}
 	r.emit(rn, "command", r.commandEvent(rn, end))

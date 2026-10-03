@@ -131,9 +131,12 @@ type Config struct {
 	VictimPort     int
 	VictimInterval time.Duration
 	VictimTimeout  time.Duration
-	// CommandTimeout bounds a non-TTY terminal command's exec (ADR 0029: 5 s). A TTY command
-	// (an interactive shell) runs until the pod is killed or the run ends.
+	// CommandTimeout bounds a non-TTY terminal command's exec (ADR 0029: 5 s).
 	CommandTimeout time.Duration
+	// TTYCommandTimeout bounds a TTY command (an interactive shell, whose empty stdin never ends
+	// it): if the pod has not been deleted by then, the exec is cancelled (ADR 0029: 10 s). Without
+	// it a shell nobody answers would hold the run, and the global slot, until the run's deadline.
+	TTYCommandTimeout time.Duration
 }
 
 // Runner runs scenarios. Safe for concurrent use.
@@ -291,6 +294,9 @@ func New(client kubernetes.Interface, exec Execer, pub Publisher, log *slog.Logg
 	}
 	if cfg.CommandTimeout <= 0 {
 		cfg.CommandTimeout = 5 * time.Second
+	}
+	if cfg.TTYCommandTimeout <= 0 {
+		cfg.TTYCommandTimeout = 10 * time.Second
 	}
 	if cfg.CompareHold <= 0 {
 		cfg.CompareHold = 12 * time.Second

@@ -537,3 +537,63 @@ func TestTerminalSignalExitWithoutDeletion(t *testing.T) {
 	rec.waitFor(t, StateFinished)
 	<-done
 }
+
+// A TTY shell that nobody kills does not hold the run (and the global slot) until the deadline: idle
+// counts from the command's start and bounds the command, so with idle 1 s and a 4 s deadline the
+// run ends `idle` about 1 s after the command started. Before, it ended `deadline` after 4 s.
+func TestTerminalIdleBoundsTTYCommand(t *testing.T) {
+	c := fake.NewClientset()
+	readyOnCreate(c)
+	rec := newRecorder()
+	r := terminalRunner(c, &fakeExec{streamBlock: true}, rec)
+	release, done := released()
+	sc := terminalScenario()
+	sc.IdleSeconds, sc.TimeoutSeconds = 1, 4
+	id, token := r.StartTerminal(sc, release)
+	rec.waitFor(t, StatePodReady)
+	seq := sendCommand(t, r, id, token, "shell")
+	ev := rec.waitFor(t, StateFinished)
+	<-done
+	if ev.Detail != "idle" {
+		t.Fatalf("finish detail = %q, want idle", ev.Detail)
+	}
+	var startedAt time.Time
+	for _, p := range rec.of("command") {
+		if c := p.v.(CommandEvent); c.Seq == seq && c.State == CommandStarted {
+			startedAt = c.At
+		}
+	}
+	// Idle from the start: ~1 s. Idle from the command's end would be ~2 s (1 s bound + 1 s idle).
+	if d := ev.At.Sub(startedAt); d > 1700*time.Millisecond {
+		t.Fatalf("run ended %v after the command started; idle (1 s) should count from the start", d)
+	}
+}
+
+// A TTY command is cut off at TTYCommandTimeout when the pod is not deleted: it ends `exited` with no
+// exit code, and the run goes on accepting commands.
+func TestTerminalTTYCommandBounded(t *testing.T) {
+	c := fake.NewClientset()
+	readyOnCreate(c)
+	rec := newRecorder()
+	r := New(c, &fakeExec{streamBlock: true}, rec, nil, Config{PollInterval: 10 * time.Millisecond, QuarantineLinger: -1,
+		CommandTimeout: 100 * time.Millisecond, TTYCommandTimeout: 200 * time.Millisecond, DeleteWait: 200 * time.Millisecond})
+	release, done := released()
+	sc := terminalScenario()
+	sc.IdleSeconds, sc.TimeoutSeconds = 30, 60
+	id, token := r.StartTerminal(sc, release)
+	rec.waitFor(t, StatePodReady)
+	seq := sendCommand(t, r, id, token, "shell")
+	waitCommand(t, rec, seq, CommandExited) // within waitCommand's 5 s, far below idle and deadline
+	for _, p := range rec.of("command") {
+		if ev := p.v.(CommandEvent); ev.Seq == seq && ev.State == CommandExited && ev.ExitCode != nil {
+			t.Fatalf("a TTY command cut at its bound reported exit_code %d", *ev.ExitCode)
+		}
+	}
+	next := sendCommand(t, r, id, token, "whoami")
+	waitCommand(t, rec, next, CommandExited)
+	_ = r.Leave(id, token)
+	if ev := rec.waitFor(t, StateFinished); ev.Detail != "left" {
+		t.Fatalf("finish detail = %q", ev.Detail)
+	}
+	<-done
+}
