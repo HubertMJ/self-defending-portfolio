@@ -57,7 +57,7 @@ export type TerminalResult =
 export type CommandResult =
   | { kind: "accepted"; seq: number }
   | { kind: "unauthorized" }
-  | { kind: "not-found" }
+  | { kind: "not-found"; reason: string }
   | { kind: "conflict" }
   | { kind: "too-large" }
   | { kind: "rate-limited"; retryAfterSeconds: number; reason: string }
@@ -288,7 +288,8 @@ export class ApiClient {
       case 401:
         return { kind: "unauthorized" };
       case 404:
-        return { kind: "not-found" };
+        // "unknown run" or "unknown command": the body says which.
+        return { kind: "not-found", reason: await errorText(res) };
       case 409:
         return { kind: "conflict" };
       case 413:

@@ -481,7 +481,7 @@ export function mountTerminal(
           ? /too many commands/i.test(r.reason)
             ? "you have run the most commands a session allows"
             : `too many requests from your address — try again in ${r.retryAfterSeconds} s`
-          : r.kind === "unauthorized" ? "this session is not yours" : r.kind === "not-found" ? "the run has ended" : r.kind === "too-large" ? "that was too long" : r.kind === "error" ? `the server refused it (HTTP ${r.status})` : "the API is not reachable";
+          : r.kind === "unauthorized" ? "this session is not yours" : r.kind === "not-found" ? (/unknown command/i.test(r.reason) ? "the API does not know that command; its catalogue may have changed, reload the page" : "the run has ended") : r.kind === "too-large" ? "that was too long" : r.kind === "error" ? `the server refused it (HTTP ${r.status})` : "the API is not reachable";
     appendLocal(line, `sh: not run (${why})`);
   };
 

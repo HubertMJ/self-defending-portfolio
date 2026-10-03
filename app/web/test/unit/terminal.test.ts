@@ -672,3 +672,18 @@ describe("tests that must survive mutation (final review, item 5)", () => {
     expect(stat(t.root, "Quarantined after your Enter")).toBe("220 ms");
   });
 });
+
+describe("a 404 for a command (final review, item 7)", () => {
+  it("says the API does not know the command, not that the run has ended", async () => {
+    let body = "unknown command";
+    const t = await harness({ commandStatus: () => [404, { error: body }] });
+    t.show(new Feed().open());
+    chips(t.root)[0].click();
+    await flush();
+    expect(text(t.root.querySelector(".term__out"))).toContain("does not know that command");
+    body = "unknown run";
+    chips(t.root)[1].click();
+    await flush();
+    expect(text(t.root.querySelector(".term__out"))).toContain("the run has ended");
+  });
+});
