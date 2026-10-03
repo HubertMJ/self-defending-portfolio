@@ -92,15 +92,18 @@ the most recent `queued` run event; one timestamp, no identifier). `/api/stats` 
 `last_24h` (`since` and the five sums over the current hour and the 23 before it); the posture's 24 h counts
 read the same buckets, so the two pages cannot disagree beyond the documented in-flight exception (ADR
 0035): a detection published before its Falco webhook, until the webhook arrives or, if it never does,
-until the run's hour leaves the window. A run's runs, detected and responded are all counted in the hour it was queued, so
-`runs >= detected >= responded` holds in every window; alerts and actions are counted in the hour they
-arrive. Buckets older than the window are pruned on every write; nothing else about writing changes (one
+until the run's hour leaves the window. A run's runs, detected and responded are all counted in the
+hour it was queued, so `runs >= detected >= responded` holds in every window; alerts and actions are
+counted in the hour they arrive. A run event stamped in the future is counted as now, for its hour and for
+`LastRunAt`. Buckets older than the window are pruned on every write; nothing else about writing changes (one
 object, `get`/`update`, written only after a successful read, at most once a minute when dirty).
 
 Loading **sanitises** the new fields instead of rejecting the blob: buckets outside
 [current hour - 23, current hour + 1] are dropped, duplicate hours are summed, a future `WindowSince` or
-`LastRunAt` is clamped to now. The blob is still rejected as invalid (and so counts as unparseable) for a
-negative count, a count above 2^40, or more than 25 buckets after sanitising. A late first read sums
+`LastRunAt` is clamped to now. An hourly section still malformed after that (a negative count, a count
+above 2^40, or more than 25 buckets in range) is discarded on its own - the window restarts at now - while
+the all-time totals still load; only a malformed all-time section rejects the blob as invalid (and so as
+unparseable), as before. A late first read sums
 buckets by hour and keeps the earliest `WindowSince` and the latest `LastRunAt`. A blob written before this
 amendment loads with every all-time field unchanged, no buckets and `WindowSince` = now.
 

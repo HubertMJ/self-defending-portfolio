@@ -16,12 +16,12 @@ on it contradicted each other or could not be checked:
 - **Times nobody can place.** The hero's "last run" and "since", the kube-bench run and the posture's
   "report generated" were relative only ("6 h ago"); the run history showed local clock time with no zone;
   nothing linked a run to its raw events at `/api/runs/{id}`, which existed.
-- **Red numbers without names.** "7 violations" and "3 failing" were shown in critical tiles with no way
-  to see what failed. All seven violations were `restrict-image-registries` on seven ReplicaSets in
+- **Red numbers without names.** "7 violations" and "3 failing" were shown in critical tiles with no way to
+  see what failed. All seven violations were `restrict-image-registries` on seven ReplicaSets in
   `falco-response` scaled to 0: Talon revisions 1-4 (upstream falco-talon 0.3.0, before ADR 0023) and
   Falcosidekick revisions 1-3 (upstream, before ADR 0025), kept by the Deployments' default
-  `revisionHistoryLimit` (10) - the same class of problem as the Trivy amendment of ADR 0015. The three kube-bench failures were CIS 1.1.9, 1.1.10 and
-  1.2.26.
+  `revisionHistoryLimit` (10) - the same class of problem as the Trivy amendment of ADR 0015. The three
+  kube-bench failures were CIS 1.1.9, 1.1.10 and 1.2.26.
 - **"(pending)" forever.** A terminal session that only ran recon commands (which by design raise no
   alert) showed its detection and response stages as unreached, with "(pending)" for screen readers, after
   the run had ended.
@@ -78,11 +78,12 @@ The new public fields, each optional for the page (an old API answers 404 or omi
 that piece):
 - `/api/stats`: `last_run_at` (the time of the most recent `queued` run event) and `last_24h` (`since`,
   `runs`, `detected`, `responded`, `falco_alerts`, `talon_actions`).
-- `/api/posture`: `kyverno.violations[]` grouped by policy, rule, kind, namespace and `running`
-  (`count`, `running` true/false/null, `file` - the policy's path in this repository from the rule index),
-  at most 50 groups plus `violations_truncated`; `kube_bench.failing[]` (`id`, `title`, `remediation`, at
-  most 50, in benchmark order) from the newest successful run; `trivy.last_scan`; `falco.counted_since`. `falco.alerts_24h` and
-  `talon.actions_24h` keep their names and meaning and now come from the persisted window.
+- `/api/posture`: `kyverno.violations[]` grouped by policy, rule, kind, namespace and `running` (`count`,
+  `running` true/false/null, `file` - the policy's path in this repository from the rule index), at most 50
+  groups plus `violations_truncated`; `kube_bench.failing[]` (`id`, `title`, `remediation`, at most 50, in
+  benchmark order) from the newest successful run; `trivy.last_scan`; `falco.counted_since`.
+  `falco.alerts_24h` and `talon.actions_24h` keep their names and meaning and now come from the persisted
+  window.
 - `/api/provenance` (above), `/build.json` (above).
 - `/api/runs`: the last 50 runs as summaries (id, scenario, state, start, end, detected, responded, event
   count, truncated) - no pod, no command, no output; the events stay at `/api/runs/{id}`.
@@ -91,11 +92,14 @@ that piece):
 **Never published:** a resource's name (no ReplicaSet, Deployment or pod name of anything outside the
 sandbox), the Kyverno message, kube-bench's `audit`, `actual_value`, `expected_result`, `AuditEnv`,
 `AuditConfig` and `reason` (they quote this host's values), the api and web pods' names, and their
-namespaces as part of provenance, and everything ADR 0021 already forbids (node names, host and pod IPs, `*.svc` and `*.cluster.local`
-names, tokens, ServiceAccount names, Argo CD URLs). Every structure is built field by field from an
-allow-list, never by copying a cluster object, and every free-text field (the kube-bench title, capped at
-200, and remediation, capped at 300) goes through the ADR 0021 scrubber and truncation. A violation group
-may name any namespace, the api's and web's included, since all are declared in the public repository.
+namespaces as part of provenance, and everything ADR 0021 already forbids (node names, host and pod IPs,
+`*.svc` and `*.cluster.local` names, tokens, ServiceAccount names, Argo CD URLs). Every structure is built
+field by field from an allow-list, never by copying a cluster object, and every free-text field (the
+kube-bench title, capped at 200, and remediation, capped at 300) goes through the ADR 0021 scrubber and
+truncation; after scrubbing, the name of the node the benchmark pod ran on is replaced by `[node]` in both,
+since a check's text can quote it. The kube-bench log committed as a test fixture is redacted the same way
+(node `node-fixture`, address `192.0.2.10`, a documentation address). A violation group may name any
+namespace, the api's and web's included, since all are declared in the public repository.
 
 **kube-bench remediation text may name host file paths** (`/var/lib/rancher/k3s/...`, the CNI
 configuration directory). They describe where k3s keeps its files on any host, not something particular to
@@ -125,24 +129,28 @@ per-run record.
   reads "since 19:05", and the page labels the numbers with `since`, never as a bare "24 h".
 - **Runs, detections and responses of one run share a bucket**, the hour the run was queued, so
   `runs >= detected >= responded` holds in every window. Alerts and actions are bucketed when they arrive.
+  A run event stamped in the future is counted as now, for its bucket and for `LastRunAt`, so a skewed
+  clock cannot park counts in an hour that has not started.
   Because alerts count from every namespace and each detection of a run follows its alert, the guarantee is
   `alerts_24h >= detected` and `actions_24h >= responded` - except while a detection published on the
   Talon-first path is still waiting for its Falco webhook (normally seconds) or, if that webhook never
   arrives, until the run's hour leaves the window.
 - **Sanitised, not rejected, on load.** A bucket older than the window or more than one hour in the future
   is dropped, duplicate hours are summed, a `WindowSince` or `LastRunAt` in the future is clamped to now.
-  The blob is rejected (counts as unparseable, ADR 0030) only for a negative count, a count above 2^40, or
-  more than 25 buckets left after sanitising. A late first read merges as before: buckets are summed by
-  hour, the earliest `WindowSince` and the latest `LastRunAt` win. Today's blob, without the new fields,
-  loads with every all-time counter unchanged, no buckets and `WindowSince` = now.
+  An hourly section that is still malformed after that (a negative count, a count above 2^40, or more than
+  25 buckets in range) is discarded on its own: the window restarts at now while the all-time totals still
+  load. Only a malformed all-time section rejects the blob (counts as unparseable, ADR 0030), as before. A
+  late first read merges as before: buckets are summed by hour, the earliest `WindowSince` and the latest
+  `LastRunAt` win. Today's blob, without the new fields, loads with every all-time counter unchanged, no
+  buckets and `WindowSince` = now.
 
 ### 4. Honest motion
 - Absolute times are UTC and say "UTC"; a relative time ("6 h ago") appears only next to an absolute one.
   The run history shows UTC with milliseconds and links each run's raw JSON at `/api/runs/{id}`.
-- `GET /api/events?tick=1` sends one tick right after the replay and then replaces each 15 s heartbeat
-  comment with one: `event: tick` / `data: {"at": ..., "started_at": ...}` - the server's clock and the
-  API's start - without an `id:` line, so resuming with `Last-Event-ID` is unaffected. It is opt-in: without `tick=1` the stream
-  is byte for byte what it was, and a page that does not know the event ignores it.
+- `GET /api/events?tick=1` sends one tick right after the replay and then replaces each 15 s heartbeat comment
+  with one: `event: tick` / `data: {"at": ..., "started_at": ...}` - the server's clock and the API's start -
+  without an `id:` line, so resuming with `Last-Event-ID` is unaffected. It is opt-in: without `tick=1` the
+  stream is byte for byte what it was, and a page that does not know the event ignores it.
 - The page shows the newest run as an evidence card at the top (scenario, state, absolute time, the sandbox
   pod's name and UID, image digest, container id, the first Falco and Talon events with their own and the
   API's timestamps, the commands of a terminal run, the latencies, and "N more - raw JSON"), a ticker of the
