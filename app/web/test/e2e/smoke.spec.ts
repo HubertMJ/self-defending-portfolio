@@ -414,6 +414,38 @@ test.describe("technical mode", () => {
   });
 });
 
+test.describe("against the API deployed today (serve.mjs --live-api: JSON 404 on the new endpoints)", () => {
+  test("the one-click scenarios are the attack section: no terminal, no twin, no stats, nothing sent", async ({ page }) => {
+    test.setTimeout(40_000);
+    const problems = guardConsole(page);
+    const requests: string[] = [];
+    page.on("request", (r) => {
+      if (r.url().includes("/api/") && !r.url().includes("/api/events")) requests.push(`${r.method()} ${new URL(r.url()).pathname}`);
+    });
+    await page.goto("http://127.0.0.1:4175/");
+    await expect(page.locator(".scenario")).toHaveCount(4);
+    // The page learnt there is no terminal: the hero and the section say what is there instead.
+    await expect(page.locator("#hero-cta")).toHaveText("Launch an attack");
+    await expect(page.locator("#attack-title")).toHaveText("Launch a real attack");
+    await expect(page.locator(".terminal-wrap")).toBeHidden();
+    await expect(page.locator(".launcher__head")).toBeHidden();
+    await expect(page.getByText("Open the terminal")).toHaveCount(0);
+    await expect(page.locator("#how .section__lead")).not.toContainText("terminal", { useInnerText: true });
+    // That API ignores ?compare=1 and would start an ordinary run: no twin is offered.
+    await expect(page.locator(".scenario__twin")).toHaveCount(0);
+    await expect(page.locator(".scenario .btn--attack")).toHaveCount(4);
+    await expect(page.locator("#hero-stats")).toBeHidden();
+    await page.waitForTimeout(3000);
+    // Loading the page posts nothing, and asks for the missing endpoints once each, not on a loop.
+    expect(requests.filter((r) => r.startsWith("POST"))).toEqual([]);
+    expect(requests.filter((r) => r === "GET /api/stats").length).toBeLessThanOrEqual(1);
+    expect(requests.filter((r) => r === "GET /api/scenarios/terminal/details").length).toBeLessThanOrEqual(1);
+    expect(requests.filter((r) => r.startsWith("GET /api/runs/")).length).toBeLessThanOrEqual(1);
+    await noHorizontalScroll(page);
+    expect(problems).toEqual([]);
+  });
+});
+
 test.describe("real EventSource against a streaming server", () => {
   test("opens exactly one long-lived stream, keeps it open and shows the replay", async ({ page }) => {
     test.skip(!!process.env.BASE_URL, "needs the local --stub-events server");

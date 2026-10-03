@@ -187,7 +187,7 @@ export function mountDefenceMap(root: HTMLElement, api: ApiClient): { refresh():
       root,
       renderDefenceMap({ posture }),
       posture
-        ? h("p", { class: "panel-foot" }, "Live posture numbers come from the dashboard above. Launch the terminal to see which layer answers which move.")
+        ? h("p", { class: "panel-foot" }, "Live posture numbers come from the dashboard above.", h("span", { class: "needs-terminal" }, " Launch the terminal to see which layer answers which move."))
         : h("p", { class: "panel-foot" }, "Posture numbers load with the dashboard above; the layers themselves are always here."),
     );
   };

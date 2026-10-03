@@ -129,6 +129,11 @@ export function mountScenarios(
     sync();
   };
 
+  // Only an API that knows `?compare=1` gets the twin button: an older one ignores the parameter and
+  // would start an ordinary run instead. Such an API also predates the terminal, and its scenarios
+  // carry no `interactive` field — that is how it is told apart.
+  let compare = false;
+
   const card = (s: Scenario): HTMLElement => {
     const url = attackUrl(s.technique);
     const btn = h(
@@ -140,8 +145,8 @@ export function mountScenarios(
     btn.addEventListener("click", () => void launch(s));
     buttons.set(s.id, btn);
     // "Run it with and without the response": the same attack in sandbox and in sandbox-unguarded (C).
-    const twin = h("button", { type: "button", class: "btn btn--ghost btn--small scenario__twin" }, "With & without the response");
-    twin.addEventListener("click", () => void launch(s, { compare: true }));
+    const twin = compare ? h("button", { type: "button", class: "btn btn--ghost btn--small scenario__twin" }, "With & without the response") : null;
+    twin?.addEventListener("click", () => void launch(s, { compare: true }));
     const response = RESPONSE_LABEL[s.response] ?? s.response;
     return h(
       "li",
@@ -184,6 +189,7 @@ export function mountScenarios(
       return;
     }
     scenarios = res.value;
+    compare = scenarios.some((s) => typeof s.interactive === "boolean");
     onLoaded?.(scenarios);
     // The interactive scenario (the terminal) has its own panel above; the launcher is the one-click
     // demo — "Just show me" — so it shows only the non-interactive scenarios.

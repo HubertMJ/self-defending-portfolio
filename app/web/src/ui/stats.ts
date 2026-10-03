@@ -74,6 +74,8 @@ function statTile(value: string, label: string, foot: string): HTMLElement {
 export interface StatsHandle {
   refresh(): void;
   setLastRun(last: LastRun): void;
+  /** The objectives' titles and order, from the terminal's catalogue (loaded once, by the terminal). */
+  setObjectives(objectives: Objective[]): void;
 }
 
 export function mountStats(root: HTMLElement, api: ApiClient): StatsHandle {
@@ -101,25 +103,32 @@ export function mountStats(root: HTMLElement, api: ApiClient): StatsHandle {
     replace(root, el);
   };
 
+  // After a failure: an API without /api/stats (a 404) is not asked again; anything else is retried
+  // a few times, further apart each time, then left alone until the page is reloaded.
+  let failures = 0;
   const refresh = async () => {
     clearTimeout(timer);
-    const [statsRes, detailsRes] = await Promise.all([api.stats(), api.scenarioDetails("terminal")]);
-    if (detailsRes.ok && detailsRes.value.objectives) objectives = detailsRes.value.objectives;
-    if (statsRes.ok) {
-      snapshot = statsRes.value;
+    const res = await api.stats();
+    if (res.ok) {
+      failures = 0;
+      snapshot = res.value;
       draw();
       timer = setTimeout(() => void refresh(), 60_000);
-    } else {
-      // No /api/stats: hide the band and back off (don't poll a 404 every minute, review item 14).
-      root.hidden = true;
-      timer = setTimeout(() => void refresh(), 10 * 60_000);
+      return;
     }
+    failures += 1;
+    if (!snapshot) root.hidden = true;
+    if (res.message !== "HTTP 404" && failures < 4) timer = setTimeout(() => void refresh(), 60_000 * 2 ** failures);
   };
 
   root.hidden = true;
   void refresh();
   return {
     refresh: () => void refresh(),
+    setObjectives(o) {
+      objectives = o;
+      draw();
+    },
     setLastRun(l) {
       // Called on every event of the feed; the band is redrawn only when the tile would change.
       if (last && last.title === l.title && last.at === l.at && last.respondMs === l.respondMs) return;

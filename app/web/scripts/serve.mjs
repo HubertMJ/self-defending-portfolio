@@ -3,7 +3,7 @@
 // drift between the two), the same cache headers, and the same text/plain 404 for /api/*. Used by
 // `npm run serve`, the dev loop and the Playwright suite. Not used in the image.
 //
-//   node scripts/serve.mjs [--port 4173] [--stub-events]
+//   node scripts/serve.mjs [--port 4173] [--stub-events | --live-api]
 //   then open http://localhost:4173/?mock=1 for mock mode, or / for the offline state.
 //
 // --stub-events serves GET /api/events the way the API does (same headers, the retry + 2 KiB
@@ -14,6 +14,13 @@
 // fields, Talon's actionner), in the API's exact field names, so the real parsing path sees them
 // too. Everything else under /api stays a text/plain 404, which is how the page meets an API without
 // the details/runs/limits endpoints: it must degrade, not break.
+//
+// --live-api answers like the API deployed today, before the interactive work: the same event stream,
+// /api/scenarios with the four one-click scenarios (no `interactive` field), posture, limits, details
+// for those four, POST /api/attack/{id} accepted for them (`?compare=1` ignored, as that API does) —
+// and a JSON 404 for everything the interactive work added: the terminal's details and attack,
+// /api/stats, and /api/runs/{id} of a run it does not keep. The page must then offer the one-click
+// demo as its attack section, with no terminal and no twin.
 
 import { createServer } from "node:http";
 import { readFile, stat } from "node:fs/promises";
@@ -24,7 +31,8 @@ const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const dist = join(root, "dist");
 const portArg = process.argv.indexOf("--port");
 const port = Number(portArg > 0 ? process.argv[portArg + 1] : process.env.PORT ?? 4173);
-const stubEvents = process.argv.includes("--stub-events");
+const liveApi = process.argv.includes("--live-api");
+const stubEvents = liveApi || process.argv.includes("--stub-events");
 
 // One finished "shell-in-container" run, as the extended API replays it: [event name, payload].
 function replayedRun() {
@@ -64,6 +72,44 @@ function eventStream(req, res) {
   req.on("close", () => clearInterval(heartbeat));
 }
 
+// GET /api/scenarios of today's API: the scenarios package's Public shape before `interactive`.
+const LIVE_SCENARIOS = [
+  ["shell-in-container", "Shell in a container", "T1059.004", "Terminal shell in container", "terminate"],
+  ["network-tool", "Download tool in a container", "T1071.001", "SDP network tool in sandbox", "quarantine"],
+  ["sensitive-file-read", "Read /etc/shadow", "T1003.008", "Read sensitive file untrusted", "terminate"],
+  ["drop-and-execute", "Drop and run a new binary", "T1105", "Drop and execute new binary in container", "terminate"],
+].map(([id, title, technique, detection, response]) => ({ id, title, summary: `${title}: one fixed attack, detected and answered.`, technique, detection, response, victim: true }));
+
+const LIVE_POSTURE = {
+  generated_at: "2026-10-01T11:59:00Z",
+  kyverno: { policies: [{ name: "verify-portfolio-images", pass: 14, fail: 0, warn: 0 }] },
+  trivy: { images: 27, critical: 0, high: 3, medium: 41, low: 88 },
+  kube_bench: { last_run: "2026-10-01T07:00:00Z", pass: 98, fail: 4, warn: 21, info: 2 },
+  falco: { alerts_24h: 17 },
+  talon: { actions_24h: 9 },
+};
+
+/** The JSON API of --live-api, or undefined for a path it leaves to the static server. */
+function liveApiAnswer(method, path) {
+  const id = (re) => re.exec(path)?.[1];
+  const known = (x) => LIVE_SCENARIOS.some((s) => s.id === x);
+  if (method === "GET" && path === "/api/scenarios") return [200, LIVE_SCENARIOS];
+  if (method === "GET" && path === "/api/posture") return [200, LIVE_POSTURE];
+  if (method === "GET" && path === "/api/limits") {
+    return [200, { per_visitor: { limit: 3, window_s: 600, remaining: 3, reset_in_s: 0 }, global: { limit: 30, window_s: 3600, remaining: 30 }, active_run: false, stream_slots_remaining: 60 }];
+  }
+  const details = id(/^\/api\/scenarios\/([^/]+)\/details$/);
+  if (method === "GET" && details) {
+    if (!known(details)) return [404, { error: "unknown scenario" }];
+    return [200, { pre_exec_command: [], exec_command: ["sh", "-c", "id"], pod_security: { runAsUser: 10001, runAsNonRoot: true, capabilities_drop: ["ALL"] }, resources: {}, image: { ref: "ghcr.io/hubertmj/self-defending-portfolio/scenario@sha256:abe9585fe91fec1881895ae79418f6b756a4ca094c9e5e7f0b3dd8a1a76cdea0", digest: "" }, policies: [], commit: "", victim: true }];
+  }
+  const attack = id(/^\/api\/attack\/([^/]+)$/);
+  if (method === "POST" && attack) return known(attack) ? [202, { run_id: "0f0e0d0c0b0a0908", scenario: attack, state: "queued" }] : [404, { error: "unknown scenario" }];
+  if (method === "GET" && /^\/api\/runs\/[^/]+$/.test(path)) return [404, { error: "unknown run (only the last 50 runs are kept)" }];
+  if (path.startsWith("/api/")) return [404, { error: "not found" }];
+  return undefined;
+}
+
 const TYPES = {
   ".html": "text/html; charset=utf-8",
   ".js": "application/javascript; charset=utf-8",
@@ -89,8 +135,10 @@ const server = createServer(async (req, res) => {
     res.writeHead(status, { ...base, ...headers });
     res.end(req.method === "HEAD" ? undefined : body);
   };
-  if (req.method !== "GET" && req.method !== "HEAD") return send(405, "method not allowed\n", { "Content-Type": "text/plain" });
   if (stubEvents && url.pathname === "/api/events") return eventStream(req, res);
+  const answer = liveApi ? liveApiAnswer(req.method, url.pathname) : undefined;
+  if (answer) return send(answer[0], JSON.stringify(answer[1]), { "Content-Type": "application/json", "Cache-Control": "no-store" });
+  if (req.method !== "GET" && req.method !== "HEAD") return send(405, "method not allowed\n", { "Content-Type": "text/plain" });
   if (url.pathname === "/api" || url.pathname.startsWith("/api/")) {
     return send(404, "not found\n", { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" });
   }

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { humanSpeed } from "../../src/ui/console";
 import { LAYERS, litFromCommands, renderDefenceMap } from "../../src/ui/defencemap";
 import { renderStats } from "../../src/ui/stats";
@@ -237,5 +237,42 @@ describe("hero stats band (review 2, item 5)", () => {
     expect(root.firstElementChild).toBe(drawn);
     handle.setLastRun({ ...last, respondMs: 150 });
     expect(root.firstElementChild).not.toBe(drawn);
+  });
+});
+
+describe("degrading against today's API (review 2, items 8 and 13)", () => {
+  const jsonFetch = (status: number, body: unknown, count: { n: number }) => async () => {
+    count.n += 1;
+    return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
+  };
+
+  it("does not poll /api/stats after a 404, and gives up after a few other failures", async () => {
+    vi.useFakeTimers();
+    try {
+      const { mountStats } = await import("../../src/ui/stats");
+      const { ApiClient } = await import("../../src/lib/api");
+      const missing = { n: 0 };
+      mountStats(document.createElement("div"), new ApiClient({ fetch: jsonFetch(404, { error: "not found" }, missing) }));
+      const broken = { n: 0 };
+      mountStats(document.createElement("div"), new ApiClient({ fetch: jsonFetch(500, { error: "x" }, broken) }));
+      await vi.advanceTimersByTimeAsync(6 * 3600_000);
+      expect(missing.n).toBe(1);
+      expect(broken.n).toBe(4);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("offers the twin only when the API's scenarios say it knows ?compare=1 (an `interactive` field)", async () => {
+    const { mountScenarios } = await import("../../src/ui/scenarios");
+    const { ApiClient } = await import("../../src/lib/api");
+    const old = [{ id: "network-tool", title: "t", summary: "s", technique: "T1071.001", detection: "d", response: "quarantine", victim: true }];
+    for (const [list, twins] of [[old, 0], [old.map((s) => ({ ...s, interactive: false })), 1]] as const) {
+      const root = document.createElement("div");
+      mountScenarios(root, document.createElement("p"), new ApiClient({ fetch: jsonFetch(200, list, { n: 0 }) }));
+      await new Promise((r) => setTimeout(r, 10));
+      expect(root.querySelectorAll(".scenario .btn--attack")).toHaveLength(1);
+      expect(root.querySelectorAll(".scenario__twin")).toHaveLength(twins);
+    }
   });
 });

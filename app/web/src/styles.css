@@ -2746,6 +2746,14 @@ html:not([data-tech="on"]) .tech-only {
   margin-bottom: 2.5rem;
 }
 
+/* An API without the terminal (main.ts degradeToOneClick): the one-click scenarios are the attack
+   section, and nothing offers or mentions a terminal that is not there. */
+html[data-terminal="off"] .terminal-wrap,
+html[data-terminal="off"] .launcher__head,
+html[data-terminal="off"] .needs-terminal {
+  display: none;
+}
+
 .term-start {
   padding: clamp(1.1rem, 3vw, 2rem);
   border: 1px solid color-mix(in srgb, var(--attack) 40%, var(--border));

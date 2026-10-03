@@ -66,7 +66,7 @@
           [TODO-CONTENT: short personal introduction]
         </p>
         <p class="hero__actions">
-          <a class="btn btn--primary" href="#attack">Open the terminal</a>
+          <a class="btn btn--primary" id="hero-cta" href="#attack">Open the terminal</a>
           <a class="btn btn--ghost" href="https://github.com/HubertMJ/self-defending-portfolio" rel="noopener noreferrer">Read the source</a>
         </p>
         <div class="herostats-wrap" id="hero-stats" hidden></div>
@@ -101,7 +101,7 @@
       <header class="section__head">
         <p class="eyebrow">02 · Attack it</p>
         <h2 id="attack-title">Your hands on the pod</h2>
-        <p class="section__lead">
+        <p class="section__lead" id="attack-lead">
           A throwaway pod in an isolated <code>sandbox</code> namespace (no service-account token,
           default-deny network, tight quotas, read-only root filesystem) with a little shop running inside it.
           Type commands into it and read the real output; the shop window changes beside you, and the cluster
@@ -148,7 +148,7 @@
       <header class="section__head">
         <p class="eyebrow">03 · How it works</p>
         <h2 id="how-title">Defence in layers, all from git</h2>
-        <p class="section__lead">Seven layers an attack has to pass. Nothing here was clicked together: every layer is a reviewed commit, reconciled by Argo CD. In the terminal above, each command lights the layer that answered it.</p>
+        <p class="section__lead">Seven layers an attack has to pass. Nothing here was clicked together: every layer is a reviewed commit, reconciled by Argo CD.<span class="needs-terminal"> In the terminal above, each command lights the layer that answered it.</span></p>
       </header>
       <div id="defence-map" class="defence-map-wrap">
         <noscript>

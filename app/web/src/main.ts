@@ -45,6 +45,22 @@ function setupThemeToggle(): void {
   matchMedia("(prefers-color-scheme: dark)").addEventListener("change", label);
 }
 
+/**
+ * An API without the terminal (today's live one answers its catalogue with a JSON 404): the one-click
+ * scenarios become the attack section, and nothing on the page offers a terminal that is not there.
+ */
+function degradeToOneClick(): void {
+  document.documentElement.dataset.terminal = "off";
+  replace(byId("hero-cta"), "Launch an attack");
+  replace(byId("attack-title"), "Launch a real attack");
+  replace(
+    byId("attack-lead"),
+    "Each attack starts a throwaway pod in an isolated ",
+    h("code", {}, "sandbox"),
+    " namespace (no service-account token, default-deny network, tight quotas, read-only root filesystem) with a little shop running inside it, runs one fixed attack, and plays the detection and the response out below as they happen. One run at a time, a few per visitor.",
+  );
+}
+
 function main(): void {
   document.documentElement.classList.add("js");
   if (prefersReducedMotion()) document.documentElement.classList.add("reduced-motion");
@@ -80,6 +96,10 @@ function main(): void {
     // terminal's button and the one-click launcher (review item 11).
     onRateLimited: (seconds) => {
       launcherState = { ...launcherState, cooldownUntil: Date.now() + seconds * 1000 };
+    },
+    onAvailable: (available, objectives) => {
+      if (available) stats.setObjectives(objectives);
+      else degradeToOneClick();
     },
   });
 

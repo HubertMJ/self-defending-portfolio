@@ -46,7 +46,14 @@ function completions(cat: Catalogue, prefix: string): string[] {
 export function mountTerminal(
   root: HTMLElement,
   api: ApiClient,
-  hooks: { onStarted?: (runId: string) => void; blocked?: () => string | null; cooldownSeconds?: () => number; onRateLimited?: (seconds: number) => void } = {},
+  hooks: {
+    onStarted?: (runId: string) => void;
+    blocked?: () => string | null;
+    cooldownSeconds?: () => number;
+    onRateLimited?: (seconds: number) => void;
+    /** Whether this API has the terminal, with its objectives: told once the catalogue has loaded or failed to. */
+    onAvailable?: (available: boolean, objectives: Objective[]) => void;
+  } = {},
 ): TerminalHandle {
   const reduced = prefersReducedMotion();
   let catalogue: Catalogue | null = null;
@@ -111,6 +118,7 @@ export function mountTerminal(
         timeoutSeconds: r.value.timeout_seconds ?? 120,
       };
       renderIdle();
+      hooks.onAvailable?.(true, catalogue.objectives);
     } else {
       renderUnavailable();
     }
@@ -120,6 +128,7 @@ export function mountTerminal(
   // main thing when the terminal is not there (review item 20) — not a loud "offline / Retry" block.
   const renderUnavailable = () => {
     mode = "unavailable";
+    hooks.onAvailable?.(false, []);
     replace(
       root,
       h(
