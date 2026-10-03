@@ -66,8 +66,10 @@ export function runHops(run: RunView): Hop[] {
   const deleted = first(run.pods, (p) => p.deleted || /^deleted$/i.test(p.phase));
   // Hop 8 of a quarantine is the first probe that failed *after* the label landed — a transient
   // timeout before it must not light the cut early (FIX 1 / review item 6).
-  const unreachable = first(run.victim, (v) => v.status === "unreachable" && (run.quarantinedAt === undefined || ts(v.at) >= run.quarantinedAt));
-  const gone = first(run.victim, (v) => v.status === "gone");
+  // Both are the guarded pod's: on a compare run the unguarded twin's probes never stand for the cut.
+  const guardedVictim = run.victim.filter((v) => v.arm !== "unguarded");
+  const unreachable = first(guardedVictim, (v) => v.status === "unreachable" && (run.quarantinedAt === undefined || ts(v.at) >= run.quarantinedAt));
+  const gone = first(guardedVictim, (v) => v.status === "gone");
 
   const hop = (h: Omit<Hop, "at" | "raw">, raw: string | undefined, fallback?: number): Hop => {
     const at = raw ? ts(raw) : fallback;
