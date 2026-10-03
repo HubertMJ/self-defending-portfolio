@@ -8,6 +8,11 @@
 // Persistence is a single ConfigMap in `portfolio-api` (configmap.go), read at start and written at
 // most once a minute and on shutdown. A restart therefore keeps the running totals; the sandbox
 // quota and the single run slot bound what a burst right after one could add.
+//
+// The same aggregate carries the "last 24 h" numbers (ADR 0035): runs, detections and responses, and
+// the Falco alerts and Talon actions the webhooks deliver, in one set of hourly buckets. The hero's
+// numbers and the posture section's alerts_24h/actions_24h are therefore read from the same buckets
+// and survive a restart together, so the page cannot show "7 detected" next to "0 alerts".
 package stats
 
 import (
@@ -37,6 +42,23 @@ type Snapshot struct {
 	Commands   map[string]CommandStat   `json:"commands"`
 	Objectives map[string]ObjectiveStat `json:"objectives"`
 	Terminal   TerminalStat             `json:"terminal"`
+	// LastRunAt is when the most recent run was queued (persisted, ADR 0035); null before any run.
+	LastRunAt *time.Time `json:"last_run_at"`
+	Last24h   Window     `json:"last_24h"`
+}
+
+// Window is the hourly window: the current hour and the 23 before it, so it covers between 23 and
+// 24 h. Since says where it starts - the start of the oldest hour, or later when the counting itself
+// started later (the first day after the window was introduced) - and the page labels the numbers
+// with it rather than with a bare "24 h". A run's Runs, Detected and Responded are all counted in
+// the hour it was queued, so runs >= detected >= responded holds in every window.
+type Window struct {
+	Since        time.Time `json:"since"`
+	Runs         int       `json:"runs"`
+	Detected     int       `json:"detected"`
+	Responded    int       `json:"responded"`
+	FalcoAlerts  int       `json:"falco_alerts"`
+	TalonActions int       `json:"talon_actions"`
 }
 
 // ScenarioStat is one scenario's run tally: how many runs, how many were detected, how many were
@@ -97,12 +119,37 @@ type agg struct {
 	RespMax         int64
 	RespSamples     []int64
 	SurvivalSamples []int64
+	// The hourly window (ADR 0035): at most windowHours buckets (plus one hour of clock slack after a
+	// load), oldest first, pruned on every write. WindowSince is when this window's counting began;
+	// LastRunAt is the queued time of the newest run.
+	Hourly      []HourBucket
+	WindowSince time.Time
+	LastRunAt   time.Time
 }
 
+// HourBucket is one hour of the window. H is the hour as a Unix timestamp divided by 3600.
+type HourBucket struct {
+	H         int64
+	Runs      int
+	Detected  int
+	Responded int
+	Alerts    int
+	Actions   int
+}
+
+// windowHours is the window's length in buckets: the current hour and the 23 before it.
+const windowHours = 24
+
+// maxHourly is the most buckets a persisted window may carry: windowHours plus the next hour, which
+// a pod whose clock runs slightly ahead may have written.
+const maxHourly = windowHours + 1
+
 func newAgg(now time.Time) *agg {
-	return &agg{Since: now, ByScenario: map[string]*ScenarioStat{},
+	return &agg{Since: now, WindowSince: now, ByScenario: map[string]*ScenarioStat{},
 		Commands: map[string]*CommandStat{}, Objectives: map[string]*ObjectiveStat{}}
 }
+
+func unixHour(t time.Time) int64 { return t.Unix() / 3600 }
 
 // maxEndedTracked bounds the set of finished run ids kept to reject late events (ADR 0030).
 const maxEndedTracked = 512
@@ -128,6 +175,9 @@ type runState struct {
 	sc          scenarios.Scenario
 	interactive bool
 	start       time.Time
+	// hour is the window bucket of the run (ADR 0035): the hour of its queued event, or of the moment
+	// it was recorded when that event carries no time. Detected and Responded go to this bucket too.
+	hour int64
 	// detectedAt is when each command of the run was first detected, keyed by command_seq (0: a
 	// scripted run, or a terminal detection or response tied to no command); a response is measured
 	// only against the detection of the same key. answered marks the keys a response was seen for.
@@ -195,6 +245,16 @@ func (c *Collector) recordRun(data []byte) {
 			if rs.interactive {
 				c.a.TerminalRuns++
 			}
+			at := e.At
+			if at.IsZero() {
+				at = c.now()
+			}
+			at = at.UTC()
+			rs.hour = unixHour(at)
+			if at.After(c.a.LastRunAt) {
+				c.a.LastRunAt = at
+			}
+			c.addHourLocked(rs.hour, func(b *HourBucket) { b.Runs++ })
 			c.dirty = true
 		}
 	case "detected":
@@ -204,12 +264,21 @@ func (c *Collector) recordRun(data []byte) {
 		if !rs.detected {
 			rs.detected = true
 			c.scenarioStat(rs.scenario).Detected++
+			// In the run's own hour, not this event's: a run queued at 10:59:59 and detected at
+			// 11:00:01 is one run and one detection of the 10:00 hour. A run never seen queued is
+			// not in any hour's Runs, so it adds no detection to one either.
+			if rs.counted {
+				c.addHourLocked(rs.hour, func(b *HourBucket) { b.Detected++ })
+			}
 			c.dirty = true
 		}
 	case "responded":
 		if !rs.responded {
 			rs.responded = true
 			c.scenarioStat(rs.scenario).Responded++
+			if rs.counted {
+				c.addHourLocked(rs.hour, func(b *HourBucket) { b.Responded++ })
+			}
 			c.dirty = true
 		}
 		// The latency is the response to *this* detection: the one with the same command_seq (a
@@ -320,6 +389,105 @@ func (c *Collector) recordCommand(data []byte) {
 	}
 }
 
+// addHourLocked applies fn to the bucket of hour h, creating it, after pruning the hours that have
+// left the window. An hour already out of the window (a run that outlived it) is not recreated.
+func (c *Collector) addHourLocked(h int64, fn func(*HourBucket)) {
+	nowH := unixHour(c.now())
+	c.pruneLocked(nowH)
+	if h < nowH-(windowHours-1) {
+		return
+	}
+	i := sort.Search(len(c.a.Hourly), func(i int) bool { return c.a.Hourly[i].H >= h })
+	if i == len(c.a.Hourly) || c.a.Hourly[i].H != h {
+		c.a.Hourly = append(c.a.Hourly, HourBucket{})
+		copy(c.a.Hourly[i+1:], c.a.Hourly[i:])
+		c.a.Hourly[i] = HourBucket{H: h}
+	}
+	fn(&c.a.Hourly[i])
+}
+
+// pruneLocked drops the buckets older than the window ending in hour nowH.
+func (c *Collector) pruneLocked(nowH int64) {
+	oldest := nowH - (windowHours - 1)
+	n := 0
+	for n < len(c.a.Hourly) && c.a.Hourly[n].H < oldest {
+		n++
+	}
+	if n > 0 {
+		c.a.Hourly = append(c.a.Hourly[:0], c.a.Hourly[n:]...)
+	}
+}
+
+// windowLocked sums the buckets of the window ending now and says where it starts.
+func (c *Collector) windowLocked() Window {
+	now := c.now().UTC()
+	nowH := unixHour(now)
+	oldest := nowH - (windowHours - 1)
+	w := Window{Since: time.Unix(oldest*3600, 0).UTC()}
+	if c.a.WindowSince.After(w.Since) {
+		w.Since = c.a.WindowSince
+	}
+	for _, b := range c.a.Hourly {
+		if b.H < oldest || b.H > nowH {
+			continue
+		}
+		w.Runs += b.Runs
+		w.Detected += b.Detected
+		w.Responded += b.Responded
+		w.FalcoAlerts += b.Alerts
+		w.TalonActions += b.Actions
+	}
+	return w
+}
+
+// Since24h is where the hourly window starts now: posture's falco.counted_since, the same value as
+// /api/stats last_24h.since (ADR 0035).
+func (c *Collector) Since24h() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.windowLocked().Since
+}
+
+// WindowCounter counts one kind of webhook delivery (Falco alerts or Talon actions) into the hourly
+// window, by the time it arrives. It is what the server's webhook handlers Add to and what posture's
+// alerts_24h/actions_24h Count (ADR 0035), so both read the persisted buckets the hero reads.
+type WindowCounter struct {
+	c      *Collector
+	action bool // Talon actions; Falco alerts otherwise
+}
+
+// AlertCounter counts Falco alerts (every namespace, as delivered).
+func (c *Collector) AlertCounter() WindowCounter { return WindowCounter{c: c} }
+
+// ActionCounter counts Talon actions (every notification, as delivered).
+func (c *Collector) ActionCounter() WindowCounter { return WindowCounter{c: c, action: true} }
+
+// Add counts one delivery now.
+func (w WindowCounter) Add() {
+	c := w.c
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.addHourLocked(unixHour(c.now()), func(b *HourBucket) {
+		if w.action {
+			b.Actions++
+		} else {
+			b.Alerts++
+		}
+	})
+	c.dirty = true
+}
+
+// Count is the number of deliveries in the window ending now.
+func (w WindowCounter) Count() int {
+	w.c.mu.Lock()
+	defer w.c.mu.Unlock()
+	win := w.c.windowLocked()
+	if w.action {
+		return win.TalonActions
+	}
+	return win.FalcoAlerts
+}
+
 // Snapshot renders the current counters.
 func (c *Collector) Snapshot() Snapshot {
 	c.mu.Lock()
@@ -344,6 +512,11 @@ func (c *Collector) Snapshot() Snapshot {
 		s.Objectives[id] = *v
 	}
 	s.ResponseMS = ResponseMS{Last: c.a.RespLast, Min: c.a.RespMin, Max: c.a.RespMax, P50: median(c.a.RespSamples)}
+	if !c.a.LastRunAt.IsZero() {
+		at := c.a.LastRunAt
+		s.LastRunAt = &at
+	}
+	s.Last24h = c.windowLocked()
 	return s
 }
 
@@ -444,6 +617,11 @@ func (c *Collector) Load(data []byte) error {
 	if a.Since.IsZero() {
 		a.Since = c.now().UTC()
 	}
+	// A blob from before the hourly window (ADR 0035) has none: its window starts now, and the page
+	// says "since" that time instead of passing off a few hours as a day.
+	if a.WindowSince.IsZero() {
+		a.WindowSince = c.now().UTC()
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.a = mergeAgg(&a, c.a)
@@ -451,12 +629,20 @@ func (c *Collector) Load(data []byte) error {
 }
 
 // mergeAgg returns the persisted aggregate p with cur - counted since start-up, so more recent - added
-// to it: counters summed, the best kept, the latency extremes combined, and cur's samples appended
-// after p's within the ring caps.
+// to it: counters summed, the best kept, the latency extremes combined, cur's samples appended
+// after p's within the ring caps, the hourly buckets summed hour by hour, the earliest window start
+// and the latest run time kept.
 func mergeAgg(p, cur *agg) *agg {
 	if cur.Since.Before(p.Since) {
 		p.Since = cur.Since
 	}
+	if p.WindowSince.IsZero() || (!cur.WindowSince.IsZero() && cur.WindowSince.Before(p.WindowSince)) {
+		p.WindowSince = cur.WindowSince
+	}
+	if cur.LastRunAt.After(p.LastRunAt) {
+		p.LastRunAt = cur.LastRunAt
+	}
+	p.Hourly = sumHours(append(p.Hourly, cur.Hourly...))
 	p.Runs += cur.Runs
 	p.Unanswered += cur.Unanswered
 	p.TerminalRuns += cur.TerminalRuns
@@ -497,6 +683,27 @@ func mergeAgg(p, cur *agg) *agg {
 	return p
 }
 
+// sumHours merges buckets of the same hour (their counts added) and sorts them oldest first.
+func sumHours(bs []HourBucket) []HourBucket {
+	byH := map[int64]int{} // hour -> index in out
+	out := make([]HourBucket, 0, len(bs))
+	for _, b := range bs {
+		if i, ok := byH[b.H]; ok {
+			o := &out[i]
+			o.Runs += b.Runs
+			o.Detected += b.Detected
+			o.Responded += b.Responded
+			o.Alerts += b.Alerts
+			o.Actions += b.Actions
+			continue
+		}
+		byH[b.H] = len(out)
+		out = append(out, b)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].H < out[j].H })
+	return out
+}
+
 // maxCounter bounds every persisted counter and latency. No real total comes near it (it is a
 // trillion), and a blob carrying more is nonsense: a counter at MaxInt64 would overflow on the next
 // increment and make the next load reject the blob and start everything over.
@@ -508,6 +715,13 @@ const maxCounter = 1 << 40
 // or a min above the max. A blob written before RespCount existed has it at 0 although it has
 // samples: the count is derived from them, so the old min is still a min (an old min of 200 and a
 // later 900 ms response give 200, not 900).
+//
+// The hourly window (ADR 0035) is sanitised rather than rejected, because losing a day's buckets is
+// no reason to lose the all-time totals beside them: buckets outside [now-23 h, now+1 h] are dropped,
+// buckets of the same hour summed, and a window start or last run time in the future clamped to now.
+// Only a count that is negative or past maxCounter, or more buckets in range than any writer keeps
+// (maxHourly, counted before same-hour buckets are merged), rejects the blob as unparseable. A blob
+// from before the window has none of these fields and loads unchanged.
 func validateAgg(a *agg, now time.Time) error {
 	if a.ByScenario == nil {
 		a.ByScenario = map[string]*ScenarioStat{}
@@ -569,11 +783,44 @@ func validateAgg(a *agg, now time.Time) error {
 	if a.BestObjectives > scenarios.MaxCommands || (a.BestObjectives > 0 && a.TerminalRuns == 0) {
 		return fmt.Errorf("best_objectives %d is not reachable", a.BestObjectives)
 	}
+	if err := sanitiseWindow(a, now, ok); err != nil {
+		return err
+	}
 	if a.RespCount < len(a.RespSamples) {
 		a.RespCount = len(a.RespSamples)
 	}
 	if a.RespCount > 0 && a.RespMin > a.RespMax {
 		return fmt.Errorf("response min %d is above max %d", a.RespMin, a.RespMax)
+	}
+	return nil
+}
+
+func sanitiseWindow(a *agg, now time.Time, ok func(...int64) bool) error {
+	nowH := unixHour(now)
+	kept := a.Hourly[:0:0]
+	for _, b := range a.Hourly {
+		if !ok(int64(b.Runs), int64(b.Detected), int64(b.Responded), int64(b.Alerts), int64(b.Actions)) {
+			return fmt.Errorf("hourly bucket %d has a counter out of range", b.H)
+		}
+		if b.H < nowH-(windowHours-1) || b.H > nowH+1 {
+			continue
+		}
+		kept = append(kept, b)
+	}
+	if len(kept) > maxHourly {
+		return fmt.Errorf("%d hourly buckets in range, at most %d", len(kept), maxHourly)
+	}
+	a.Hourly = sumHours(kept)
+	for _, b := range a.Hourly {
+		if !ok(int64(b.Runs), int64(b.Detected), int64(b.Responded), int64(b.Alerts), int64(b.Actions)) {
+			return fmt.Errorf("hourly bucket %d has a counter out of range", b.H)
+		}
+	}
+	if a.WindowSince.After(now) {
+		a.WindowSince = now.UTC()
+	}
+	if a.LastRunAt.After(now) {
+		a.LastRunAt = now.UTC()
 	}
 	return nil
 }
