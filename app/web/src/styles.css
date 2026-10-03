@@ -256,9 +256,12 @@ main {
   min-height: 3.5rem;
 }
 
+/* On the narrowest phones, with a wide font, the name gives way (an ellipsis) before the header's
+   buttons are pushed off the screen. */
 .brand {
   display: inline-flex;
   align-items: center;
+  min-width: 0;
   gap: 0.55rem;
   color: var(--text);
   text-decoration: none;
@@ -267,10 +270,17 @@ main {
 }
 
 .brand__mark {
+  flex: none;
   width: 0.9rem;
   height: 0.9rem;
   border-radius: 3px;
   background: conic-gradient(from 210deg, var(--attack) 0 33%, var(--detect) 0 66%, var(--respond) 0);
+}
+
+.brand__name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .brand__dot {
@@ -305,6 +315,7 @@ main {
 
 .site-header__tools {
   display: flex;
+  flex: none;
   align-items: center;
   gap: 0.5rem;
 }
@@ -487,7 +498,9 @@ main {
 
 .hero {
   position: relative;
-  padding-block: clamp(3rem, 9vw, 6.5rem) clamp(2.5rem, 6vw, 4.5rem);
+  /* The verify strip has to stay above a 720 px fold whatever fonts the visitor has (ADR 0035):
+     the top padding is kept modest, the name below is sized to its column. */
+  padding-block: clamp(2.25rem, 5vw, 4rem) clamp(2.5rem, 6vw, 4.5rem);
   background-image:
     linear-gradient(var(--bg-grid) 1px, transparent 1px),
     linear-gradient(90deg, var(--bg-grid) 1px, transparent 1px);
@@ -511,8 +524,17 @@ main {
   }
 }
 
+/* The name is sized by its column (container query units), not the viewport, so it stays on one
+   line with a wider system font as well: 10cqi leaves room for ~10 em of text. */
+.hero__copy {
+  container-type: inline-size;
+  min-width: 0;
+}
+
 .hero h1 {
-  font-size: clamp(2.6rem, 8vw, 5rem);
+  font-size: clamp(2.2rem, 8vw, 4.5rem);
+  font-size: clamp(2rem, 10cqi, 4.5rem);
+  line-height: 1.1;
   font-weight: 750;
   letter-spacing: -0.035em;
   margin-bottom: 1.25rem;
@@ -1626,12 +1648,14 @@ html:not([data-tech="on"]) .tech-only {
   transition: color 0.35s;
 }
 
+/* The first hop's time is absolute UTC, with the date when it is not today (ADR 0035): it may wrap
+   between date, time and "UTC" rather than push a phone's page sideways. */
 .hop__t {
   grid-area: t;
   font: 700 0.85rem/1.2 var(--font-mono);
   font-variant-numeric: tabular-nums;
   color: var(--c);
-  white-space: nowrap;
+  text-align: right;
 }
 
 /* The wire runs from the previous node to this one; its fill grows when this hop lights. */
@@ -1765,6 +1789,7 @@ html:not([data-tech="on"]) .tech-only {
 
   .hop__t {
     margin-top: 0.15rem;
+    text-align: center;
   }
 }
 
@@ -3570,10 +3595,15 @@ html[data-terminal="off"] .needs-terminal {
   list-style: none;
 }
 
+/* One line per image while it fits: the digest is the part that gives way (its basis is small, it
+   grows back to its full text when there is room, and is cut with an ellipsis otherwise; the whole
+   digest is in its title and in the copied command). Only when even that is not enough does the
+   row wrap. */
 .vstrip__row {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
+  min-width: 0;
   gap: 0.15rem 0.45rem;
   font-size: 0.85rem;
   line-height: 1.6;
@@ -3587,6 +3617,15 @@ html[data-terminal="off"] .needs-terminal {
   font: 600 0.8rem/1.6 var(--font-mono);
   min-width: 2rem;
   color: var(--text-muted);
+}
+
+.vstrip__digest {
+  flex: 1 1 4.5rem;
+  max-width: max-content;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 .vstrip__digest,
@@ -3804,6 +3843,18 @@ html[data-terminal="off"] .needs-terminal {
 
 .data-table--wrap th,
 .data-table--wrap td {
+  overflow-wrap: anywhere;
+}
+
+/* A tile's status chip can be long ("stale config, nothing running violates"): it wraps inside the
+   tile rather than widening the page on a phone. The same for the evidence card's chip. */
+.chip {
+  max-width: 100%;
+}
+
+.tile .chip,
+.evcard .chip {
+  white-space: normal;
   overflow-wrap: anywhere;
 }
 
