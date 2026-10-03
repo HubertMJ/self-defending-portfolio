@@ -526,12 +526,17 @@ describe("one command at a time (review 2, items 7 and 12)", () => {
     expect((t.root.querySelector(".term__exit") as HTMLButtonElement).disabled).toBe(true);
   });
 
-  it("pagehide leaves once while live, never after the end, never again after a back/forward restore", async () => {
+  const unload = (persisted: boolean) => dispatchEvent(new PageTransitionEvent("pagehide", { persisted }));
+
+  it("pagehide into the back/forward cache keeps the run; a real unload leaves it, once, while live", async () => {
     const t = await harness();
     const f = new Feed().open();
     t.show(f);
-    dispatchEvent(new Event("pagehide"));
-    dispatchEvent(new Event("pagehide")); // hidden again after a bfcache restore
+    unload(true); // the page may come back to its session: the idle timer frees the slot if not
+    await flush();
+    expect(deletes(t)).toHaveLength(0);
+    unload(false); // restored, then really closed
+    unload(false);
     await flush();
     expect(deletes(t)).toHaveLength(1);
 
@@ -539,7 +544,7 @@ describe("one command at a time (review 2, items 7 and 12)", () => {
     const g = new Feed().open();
     g.run("finished", 5000, "idle");
     u.show(g);
-    dispatchEvent(new Event("pagehide"));
+    unload(false);
     await flush();
     expect(deletes(u)).toHaveLength(0);
   });

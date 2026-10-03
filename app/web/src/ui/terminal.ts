@@ -950,9 +950,11 @@ export function mountTerminal(
 
   // The visitor closing the tab ends their run, freeing the single slot at once rather than after the
   // idle timeout (review item 10). keepalive lets the DELETE outlive the page.
-  const onPageHide = () => {
-    // Once only, and only while the run is live: not after it ended (the API would answer 409), and
-    // not again when a page restored from the back/forward cache is hidden a second time.
+  const onPageHide = (e: Event) => {
+    // Only a page that is really unloading: one going into the back/forward cache (persisted) may
+    // come back to its session, so it keeps the run, and the idle timer frees the slot if it does not.
+    if ((e as PageTransitionEvent).persisted !== false) return;
+    // Once only, and only while the run is live: not after it ended (the API would answer 409).
     if (session && !watching && !over()) void leave();
   };
   if (typeof addEventListener === "function") addEventListener("pagehide", onPageHide);
