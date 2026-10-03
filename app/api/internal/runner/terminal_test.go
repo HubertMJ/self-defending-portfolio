@@ -9,6 +9,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -17,6 +18,7 @@ import (
 	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/hubertmj/self-defending-portfolio/app/api/internal/scenarios"
+	"github.com/hubertmj/self-defending-portfolio/app/api/internal/webhook"
 )
 
 func terminalScenario() scenarios.Scenario {
@@ -635,5 +637,80 @@ func TestTerminalLeaveDuringCleanupIs409(t *testing.T) {
 	// Released and unregistered: still 409, from the record of ended runs.
 	if err := r.Leave(id, token); !errors.Is(err, ErrRunBusy) {
 		t.Fatalf("Leave after the end: %v, want ErrRunBusy", err)
+	}
+}
+
+// A command cut off by its own bound, or by a leave, is not a kill: its end is published at once, not
+// after waiting DeleteWait for a pod deletion that is not coming (which would hold the slot).
+func TestTerminalBoundOrLeaveDoesNotWaitForDeletion(t *testing.T) {
+	c := fake.NewClientset()
+	readyOnCreate(c)
+	rec := newRecorder()
+	r := New(c, &fakeExec{streamBlock: true}, rec, nil, Config{PollInterval: 10 * time.Millisecond, QuarantineLinger: -1,
+		CommandTimeout: 100 * time.Millisecond, DeleteWait: 3 * time.Second})
+	release, done := released()
+	id, token := r.StartTerminal(terminalScenario(), release)
+	rec.waitFor(t, StatePodReady)
+
+	ended := func(seq int) time.Time {
+		waitCommand(t, rec, seq, CommandExited)
+		for _, p := range rec.of("command") {
+			if ev := p.v.(CommandEvent); ev.Seq == seq && ev.State == CommandExited {
+				return ev.At
+			}
+		}
+		return time.Time{}
+	}
+	started := func(seq int) time.Time {
+		for _, p := range rec.of("command") {
+			if ev := p.v.(CommandEvent); ev.Seq == seq && ev.State == CommandStarted {
+				return ev.At
+			}
+		}
+		return time.Time{}
+	}
+	s1 := sendCommand(t, r, id, token, "whoami") // cut at its 100 ms bound
+	if d := ended(s1).Sub(started(s1)); d > time.Second {
+		t.Fatalf("a command cut at its bound ended %v after it started; it waited for a deletion", d)
+	}
+	s2 := sendCommand(t, r, id, token, "shell") // a TTY shell, ended by the leave
+	waitCommand(t, rec, s2, CommandStarted)
+	left := time.Now()
+	if err := r.Leave(id, token); err != nil {
+		t.Fatal(err)
+	}
+	if d := ended(s2).Sub(left); d > time.Second {
+		t.Fatalf("a command ended by a leave ended %v after it; it waited for a deletion", d)
+	}
+	rec.waitFor(t, StateFinished)
+	<-done
+}
+
+// The rule name in a `detected` detail is capped like every other Falco field (256 runes), on the
+// late-alert route as on the correlated one.
+func TestTerminalDetectedRuleCapped(t *testing.T) {
+	c := fake.NewClientset()
+	readyOnCreate(c)
+	rec := newRecorder()
+	r := terminalRunner(c, &fakeExec{}, rec)
+	release, done := released()
+	id, token := r.StartTerminal(terminalScenario(), release)
+	pod := podName("terminal", id)
+	rec.waitFor(t, StatePodReady)
+	r.ObserveFalco("sandbox", pod, strings.Repeat("r", 5000)) // no command: the late-alert route
+	seq := sendCommand(t, r, id, token, "beacon")
+	waitCommand(t, rec, seq, CommandStarted)
+	r.ObserveFalco("sandbox", pod, strings.Repeat("s", 5000))
+	_ = r.Leave(id, token)
+	rec.waitFor(t, StateFinished)
+	<-done
+	ds := runStates(rec, StateDetected)
+	if len(ds) != 2 {
+		t.Fatalf("detected = %d events, want 2", len(ds))
+	}
+	for _, d := range ds {
+		if n := utf8.RuneCountInString(d.Detail); n > webhook.MaxFieldValue {
+			t.Fatalf("detected detail of %d runes (command_seq %d), want at most %d", n, d.CommandSeq, webhook.MaxFieldValue)
+		}
 	}
 }
