@@ -21,12 +21,16 @@
 //   - all runs together, 8 MiB: past it the oldest runs are dropped first, and a run that would
 //     exceed it on its own is truncated.
 //
+// List (GET /api/runs, ADR 0035) is a summary of each kept run, newest first, maintained as events
+// are recorded and evicted with its run, so the list and the store never disagree.
+//
 // In memory only, like the rest of the API's state (ADR 0015).
 package runlog
 
 import (
 	"encoding/json"
 	"sync"
+	"time"
 
 	"github.com/hubertmj/self-defending-portfolio/app/api/internal/events"
 )
@@ -55,6 +59,22 @@ type Run struct {
 	Truncated bool    `json:"truncated"`
 
 	bytes int // sum of len(Data) of Events
+	sum   Summary
+}
+
+// Summary is one row of GET /api/runs: what the run's own `run` events say about it - its latest
+// state, when it was queued and ended, whether it was detected and answered - and how many events
+// it holds. No pod, no command, no output.
+type Summary struct {
+	RunID     string     `json:"run_id"`
+	Scenario  string     `json:"scenario"`
+	State     string     `json:"state"`
+	StartedAt time.Time  `json:"started_at"`
+	EndedAt   *time.Time `json:"ended_at"`
+	Detected  bool       `json:"detected"`
+	Responded bool       `json:"responded"`
+	Events    int        `json:"events"`
+	Truncated bool       `json:"truncated"`
 }
 
 // Store is safe for concurrent use.
@@ -110,10 +130,11 @@ func terminalState(typ, state string) bool {
 // known run (an alert for a pod no run created) are ignored.
 func (s *Store) Record(ev events.Event) {
 	var key struct {
-		RunID    string `json:"run_id"`
-		Scenario string `json:"scenario"`
-		Pod      string `json:"pod"`
-		State    string `json:"state"`
+		RunID    string    `json:"run_id"`
+		Scenario string    `json:"scenario"`
+		Pod      string    `json:"pod"`
+		State    string    `json:"state"`
+		At       time.Time `json:"at"`
 	}
 	if json.Unmarshal(ev.Data, &key) != nil {
 		return
@@ -142,6 +163,11 @@ func (s *Store) Record(ev events.Event) {
 	if run.Scenario == "" && key.Scenario != "" {
 		run.Scenario = key.Scenario
 	}
+	// The summary follows the run's own state events only: a command's or a pod's `state` is not the
+	// run's. It is updated even when the event itself no longer fits the run's caps.
+	if ev.Type == "run" && key.State != "" {
+		summarise(&run.sum, key.State, key.At)
+	}
 	if key.RunID != "" && key.Pod != "" {
 		s.pods[key.Pod] = id
 	}
@@ -166,6 +192,40 @@ func (s *Store) Record(ev events.Event) {
 	run.bytes += size
 	s.total += size
 }
+
+func summarise(sum *Summary, state string, at time.Time) {
+	at = at.UTC()
+	if sum.State == "" {
+		sum.StartedAt = at
+	}
+	sum.State = state
+	switch state {
+	case "detected":
+		sum.Detected = true
+	case "responded":
+		sum.Responded = true
+	}
+	if terminalState("run", state) && sum.EndedAt == nil {
+		sum.EndedAt = &at
+	}
+}
+
+// List returns the summaries of the kept runs, newest first.
+func (s *Store) List() []Summary {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]Summary, 0, len(s.order))
+	for i := len(s.order) - 1; i >= 0; i-- {
+		run := s.runs[s.order[i]]
+		sum := run.sum
+		sum.RunID, sum.Scenario, sum.Events, sum.Truncated = run.RunID, run.Scenario, len(run.Events), run.Truncated
+		out = append(out, sum)
+	}
+	return out
+}
+
+// Kept is how many runs the store keeps.
+func (s *Store) Kept() int { return s.maxRuns }
 
 func (s *Store) evictOldestLocked() {
 	id := s.order[0]

@@ -180,3 +180,51 @@ func TestTerminalStateByteReserve(t *testing.T) {
 		}
 	}
 }
+
+// The list is newest first, capped like the store, consistent with it after evictions, and built
+// from the runs' own `run` events only.
+func TestList(t *testing.T) {
+	s := New(3, 0, 0, 0)
+	h := events.NewHub(10)
+	h.Tap(s.Record)
+	at := func(sec int) string { return fmt.Sprintf("2026-10-03T18:00:%02dZ", sec) }
+	for i := range 5 {
+		id := fmt.Sprintf("r%d", i)
+		feed(h, "run", map[string]string{"run_id": id, "scenario": "network-tool", "state": "queued", "at": at(i * 10)})
+		feed(h, "run", map[string]string{"run_id": id, "scenario": "network-tool", "state": "started", "pod": "p" + id, "at": at(i*10 + 1)})
+	}
+	feed(h, "falco", map[string]string{"pod": "pr4", "rule": "x", "state": "detected"})
+	feed(h, "command", map[string]string{"run_id": "r4", "id": "whoami", "state": "exited"})
+	feed(h, "run", map[string]string{"run_id": "r4", "state": "detected", "at": at(43)})
+	feed(h, "run", map[string]string{"run_id": "r4", "state": "responded", "at": at(44)})
+	feed(h, "run", map[string]string{"run_id": "r4", "state": "finished", "at": at(45)})
+	feed(h, "command", map[string]string{"run_id": "r4", "id": "whoami", "state": "started"})
+	feed(h, "falco", map[string]string{"pod": "pr3", "rule": "y"})
+
+	list := s.List()
+	var ids []string
+	for _, r := range list {
+		ids = append(ids, r.RunID)
+		if _, ok := s.Get(r.RunID); !ok {
+			t.Errorf("listed run %s is not in the store", r.RunID)
+		}
+	}
+	if strings.Join(ids, ",") != "r4,r3,r2" || s.Kept() != 3 {
+		t.Fatalf("list = %v kept %d, want r4,r3,r2 of 3", ids, s.Kept())
+	}
+	r4, r3 := list[0], list[1]
+	if r4.State != "finished" || !r4.Detected || !r4.Responded || r4.EndedAt == nil || r4.EndedAt.Format("15:04:05") != "18:00:45" ||
+		r4.StartedAt.Format("15:04:05") != "18:00:40" || r4.Events != 8 || r4.Scenario != "network-tool" || r4.Truncated {
+		t.Fatalf("r4 = %+v", r4)
+	}
+	if r3.State != "started" || r3.Detected || r3.EndedAt != nil || r3.Events != 3 {
+		t.Fatalf("r3 = %+v (a falco event must not make it detected)", r3)
+	}
+	b, _ := json.Marshal(r3)
+	if !strings.Contains(string(b), `"ended_at":null`) || strings.Contains(string(b), "pr3") {
+		t.Fatalf("%s", b)
+	}
+	if b, _ := json.Marshal(New(0, 0, 0, 0).List()); string(b) != "[]" {
+		t.Fatalf("empty list = %s", b)
+	}
+}
