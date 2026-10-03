@@ -84,9 +84,18 @@ special-cased: it is this run's secret and is meant to be seen by the visitor wh
 **Correlation.** `falco` and `talon` events gain `command_seq`: the command that was running, or ended less
 than 2 s before, when the alert arrived; absent otherwise. It is best effort (Falco's alert and the exec are
 not transactionally linked) and set by the server from the runner. Only the attribution is best effort: a
-Falco alert for the run's pod is always a `detected` run event - one that correlates to no command is
-published once per run without `command_seq` - so a `responded` is never published without a `detected`
-before it. A response tied to no command gets a `detected` backfilled only when the run has none at all.
+Falco alert for the run's pod is always a `detected` run event, its rule capped at 256 characters like any
+Falco field. One that correlates to no command is published once per run without `command_seq`, unless the
+run already detected the same rule - then it is that command's alert arriving late, not a new detection.
+A `responded` run event is paired with the detection it answers, not with whatever command is running when
+Talon's notification arrives (the visitor has often typed the next one by then): the most recent detection
+with no response yet whose command's catalogue response is what Talon did (`kubernetes:label` is the
+quarantine, `kubernetes:terminate` the terminate; Talon's notification names no Falco rule), published under
+that detection's `command_seq`. No `detected` is ever made up at the moment of a response - one would read as
+a 0 ms response and, on another command, as a detection nobody answered. If no detection is waiting (Talon
+beat Falco's alert to the API), the response is published tied to the command running or just ended, and the
+alert, when it comes, is taken as already answered; a repeat notification for something already answered
+publishes nothing.
 `/api/runs/{id}` includes `command` events under the per-run caps of ADR 0021, with room reserved for how
 each command and the run ended (below), so a whole terminal session can be replayed and checked.
 

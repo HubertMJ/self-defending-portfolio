@@ -29,8 +29,10 @@ a scripted run has one of each) - a terminal run may detect several commands, an
 response that cannot be paired with a detection records no latency; `unanswered` (runs detected but not
 responded to **before the scenario's time ran out** - a run the visitor left, let go idle, or that was killed
 is not an escape: for a scripted run that is a `timeout` ending; a terminal run never ends `timeout`, so it is
-unanswered when it ends `finished` with detail `deadline` while a command it detected has had no response -
-counted once per run, and a response tied to no command is taken to answer any); per
+unanswered when it ends `finished` with detail `deadline` while a detection has had no response - counted
+once per run; detections and responses are matched by `command_seq` only, since the runner already
+publishes a response under the seq of the detection it answers (ADR 0029), so a response tied to no
+command answers only the detection tied to none); per
 terminal command `{attempts, allowed, prevented, detected}`; per objective `{attempts, achieved}` counted once
 per run ("tried / reached by X of N runs", not per keystroke); and
 `terminal{runs, best_objectives, median_survival_s}`. A command's outcome and objective are read from the
