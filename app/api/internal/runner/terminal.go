@@ -155,17 +155,18 @@ func (r *Runner) CommandSeqFor(namespace, pod string) int {
 	}
 	rn.tmu.Lock()
 	defer rn.tmu.Unlock()
-	seq, _ := rn.activeSeqLocked()
+	seq, _ := rn.activeSeqLocked(r.now())
 	return seq
 }
 
 // activeSeqLocked returns the running command's seq and id, or the last finished one's if it ended
-// within the 2 s window, else (0, ""). rn.tmu must be held.
-func (rn *run) activeSeqLocked() (int, string) {
+// within the 2 s window before now, else (0, ""). now is the runner's clock, the one lastEnded was
+// read from. rn.tmu must be held.
+func (rn *run) activeSeqLocked(now time.Time) (int, string) {
 	if rn.running {
 		return rn.curSeq, rn.curCmdID
 	}
-	if rn.lastSeq > 0 && time.Since(rn.lastEnded) < 2*time.Second {
+	if rn.lastSeq > 0 && now.Sub(rn.lastEnded) < 2*time.Second {
 		return rn.lastSeq, rn.lastCmdID
 	}
 	return 0, ""
@@ -330,15 +331,28 @@ func (r *Runner) commandEvent(rn *run, ev CommandEvent) CommandEvent {
 // Falco rule that fired (the honest name, even for an `allowed`/`prevented` command that has no rule
 // of its own in the catalogue); it falls back to the command's catalogue detection if no rule was
 // passed.
+//
+// A Falco alert for the run's pod is always a detection; only the command it is tied to is best
+// effort. An alert that correlates to no command (it arrived more than the 2 s window after the
+// command ended) is published once per run without a command_seq, rather than dropped - dropping it
+// let Talon's later response be published with no detection before it.
 func (r *Runner) terminalDetected(rn *run, rule string) {
 	rn.tmu.Lock()
-	seq, id := rn.activeSeqLocked()
-	if seq == 0 || rn.detectedSeq == seq {
+	seq, id := rn.activeSeqLocked(r.now())
+	switch {
+	case seq == 0 && rn.detectedZero, seq != 0 && rn.detectedSeq == seq:
 		rn.tmu.Unlock()
 		return
+	case seq == 0:
+		rn.detectedZero = true
+	default:
+		rn.detectedSeq = seq
 	}
-	rn.detectedSeq = seq
 	rn.tmu.Unlock()
+	if seq == 0 {
+		r.publishCmd(rn, StateDetected, rule, 0)
+		return
+	}
 	if rule == "" {
 		cmd, _ := rn.sc.CommandByID(id)
 		rule = cmd.Detection
@@ -352,26 +366,29 @@ func (r *Runner) terminalDetected(rn *run, rule string) {
 // pod running.
 func (r *Runner) terminalResponded(rn *run) {
 	rn.tmu.Lock()
-	seq, id := rn.activeSeqLocked()
+	seq, id := rn.activeSeqLocked(r.now())
+	var needDetect bool
 	if seq != 0 {
 		if rn.respondedSeq == seq {
 			rn.tmu.Unlock()
 			return
 		}
 		rn.respondedSeq = seq
+		needDetect = rn.detectedSeq != seq
+		rn.detectedSeq = seq
 	} else {
 		// A response that correlated to no command (it arrived more than the 2 s window after the
 		// command ended): still record the run was answered, just without a command_seq. Once only,
-		// so a retrying Talon cannot spam the feed.
+		// so a retrying Talon cannot spam the feed. It needs a detection before it only if the run
+		// has none at all: an earlier command's `detected` already says the run was seen, and a
+		// backfilled one here would pair the response with a detection made up at the same instant.
 		if rn.respondedZero {
 			rn.tmu.Unlock()
 			return
 		}
 		rn.respondedZero = true
-	}
-	needDetect := seq != 0 && rn.detectedSeq != seq
-	if needDetect {
-		rn.detectedSeq = seq
+		needDetect = !rn.detectedZero && rn.detectedSeq == 0
+		rn.detectedZero = true
 	}
 	rn.tmu.Unlock()
 	var detection, response string

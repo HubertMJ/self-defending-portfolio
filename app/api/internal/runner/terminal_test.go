@@ -3,7 +3,9 @@ package runner
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -377,4 +379,98 @@ func waitCommand(t *testing.T, rec *recorder, seq int, state string) {
 		time.Sleep(5 * time.Millisecond)
 	}
 	t.Fatalf("timed out waiting for command seq %d state %q; order=%s", seq, state, rec.order())
+}
+
+// runStates is the run events of one state, in order.
+func runStates(rec *recorder, state string) []RunEvent {
+	var out []RunEvent
+	for _, p := range rec.of("run") {
+		if ev := p.v.(RunEvent); ev.State == state {
+			out = append(out, ev)
+		}
+	}
+	return out
+}
+
+// A Falco alert that arrives more than 2 s after the command ended still becomes `detected` (without
+// a command_seq), and Talon's response after it is not preceded by a second, made-up detection; a
+// response with no alert at all gets one backfilled; a late response after a correlated detection
+// gets none. Before, the late alert was dropped and `responded` was published alone, so the stats
+// counted a run as answered but never detected.
+func TestTerminalLateAlertIsDetected(t *testing.T) {
+	cases := []struct {
+		name          string
+		falcoInWindow bool // the alert arrives while the command runs (correlated)
+		falcoLate     bool // the alert arrives after the window
+		wantDetected  []int
+	}{
+		{"late alert, late response", false, true, []int{0}},
+		{"no alert, late response", false, false, []int{0}},
+		{"correlated alert, late response", true, false, []int{1}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := fake.NewClientset()
+			readyOnCreate(c)
+			rec := newRecorder()
+			r := terminalRunner(c, &fakeExec{stdout: "x\n"}, rec)
+			late := false
+			var mu sync.Mutex
+			// Once late is set, the clock is 3 s ahead, so the finished command is out of the window.
+			r.now = func() time.Time {
+				mu.Lock()
+				defer mu.Unlock()
+				if late {
+					return time.Now().Add(3 * time.Second)
+				}
+				return time.Now()
+			}
+			release, done := released()
+			sc := terminalScenario()
+			id, token := r.StartTerminal(sc, release)
+			pod := podName(sc.ID, id)
+			rec.waitFor(t, StatePodReady)
+			seq := sendCommand(t, r, id, token, "beacon")
+			if tc.falcoInWindow {
+				waitCommand(t, rec, seq, CommandStarted)
+				r.ObserveFalco("sandbox", pod, "SDP network tool in sandbox")
+			}
+			waitCommand(t, rec, seq, CommandExited)
+			mu.Lock()
+			late = true
+			mu.Unlock()
+			if r.CommandSeqFor("sandbox", pod) != 0 {
+				t.Fatal("the command is still inside the 2 s window")
+			}
+			if tc.falcoLate {
+				r.ObserveFalco("sandbox", pod, "SDP network tool in sandbox")
+				r.ObserveFalco("sandbox", pod, "SDP network tool in sandbox") // once per run
+			}
+			r.ObserveTalon("sandbox", pod, "success")
+			rec.waitFor(t, StateResponded)
+			_ = r.Leave(id, token)
+			rec.waitFor(t, StateFinished)
+			<-done
+
+			o := rec.order()
+			if strings.Index(o, "run:detected") < 0 || strings.Index(o, "run:detected") > strings.Index(o, "run:responded") {
+				t.Fatalf("responded without a detection before it: %s", o)
+			}
+			var got []int
+			for _, ev := range runStates(rec, StateDetected) {
+				got = append(got, ev.CommandSeq)
+			}
+			if fmt.Sprint(got) != fmt.Sprint(tc.wantDetected) {
+				t.Fatalf("detected command_seqs = %v, want %v", got, tc.wantDetected)
+			}
+			if tc.falcoLate {
+				if d := runStates(rec, StateDetected)[0].Detail; d != "SDP network tool in sandbox" {
+					t.Fatalf("late detection detail = %q, want the rule", d)
+				}
+			}
+			if rs := runStates(rec, StateResponded); len(rs) != 1 || rs[0].CommandSeq != 0 {
+				t.Fatalf("responded = %+v", rs)
+			}
+		})
+	}
 }

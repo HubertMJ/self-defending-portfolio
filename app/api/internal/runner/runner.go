@@ -172,9 +172,11 @@ type run struct {
 	detectOnce        sync.Once
 	respondOnce       sync.Once
 
-	// podVisible: the pod exists, so run events name it. Written and read by the run's own
-	// goroutine only.
-	podVisible bool
+	// podVisible: the pod exists, so run events name it. Set by the run's own goroutine once the pod
+	// is created, and read by every goroutine that publishes a run event for the run - its own, and
+	// for a terminal run the webhook handlers' ObserveFalco/ObserveTalon, which may fire at any time
+	// after the run is registered. Hence atomic.
+	podVisible atomic.Bool
 	// gone is closed when the pod is being deleted by someone other than the runner (Talon's
 	// terminate); deleted when the watch has seen it disappear from the API server.
 	gone, deleted         chan struct{}
@@ -226,6 +228,7 @@ type run struct {
 	lastEnded     time.Time // when the last command finished (for the 2 s command_seq window)
 	detectedSeq   int       // the seq a `detected` run event was last published for
 	respondedSeq  int       // the seq a `responded` run event was last published for
+	detectedZero  bool      // a detection correlated to no command was already published
 	respondedZero bool      // a response correlated to no command was already published
 	runOut        int       // bytes of command output published across the run (32 KiB budget)
 	runOutEvents  int       // `output` events published across the run (runOutEvents budget)
@@ -548,7 +551,7 @@ func (r *Runner) execute(rn *run, sc scenarios.Scenario) {
 		return
 	}
 	created = true
-	rn.podVisible = true
+	rn.podVisible.Store(true)
 	r.publish(rn, StateStarted, "pod created")
 
 	ready, err := r.waitReady(ctx, rn.namespace, rn.pod)
@@ -798,7 +801,7 @@ func (r *Runner) sleep(ctx context.Context, d time.Duration) {
 
 func (r *Runner) publish(rn *run, state, detail string) {
 	ev := RunEvent{RunID: rn.id, Scenario: rn.scenario, State: state, At: r.now().UTC(), Detail: detail, Pods: rn.pods}
-	if rn.podVisible {
+	if rn.podVisible.Load() {
 		ev.Pod = rn.pod
 	}
 	r.emit(rn, "run", ev)
@@ -808,7 +811,7 @@ func (r *Runner) publish(rn *run, state, detail string) {
 func (r *Runner) publishCmd(rn *run, state, detail string, seq int) {
 	ev := RunEvent{RunID: rn.id, Scenario: rn.scenario, State: state, At: r.now().UTC(), Detail: detail,
 		Pods: rn.pods, CommandSeq: seq}
-	if rn.podVisible {
+	if rn.podVisible.Load() {
 		ev.Pod = rn.pod
 	}
 	r.emit(rn, "run", ev)

@@ -137,7 +137,7 @@ func (r *Runner) executeArm(ctx context.Context, rn *run, sc scenarios.Scenario)
 		return
 	}
 	created = true
-	rn.podVisible = true
+	rn.podVisible.Store(true)
 
 	ready, err := r.waitReady(actx, rn.namespace, rn.pod)
 	if err != nil {
