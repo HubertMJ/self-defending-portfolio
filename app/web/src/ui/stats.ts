@@ -15,7 +15,6 @@ const REPO_ISSUES = "https://github.com/HubertMJ/self-defending-portfolio/issues
 export interface LastRun {
   title: string;
   at: number;
-  respondMs?: number;
 }
 
 const own = (o: Record<string, { attempts: number; achieved: number }>, id: string) =>
@@ -27,10 +26,13 @@ export function renderStats(s: Stats, objectives: Objective[], last?: LastRun, n
   const responded = Object.values(s.by_scenario).reduce((a, x) => a + x.responded, 0);
 
   const list = [
-    last ? statTile(relativeTime(new Date(last.at).toISOString(), now), "last run", `${last.title}${last.respondMs !== undefined ? ` · answered in ${last.respondMs} ms` : ""}`) : null,
+    // The last run names what ran; how fast the answer came is the API's one figure, the tile below.
+    last ? statTile(relativeTime(new Date(last.at).toISOString(), now), "last run", last.title) : null,
     statTile(String(s.runs), "attacks, all visitors", s.since ? `since ${relativeTime(s.since, now)}` : ""),
-    statTile(`${responded} of ${detected}`, "detections answered", `${s.unanswered} went unanswered`),
-    s.response_ms.last > 0 ? statTile(`${s.response_ms.last} ms`, "last response", humanSpeed(s.response_ms.last)) : null,
+    // Both counts are runs: of the runs Falco detected, how many Talon answered at least once; and how
+    // many ran out of time with a detection still unanswered (a terminal run can be both).
+    statTile(`${responded} of ${detected}`, "detected runs answered", `${s.unanswered} ran out of time with a detection unanswered`),
+    s.response_ms.last > 0 ? statTile(`${s.response_ms.last} ms`, "last detection to response", humanSpeed(s.response_ms.last)) : null,
   ].filter((x): x is HTMLElement => x !== null);
   // The stylesheet lays the tiles out by their count, so none is ever left alone on a row.
   const tiles = h("div", { class: "herostats__tiles", "data-count": list.length }, list);
@@ -141,7 +143,7 @@ export function mountStats(root: HTMLElement, api: ApiClient): StatsHandle {
     },
     setLastRun(l) {
       // Called on every event of the feed; the band is redrawn only when the tile would change.
-      if (last && last.title === l.title && last.at === l.at && last.respondMs === l.respondMs) return;
+      if (last && last.title === l.title && last.at === l.at) return;
       last = l;
       draw();
     },

@@ -372,7 +372,7 @@ test.describe("defence map and live stats (mock, ADR 0033)", () => {
     await expect(hero).toBeVisible();
     await expect(hero.locator(".herostats__tile")).toHaveCount(4);
     await expect(hero).toContainText("attacks");
-    await expect(hero).toContainText("detections answered");
+    await expect(hero).toContainText("detected runs answered");
     await expect(hero.locator('.herostats__obj[data-never="true"]').first()).toContainText("not reached yet");
     await expect(hero.locator("a", { hasText: "Open an issue" })).toHaveAttribute("href", /\/issues$/);
     // No escapes/"got out" counter (review item 18).

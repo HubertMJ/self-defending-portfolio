@@ -187,7 +187,7 @@ describe("hero stats (ADR 0033, E+F)", () => {
   it("shows counters and objectives, naming the never-reached ones, with no escapes counter", () => {
     const el = renderStats(stats(), TERMINAL_OBJECTIVES);
     expect(el.textContent).toContain("attacks");
-    expect(el.textContent).toContain("detections answered");
+    expect(el.textContent).toContain("detected runs answered");
     const never = [...el.querySelectorAll('.herostats__obj[data-never="true"]')];
     expect(never.length).toBeGreaterThan(0);
     expect(never.some((n) => /not reached yet/.test(n.textContent ?? ""))).toBe(true);
@@ -196,10 +196,11 @@ describe("hero stats (ADR 0033, E+F)", () => {
   });
 
   it("shows the last real run when one is given", () => {
-    const el = renderStats(stats(), TERMINAL_OBJECTIVES, { title: "Download tool in a container", at: Date.now() - 5000, respondMs: 142 });
+    const el = renderStats(stats(), TERMINAL_OBJECTIVES, { title: "Download tool in a container", at: Date.now() - 5000 });
     expect(el.textContent).toContain("last run");
     expect(el.textContent).toContain("Download tool in a container");
-    expect(el.textContent).toContain("142 ms");
+    // One definition of response time on the band: the API's, on its own tile; none on the last run.
+    expect(el.querySelector(".herostats__tile")?.textContent).not.toMatch(/\bms\b|answered in/);
   });
 });
 
@@ -252,13 +253,13 @@ describe("hero stats band (review 2, item 5)", () => {
     const root = document.createElement("div");
     const handle = mountStats(root, api);
     await new Promise((r) => setTimeout(r, 10));
-    const last = { title: "Read /etc/shadow", at: Date.now() - 1000, respondMs: 140 };
+    const last = { title: "Read /etc/shadow", at: Date.now() - 1000 };
     handle.setLastRun(last);
     const drawn = root.firstElementChild;
     expect(drawn).not.toBeNull();
     handle.setLastRun({ ...last });
     expect(root.firstElementChild).toBe(drawn);
-    handle.setLastRun({ ...last, respondMs: 150 });
+    handle.setLastRun({ ...last, at: last.at + 1 });
     expect(root.firstElementChild).not.toBe(drawn);
   });
 });
@@ -308,7 +309,7 @@ describe("hero stats wording and tiles (review 2, item 13 and the cross-side poi
     const values = tiles.map((t) => t.querySelector(".herostats__value")?.textContent);
     expect(new Set(values).size).toBe(values.length);
     expect(el.querySelector(".herostats__tiles")?.getAttribute("data-count")).toBe("3");
-    const withLast = renderStats(stats(), TERMINAL_OBJECTIVES, { title: "x", at: Date.now(), respondMs: 1 });
+    const withLast = renderStats(stats(), TERMINAL_OBJECTIVES, { title: "x", at: Date.now() });
     expect(withLast.querySelector(".herostats__tiles")?.getAttribute("data-count")).toBe("4");
   });
 
@@ -321,5 +322,16 @@ describe("hero stats wording and tiles (review 2, item 13 and the cross-side poi
     expect(reached).toContain("exited 0");
     expect(reached).toContain("Detection is not prevention");
     expect(reached).toContain("median 48 s");
+  });
+});
+
+describe("hero tiles say what their numbers count (final review, item 4)", () => {
+  it("runs answered of runs detected, next to runs that ran out of time unanswered", () => {
+    const el = renderStats(stats(), TERMINAL_OBJECTIVES);
+    const tile = [...el.querySelectorAll(".herostats__tile")].find((t) => t.textContent?.includes("1266 of 1279"));
+    expect(tile?.querySelector(".herostats__name")?.textContent).toBe("detected runs answered");
+    expect(tile?.querySelector(".herostats__foot")?.textContent).toBe("11 ran out of time with a detection unanswered");
+    expect(el.textContent).not.toContain("went unanswered");
+    expect(el.textContent).toContain("last detection to response");
   });
 });

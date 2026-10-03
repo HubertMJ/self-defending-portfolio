@@ -159,7 +159,6 @@ function main(): void {
         stats.setLastRun({
           title: titles.get(newest.scenario) ?? newest.scenario,
           at: newest.states.started ?? newest.states.queued ?? Date.now(),
-          respondMs: newest.timings.respondMs,
         });
       }
       if (wasActive && !activeId) limits.refresh();
