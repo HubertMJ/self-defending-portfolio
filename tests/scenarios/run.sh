@@ -41,7 +41,7 @@
 # deleted at the end of its case on every path, and again on exit, Ctrl-C and SIGTERM included. Never by
 # label selector: the API's own runs share the namespace and the labels. A delete that fails is a FAIL
 # naming the pod. What no trap covers - SIGKILL, a lost connection to the cluster - leaves a pod up to
-# its activeDeadlineSeconds (<= 120 s), holding one of the 3 pods the sandbox quota allows, so a
+# its activeDeadlineSeconds (<= 300 s), holding one of the 3 pods the sandbox quota allows, so a
 # visitor's run can be refused meanwhile: check `kubectl -n sandbox get pods` for sc-* after such an end.
 #
 # Visible on the site. The test pods are real sandbox pods: their Falco alerts and Talon actions take the
@@ -71,7 +71,7 @@ ISOLATE_TIMEOUT=${ISOLATE_TIMEOUT:-30}
 LABEL_WAIT=60
 # How long an allowed or prevented terminal command gets for a Falco alert to show up in Falco's log
 # before it is concluded that none fired. Falco writes an alert within a second of the syscall; the
-# margin is for the log path. Eight quiet steps at 5 s stay well inside the pod's 120 s deadline.
+# margin is for the log path. Eight quiet steps at 5 s stay well inside the pod's 300 s deadline.
 QUIET_WAIT=${QUIET_WAIT:-5}
 # The API's probe (app/api/internal/runner: VictimTimeout 300 ms, ADR 0021/0022).
 PROBE_TIMEOUT=0.3

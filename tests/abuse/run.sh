@@ -31,8 +31,9 @@ API=${API%/}
 FAKE_IPS=${FAKE_IPS:-}
 # The scenario to trigger; defaults to the first one the API lists.
 SCENARIO=${SCENARIO:-}
-# How long to follow one run on the event stream before giving up (scenario timeout is <= 120 s).
-RUN_TIMEOUT=${RUN_TIMEOUT:-150}
+# How long to follow one run on the event stream before giving up: the 300 s scenario bound (ADR 0017
+# amendment; the one-click scenarios ask for 90 s, the terminal for 300 s) plus 30 s of margin.
+RUN_TIMEOUT=${RUN_TIMEOUT:-330}
 
 WORK_DIR=$(mktemp -d)
 PIDS=()
