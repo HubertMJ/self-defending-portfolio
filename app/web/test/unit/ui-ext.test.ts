@@ -276,3 +276,27 @@ describe("degrading against today's API (review 2, items 8 and 13)", () => {
     }
   });
 });
+
+describe("hero stats wording and tiles (review 2, item 13 and the cross-side point)", () => {
+  it("without a last run, no tile repeats another; the grid knows how many tiles it has", () => {
+    const el = renderStats(stats(), TERMINAL_OBJECTIVES);
+    const tiles = [...el.querySelectorAll(".herostats__tile")];
+    expect(tiles).toHaveLength(3);
+    const values = tiles.map((t) => t.querySelector(".herostats__value")?.textContent);
+    expect(new Set(values).size).toBe(values.length);
+    expect(el.querySelector(".herostats__tiles")?.getAttribute("data-count")).toBe("3");
+    const withLast = renderStats(stats(), TERMINAL_OBJECTIVES, { title: "x", at: Date.now(), respondMs: 1 });
+    expect(withLast.querySelector(".herostats__tiles")?.getAttribute("data-count")).toBe("4");
+  });
+
+  it("counts objectives in runs, and says what 'reached' means next to how long the pod was kept", () => {
+    const el = renderStats(stats(), TERMINAL_OBJECTIVES);
+    const counts = [...el.querySelectorAll(".herostats__objcount")].map((c) => c.textContent ?? "");
+    expect(counts.every((c) => /runs?\b/.test(c) && !/tries/.test(c))).toBe(true);
+    expect(counts[2]).toBe("reached in 30 of 30 runs that tried"); // credentials: `cat /etc/shadow` exits 0
+    const reached = el.querySelector(".herostats__reached")?.textContent ?? "";
+    expect(reached).toContain("exited 0");
+    expect(reached).toContain("Detection is not prevention");
+    expect(reached).toContain("median 48 s");
+  });
+});

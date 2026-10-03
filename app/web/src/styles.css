@@ -2668,10 +2668,33 @@ html:not([data-tech="on"]) .tech-only {
   margin: 0 0 0.6rem;
 }
 
+/* Columns by tile count, so a row never ends with one tile alone: 4 → 2×2, then one row of four
+   when there is room; 3 → one column, then one row; 2 → one row. */
+.herostats {
+  container-type: inline-size;
+}
+
 .herostats__tiles {
   display: grid;
   gap: 0.75rem;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 9.5rem), 1fr));
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.herostats__tiles[data-count="2"],
+.herostats__tiles[data-count="4"] {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+@container (min-width: 30rem) {
+  .herostats__tiles[data-count="3"] {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@container (min-width: 40rem) {
+  .herostats__tiles[data-count="4"] {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
 }
 
 .herostats__tile {

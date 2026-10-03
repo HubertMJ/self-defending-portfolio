@@ -708,6 +708,20 @@ export function mountTerminal(
                 ? [`${You} ${other ? "was" : "were"} quarantined, then the session ended.`]
                 : ["The session ended."];
     const enter = other ? "their Enter" : "your Enter";
+    // Reached means the command exited 0 (the API's rule) — which a credential read or a dropped
+    // binary does before the kill lands. Each reached objective says how long the pod lasted after.
+    const firstReach = new Map<string, CommandRun>();
+    for (const c of run.commands) {
+      const o = c.achieved ? catalogue.commands.find((x) => x.id === c.id)?.objective : undefined;
+      if (o && !firstReach.has(o)) firstReach.set(o, c);
+    }
+    const reachedLines = catalogue.objectives
+      .filter((o) => firstReach.has(o.id))
+      .map((o) => {
+        const c = firstReach.get(o.id) as CommandRun;
+        const after = endT !== undefined && c.endedAt !== undefined && endT > c.endedAt ? formatDuration(endT - c.endedAt) : undefined;
+        return h("li", {}, h("strong", {}, o.title), " — ", input(c), " exited 0", after ? `; the pod ${killedRun ? "was deleted" : "lasted"} ${after} later` : "", ".");
+      });
     // "Killed N ms after your Enter": the terminate's response time minus the start of the command it
     // answered, with Falco-to-response beside it — that command's alert, else the last one before.
     const killMs = afterEnter(ender);
@@ -730,6 +744,7 @@ export function mountTerminal(
         killMs !== undefined ? stat(`Killed after ${enter}`, formatDuration(killMs)) : null,
         falcoToResp !== undefined ? stat("Falco to response", formatDuration(falcoToResp)) : null,
       ),
+      reachedLines.length ? h("ul", { class: "term__sumreached", "aria-label": "Objectives reached" }, reachedLines) : null,
       h("h4", { class: "term__sumhead" }, "Which layer answered which move"),
       renderDefenceMap({ posture, lit }),
       h(

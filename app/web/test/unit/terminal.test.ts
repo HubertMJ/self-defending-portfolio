@@ -517,3 +517,15 @@ describe("untrusted output in .term__out (review 2, item 11)", () => {
     expect(controls).not.toMatch(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f​‪-‮]/);
   });
 });
+
+describe("what 'reached' means in the summary (cross-side point)", () => {
+  it("an objective reached by a command that exited 0 before the kill says how long the pod lasted after", async () => {
+    const t = await harness();
+    const f = new Feed().open();
+    killedBy(f, 1, 3000); // `cat /etc/shadow` exits at 3 040 ms, the run ends at 3 600 ms
+    t.show(f);
+    const items = [...t.root.querySelectorAll(".term__sumreached li")].map((li) => text(li));
+    expect(items).toEqual(["Steal credentials — cat /etc/shadow exited 0; the pod was deleted 560 ms later."]);
+    expect(stat(t.root, "Objectives reached")).toBe("1 of 5");
+  });
+});

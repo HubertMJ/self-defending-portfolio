@@ -26,16 +26,14 @@ export function renderStats(s: Stats, objectives: Objective[], last?: LastRun, n
   const detected = Object.values(s.by_scenario).reduce((a, x) => a + x.detected, 0);
   const responded = Object.values(s.by_scenario).reduce((a, x) => a + x.responded, 0);
 
-  const tiles = h(
-    "div",
-    { class: "herostats__tiles" },
-    last
-      ? statTile(relativeTime(new Date(last.at).toISOString(), now), "last run", `${last.title}${last.respondMs !== undefined ? ` · answered in ${last.respondMs} ms` : ""}`)
-      : statTile(String(s.runs), "attacks launched", s.since ? `since ${relativeTime(s.since, now)}` : ""),
+  const list = [
+    last ? statTile(relativeTime(new Date(last.at).toISOString(), now), "last run", `${last.title}${last.respondMs !== undefined ? ` · answered in ${last.respondMs} ms` : ""}`) : null,
     statTile(String(s.runs), "attacks, all visitors", s.since ? `since ${relativeTime(s.since, now)}` : ""),
     statTile(`${responded} of ${detected}`, "detections answered", `${s.unanswered} went unanswered`),
     s.response_ms.last > 0 ? statTile(`${s.response_ms.last} ms`, "last response", humanSpeed(s.response_ms.last)) : null,
-  );
+  ].filter((x): x is HTMLElement => x !== null);
+  // The stylesheet lays the tiles out by their count, so none is ever left alone on a row.
+  const tiles = h("div", { class: "herostats__tiles", "data-count": list.length }, list);
 
   // Objectives, in the catalogue's order, with how many runs reached each; the never-reached say so.
   const order = objectives.length ? objectives.map((o) => o.id) : Object.keys(s.objectives);
@@ -46,7 +44,8 @@ export function renderStats(s: Stats, objectives: Objective[], last?: LastRun, n
       "li",
       { class: "herostats__obj", "data-never": String(never) },
       h("span", { class: "herostats__objtitle" }, title(id)),
-      h("span", { class: "herostats__objcount" }, never ? `not reached yet — 0 of ${o.attempts} tries` : `reached in ${o.achieved} of ${o.attempts} tries`),
+      // The API counts runs, not keystrokes: "of N runs that tried it".
+      h("span", { class: "herostats__objcount" }, never ? `not reached yet — tried in ${o.attempts} run${o.attempts === 1 ? "" : "s"}` : `reached in ${o.achieved} of ${o.attempts} run${o.attempts === 1 ? "" : "s"} that tried`),
     );
   });
 
@@ -61,6 +60,17 @@ export function renderStats(s: Stats, objectives: Objective[], last?: LastRun, n
           { class: "herostats__objectives" },
           h("p", { class: "herostats__objhead" }, "Objectives, and who has reached them"),
           h("ul", { class: "herostats__objlist", role: "list" }, objEls),
+          // What "reached" means on the API side: the objective's command exited 0. A credential read
+          // and a dropped binary finish before the kill lands, so they count — detection is not
+          // prevention — and the line says how long the attacker then kept the pod.
+          h(
+            "p",
+            { class: "small herostats__reached" },
+            "Reached means the command for it exited 0. Detection is not prevention: ",
+            h("code", {}, "cat /etc/shadow"),
+            " and a dropped binary finish before the kill lands, so they count",
+            s.terminal.median_survival_s > 0 ? ` — and the attacker kept the pod a median ${s.terminal.median_survival_s} s per session.` : ".",
+          ),
           h("p", { class: "small" }, "Think you can get further than this says is possible? ", h("a", { href: REPO_ISSUES, rel: "noopener noreferrer", target: "_blank" }, "Open an issue"), "."),
         )
       : null,
