@@ -9,7 +9,7 @@
 // objective for touch screens. prefers-reduced-motion drops the caret blink and smooth scrolling.
 
 import type { ApiClient } from "../lib/api";
-import type { CatalogueCommand, Objective, Posture, ScenarioDetails } from "../lib/contract";
+import { type CatalogueCommand, type Objective, type Posture, type ScenarioDetails, isRunId } from "../lib/contract";
 import { h, prefersReducedMotion, replace } from "../lib/dom";
 import type { CommandRun, RunView, TimelineView } from "../lib/timeline";
 import { formatDuration, ts } from "../lib/timeline";
@@ -73,8 +73,6 @@ export function mountTerminal(
   const ownRunLost = () => startTimedOutAt !== undefined && Date.now() - startTimedOutAt < 60_000;
   let mode: "idle" | "session" | "unavailable" = "unavailable";
 
-  /** The run id shape the API uses; a value from the 202 that does not match is never put in a URL. */
-  const VALID_RUN_ID = /^[A-Za-z0-9_-]{1,64}$/;
 
   // Built once per session; patched after.
   let els: {
@@ -218,7 +216,7 @@ export function mountTerminal(
     const r = await api.attackTerminal();
     starting = false;
     if (r.kind === "accepted") {
-      if (!VALID_RUN_ID.test(r.run.run_id)) {
+      if (!isRunId(r.run.run_id)) {
         // The server accepted a run but named it something we will not put in a URL; say so plainly
         // rather than sending a request that could escape the run path.
         syncIdle();

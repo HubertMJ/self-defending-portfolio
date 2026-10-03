@@ -410,6 +410,15 @@ main {
 
 /* ---------- mock banner ---------- */
 
+/* In mock mode main.ts moves the banner into the sticky header, so no scroll — a link to #attack
+   included — can take it off screen. */
+.site-header .mock-banner {
+  padding-block: 0.35rem;
+  border-top: 1px solid color-mix(in srgb, var(--warning) 45%, transparent);
+  border-bottom: 0;
+  font-size: 0.82rem;
+}
+
 .mock-banner {
   margin: 0;
   padding: 0.6rem var(--gutter);
@@ -3461,8 +3470,10 @@ html[data-terminal="off"] .needs-terminal {
   color: var(--text-faint);
 }
 
-/* A right-to-left run in attacker output must not reorder the line (ADR 0021 / review item 24). */
+/* A right-to-left run in attacker output must not reorder the line (ADR 0021): each line is its own
+   paragraph for the bidi algorithm, its direction taken from its own first strong character. On a
+   block, `isolate` does nothing; `plaintext` is what isolates a block's content. */
 .term__line,
 .term__explain {
-  unicode-bidi: isolate;
+  unicode-bidi: plaintext;
 }

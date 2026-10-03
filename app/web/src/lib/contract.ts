@@ -651,6 +651,9 @@ function sourceRef(v: unknown): SourceRef | undefined {
 
 const isArgv = (v: unknown): v is string[] => Array.isArray(v) && v.every(isStr);
 
+/** A run id the page will put in a URL: the API's are 16 hex; nothing that could leave the path. */
+export const isRunId = (v: unknown): v is string => isStr(v) && /^[A-Za-z0-9_-]{1,64}$/.test(v);
+
 /** The terminal catalogue id: the only thing the API accepts, so the page validates it the same way. */
 export const isCommandId = (v: unknown): v is string => isStr(v) && /^[a-z0-9-]{1,32}$/.test(v);
 
@@ -776,24 +779,13 @@ export function isCommandAccepted(v: unknown): v is CommandAccepted {
 export function parseStats(v: unknown): Stats {
   if (!isObj(v)) throw new TypeError("stats: expected an object");
   const count = (x: unknown): number => (isCount(x) ? x : 0);
-  const byScenario: Stats["by_scenario"] = {};
-  if (isObj(v.by_scenario)) {
-    for (const [k, x] of Object.entries(v.by_scenario).slice(0, 64)) {
-      if (isObj(x)) byScenario[cap(k, 40)] = { runs: count(x.runs), detected: count(x.detected), responded: count(x.responded) };
-    }
-  }
-  const commands: Stats["commands"] = {};
-  if (isObj(v.commands)) {
-    for (const [k, x] of Object.entries(v.commands).slice(0, 64)) {
-      if (isObj(x)) commands[cap(k, 32)] = { attempts: count(x.attempts), allowed: count(x.allowed), prevented: count(x.prevented), detected: count(x.detected) };
-    }
-  }
-  const objectives: Stats["objectives"] = {};
-  if (isObj(v.objectives)) {
-    for (const [k, x] of Object.entries(v.objectives).slice(0, 40)) {
-      if (isObj(x)) objectives[cap(k, 40)] = { attempts: count(x.attempts), achieved: count(x.achieved) };
-    }
-  }
+  // Keyed by ids the API sends: built with Object.fromEntries, which makes even a `__proto__` key an
+  // ordinary own property — an assignment would set the object's prototype instead.
+  const table = <T>(o: unknown, max: number, keyCap: number, row: (x: Obj) => T): Record<string, T> =>
+    Object.fromEntries(isObj(o) ? Object.entries(o).slice(0, max).filter((e): e is [string, Obj] => isObj(e[1])).map(([k, x]) => [cap(k, keyCap), row(x)]) : []);
+  const byScenario = table(v.by_scenario, 64, 40, (x) => ({ runs: count(x.runs), detected: count(x.detected), responded: count(x.responded) }));
+  const commands = table(v.commands, 64, 32, (x) => ({ attempts: count(x.attempts), allowed: count(x.allowed), prevented: count(x.prevented), detected: count(x.detected) }));
+  const objectives = table(v.objectives, 40, 40, (x) => ({ attempts: count(x.attempts), achieved: count(x.achieved) }));
   const rms = isObj(v.response_ms) ? v.response_ms : {};
   const term = isObj(v.terminal) ? v.terminal : {};
   return {

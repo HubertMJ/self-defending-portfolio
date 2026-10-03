@@ -16,6 +16,7 @@ import {
   isAttackAccepted,
   isCommandAccepted,
   isLimits,
+  isRunId,
   isTerminalAccepted,
   parsePosture,
   parseRunEvents,
@@ -198,6 +199,8 @@ export class ApiClient {
 
   /** GET /api/runs/{id}: the stored events of a run, for backfilling a session joined mid-way. */
   runEvents(id: string): Promise<Result<StreamEvent[]>> {
+    // The id comes from the event stream; one that is not a run id never becomes a URL.
+    if (!isRunId(id)) return Promise.resolve({ ok: false, error: "bad-response", message: "not a run id" });
     return this.getJson(`/runs/${encodeURIComponent(id)}`, parseRunEvents);
   }
 

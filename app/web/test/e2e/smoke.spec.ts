@@ -97,6 +97,14 @@ test.describe("API offline (nothing behind /api)", () => {
 });
 
 test.describe("mock mode", () => {
+  test("the mock banner stays on screen when the page opens at #attack", async ({ page }) => {
+    await page.goto("/?mock=1#attack");
+    await expect.poll(() => page.evaluate(() => scrollY)).toBeGreaterThan(500);
+    await expect(page.locator("#mock-banner")).toBeInViewport();
+    await page.mouse.wheel(0, 3000);
+    await expect(page.locator("#mock-banner")).toBeInViewport();
+  });
+
   test("posture, scenarios and history render from fixtures", async ({ page }) => {
     const problems = guardConsole(page);
     await page.goto("/?mock=1");
@@ -267,6 +275,8 @@ test.describe("attacker's terminal (mock, ADR 0033)", () => {
     // A real recon command streams real output back.
     await term.getByRole("button", { name: "id", exact: true }).click();
     await expect(term.locator(".term__out")).toContainText("uid=10001");
+    // Each output line is its own bidi paragraph: a right-to-left run cannot reorder it.
+    expect(await term.locator(".term__cmdout .term__line").first().evaluate((e) => getComputedStyle(e).unicodeBidi)).toBe("plaintext");
 
     // Defacing the shop changes the window beside the terminal; no rule fires.
     await term.getByRole("button", { name: /^echo pwned>/ }).click();

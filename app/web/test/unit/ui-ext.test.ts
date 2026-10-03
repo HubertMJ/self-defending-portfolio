@@ -104,13 +104,36 @@ describe("parseScenarioDetails commands (review item 13)", () => {
 });
 
 describe("parseStats", () => {
-  it("ignores inherited properties and fills missing sections", () => {
+  it("fills missing sections", () => {
     const s = parseStats({ objectives: { recon: { attempts: 3, achieved: 2 } } });
     expect(s.objectives.recon).toEqual({ attempts: 3, achieved: 2 });
-    // A prototype key must not leak in as "undefined of undefined".
-    expect(Object.prototype.hasOwnProperty.call(s.objectives, "constructor")).toBe(false);
     expect(s.runs).toBe(0);
     expect(s.response_ms).toEqual({ last: 0, p50: 0, min: 0, max: 0 });
+  });
+
+  it("keeps a `__proto__` key as data: the parsed object's prototype is untouched (review 2, item 14)", () => {
+    const s = parseStats(JSON.parse('{"objectives":{"__proto__":{"attempts":7,"achieved":7},"recon":{"attempts":1,"achieved":1}},"commands":{"__proto__":{"attempts":1}}}'));
+    expect(Object.getPrototypeOf(s.objectives)).toBe(Object.prototype);
+    expect(Object.getPrototypeOf(s.commands)).toBe(Object.prototype);
+    expect(Object.keys(s.objectives)).toEqual(["__proto__", "recon"]);
+    expect((s.objectives as Record<string, unknown>).attempts).toBeUndefined();
+  });
+
+  it("an objective the catalogue has and the stats lack reads 0, even one named like a prototype key", () => {
+    const el = renderStats(parseStats({ objectives: {} }), [{ id: "constructor", title: "Odd id" }]);
+    expect(el.querySelector(".herostats__objcount")?.textContent).toBe("not reached yet — tried in 0 runs");
+  });
+});
+
+describe("GET /api/runs/{id} (review 2, item 14)", () => {
+  it("never builds a URL from a run id that is not one", async () => {
+    const { ApiClient } = await import("../../src/lib/api");
+    const urls: string[] = [];
+    const api = new ApiClient({ fetch: async (u) => (urls.push(u), new Response("[]", { status: 200, headers: { "Content-Type": "application/json" } })) });
+    for (const bad of ["../limits", "a/b", "x?y", "", "%2e%2e"]) expect((await api.runEvents(bad)).ok).toBe(false);
+    expect(urls).toEqual([]);
+    expect((await api.runEvents("4f1c2a9e8b7d6c5a")).ok).toBe(true);
+    expect(urls).toEqual(["/api/runs/4f1c2a9e8b7d6c5a"]);
   });
 });
 
