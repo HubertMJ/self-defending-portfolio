@@ -177,20 +177,45 @@ test.describe("live run console (mock)", () => {
     const problems = guardConsole(page);
     await page.goto("/?mock=1");
     const consoleEl = page.locator("#console");
+    // The run's in-between states last a few hundred milliseconds (the kill-timer runs for about half
+    // a second), shorter than an assertion's polling can be sure to see. Every state the console
+    // passes through is recorded as it happens instead, and the sequence is checked afterwards.
+    await page.evaluate(() => {
+      const root = document.getElementById("console") as HTMLElement;
+      const seen: { victim: string; text: string; falcoLit: boolean; timer: string; who: string }[] = [];
+      const record = () => {
+        const s = {
+          victim: root.querySelector(".browser")?.getAttribute("data-status") ?? "",
+          text: root.querySelector(".browser")?.textContent ?? "",
+          falcoLit: root.querySelector('.hop[data-hop="falco"]')?.getAttribute("data-state") === "lit",
+          timer: root.querySelector(".killtimer")?.getAttribute("data-state") ?? "",
+          who: root.querySelector(".console__who")?.textContent ?? "",
+        };
+        const last = seen[seen.length - 1];
+        if (!last || JSON.stringify(last) !== JSON.stringify(s)) seen.push(s);
+      };
+      new MutationObserver(record).observe(root, { subtree: true, childList: true, attributes: true, characterData: true });
+      (window as unknown as { consoleStates: typeof seen }).consoleStates = seen;
+    });
     await page.locator('.scenario[data-scenario="shell-in-container"] .btn--attack').click();
+    // The run takes the console over (live for its whole length), then ends.
     await expect(consoleEl).toHaveAttribute("data-state", "live");
-    await expect(consoleEl.locator(".console__who")).toHaveText("Your run");
-    // Before its first answer the shop is "booting", with the pod's phase from the pod watch.
-    await expect(consoleEl.locator(".browser")).toContainText(/Shop booting · pod (Pending|ContainerCreating|Running)/);
-    // The victim shop is up first, then defaced by the attack, then gone with its pod.
-    await expect(consoleEl.locator(".browser")).toHaveAttribute("data-status", /fresh|defaced/);
-    // The pre_exec defaces the shop before the shell Falco catches: defaced while nothing is detected.
-    await expect(consoleEl.locator(".browser")).toHaveAttribute("data-status", "defaced");
-    await expect(consoleEl.locator('.hop[data-hop="falco"]')).not.toHaveAttribute("data-state", "lit");
-    await expect(consoleEl.locator(".killtimer")).toHaveAttribute("data-state", "running");
-    await expect(consoleEl.locator(".browser")).toHaveAttribute("data-status", "gone", { timeout: 15_000 });
+    await expect(consoleEl).toHaveAttribute("data-state", "done", { timeout: 15_000 });
+    await expect(consoleEl.locator(".browser")).toHaveAttribute("data-status", "gone");
     await expect(consoleEl.locator(".hop[data-state=lit]")).toHaveCount(8, { timeout: 15_000 });
     await expect(consoleEl.locator(".killtimer")).toHaveAttribute("data-state", "stopped");
+    const states = await page.evaluate(() => (window as unknown as { consoleStates: { victim: string; text: string; falcoLit: boolean; timer: string; who: string }[] }).consoleStates);
+    // Only what the console showed once this run had taken it over (before, it showed the history).
+    const own = states.slice(states.findIndex((s) => s.who === "Your run"));
+    const changes = (xs: string[]) => xs.filter((x, i) => x !== "" && x !== xs[i - 1]);
+    expect(states.some((s) => s.who === "Your run")).toBe(true);
+    // Before its first answer the shop is "booting", with the pod's phase from the pod watch.
+    expect(own.some((s) => /Shop booting · pod (Pending|ContainerCreating|Running)/.test(s.text))).toBe(true);
+    // The shop is up first, then defaced by the pre_exec — while nothing is detected yet — then gone.
+    expect(changes(own.map((s) => s.victim))).toEqual(["waiting", "fresh", "defaced", "gone"]);
+    expect(own.some((s) => s.victim === "defaced" && !s.falcoLit)).toBe(true);
+    // The kill-timer waits, runs from the detected syscall, and stops at the response.
+    expect(changes(own.map((s) => s.timer))).toEqual(["idle", "running", "stopped"]);
     await expect(consoleEl.locator(".killtimer__value")).toHaveText(/^0\.\d{3}$/);
     // FIX 3: it played in real time; the badge states how fast that was, next to something human.
     await expect(consoleEl.locator(".replay-badge")).toContainText(/Real time · real: \d+ ms from the detected syscall to pod deleted · (faster|about as fast|quicker|in under|in a couple)/);
