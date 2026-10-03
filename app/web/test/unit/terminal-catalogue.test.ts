@@ -75,6 +75,12 @@ describe("terminal catalogue generator (scripts/terminal-catalogue.mjs)", () => 
     expect("detection" in deface).toBe(false);
   });
 
+  it("keeps a '#' inside a block scalar as text, and drops comments outside it (final review, item 7)", () => {
+    const c = terminalCatalogue(EXCERPT.replace("        The shop window next to you just changed.", "        The shop window changed (see issue #42).\n        # still part of the text").replace("      tty: false\n      outcome: allowed\n      layer: runtime\n      control: \"Falco is watching; an app", "      tty: false # a TTY is not needed\n      outcome: allowed\n      layer: runtime\n      control: \"Falco is watching; an app"));
+    expect(c.commands[1].explain).toBe("The shop window changed (see issue #42). # still part of the text");
+    expect(c.commands[1].tty).toBe(false);
+  });
+
   it("fails loudly on a command missing a field the page needs", () => {
     expect(() => terminalCatalogue(EXCERPT.replace('      layer: runtime\n      control: "Falco is watching; plain', '      control: "Falco is watching; plain'))).toThrow(/whoami has no layer/);
     expect(() => terminalCatalogue("- id: other\n  title: x\n")).toThrow(/no `- id: terminal`/);

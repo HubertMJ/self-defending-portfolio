@@ -158,14 +158,27 @@ function parseBlock(lines) {
   return v;
 }
 
+/**
+ * The non-blank lines, with comments removed — except inside a block scalar (`>-`, `|`), where a
+ * `#` is text: `explain: >-` followed by "see #42" keeps "see #42".
+ */
 function toLines(text) {
-  return text
-    .split("\n")
-    .map((raw) => {
-      const stripped = stripComment(raw);
-      return { raw: stripped, indent: stripped.length - stripped.trimStart().length, text: stripped.trim() };
-    })
-    .filter((l) => l.text !== "");
+  const out = [];
+  let blockAt = -1; // the indentation of the key that opened a block scalar, or -1 outside one
+  for (const raw of text.split("\n")) {
+    const indent = raw.length - raw.trimStart().length;
+    if (raw.trim() === "") continue;
+    if (blockAt >= 0 && indent > blockAt) {
+      out.push({ raw: raw.trimEnd(), indent, text: raw.trim() });
+      continue;
+    }
+    blockAt = -1;
+    const stripped = stripComment(raw);
+    if (stripped.trim() === "") continue;
+    out.push({ raw: stripped, indent, text: stripped.trim() });
+    if (/(:\s+|^-\s+)[>|][-+]?$/.test(stripped.trim())) blockAt = indent;
+  }
+  return out;
 }
 
 const REQUIRED = ["id", "input", "aliases", "technique", "command", "tty", "outcome", "layer", "control", "explain"];
