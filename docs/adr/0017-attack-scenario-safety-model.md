@@ -146,3 +146,21 @@ session read-only meanwhile. The rest of the envelope is unchanged - one hardene
 same quota, no network beyond its loopback and DNS - so the Consequences above hold with "two minutes" read as
 "five". The rate limits (3 per 10 minutes per visitor, 30 per hour) are unchanged: a slot held for five minutes
 serves at most 12 terminal sessions an hour, fewer than the global budget allows.
+
+## Amendment 2026-10-03: one command resolves a name, inside the cluster only (ADR 0034)
+
+The 2026-10-02 amendment says no terminal command "resolves a name". One command now does, deliberately:
+`dns-exfil` (ADR 0034) is the scenario the eBPF layer cannot see and the SIEM catches by correlation, and a
+DNS lookup carrying the run's flag is its whole point. The exception is bounded so the envelope does not
+grow:
+
+- **Only under the reserved `.test` TLD, in one zone CoreDNS answers itself.** The name is
+  `<label>.x.exfil.sdp.test.` (fully qualified, no search-domain expansion); CoreDNS serves `exfil.sdp.test`
+  as a sinkhole (NXDOMAIN) and never forwards it, so the query ends inside the cluster and the flag never
+  reaches a resolver outside the homelab. A live test proves no `exfil.sdp.test` query leaves CoreDNS.
+- **The argv is fixed** like every command's (by id, no free text, no visitor input); the only variable part
+  is the run's own flag, read from the pod's own file, which is meant to be read (ADR 0032).
+- **No new reach.** The pod's DNS egress existed before (it is what makes quarantine observable); the twin
+  has none and the lookup is dropped there; a quarantined pod's lookup is dropped too.
+
+Every other command still prints no environment, names no host outside the pod and resolves no name.

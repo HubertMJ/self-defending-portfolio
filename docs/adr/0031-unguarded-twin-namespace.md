@@ -97,3 +97,10 @@ The owner accepted that trade. The quota (3 pods) and the rate limits are unchan
 pod is the same; only how long one pod may live has grown. `tests/admission/sandbox-deadline-pods.yaml`
 moves with the bound: 301 is refused and 300 admitted, in both namespaces, live (`run.sh`) and offline
 (`offline.sh`).
+
+## Amendment 2026-10-03: one catalogue command now resolves a name (ADR 0034)
+
+"No catalogue command that resolves a name" above no longer holds: `dns-exfil` (ADR 0034, ADR 0017 and 0032
+amendments of the same date) looks up a name under `exfil.sdp.test`. The twin's decision is unchanged and is
+now exercised: the twin still has no DNS egress, so in `sandbox-unguarded` that lookup is dropped by policy,
+and the SIEM sees the attempt as a drop rather than a query.

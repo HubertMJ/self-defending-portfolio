@@ -212,3 +212,14 @@ session over at three minutes, and its fallbacks for absent values are still 120
 Live checks (no cluster here): a terminal session left quiet ends `idle` after 90 s and one kept busy ends
 `deadline` at 300 s with the shop still answering until then; `tests/admission/run.sh` admits 300 and refuses
 301 in both sandbox namespaces.
+
+## Amendment 2026-10-03: a fifteenth command, `dns-exfil`, resolves a name (ADR 0034)
+
+"No command ... resolves a name" (part 2) gains one bounded exception, recorded in ADR 0017's amendment of
+the same date: `dns-exfil` (objective "Phone home") reads the run's flag from `/srv/shop/.flag`, makes it one
+DNS label and looks up `<label>.x.exfil.sdp.test.` with busybox `nslookup`, in a zone CoreDNS answers itself
+and never forwards; the argv ends `; true` because `nslookup` exits non-zero on NXDOMAIN and the outcome is
+"allowed". Falco has no rule for it by design - that blindness is the exhibit, and the live test asserts zero
+Falco events, so a rule that starts catching it turns the test red. `tests/scenarios/offline.sh` proves the
+argv and the label form under the pod's security context; the lookup itself is proven live. The SIEM's side
+(the Hubble DNS finding, the correlation, the API's flag match) is ADR 0034's.
