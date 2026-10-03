@@ -335,3 +335,16 @@ describe("hero tiles say what their numbers count (final review, item 4)", () =>
     expect(el.textContent).toContain("last detection to response");
   });
 });
+
+describe("the defence map in result mode (final review, item 7)", () => {
+  it("gives every layer a status pill: a verdict, 'never reached', or 'not tried'", () => {
+    const el = renderDefenceMap({ lit: litFromCommands([{ layer: "runtime", outcome: "allowed", control: "watched", input: "id" }]) });
+    const pill = (id: string) => el.querySelector(`.deflayer[data-layer="${id}"] .deflayer__head .deflayer__verdict`)?.textContent;
+    expect(pill("runtime")).toBe("allowed");
+    expect(pill("edge")).toBe("never reached");
+    expect(pill("network")).toBe("not tried");
+    expect(pill("pod-security")).toBe("not tried");
+    // The static map (How it works) has no pills.
+    expect(renderDefenceMap({}).querySelector(".deflayer__verdict")).toBeNull();
+  });
+});

@@ -121,7 +121,7 @@ export function renderDefenceMap(opts: { posture?: Posture; lit?: Map<DefenceLay
 }
 
 function layerCard(meta: LayerMeta, posture: Posture | undefined, lit: LitLayer | undefined, live: boolean): HTMLElement {
-  const state = lit ? lit.outcome : meta.reach === "outside" && live ? "out-of-reach" : "idle";
+  const state = lit ? lit.outcome : meta.reach === "outside" && live ? "out-of-reach" : live ? "untried" : "idle";
   const ev = meta.evidence && posture ? meta.evidence(posture) : null;
   return h(
     "li",
@@ -135,7 +135,10 @@ function layerCard(meta: LayerMeta, posture: Posture | undefined, lit: LitLayer 
         ? h("span", { class: `deflayer__verdict deflayer__verdict--${lit.outcome}` }, OUTCOME_WORD[lit.outcome])
         : meta.reach === "outside" && live
           ? h("span", { class: "deflayer__verdict deflayer__verdict--out" }, "never reached")
-          : null,
+          : live
+            ? // In reach from the pod, but no command has met it yet: every card in the result says something.
+              h("span", { class: "deflayer__verdict deflayer__verdict--out" }, "not tried")
+            : null,
     ),
     h("p", { class: "deflayer__blurb" }, meta.blurb),
     lit && lit.entries.length
