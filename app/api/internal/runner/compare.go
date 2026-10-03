@@ -16,8 +16,6 @@ import (
 	"context"
 	"sync"
 
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-
 	"github.com/hubertmj/self-defending-portfolio/app/api/internal/scenarios"
 )
 
@@ -107,18 +105,8 @@ func (r *Runner) executeArm(ctx context.Context, rn *run, sc scenarios.Scenario)
 	defer cancel()
 	log := r.log.With("run_id", rn.id, "arm", rn.arm, "pod", rn.pod)
 
-	wctx, stopWatch := context.WithCancel(r.base)
+	stopWatch, watchDone := r.startPodWatch(rn, sc, log)
 	defer stopWatch()
-	w, err := r.openPodWatch(wctx, rn.namespace, rn.pod)
-	if err != nil {
-		log.Warn("unguarded pod watch failed; retrying in the background", "err", err)
-		w = nil
-	}
-	watchDone := make(chan struct{})
-	go func() {
-		defer close(watchDone)
-		r.watchPod(wctx, rn, sc.Container(), w)
-	}()
 
 	stopVictim := func() {}
 	created := false
@@ -131,13 +119,11 @@ func (r *Runner) executeArm(ctx context.Context, rn *run, sc scenarios.Scenario)
 		<-watchDone
 	}()
 
-	pod := buildPod(rn, sc, rn.namespace, sc.Timeout())
-	if _, err := r.client.CoreV1().Pods(rn.namespace).Create(actx, pod, metav1.CreateOptions{}); err != nil {
+	if err := r.createPod(actx, rn, sc, sc.Timeout()); err != nil {
 		log.Warn("unguarded pod rejected", "err", err)
 		return
 	}
 	created = true
-	rn.podVisible.Store(true)
 
 	ready, err := r.waitReady(actx, rn.namespace, rn.pod)
 	if err != nil {
@@ -147,21 +133,7 @@ func (r *Runner) executeArm(ctx context.Context, rn *run, sc scenarios.Scenario)
 		stopVictim = stop
 	}
 
-	if sc.Exec != nil {
-		go func() {
-			if sc.PreExec != nil {
-				if err := r.exec.Exec(actx, rn.namespace, rn.pod, sc.Container(), sc.PreExec.Command, false); err != nil {
-					log.Info("unguarded pre-exec ended", "err", err)
-				}
-				if actx.Err() != nil {
-					return
-				}
-			}
-			if err := r.exec.Exec(actx, rn.namespace, rn.pod, sc.Container(), sc.Exec.Command, sc.Exec.TTY); err != nil {
-				log.Info("unguarded exec ended", "err", err)
-			}
-		}()
-	}
+	r.startScriptedExec(actx, rn, sc, log) // log carries arm=unguarded
 
 	<-actx.Done() // held until the coordinator (or the deadline) stops this arm
 }

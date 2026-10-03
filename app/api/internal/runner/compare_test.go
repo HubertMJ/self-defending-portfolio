@@ -3,11 +3,14 @@ package runner
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
+
+	"github.com/hubertmj/self-defending-portfolio/app/api/internal/scenarios"
 )
 
 func compareRunner(c *fake.Clientset, ex Execer, rec *recorder) *Runner {
@@ -19,11 +22,13 @@ func TestCompareTwoArms(t *testing.T) {
 	c := fake.NewClientset()
 	readyOnCreate(c)
 	rec := newRecorder()
-	r := compareRunner(c, &fakeExec{block: true}, rec)
+	ex := &fakeExec{} // returns at once, so the exec follows the pre-exec
+	r := compareRunner(c, ex, rec)
 	release, done := released()
 
 	sc := scenario("terminate", true)
 	sc.TimeoutSeconds = 30
+	sc.PreExec = &scenarios.Exec{Command: []string{"sh", "-c", "deface"}}
 	id := startCompare(t, r, sc, release)
 	guardedPod := podName(sc.ID, id)
 	unguardedPod := guardedPod + "-u"
@@ -51,6 +56,19 @@ func TestCompareTwoArms(t *testing.T) {
 	rec.waitFor(t, StateFinished)
 	waitArm(t, rec, "unguarded", true) // the twin was cleaned up
 	<-done
+
+	// The same attack in both pods: the pre-exec, then the exec, in each.
+	ex.mu.Lock()
+	calls := strings.Join(ex.calls, "\n")
+	ex.mu.Unlock()
+	for _, want := range []string{
+		"sandbox/" + guardedPod + "/victim:sh -c deface", "sandbox/" + guardedPod + "/victim:sh -c id",
+		"sandbox-unguarded/" + unguardedPod + "/victim:sh -c deface", "sandbox-unguarded/" + unguardedPod + "/victim:sh -c id",
+	} {
+		if !strings.Contains(calls, want) {
+			t.Fatalf("exec %q not sent; calls:\n%s", want, calls)
+		}
+	}
 }
 
 func TestCompareFallsBackWithoutTwin(t *testing.T) {

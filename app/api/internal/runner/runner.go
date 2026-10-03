@@ -511,20 +511,8 @@ func (r *Runner) execute(rn *run, sc scenarios.Scenario) {
 	defer cancel()
 	log := r.log.With("run_id", rn.id, "scenario", rn.scenario, "pod", rn.pod)
 
-	// The watch outlives the run's timeout (it has to see the cleanup's deletion) but not the API.
-	// Opened before the pod is created, so the creation is its first event.
-	wctx, stopWatch := context.WithCancel(r.base)
+	stopWatch, watchDone := r.startPodWatch(rn, sc, log)
 	defer stopWatch()
-	w, err := r.openPodWatch(wctx, rn.namespace, rn.pod)
-	if err != nil {
-		log.Warn("pod watch failed; retrying in the background", "err", err)
-		w = nil
-	}
-	watchDone := make(chan struct{})
-	go func() {
-		defer close(watchDone)
-		r.watchPod(wctx, rn, sc.Container(), w)
-	}()
 
 	// The victim poller, once there is a pod to poll; stopVictim ends it and waits.
 	stopVictim, victimStarted := func() {}, false
@@ -553,8 +541,7 @@ func (r *Runner) execute(rn *run, sc scenarios.Scenario) {
 		log.Info("run ended", "state", final, "detail", detail)
 	}()
 
-	pod := buildPod(rn, sc, rn.namespace, timeout)
-	if _, err := r.client.CoreV1().Pods(rn.namespace).Create(ctx, pod, metav1.CreateOptions{}); err != nil {
+	if err := r.createPod(ctx, rn, sc, timeout); err != nil {
 		log.Error("scenario pod rejected", "err", err)
 		final, detail = StateFailed, "the sandbox refused the scenario pod"
 		if apierrors.IsForbidden(err) || apierrors.IsInvalid(err) {
@@ -564,7 +551,6 @@ func (r *Runner) execute(rn *run, sc scenarios.Scenario) {
 		return
 	}
 	created = true
-	rn.podVisible.Store(true)
 	r.publish(rn, StateStarted, "pod created")
 
 	ready, err := r.waitReady(ctx, rn.namespace, rn.pod)
@@ -600,25 +586,7 @@ func (r *Runner) execute(rn *run, sc scenarios.Scenario) {
 		return
 	}
 
-	if sc.Exec != nil {
-		// In the background: a terminated pod ends the exec stream with an error, which is the
-		// expected outcome of a successful response, not a failure of the run. The pre-exec (no
-		// TTY, validated) runs to its end first; its failure does not stop the exec, which is the
-		// step the scenario is judged by.
-		go func() {
-			if sc.PreExec != nil {
-				if err := r.exec.Exec(ctx, rn.namespace, rn.pod, sc.Container(), sc.PreExec.Command, false); err != nil {
-					log.Info("pre-exec ended", "err", err)
-				}
-				if ctx.Err() != nil {
-					return
-				}
-			}
-			if err := r.exec.Exec(ctx, rn.namespace, rn.pod, sc.Container(), sc.Exec.Command, sc.Exec.TTY); err != nil {
-				log.Info("exec ended", "err", err)
-			}
-		}()
-	}
+	r.startScriptedExec(ctx, rn, sc, log)
 
 	detected := false
 	detectedCh := rn.detected
@@ -648,6 +616,58 @@ func (r *Runner) execute(rn *run, sc scenarios.Scenario) {
 			return
 		}
 	}
+}
+
+// startPodWatch opens the watch on the run's pod - before the pod is created, so the creation is its
+// first event - and runs it in the background. The watch outlives the run's timeout (it has to see
+// the cleanup's deletion) but not the API. stop ends it; done is closed when it has returned. Shared
+// by a run and the compare twin.
+func (r *Runner) startPodWatch(rn *run, sc scenarios.Scenario, log *slog.Logger) (stop func(), done <-chan struct{}) {
+	wctx, cancel := context.WithCancel(r.base)
+	w, err := r.openPodWatch(wctx, rn.namespace, rn.pod)
+	if err != nil {
+		log.Warn("pod watch failed; retrying in the background", "err", err)
+		w = nil
+	}
+	watchDone := make(chan struct{})
+	go func() {
+		defer close(watchDone)
+		r.watchPod(wctx, rn, sc.Container(), w)
+	}()
+	return cancel, watchDone
+}
+
+// createPod creates the run's pod from the scenario; once it returns nil the pod exists and the
+// run's events name it.
+func (r *Runner) createPod(ctx context.Context, rn *run, sc scenarios.Scenario, timeout time.Duration) error {
+	if _, err := r.client.CoreV1().Pods(rn.namespace).Create(ctx, buildPod(rn, sc, rn.namespace, timeout), metav1.CreateOptions{}); err != nil {
+		return err
+	}
+	rn.podVisible.Store(true)
+	return nil
+}
+
+// startScriptedExec sends a scripted scenario's pre-exec and exec in the background, if it has them.
+// In the background: a terminated pod ends the exec stream with an error, which is the expected
+// outcome of a successful response, not a failure of the run. The pre-exec (no TTY, validated) runs
+// to its end first; its failure does not stop the exec, which is the step the scenario is judged by.
+func (r *Runner) startScriptedExec(ctx context.Context, rn *run, sc scenarios.Scenario, log *slog.Logger) {
+	if sc.Exec == nil {
+		return
+	}
+	go func() {
+		if sc.PreExec != nil {
+			if err := r.exec.Exec(ctx, rn.namespace, rn.pod, sc.Container(), sc.PreExec.Command, false); err != nil {
+				log.Info("pre-exec ended", "err", err)
+			}
+			if ctx.Err() != nil {
+				return
+			}
+		}
+		if err := r.exec.Exec(ctx, rn.namespace, rn.pod, sc.Container(), sc.Exec.Command, sc.Exec.TTY); err != nil {
+			log.Info("exec ended", "err", err)
+		}
+	}()
 }
 
 // startVictim begins the victim poller for a ready pod that has the app, publishing the first
