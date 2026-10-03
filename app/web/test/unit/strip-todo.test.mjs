@@ -106,3 +106,10 @@ describe("stripTodoContent on src/index.html (review 2, item 9)", () => {
     expect(out).not.toMatch(/todo-content|TODO-CONTENT/i);
   });
 });
+
+describe("stripTodoContent, two unwritten children of one written element (final review, item 5)", () => {
+  it("removes both and keeps the written one", () => {
+    const html = '<div class="todo-content" data-todo-content="x"><p>[TODO-CONTENT: a]</p><p>Written.</p><p>[TODO-CONTENT: b]</p></div>';
+    expect(stripTodoContent(html)).toBe("<div><p>Written.</p></div>");
+  });
+});

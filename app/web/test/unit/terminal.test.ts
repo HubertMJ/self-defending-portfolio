@@ -645,3 +645,30 @@ describe("a catalogue that fails to load (final review, item 2)", () => {
     expect(available).toEqual([false]);
   });
 });
+
+describe("tests that must survive mutation (final review, item 5)", () => {
+  it("orders same-millisecond output by event id when a backfill brings the middle chunk last", () => {
+    const f = new Feed().open();
+    f.cmd(1, "ps", "started", 3000);
+    const a = f.out(1, "ps", 3010, "A\n");
+    const b = f.out(1, "ps", 3010, "B\n");
+    const c = f.out(1, "ps", 3010, "C\n");
+    // The live feed delivered A and C; B arrives from /api/runs/{id} afterwards, same millisecond.
+    const log = f.events.filter((e) => e !== b).concat(b);
+    const run = buildTimeline(log, T0 + 60_000).runs[0];
+    expect(run.commands[0].stdout).toBe("A\nB\nC\n");
+    expect([a.id, b.id, c.id]).toEqual([...[a.id, b.id, c.id]].sort((x, y) => (x as number) - (y as number)));
+  });
+
+  it("names the first quarantine, the one that cut the pod off, when there were two", async () => {
+    const t = await harness();
+    const f = new Feed().open();
+    quarantined(f, 1, 3000); // 220 ms after its Enter
+    f.ran(2, "beacon", 6000, ["wget: can't connect"], 1, true, "stderr");
+    f.talon(6300, "label", 2);
+    f.run("responded", 6400, "quarantine", { command_seq: 2 }); // 400 ms after its Enter
+    killedBy(f, 3, 9000);
+    t.show(f);
+    expect(stat(t.root, "Quarantined after your Enter")).toBe("220 ms");
+  });
+});

@@ -69,3 +69,14 @@ describe("a run joined mid-session (review 2, item 6)", () => {
     expect(asked).toEqual(["r1", "r1"]);
   });
 });
+
+describe("backfill of events that name a run the feed never showed (final review, item 5)", () => {
+  it("fetches that run", async () => {
+    const asked: string[] = [];
+    const b = new Backfill(async (id) => (asked.push(id), { ok: true, value: [] }), () => {});
+    const orphan = ev("victim", { run_id: "0123456789abcdef", pod: "p", at: at(0), status: "up", title: "", banner: "", probe_ms: 3, checksum: "" }, 9);
+    b.view({ runs: [], unmatched: [orphan] });
+    await Promise.resolve();
+    expect(asked).toEqual(["0123456789abcdef"]);
+  });
+});

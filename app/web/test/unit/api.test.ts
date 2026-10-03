@@ -163,3 +163,13 @@ describe("ApiClient.attack", () => {
     expect(html405.kind).toBe("offline");
   });
 });
+
+describe("ApiClient.leaveRun (final review, item 5)", () => {
+  it("sends the DELETE with keepalive, so it outlives a page that is closing", async () => {
+    const inits: RequestInit[] = [];
+    const ok = await client(async (_u, init) => (inits.push(init ?? {}), json(202, { state: "finishing" }))).leaveRun("4f1c2a9e8b7d6c5a", "0123456789abcdef0123456789abcdef");
+    expect(ok).toBe(true);
+    expect(inits[0].method).toBe("DELETE");
+    expect(inits[0].keepalive).toBe(true);
+  });
+});
