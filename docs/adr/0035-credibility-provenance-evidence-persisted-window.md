@@ -85,8 +85,9 @@ that piece):
   `falco.alerts_24h` and `talon.actions_24h` keep their names and meaning and now come from the persisted
   window.
 - `/api/provenance` (above), `/build.json` (above).
-- `/api/runs`: the last 50 runs as summaries (id, scenario, state, start, end, detected, responded, event
-  count, truncated) - no pod, no command, no output; the events stay at `/api/runs/{id}`.
+- `/api/runs`: the last 50 runs as summaries (id, scenario, state, start and end - either may be null -,
+  detected, responded, event count, truncated) - no pod, no command, no output; the events stay at
+  `/api/runs/{id}`.
 - `/api/events?tick=1`: a `tick` event (`at`, `started_at`), below.
 
 **Never published:** a resource's name (no ReplicaSet, Deployment or pod name of anything outside the
@@ -98,8 +99,9 @@ field by field from an allow-list, never by copying a cluster object, and every 
 kube-bench title, capped at 200, and remediation, capped at 300) goes through the ADR 0021 scrubber and
 truncation; after scrubbing, the name of the node the benchmark pod ran on is replaced by `[node]` in both,
 since a check's text can quote it. The kube-bench log committed as a test fixture is redacted the same way
-(node `node-fixture`, address `192.0.2.10`, a documentation address). A violation group may name any
-namespace, the api's and web's included, since all are declared in the public repository.
+(node `node-fixture`, address `192.0.2.10`, a documentation address). The api and web namespaces are kept
+out of provenance only: a violation group may name any namespace, `portfolio-api` and `hello` included,
+since every namespace here is declared in the public repository.
 
 **kube-bench remediation text may name host file paths** (`/var/lib/rancher/k3s/...`, the CNI
 configuration directory). They describe where k3s keeps its files on any host, not something particular to
@@ -127,22 +129,24 @@ per-run record.
 - **The window is 23 to 24 hours, and says so.** It is the current hour plus the 23 before it.
   `since` is the later of the start of the oldest hour and `WindowSince`, so the first day after this ships
   reads "since 19:05", and the page labels the numbers with `since`, never as a bare "24 h".
-- **Runs, detections and responses of one run share a bucket**, the hour the run was queued, so
-  `runs >= detected >= responded` holds in every window. Alerts and actions are bucketed when they arrive.
-  A run event stamped in the future is counted as now, for its bucket and for `LastRunAt`, so a skewed
-  clock cannot park counts in an hour that has not started.
-  Because alerts count from every namespace and each detection of a run follows its alert, the guarantee is
-  `alerts_24h >= detected` and `actions_24h >= responded` - except while a detection published on the
-  Talon-first path is still waiting for its Falco webhook (normally seconds) or, if that webhook never
-  arrives, until the run's hour leaves the window.
-- **Sanitised, not rejected, on load.** A bucket older than the window or more than one hour in the future
-  is dropped, duplicate hours are summed, a `WindowSince` or `LastRunAt` in the future is clamped to now.
-  An hourly section that is still malformed after that (a negative count, a count above 2^40, or more than
-  25 buckets in range) is discarded on its own: the window restarts at now while the all-time totals still
-  load. Only a malformed all-time section rejects the blob (counts as unparseable, ADR 0030), as before. A
-  late first read merges as before: buckets are summed by hour, the earliest `WindowSince` and the latest
-  `LastRunAt` win. Today's blob, without the new fields, loads with every all-time counter unchanged, no
-  buckets and `WindowSince` = now.
+- **Runs, detections and responses of one run share a bucket**, the hour the run was queued, and a response
+  counts only together with a detection: when Talon's notification arrives first (the terminal path), its
+  response is added to `last_24h` when the detection arrives, and a run that never gets a detection adds no
+  response to the window (its Talon action still counts in `talon_actions`). So `runs >= detected >=
+  responded` holds in every window. Alerts and actions are bucketed when they arrive. A run event stamped in
+  the future is counted as now, for its bucket and for `LastRunAt`, so a skewed clock cannot park counts in an
+  hour that has not started. Because alerts count from every namespace and each action precedes the response
+  it reports, `actions_24h >= responded` always holds, and `alerts_24h >= detected` holds except while a
+  detection published on the Talon-first path is still waiting for its Falco webhook (normally seconds) or, if
+  that webhook is lost, until the run's hour leaves the window. That is the only exception.
+- **Sanitised, not rejected, on load.** A bucket older than the window or more than one hour in the future is
+  dropped, duplicate hours are summed, a `WindowSince` or `LastRunAt` in the future is clamped to now. An
+  hourly section that is still malformed after that (a negative count, a count above 2^40, or more than 25
+  buckets in range, counted after same-hour buckets are summed) is discarded on its own: the window restarts
+  at now while the all-time totals still load. Only a malformed all-time section rejects the blob (counts as
+  unparseable, ADR 0030), as before. A late first read merges as before: buckets are summed by hour, the
+  earliest `WindowSince` and the latest `LastRunAt` win. Today's blob, without the new fields, loads with
+  every all-time counter unchanged, no buckets and `WindowSince` = now.
 
 ### 4. Honest motion
 - Absolute times are UTC and say "UTC"; a relative time ("6 h ago") appears only next to an absolute one.
@@ -197,7 +201,8 @@ general "not running" explanation of section 2, because the next stale object wi
 ## Consequences
 - The 24 h numbers move by hour: a run at 10:59 leaves the window an hour after one at 10:00. The first day
   after rollout shows "since <time>"; a crash loses at most the last minute of counts, as ADR 0030 already
-  accepts for every counter.
+  accepts for every counter. During a rollout overlap the ConfigMap is last-writer-wins (ADR 0030): alerts,
+  actions and runs that reach the old pod in its last minute can be lost from the window.
 - Rollback: the previous API ignores the unknown fields when it reads the blob, but its writes drop them,
   so the window starts again (the all-time counters survive). Rolling forward again sanitises whatever it
   finds.
