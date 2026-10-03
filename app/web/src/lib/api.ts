@@ -27,9 +27,10 @@ import {
 
 export type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
 
+/** `status` and `json` say what answered a failed request: a JSON 404 is the API saying "no such thing". */
 export type Result<T> =
   | { ok: true; value: T }
-  | { ok: false; error: "offline" | "bad-response"; message: string };
+  | { ok: false; error: "offline" | "bad-response"; message: string; status?: number; json?: boolean };
 
 export type AttackResult =
   | { kind: "accepted"; run: AttackAccepted }
@@ -162,7 +163,7 @@ export class ApiClient {
     // A 404/502/503 here almost always means "phase 5 is not deployed" or "the API pod is down",
     // and the static site's own fallback would answer with HTML. Both are offline for the visitor.
     if (!res.ok || !isJson(res)) {
-      return { ok: false, error: "offline", message: `HTTP ${res.status}` };
+      return { ok: false, error: "offline", message: `HTTP ${res.status}`, status: res.status, json: isJson(res) };
     }
     try {
       return { ok: true, value: guard(await res.json()) };

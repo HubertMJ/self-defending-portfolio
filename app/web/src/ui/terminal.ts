@@ -14,6 +14,7 @@ import { h, prefersReducedMotion, replace } from "../lib/dom";
 import type { CommandRun, RunView, TimelineView } from "../lib/timeline";
 import { formatDuration, ts } from "../lib/timeline";
 import { litFromCommands, renderDefenceMap } from "./defencemap";
+import { offlinePanel } from "./common";
 import { renderVictim } from "./victim";
 
 export interface TerminalHandle {
@@ -106,7 +107,13 @@ export function mountTerminal(
   };
 
   // ---- load the catalogue ----
+  // Only the API saying "no such scenario" (a JSON 404) means this build has no terminal; a network
+  // error, a 5xx or a 429 from the request limiter is passing, so it gets an offline state that
+  // retries (30 s, then twice as long, three times) and a button, and the page is not degraded.
+  let catalogueTries = 0;
+  let catalogueTimer: ReturnType<typeof setTimeout> | undefined;
   const loadCatalogue = async () => {
+    clearTimeout(catalogueTimer);
     const r = await api.scenarioDetails("terminal");
     if (r.ok && (r.value.commands?.length ?? 0) > 0) {
       catalogue = {
@@ -127,9 +134,26 @@ export function mountTerminal(
         renderIdle();
       }
       hooks.onAvailable?.(true, catalogue.objectives);
-    } else {
+    } else if (r.ok || (r.status === 404 && r.json)) {
       renderUnavailable();
+    } else {
+      catalogueTries += 1;
+      if (catalogueTries <= 3) catalogueTimer = setTimeout(() => void loadCatalogue(), 15_000 * 2 ** catalogueTries);
+      if (mode !== "session") renderOffline(r.message);
     }
+  };
+
+  const renderOffline = (detail: string) => {
+    mode = "unavailable";
+    replace(
+      root,
+      offlinePanel({
+        title: "The terminal cannot reach the API right now",
+        body: "Its command list did not load. This is usually brief; the one-click attacks below may still work.",
+        detail,
+        onRetry: () => void loadCatalogue(),
+      }),
+    );
   };
 
   // No terminal on this API build: keep it quiet and point at the one-click demo below, which is the

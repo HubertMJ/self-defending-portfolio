@@ -601,3 +601,28 @@ describe("the catalogue arriving after a watched run (final review, item 1)", ()
   });
 });
 
+describe("a catalogue that fails to load (final review, item 2)", () => {
+  for (const [what, answer] of [
+    ["a 5xx", [503, { error: "unavailable" }]],
+    ["the request limiter's 429", [429, { error: "too many requests" }]],
+    ["a non-JSON 404 (no API behind /api)", [404, "not found\n", "text/plain"]],
+  ] as const) {
+    it(`${what}: an offline state that retries, and the page is not degraded`, async () => {
+      const available: boolean[] = [];
+      let calls = 0;
+      const t = await harness({ start: false, hooks: { onAvailable: (a) => available.push(a) }, details: async () => (calls++ === 0 ? [...answer] as [number, unknown, string?] : [200, terminalDetails()]) });
+      expect(available).toEqual([]);
+      expect(text(t.root)).toContain("cannot reach the API");
+      (t.root.querySelector(".offline button") as HTMLButtonElement).click();
+      await flush();
+      expect(available).toEqual([true]);
+      expect(t.root.querySelector(".term-start__btn")).not.toBeNull();
+    });
+  }
+
+  it("a JSON 404 (an API without the terminal) degrades", async () => {
+    const available: boolean[] = [];
+    await harness({ start: false, hooks: { onAvailable: (a) => available.push(a) }, details: async () => [404, { error: "unknown scenario" }] });
+    expect(available).toEqual([false]);
+  });
+});
