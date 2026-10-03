@@ -140,3 +140,43 @@ func TestTerminalStateEventsAreReserved(t *testing.T) {
 		t.Fatalf("the run does not end with its command's end and its final state: %s / %s", run.Events[18].Data, last)
 	}
 }
+
+// The byte reserve, for every final state: about a hundred Falco events of 2.5 KiB, then smaller ones
+// that fill what is left of the budget to within a few bytes, still leave the run's command end and
+// its final `run` event (finished, timeout or failed) in the record, last. Without the reserve, or
+// with the final state not counted as one, nothing is left for them.
+func TestTerminalStateByteReserve(t *testing.T) {
+	for _, final := range []string{"finished", "timeout", "failed"} {
+		s := New(0, 0, 0, 0)
+		rec := func(id uint64, typ, data string) { s.Record(events.Event{ID: id, Type: typ, Data: []byte(data)}) }
+		rec(1, "run", `{"run_id":"r","pod":"p","state":"started"}`)
+		// Falco events of exactly `size` bytes: 110 of 2.5 KiB, more than the budget, then halving
+		// sizes down to the smallest event, so whatever budget other events may use is filled to
+		// within 24 bytes - less than any `run` or `command` event.
+		alert := func(size int) string {
+			const frame = `{"pod":"p","output":""}`
+			return `{"pod":"p","output":"` + strings.Repeat("a", size-len(frame)) + `"}`
+		}
+		id := uint64(2)
+		sizes := []int{1280, 640, 320, 160, 80, 40, 24}
+		for range 110 {
+			sizes = append([]int{2560}, sizes...)
+		}
+		for _, size := range sizes {
+			rec(id, "falco", alert(size))
+			id++
+		}
+		rec(id, "command", `{"run_id":"r","seq":1,"state":"exited","exit_code":0}`)
+		rec(id+1, "run", `{"run_id":"r","state":"`+final+`","detail":"x"}`)
+		run, _ := s.Get("r")
+		if !run.Truncated || run.bytes > DefaultRunBytes || len(run.Events) > DefaultRunEvents {
+			t.Fatalf("%s: truncated=%v bytes=%d events=%d", final, run.Truncated, run.bytes, len(run.Events))
+		}
+		n := len(run.Events)
+		if !strings.Contains(string(run.Events[n-1].Data), `"state":"`+final+`"`) ||
+			!strings.Contains(string(run.Events[n-2].Data), `"state":"exited"`) {
+			t.Fatalf("%s: the record ends with %s / %s, not the command's end and the run's final state",
+				final, run.Events[n-2].Type, run.Events[n-1].Type)
+		}
+	}
+}
