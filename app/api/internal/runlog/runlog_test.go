@@ -214,7 +214,7 @@ func TestList(t *testing.T) {
 	}
 	r4, r3 := list[0], list[1]
 	if r4.State != "finished" || !r4.Detected || !r4.Responded || r4.EndedAt == nil || r4.EndedAt.Format("15:04:05") != "18:00:45" ||
-		r4.StartedAt.Format("15:04:05") != "18:00:40" || r4.Events != 8 || r4.Scenario != "network-tool" || r4.Truncated {
+		r4.StartedAt == nil || r4.StartedAt.Format("15:04:05") != "18:00:40" || r4.Events != 8 || r4.Scenario != "network-tool" || r4.Truncated {
 		t.Fatalf("r4 = %+v", r4)
 	}
 	if r3.State != "started" || r3.Detected || r3.EndedAt != nil || r3.Events != 3 {
@@ -226,5 +226,30 @@ func TestList(t *testing.T) {
 	}
 	if b, _ := json.Marshal(New(0, 0, 0, 0).List()); string(b) != "[]" {
 		t.Fatalf("empty list = %s", b)
+	}
+}
+
+// The first terminal state is final; the start is the queued time; no zero time is published.
+func TestSummaryStates(t *testing.T) {
+	s := New(0, 0, 0, 0)
+	h := events.NewHub(10)
+	h.Tap(s.Record)
+	feed(h, "run", map[string]string{"run_id": "r1", "state": "started", "at": "2026-10-03T18:00:01Z"})
+	feed(h, "run", map[string]string{"run_id": "r1", "state": "queued", "at": "2026-10-03T18:00:00Z"})
+	feed(h, "run", map[string]string{"run_id": "r1", "state": "finished", "at": "2026-10-03T18:00:09Z"})
+	feed(h, "run", map[string]string{"run_id": "r1", "state": "failed", "at": "2026-10-03T18:00:30Z"})
+	feed(h, "run", map[string]string{"run_id": "r1", "state": "detected", "at": "2026-10-03T18:00:31Z"})
+	feed(h, "run", map[string]string{"run_id": "r2", "state": "queued"})
+	feed(h, "run", map[string]string{"run_id": "r2", "state": "timeout"})
+	l := s.List()
+	r2, r1 := l[0], l[1]
+	if r1.State != "finished" || r1.EndedAt == nil || r1.EndedAt.Format("15:04:05") != "18:00:09" || !r1.Detected ||
+		r1.StartedAt == nil || r1.StartedAt.Format("15:04:05") != "18:00:00" {
+		t.Fatalf("r1 = %+v", r1)
+	}
+	b, _ := json.Marshal(r2)
+	if r2.State != "timeout" || !strings.Contains(string(b), `"started_at":null`) || !strings.Contains(string(b), `"ended_at":null`) ||
+		strings.Contains(string(b), "0001-01-01") {
+		t.Fatalf("r2 = %s", b)
 	}
 }

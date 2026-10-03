@@ -64,17 +64,20 @@ type Run struct {
 
 // Summary is one row of GET /api/runs: what the run's own `run` events say about it - its latest
 // state, when it was queued and ended, whether it was detected and answered - and how many events
-// it holds. No pod, no command, no output.
+// it holds. No pod, no command, no output. StartedAt is the queued time (until it is seen, the first
+// run event's), EndedAt the first terminal state's; either is null rather than a zero time.
 type Summary struct {
 	RunID     string     `json:"run_id"`
 	Scenario  string     `json:"scenario"`
 	State     string     `json:"state"`
-	StartedAt time.Time  `json:"started_at"`
+	StartedAt *time.Time `json:"started_at"`
 	EndedAt   *time.Time `json:"ended_at"`
 	Detected  bool       `json:"detected"`
 	Responded bool       `json:"responded"`
 	Events    int        `json:"events"`
 	Truncated bool       `json:"truncated"`
+
+	ended, queuedSeen bool
 }
 
 // Store is safe for concurrent use.
@@ -193,20 +196,30 @@ func (s *Store) Record(ev events.Event) {
 	s.total += size
 }
 
+// summarise files one of the run's state events. The first terminal state is final: a later event
+// (a late `detected` after `finished`, a second terminal event) may still set Detected/Responded, but
+// does not change State or EndedAt.
 func summarise(sum *Summary, state string, at time.Time) {
 	at = at.UTC()
-	if sum.State == "" {
-		sum.StartedAt = at
-	}
-	sum.State = state
 	switch state {
 	case "detected":
 		sum.Detected = true
 	case "responded":
 		sum.Responded = true
 	}
-	if terminalState("run", state) && sum.EndedAt == nil {
-		sum.EndedAt = &at
+	if !at.IsZero() && !sum.queuedSeen && (state == "queued" || sum.StartedAt == nil) {
+		sum.StartedAt = &at
+		sum.queuedSeen = state == "queued"
+	}
+	if sum.ended {
+		return
+	}
+	sum.State = state
+	if terminalState("run", state) {
+		sum.ended = true
+		if !at.IsZero() {
+			sum.EndedAt = &at
+		}
 	}
 }
 
