@@ -12,7 +12,9 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/hubertmj/self-defending-portfolio/app/api/internal/scenarios"
 )
@@ -596,4 +598,41 @@ func TestTerminalTTYCommandBounded(t *testing.T) {
 		t.Fatalf("finish detail = %q", ev.Detail)
 	}
 	<-done
+}
+
+// A leave (or a command) while the run's loop has ended and its pod is being deleted is 409: the run
+// is over. Before, Leave answered 202 for a run that was already finishing for another reason.
+func TestTerminalLeaveDuringCleanupIs409(t *testing.T) {
+	c := fake.NewClientset()
+	readyOnCreate(c)
+	deleting, unblock := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	c.PrependReactor("delete", "pods", func(k8stesting.Action) (bool, runtime.Object, error) {
+		once.Do(func() { close(deleting) })
+		<-unblock
+		return false, nil, nil
+	})
+	rec := newRecorder()
+	r := terminalRunner(c, &fakeExec{}, rec)
+	release, done := released()
+	sc := terminalScenario()
+	sc.IdleSeconds = 1
+	id, token := r.StartTerminal(sc, release)
+	rec.waitFor(t, StatePodReady)
+	<-deleting // idle ended the loop; the cleanup's delete is in flight
+	if err := r.Leave(id, token); !errors.Is(err, ErrRunBusy) {
+		t.Fatalf("Leave during cleanup: %v, want ErrRunBusy", err)
+	}
+	if _, err := r.Command(id, token, "whoami"); !errors.Is(err, ErrRunBusy) {
+		t.Fatalf("Command during cleanup: %v, want ErrRunBusy", err)
+	}
+	close(unblock)
+	if ev := rec.waitFor(t, StateFinished); ev.Detail != "idle" {
+		t.Fatalf("finish detail = %q, want idle", ev.Detail)
+	}
+	<-done
+	// Released and unregistered: still 409, from the record of ended runs.
+	if err := r.Leave(id, token); !errors.Is(err, ErrRunBusy) {
+		t.Fatalf("Leave after the end: %v, want ErrRunBusy", err)
+	}
 }

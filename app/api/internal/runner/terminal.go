@@ -130,7 +130,9 @@ func (r *Runner) Command(runID, token, commandID string) (int, error) {
 }
 
 // Leave ends a terminal run early (the visitor pressed "leave"). 404 for a run that never existed,
-// 409 (ErrRunBusy) for one already over, 401 for a bad token.
+// 409 (ErrRunBusy) for one already over - including one whose command loop has ended and whose pod
+// is still being cleaned up, where a leave would change nothing - 401 for a bad token. A leave
+// before the pod is ready is accepted: the loop sees it the moment it starts.
 func (r *Runner) Leave(runID, token string) error {
 	rn := r.lookupID(runID)
 	if rn == nil || !rn.terminal {
@@ -141,6 +143,12 @@ func (r *Runner) Leave(runID, token string) error {
 	}
 	if subtle.ConstantTimeCompare([]byte(token), []byte(rn.token)) != 1 {
 		return ErrBadToken
+	}
+	rn.tmu.Lock()
+	over := rn.over
+	rn.tmu.Unlock()
+	if over {
+		return ErrRunBusy
 	}
 	rn.leaveOnce.Do(func() { close(rn.leave) })
 	return nil
