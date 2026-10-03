@@ -26,6 +26,10 @@ spec:
   # One replica: leader election is always on (talon/config.yaml), so a second replica would only
   # stand by, and its memory is better spent elsewhere on one node.
   replicas: 1
+  # One previous revision kept for a rollback, not the default ten. The older ones are ReplicaSets at 0
+  # replicas that still carried the upstream image from before ADR 0023 and failed
+  # restrict-image-registries forever, shown as violations on the posture page (ADR 0035).
+  revisionHistoryLimit: 1
   selector:
     matchLabels:
       app.kubernetes.io/name: falco-talon
