@@ -96,6 +96,15 @@ spec:
         # to 500 ms - enough to order the identity change ahead of the endpoint regeneration, far
         # under the 3 s the demo needs. tests/scenarios/run.sh measures label-to-isolation live.
         identityChangeGracePeriod: "500ms"
+        # The agent delays acting on a pod's changed labels by a random time up to identity-max-jitter
+        # (default 30 s), to spread identity churn across a large cluster. Here it is the whole wait
+        # between Talon's quarantine label and the pod being cut off (measured 10-36 s), on a node
+        # with nothing to spread. Zero: a label change is acted on at once (ADR 0032, amendment).
+        extraConfig:
+          identity-max-jitter: "0s"
+        # Restart the agent when its ConfigMap changes, so a value edited here takes effect on sync
+        # instead of waiting for a manual rollout (the chart does not do that by default).
+        rollOutCiliumPods: true
         # --- phase 2 additions (ADR 0010); not present in the Ansible role ---
         gatewayAPI:
           # The chart creates the `cilium` GatewayClass only when the Gateway API CRDs are already

@@ -100,6 +100,15 @@ cilium_values:
   # label-to-isolation under 3 s (run.sh measures a cold and a warm case).
   labels: "k8s:!sdp.hubertjablon.ski/run-id k8s:!sdp.hubertjablon.ski/scenario"
   identityChangeGracePeriod: "500ms"
+  # The agent delays acting on a pod's changed labels by a random time up to identity-max-jitter
+  # (default 30 s), to spread identity churn across a large cluster. Here it is the whole wait
+  # between Talon's quarantine label and the pod being cut off (measured 10-36 s), on a node
+  # with nothing to spread. Zero: a label change is acted on at once (ADR 0032, amendment).
+  extraConfig:
+    identity-max-jitter: "0s"
+  # Restart the agent when its ConfigMap changes, so a value edited here takes effect on sync
+  # instead of waiting for a manual rollout (the chart does not do that by default).
+  rollOutCiliumPods: true
   # Gateway API (ADR 0010). Identical to cluster/apps/cilium.yaml so the Argo CD takeover is a
   # no-op; scripts/check-cilium-values.sh enforces that.
   gatewayAPI:
