@@ -74,3 +74,40 @@ describe("renderTwin's held counter (review 2, item 4)", () => {
     expect(held(root)).toBe("attacker has held this pod 7.0 s");
   });
 });
+
+describe("the twin's clock is stopped on every path (final review, item 7)", () => {
+  it("when the run ends, and when the console has nothing to show", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
+    vi.setSystemTime(T0 + 5210);
+    // The console's one-second clocks (the page's other timers — animation frames — run faster).
+    const clocks = new Set<unknown>();
+    const set = globalThis.setInterval;
+    const clear = globalThis.clearInterval;
+    vi.spyOn(globalThis, "setInterval").mockImplementation(((fn: () => void, ms?: number) => {
+      const id = set(fn, ms);
+      if (ms === 1000) clocks.add(id);
+      return id;
+    }) as typeof setInterval);
+    vi.spyOn(globalThis, "clearInterval").mockImplementation(((id?: ReturnType<typeof setInterval>) => {
+      clocks.delete(id);
+      clear(id);
+    }) as typeof clearInterval);
+    try {
+      const root = document.createElement("section");
+      document.body.append(root);
+      const api = new ApiClient({ fetch: async () => new Response("{}", { status: 404, headers: { "Content-Type": "application/json" } }) });
+      const c = mountConsole(root, api);
+      const live = compareRun({ held: true });
+      c.update(buildTimeline(live, Date.now()));
+      expect(clocks.size).toBe(1);
+      c.update(buildTimeline(compareRun(), Date.now()));
+      expect(clocks.size).toBe(0);
+      c.update(buildTimeline(live, Date.now()));
+      expect(clocks.size).toBe(1);
+      c.update({ runs: [], unmatched: [] }); // nothing to show
+      expect(clocks.size).toBe(0);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+});
