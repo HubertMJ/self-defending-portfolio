@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# The attack scenarios' detection chain, checked without a cluster (ADR 0018). Needs docker and python3
-# with PyYAML; pulls the pinned Falco and Falco Talon images and builds app/scenario locally.
+# The attack scenarios' detection chain, checked without a cluster (ADR 0018). Needs docker, python3
+# with PyYAML and `script` (util-linux, to give the terminal's `shell` command a real TTY); pulls the
+# pinned Falco and Falco Talon images and builds app/scenario locally.
 #
 #   tests/scenarios/offline.sh                     (or: make scenario-offline)
 #   DOCKER="sudo -n docker" tests/scenarios/offline.sh
@@ -41,6 +42,7 @@ cd "$(dirname "$0")"
 REPO_ROOT=$(cd ../.. && pwd)
 
 DOCKER=${DOCKER:-docker}
+command -v script >/dev/null || { echo "offline.sh: the 'script' command (util-linux) is required for a real TTY" >&2; exit 1; }
 # Same digest as cluster/infra/falco/kustomization.yaml.
 FALCO_IMAGE=${FALCO_IMAGE:-docker.io/falcosecurity/falco:0.45.0@sha256:788f1129c542171813083d4afc61b16730a47dde8c23d9c39370acef996349b6}
 # Talon is this repository's own image (app/talon, ADR 0023), pinned by its kustomize `images:` entry;
@@ -465,17 +467,18 @@ while IFS=$'\t' read -r tag id outcome tty detection argv; do
       fi ;;
     prevented)
       # The exact refusal each command must get: a non-zero exit is not enough (a typo also exits
-      # non-zero), so assert the kernel's own message for the control the catalogue claims.
+      # non-zero), so assert the kernel's own message for the control the catalogue claims; a
+      # prevented command with no expectation here is a failure, not a pass on any non-zero exit.
       case $id in
         touch-bin)  want="Read-only file system" ;;
         read-token) want="No such file or directory" ;;
         chown-root) want="Operation not permitted" ;;
-        *)          want="" ;;
+        *)          fail "$id: prevented, but offline.sh has no expected refusal for it - add one"; continue ;;
       esac
       out=$(eval "$DOCKER exec $tc $argv" 2>&1) && rc=0 || rc=$?
       if [ "$rc" = 0 ]; then
         fail "$id: expected to be refused but it succeeded ('$out')"
-      elif [ -n "$want" ] && ! grep -qiF "$want" <<<"$out"; then
+      elif ! grep -qiF "$want" <<<"$out"; then
         fail "$id: refused, but not with the expected message ('$want'): \"$(head -1 <<<"$out")\""
       else
         pass "$id: refused by the pod (\"$(head -1 <<<"$out")\")"
@@ -503,22 +506,29 @@ while IFS=$'\t' read -r tag id outcome tty detection argv; do
           else fail "$id: the tool did not fail fast ('$out')"; fi ;;
         "Terminal shell in container")
           if [ "$tty" = true ]; then pass "$id: the command asks for a TTY (tty: true)"; else fail "$id: must set tty: true"; fi
-          # Run the catalogue's own argv with a TTY and empty stdin, the way the API execs it, and record
-          # whether sh -i exits at once or stays. Under a real pty it stays (waiting for input), so a 3 s
-          # timeout (rc 124) is the expected "stays open" - that is what a live Talon kill interrupts.
-          if eval "timeout 3 $DOCKER exec -t $tc $argv" </dev/null >/dev/null 2>&1; then
-            pass "$id: '$argv' with a TTY exited on its own"
+          # The rule's precondition is proc.tty != 0. Run the catalogue's own argv with a real TTY
+          # (`script` gives docker a terminal, so `exec -it` allocates one in the container), type `tty`
+          # into it, then end its input - the API's exec has an empty stdin too, so the shell sees EOF and
+          # exits. It must start (126/127: it could not), report a /dev/pts terminal from inside the
+          # argv itself, and end on its own, leaving no shell behind in the container. `timeout` only
+          # turns a hang into a failure here; a `docker exec` killed by it would leave the shell running.
+          out=$(printf 'tty\n' | timeout 15 script -qec "$DOCKER exec -it $tc $argv" /dev/null 2>&1) && rc=0 || rc=$?
+          case $rc in
+            0)       pass "$id: '$argv' with a TTY started and exited on end of input" ;;
+            124)     fail "$id: '$argv' did not end on end of input within 15 s" ;;
+            126|127) fail "$id: '$argv' could not be run (rc=$rc): $(tr -d '\r' <<<"$out" | tail -1)" ;;
+            *)       fail "$id: '$argv' with a TTY failed (rc=$rc): $(tr -d '\r' <<<"$out" | tail -1)" ;;
+          esac
+          if grep -q '/dev/pts/' <<<"$out"; then
+            pass "$id: '$argv' runs with a controlling terminal ($(grep -o '/dev/pts/[0-9]*' <<<"$out" | head -1))"
           else
-            rc=$?
-            if [ "$rc" = 124 ]; then pass "$id: '$argv' with a TTY stays open (killed after 3 s), as a live session would"
-            else pass "$id: '$argv' with a TTY ended (rc=$rc)"; fi
+            fail "$id: no controlling terminal inside '$argv', so the rule would not fire ($(tr -d '\r' <<<"$out" | tail -1))"
           fi
-          # The rule's precondition is proc.tty != 0: confirm an interactive shell here gets a controlling
-          # terminal (proc.name is a shell, and -t gives it a pts).
-          if out=$($DOCKER exec -t "$tc" sh -ic 'tty' </dev/null 2>&1) && grep -q '/dev/pts/' <<<"$out"; then
-            pass "$id: an interactive shell gets a controlling terminal ($(tr -dc '/a-z0-9' <<<"$out"))"
+          procs=$($DOCKER exec "$tc" ps -o args)
+          if grep -qx "$(eval "set -- $argv"; echo "$*")" <<<"$procs"; then
+            fail "$id: '$argv' is still running in the container after the check"
           else
-            fail "$id: no controlling terminal, so the rule would not fire ($out)"
+            pass "$id: no '$argv' left running in the container"
           fi ;;
         "SDP execution from shop volume")
           # The command drops a binary into the shop volume and runs it: exit 0 means it executed.
