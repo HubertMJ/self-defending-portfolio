@@ -98,10 +98,12 @@ namespaces as part of provenance, and everything ADR 0021 already forbids (node 
 field by field from an allow-list, never by copying a cluster object, and every free-text field (the
 kube-bench title, capped at 200, and remediation, capped at 300) goes through the ADR 0021 scrubber and
 truncation; after scrubbing, the name of the node the benchmark pod ran on is replaced by `[node]` in both,
-since a check's text can quote it. The kube-bench log committed as a test fixture is redacted the same way
-(node `node-fixture`, address `192.0.2.10`, a documentation address). The api and web namespaces are kept
-out of provenance only: a violation group may name any namespace, `portfolio-api` and `hello` included,
-since every namespace here is declared in the public repository.
+since a check's text can quote it. A text over its cap is cut after its last sentence end when that keeps
+at least 60% of the cap, else at its last white space, and inside a word only when one token alone is
+longer than the cap; the cap counts runes, the ellipsis included. The kube-bench log committed as a test
+fixture is redacted the same way (node `node-fixture`, address `192.0.2.10`, a documentation address).
+The api and web namespaces are kept out of provenance only: a violation group may name any namespace,
+`portfolio-api` and `hello` included, since every namespace here is declared in the public repository.
 
 **kube-bench remediation text may name host file paths** (`/var/lib/rancher/k3s/...`, the CNI
 configuration directory). They describe where k3s keeps its files on any host, not something particular to

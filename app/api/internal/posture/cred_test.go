@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -261,6 +262,42 @@ func TestKubeBenchRedactsNode(t *testing.T) {
 	}
 	if !strings.Contains(kb.Failing[2].Title, "On [node], ensure") || !strings.Contains(kb.Failing[0].Remediation, "[node]") {
 		t.Fatalf("not redacted in place: %q / %q", kb.Failing[2].Title, kb.Failing[0].Remediation)
+	}
+}
+
+// A kube-bench text over its cap is cut after a sentence, else after a word, never inside one; the
+// cap counts runes and includes the ellipsis.
+func TestBenchCut(t *testing.T) {
+	for _, c := range []struct{ name, in, want string }{
+		{"sentence end", "One two three. Four five six seven.", "One two three. …"},
+		{"sentence end before a newline", "Line one is here.\nLine two goes on", "Line one is here. …"},
+		{"sentence end under 60% of the cap", "Hi. Then a long tail of words", "Hi. Then a long…"},
+		{"sentence end without room for \" …\"", "abcdefgh ijklmnopq. rest", "abcdefgh ijklmnopq.…"},
+		{"word boundary", "alpha beta gamma delta epsilon", "alpha beta gamma…"},
+		{"word boundary at the cap", "alpha beta gamma de x", "alpha beta gamma de…"},
+		{"one long token", strings.Repeat("x", 30), strings.Repeat("x", 19) + "…"},
+		{"exactly at the cap", "One two. Three four!", "One two. Three four!"},
+		{"one over the cap", "One two. Three four!!", "One two. Three…"},
+		{"multibyte under the cap", "zażółć gęślą jaźń", "zażółć gęślą jaźń"},
+		{"multibyte words", "żółw żółw żółw żółw żółw", "żółw żółw żółw żółw…"},
+		{"multibyte long token", strings.Repeat("ż", 30), strings.Repeat("ż", 19) + "…"},
+	} {
+		got := benchCut(c.in, 20)
+		if got != c.want || utf8.RuneCountInString(got) > 20 || !utf8.ValidString(got) {
+			t.Errorf("%s: benchCut(%q, 20) = %q (%d runes), want %q", c.name, c.in, got, utf8.RuneCountInString(got), c.want)
+		}
+	}
+	// The live 1.2.26 remediation, once cut inside "the", now ends with its last whole sentence.
+	log, err := os.ReadFile("testdata/kube-bench-live.log")
+	if err != nil {
+		t.Fatal(err)
+	}
+	kb, err := ParseKubeBench(log)
+	if err != nil || len(kb.Failing) != 3 {
+		t.Fatalf("failing = %+v %v", kb.Failing, err)
+	}
+	if got := kb.Failing[2].Remediation; !strings.HasSuffix(got, "certificate command line tool. …") || utf8.RuneCountInString(got) > maxBenchRemedy {
+		t.Fatalf("1.2.26 remediation = %q", got)
 	}
 }
 
