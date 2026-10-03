@@ -12,10 +12,16 @@
 #                    "" for the interactive terminal, whose detections are per command below
 #   response         what Falco Talon does: terminate (pod deleted) | quarantine (pod labelled, cut off);
 #                    "" for the interactive terminal
-#   timeout_seconds  <= 120; the API sets activeDeadlineSeconds from it and gives up after it
-#   pod              a PodSpec. The API adds metadata (generateName, namespace `sandbox`, labels
-#                    sdp.hubertjablon.ski/run-id and sdp.hubertjablon.ski/quarantine: "false") and
-#                    activeDeadlineSeconds, and changes nothing else
+#   timeout_seconds  <= 300 (the API's scenarios.MaxTimeout and the cluster's require-sandbox-deadline;
+#                    120 until the ADR 0017 amendment of 2026-10-03, which gave the terminal time to
+#                    read); the API sets activeDeadlineSeconds from it and gives up after it
+#   pod              a PodSpec. The API adds metadata (name <id>-<run id prefix>; namespace `sandbox`, or
+#                    for a `compare` run also the no-egress twin `sandbox-unguarded`, ADR 0031; labels
+#                    sdp.hubertjablon.ski/run-id, sdp.hubertjablon.ski/scenario,
+#                    sdp.hubertjablon.ski/quarantine: "false" and app.kubernetes.io/managed-by:
+#                    portfolio-api) and activeDeadlineSeconds, forces restartPolicy Never, no
+#                    ServiceAccount token and no service links (which every spec here already sets),
+#                    and changes nothing else
 #   exec             {command, tty} run in container `target` once the pod is Ready, or null
 #   pre_exec         optional {command}, run to completion in the same container *before* exec, never
 #                    with a TTY (the API refuses tty: true); for an attack whose detected step fires
@@ -26,7 +32,7 @@
 # The interactive terminal (ADR 0032) adds these fields; the four one-click scenarios never set them:
 #   interactive      true: no exec/pre_exec; the API runs the commands below one at a time, each only
 #                    when the visitor asks, by command id (never free text - contract hard rule)
-#   idle_seconds     no command for this long ends the run
+#   idle_seconds     no command for this long ends the run; below timeout_seconds, or it never fires
 #   objectives[]     {id, title} - what the visitor tries to reach, in kill-chain order; a command may
 #                    count towards one (commands[].objective)
 #   commands[]       the catalogue of what the visitor may run; the only thing the API accepts is an id:
@@ -58,7 +64,9 @@
 #     its exec probe has read /state.json back - so "Ready" means "the shop is up", and the exec never
 #     races the server writing the healthy page. An exec probe, not httpGet: the kubelet's probes come
 #     from the host, and the sandbox policy admits only the portfolio API to :8080
-#     (../ciliumnetworkpolicy-victim.yaml). No Service, no route: the shop is not on the internet;
+#     (../ciliumnetworkpolicy-victim.yaml). No Service, no route: the shop is not on the internet. It
+#     exits on its own after 120 s unless its command passes a longer -lifetime, which a scenario with a
+#     longer timeout must, or the shop dies mid-run (the terminal does; checked by `make validate`);
 #   * terminationGracePeriodSeconds 0: a terminated scenario pod is gone at once;
 #   * small requests and a hard memory and CPU limit, inside the sandbox LimitRange and ResourceQuota
 #     (../limitrange.yaml, ../resourcequota.yaml).
@@ -109,7 +117,7 @@
         # `scripts/bump-image-digest.sh scenario sha256:<digest from the run's summary>`.
         # One unbroken line, so a bump is a one-line diff that a grep for the digest finds.
         # yamllint disable-line rule:line-length
-        image: &scenario-image ghcr.io/hubertmj/self-defending-portfolio/scenario@sha256:c65e2e6f5f1d4305372bc9e3d61dd20af07cdf6696822f7b18df89ac84a5a541
+        image: &scenario-image ghcr.io/hubertmj/self-defending-portfolio/scenario@sha256:79ce6670191eb019ffe8abdd11c7a6a872220a89c77ff4318fa95858f07efa7a
         # The victim (ADR 0022). Anchored here, aliased in the other three scenarios.
         command: &victim-command ["/usr/local/bin/victim", "-docroot", "/srv/shop"]
         ports: &victim-ports
@@ -301,9 +309,10 @@
 #    *upper* layer (proc.is_exe_upper_layer), i.e. one that was written after the container started
 #    rather than shipped in the image. Talon rule "Kill drifted binary in sandbox" deletes the pod.
 #
-#    The "dropped binary" is a copy of the image's own busybox: no download (the sandbox has no egress,
-#    and the image has no package manager), no foreign code. Named `busybox` so it actually runs (busybox
-#    picks its applet from argv[0]) and sleeps, so the kill is what ends it.
+#    The "dropped binary" is a copy of the image's own busybox: no download (the sandbox allows DNS
+#    and nothing else, the twin not even that, and the image has no package manager), no foreign code.
+#    Named `busybox` so it actually runs (busybox picks its applet from argv[0]) and sleeps, so the kill
+#    is what ends it.
 #
 #    The one deliberate relaxation in this file: readOnlyRootFilesystem is false here. The rule only
 #    sees files in the overlay upper layer; an emptyDir at /tmp is a separate mount, not overlayfs, and
@@ -401,8 +410,12 @@
   detection: ""
   response: ""
   interactive: true
-  timeout_seconds: 120
-  idle_seconds: 30
+  # Five minutes a session, and a minute and a half without a command before it ends (ADR 0032
+  # amendment, 2026-10-03): the explanation after each command takes time to read, and at 120 s / 30 s
+  # visitors - the owner included - were told "session over" mid-sentence. One run at a time for
+  # everyone (ADR 0015), so the next visitor may wait up to these 300 s, watching read-only; accepted.
+  timeout_seconds: 300
+  idle_seconds: 90
   victim: true
   objectives:
     - {id: recon, title: "Look around"}
@@ -428,7 +441,10 @@
     containers:
       - name: target
         image: *scenario-image
-        command: *victim-command
+        # The victim's command with a lifetime as long as the session: on its own it exits after 120 s
+        # (the one-click scenarios' 90 s fit inside that), which would end a 300 s session at two
+        # minutes. The pod's deadline still ends it first; this only keeps the shop from leaving early.
+        command: ["/usr/local/bin/victim", "-docroot", "/srv/shop", "-lifetime", "300s"]
         ports: *victim-ports
         readinessProbe: *victim-probe
         volumeMounts: *victim-mounts

@@ -86,9 +86,10 @@ it cannot run offline (no cluster, no Cilium datapath).
 
 A fifth scenario, `id: terminal`, `interactive: true`, in `cluster/infra/sandbox/scenarios/scenarios.yaml`.
 The four one-click scenarios are unchanged and stay as "just show me". The terminal's shape (contract):
-`timeout_seconds: 120`, `idle_seconds: 30`, an `objectives[]` list in kill-chain order, and a `commands[]`
-catalogue. The API runs a command only on the visitor's request, **by id** - the only thing it accepts, never
-free text (contract hard rule) - so a visitor's typing never reaches the cluster as a command.
+`timeout_seconds: 120`, `idle_seconds: 30` (300 and 90 since the 2026-10-03 amendment below), an
+`objectives[]` list in kill-chain order, and a `commands[]` catalogue. The API runs a command only on the
+visitor's request, **by id** - the only thing it accepts, never free text (contract hard rule) - so a
+visitor's typing never reaches the cluster as a command.
 
 **The pod** is the same hardened victim shop as the others: PSS `restricted`, read-only root filesystem, no
 ServiceAccount token, the shop on :8080 polled by the API. Two differences, both already precedented:
@@ -184,3 +185,30 @@ they were right, they were not the bulk.
 Also added: `rollOutCiliumPods: true`, because the first deployment showed that a ConfigMap change syncs and
 then waits for a manual `rollout restart` of the agent; now a changed value takes effect on sync. The
 measurement after this amendment is in the integration record, cold and warm.
+
+## Amendment 2026-10-03: the terminal session is 300 s, idle 90 s
+
+`timeout_seconds: 300`, `idle_seconds: 90` (were 120 and 30). Live, sessions - the owner's own included -
+ended "session over" while the visitor was still reading: each command is followed by an explanation of
+which layer answered and why, and 30 s without a command was less than it takes to read one, while two
+minutes in all left room for only a handful of the 14 commands. The four one-click scenarios keep their 90 s.
+
+What moved with it: the bound on every sandbox pod, 120 -> 300 s, in the API (`scenarios.MaxTimeout`), in
+`make validate` (`scripts/lib/scenario_pods.py`) and in the cluster (`require-sandbox-deadline`, ADR 0031
+amendment); see ADR 0017's amendment for the safety envelope. The terminal's pod now passes the victim
+`-lifetime 300s`: the shop server exits after 120 s on its own (ADR 0022), which would have ended a
+five-minute session at two, with the pod completing as if something had answered. `make validate` checks that
+every victim scenario's lifetime covers its timeout.
+
+The cost, accepted by the owner: the API runs one scenario at a time for everyone (ADR 0015), so while a
+terminal is open another visitor may wait up to five minutes, watching that session read-only. The pod's
+footprint is unchanged (one pod, the same requests and limits, inside the quota); only how long it may hold
+the slot has grown.
+
+The page has to follow, in `app/web`: it reads both values from `/api/scenarios/terminal/details`, but its
+stale-run cut-off (`STALE_RUN_MS`, 180 s, written for a 120 s deadline) would declare a live five-minute
+session over at three minutes, and its fallbacks for absent values are still 120 and 30.
+
+Live checks (no cluster here): a terminal session left quiet ends `idle` after 90 s and one kept busy ends
+`deadline` at 300 s with the shop still answering until then; `tests/admission/run.sh` admits 300 and refuses
+301 in both sandbox namespaces.

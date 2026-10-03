@@ -130,3 +130,14 @@ running the image standalone): no flag file. The flag value is capped (128 bytes
 its only writer. The terminal's shop emptyDir is 2 MiB rather than 1, so the `drop-run` command's busybox copy
 fits next to the page, state and flag. Unit-tested in `app/scenario/victim` (written 0600, not served, does not
 leak into state, truncated past the cap).
+
+## Amendment 2026-10-03: a scenario longer than 120 s passes the victim a longer lifetime
+
+The server still exits after 120 s on its own by default (`-lifetime`, unchanged in `app/scenario`), but the
+pod's deadline is no longer always the shorter of the two: the interactive terminal now runs up to 300 s (ADR
+0032 amendment; the bound in ADR 0017's). A victim that exits first ends its pod early - the shop goes down and
+the pod completes, which the visitor would read as a response that never happened. So the terminal's pod
+passes `-lifetime 300s` in its command, and `make validate` (`scripts/lib/scenario_pods.py`) refuses any
+`victim: true` scenario whose victim lifetime, the 120 s default included, is shorter than its
+`timeout_seconds`. The four one-click scenarios (90 s) keep the default; in the cluster `activeDeadlineSeconds`
+still ends the server first, as before.
