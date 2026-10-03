@@ -299,6 +299,9 @@ func digestN(c byte) string { return "sha256:" + strings.Repeat(string(c), 64) }
 // pod list keeps the previous images and the time they were seen.
 func TestDeployedImages(t *testing.T) {
 	const own = "ghcr.io/hubertmj/self-defending-portfolio/"
+	// An init container on the api image is not what serves: only containers count.
+	withInit := runningPod("portfolio-api", "api-init", own+"api@"+digestN('b'))
+	withInit.Status.InitContainerStatuses = []corev1.ContainerStatus{{Name: "init", ImageID: own + "api@" + digestN('1')}}
 	pending := runningPod("portfolio-api", "api-next", own+"api@"+digestN('c'))
 	pending.Status.Phase = corev1.PodPending
 	kube := fake.NewClientset(
@@ -309,6 +312,7 @@ func TestDeployedImages(t *testing.T) {
 		runningPod("portfolio-api", "api-6", own+"api@"+digestN('9')),
 		runningPod("portfolio-api", "api-7", own+"api@"+digestN('0')),
 		runningPod("portfolio-api", "api-3", own+"api@"+digestN('b')), // same digest: once
+		withInit,
 		runningPod("hello", "hello-1", own+"web@"+digestN('d')),
 		runningPod("hello", "hello-2", own+"web@"+digestN('d')),
 		runningPod("x", "api-x", own+"api-x@"+digestN('e')),

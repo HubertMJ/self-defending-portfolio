@@ -517,6 +517,24 @@ func TestAlertsCoverDetections(t *testing.T) {
 		t.Fatalf("talon-first after its alert: %+v", after)
 	}
 
+	// Terminal Talon-first: the runner publishes `responded` before any `detected`. The window holds
+	// the response back until its detection, so detected >= responded holds throughout.
+	state(hub, "terminal-first", "queued")
+	talon(internal.URL, "terminal-first")
+	state(hub, "terminal-first", "responded")
+	tf := readCounters(t, pub.URL)
+	if tf.responded != after.responded || tf.detected < tf.responded || tf.actions < tf.responded {
+		t.Fatalf("terminal talon-first, before its detection: %+v (before %+v)", tf, after)
+	}
+	falco(internal.URL, "terminal-first")
+	state(hub, "terminal-first", "detected")
+	state(hub, "terminal-first", "finished")
+	after = readCounters(t, pub.URL)
+	holds("terminal talon-first after its detection", after)
+	if after.detected != 6 || after.responded != 6 {
+		t.Fatalf("terminal talon-first after its detection: %+v", after)
+	}
+
 	// The restart: a new collector loads what the old one wrote.
 	blob, err := c1.Marshal()
 	if err != nil {
