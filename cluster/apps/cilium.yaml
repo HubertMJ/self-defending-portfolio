@@ -75,6 +75,27 @@ spec:
           ui:
             enabled: false
         policyEnforcementMode: default
+        # Which pod labels count towards a Cilium security identity (ADR 0032). The default list is
+        # kept (these are appended ignore rules, so the whitelist flag stays off and every other
+        # label is still identity-relevant); the two per-run labels the portfolio API stamps on a
+        # scenario pod are taken out. They change on every run, so with them in the identity every
+        # scenario pod - and every quarantined pod - is a fresh identity that has to be allocated and
+        # have its policy computed before isolation can take effect. Out of the identity, all scenario
+        # pods share one stable identity, and the quarantined identity (quarantine="true", still
+        # identity-relevant) is stable too - so while it stays warm a quarantine is a label flip onto an
+        # identity Cilium already knows. It does not stay warm forever: Cilium GCs an unused identity
+        # (operator identityGCInterval 15m, identityHeartbeatTimeout 30m, chart defaults), so after a
+        # quiet spell the first quarantine is a cold allocation again. run.sh measures both a first
+        # (possibly cold) and an immediate second (warm) quarantine against the 3 s bound. The victim's
+        # one allowed flow is selected by the stable app.kubernetes.io/managed-by label instead of the
+        # run-id (cluster/infra/sandbox/ciliumnetworkpolicy-victim.yaml, portfolio-api CNP).
+        labels: "k8s:!sdp.hubertjablon.ski/run-id k8s:!sdp.hubertjablon.ski/scenario"
+        # Time an endpoint waits before using a changed identity, so other nodes can whitelist the
+        # new one first (ADR 0032). This is a single node: there is no other node to wait for, and
+        # the default 5 s is most of the seconds a visitor waited to see a quarantine bite. Dropped
+        # to 500 ms - enough to order the identity change ahead of the endpoint regeneration, far
+        # under the 3 s the demo needs. tests/scenarios/run.sh measures label-to-isolation live.
+        identityChangeGracePeriod: "500ms"
         # --- phase 2 additions (ADR 0010); not present in the Ansible role ---
         gatewayAPI:
           # The chart creates the `cilium` GatewayClass only when the Gateway API CRDs are already
