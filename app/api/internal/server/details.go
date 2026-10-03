@@ -177,7 +177,8 @@ func (s *Server) stats(w http.ResponseWriter, _ *http.Request) {
 	if s.cfg.Stats == nil {
 		writeJSON(w, http.StatusOK, stats.Snapshot{
 			Since: s.cfg.Now().UTC(), ByScenario: map[string]stats.ScenarioStat{},
-			Commands: map[string]stats.CommandStat{}, Objectives: map[string]stats.ObjectiveStat{}})
+			Commands: map[string]stats.CommandStat{}, Objectives: map[string]stats.ObjectiveStat{},
+			Last24h: stats.Window{Since: s.cfg.Now().UTC()}})
 		return
 	}
 	writeJSON(w, http.StatusOK, s.cfg.Stats.Snapshot())
