@@ -333,6 +333,49 @@ test.describe("attacker's terminal (mock, ADR 0033)", () => {
     expect(problems).toEqual([]);
   });
 
+  test("the bar counts down the 5-minute session and the 90 s idle limit without moving, and says why it ended", async ({ page }) => {
+    const problems = guardConsole(page);
+    await page.goto("/?mock=1");
+    const term = page.locator("#terminal");
+    await term.getByRole("button", { name: /Open the terminal/ }).click();
+    const bar = term.locator(".term__bar");
+    await expect(bar.locator(".term__clock")).toHaveAttribute("data-live", "true", { timeout: 10_000 });
+    await expect(bar.locator(".term__left")).toHaveText(/^Session time: 4:5\d left$/);
+    await expect(bar.locator(".term__idleleft")).toHaveText(/^Idle limit in idle 1:[23]\d$/);
+    // A tick changes the numbers and nothing else: every item of the bar stays where it was.
+    const boxes = () => bar.evaluate((b) => [...b.children].map((e) => JSON.stringify(e.getBoundingClientRect())));
+    const before = { boxes: await boxes(), text: await bar.locator(".term__left").textContent() };
+    await expect(bar.locator(".term__left")).not.toHaveText(before.text ?? "", { timeout: 2_500 });
+    expect(await boxes()).toEqual(before.boxes);
+    // The bar is dark in both themes; Leave reads on it in both.
+    for (const scheme of ["light", "dark"] as const) {
+      await page.emulateMedia({ colorScheme: scheme });
+      const ratio = await bar.locator(".term__exit").evaluate((el) => {
+        const lum = (c: string) => {
+          const [r, g, b] = (c.match(/[\d.]+/g) ?? []).slice(0, 3).map(Number).map((x) => x / 255).map((x) => (x <= 0.03928 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4));
+          return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+        };
+        const [a, b] = [lum(getComputedStyle(el).color), lum(getComputedStyle(el.closest(".term__bar") as HTMLElement).backgroundColor)].sort((x, y) => y - x);
+        return (a + 0.05) / (b + 0.05);
+      });
+      expect(ratio, scheme).toBeGreaterThanOrEqual(4.5);
+    }
+    await bar.getByRole("button", { name: "Leave" }).click();
+    await expect(term.locator(".term__status")).toHaveText("session over — you left");
+    await expect(term.locator(".term__sumlead")).toContainText("You left");
+    await expect(bar.locator(".term__clock")).toBeHidden();
+    expect(problems).toEqual([]);
+  });
+
+  test("a session left without a command ends at the idle limit, and the bar and the summary say so", async ({ page }) => {
+    // At 0.03x the mock's 90 s idle limit is 2.7 s; the words come from the details, not the clock.
+    await page.goto("/?mock=1&mock-speed=0.03");
+    const term = page.locator("#terminal");
+    await term.getByRole("button", { name: /Open the terminal/ }).click();
+    await expect(term.locator(".term__status")).toHaveText("session over — ended after 90 s without a command", { timeout: 10_000 });
+    await expect(term.locator(".term__sumlead")).toContainText("ended after 90 s without a command");
+  });
+
   test("an unknown line is answered locally and never sent to the API", async ({ page }) => {
     const problems = guardConsole(page);
     await page.goto("/?mock=1&mock-speed=0.3");

@@ -3466,6 +3466,13 @@ html[data-terminal="off"] .needs-terminal {
 
 .term__exit {
   margin-left: 0.25rem;
+  /* The bar is dark in both themes: the ghost button's theme colours vanish on it in the light one. */
+  color: #e6e3dc;
+  border-color: #4a5160;
+}
+
+.term__exit:hover {
+  background: #262b34;
 }
 
 .term-fallback {
