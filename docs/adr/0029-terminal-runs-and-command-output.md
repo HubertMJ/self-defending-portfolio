@@ -40,11 +40,14 @@ pins, so one visitor cannot read another's and the catalogue cannot fix it to a 
 **Commands.** `POST /api/runs/{run_id}/commands`, `Authorization: Bearer <token>`, body `{"id":"read-shadow"}`
 → `202 {seq}`. The token is compared in constant time. `401` wrong/missing token, `404` unknown run or command
 id, `409` the run is not ready or is over or a command is already running (one at a time), `413` body over 256
-bytes, `429` over 30 commands in the run. A non-TTY command's exec is cancelled after 5 s; a TTY command (an
-interactive shell) runs until the pod is killed or the run ends. `DELETE /api/runs/{run_id}` with the token
-ends the run ("the visitor left"). A terminal run ends when Talon deletes the pod (`killed`), on `DELETE`
+bytes, `429` over 30 commands in the run. A non-TTY command's exec is cancelled after 5 s, a TTY command's (an
+interactive shell, which only a pod deletion is expected to end) after 10 s, so a shell nobody answers
+cannot hold the run - and the one global slot - until the deadline. `DELETE /api/runs/{run_id}` with the
+token ends the run ("the visitor left"); once the run is over, including while its pod is still being
+deleted, both endpoints answer `409`. A terminal run ends when Talon deletes the pod (`killed`), on `DELETE`
 (`left`), after `idle_seconds` with no command (`idle`), or at `timeout_seconds` (`deadline`); the final `run`
-event is `finished` with that `detail`. `detected` and `responded` run events may occur more than once in a
+event is `finished` with that `detail`. Idle counts from the last command's *start*, not its end, and bounds
+the command too: a command that hangs is not activity. `detected` and `responded` run events may occur more than once in a
 terminal run (a quarantine command, then later a terminate command), unlike a scripted run where either ends
 it.
 
@@ -53,26 +56,48 @@ it.
 the exec is sent, `output` with `stream` (stdout/stderr) and a `chunk` of at most 1024 bytes of text,
 `exited` with `exit_code` and `achieved` (true iff the command has an `objective` and exited 0), or `killed`
 when the pod went away under the command (no exit code). A non-zero exit is the command's own result (wget
-fails by design), not an error; a cut-short exec reports `-1`.
+fails by design), not an error. An exec cut short before the shell reported a status (its own bound, a leave,
+a transport error) is `exited` with no `exit_code`, never a made-up `-1`. A kill can reach the API as a clean
+exit: the exec stream reports a container killed under the command as status 137 (SIGKILL) or 143 (SIGTERM),
+often before the pod watch has seen the deletion. So after a transport error or an exit status above 128 the
+runner waits briefly for the deletion (3 s at most) before choosing between `killed` and `exited`; an
+ordinary exit does not wait.
 
-**Output is scrubbed and capped.** Each chunk is forced to valid UTF-8, stripped of every control character
-except newline and tab (so no ANSI escape sequences) and of invisible format characters, then run through the
-ADR 0021 scrubber (URLs, IPv4/IPv6 and in-cluster service names replaced; loopback kept, because
-`http://127.0.0.1:9/` is the evidence that nothing left the pod). Output is capped at 4 KiB per command and 32
-KiB per run; past either, `truncated: true` and the rest is dropped. The flag is not special-cased: it is this
-run's secret and is meant to be seen by the visitor who read it. Chunking keeps whole lines together where it
-can and never splits a UTF-8 sequence.
+**Output is scrubbed as whole lines, then batched and capped.** The pod chooses every byte and every write
+boundary, so the unit of scrubbing is not a write or a chunk but a complete line of one stream (the bytes
+between two newlines, or the last bytes when the stream ends). Each line is forced to valid UTF-8, stripped of
+every control character except newline and tab (so no ANSI escape sequences) and of invisible format
+characters, then run through the ADR 0021 scrubber (URLs, IPv4/IPv6 and in-cluster service names replaced;
+loopback kept, because `http://127.0.0.1:9/` is the evidence that nothing left the pod). None of the
+scrubber's patterns can match across a newline, so a token always lies inside one line and is seen whole,
+however the pod splits its writes or pads them with bytes the sanitiser drops. A line that does not end
+within 2 KiB is not scrubbed in pieces - each piece would pass on its own - but dropped whole, with
+`[line too long, not shown]` published in its place and `truncated: true` on the command's end event. Only
+scrubbed text is cut into events, on a UTF-8 boundary, so an event boundary can fall inside a replacement such
+as `[ip]` but never inside an address. The lines one write completes are published together, up to 1024 bytes
+per `output` event, so a burst of short lines is a few events, not one per line. Output is capped per command
+at 4 KiB and 64 `output` events, and per run at 32 KiB and 300 events - events are bounded as well as bytes,
+since the stream's buffers and the run log count events; past any cap, `truncated: true` and the rest of that
+command's output is dropped. A write that arrives after the command's end event is ignored. The flag is not
+special-cased: it is this run's secret and is meant to be seen by the visitor who read it.
 
 **Correlation.** `falco` and `talon` events gain `command_seq`: the command that was running, or ended less
 than 2 s before, when the alert arrived; absent otherwise. It is best effort (Falco's alert and the exec are
-not transactionally linked) and set by the server from the runner. `/api/runs/{id}` includes `command` events
-under the same per-run caps as ADR 0021, so a whole terminal session can be replayed and checked.
+not transactionally linked) and set by the server from the runner. Only the attribution is best effort: a
+Falco alert for the run's pod is always a `detected` run event - one that correlates to no command is
+published once per run without `command_seq` - so a `responded` is never published without a `detected`
+before it. A response tied to no command gets a `detected` backfilled only when the run has none at all.
+`/api/runs/{id}` includes `command` events under the per-run caps of ADR 0021, with room reserved for how
+each command and the run ended (below), so a whole terminal session can be replayed and checked.
 
 **FIX 1: a quarantine shows its cut.** The live demo deleted a quarantined pod on a fixed 5 s linger, which
 beat Cilium's isolation, so the probe was still answering and no `unreachable` ever reached the page. The
-runner now keeps a quarantined pod until the victim poller publishes its first `unreachable` event and then 3
-s more, the whole wait bounded by `QuarantineLingerMax` (40 s) so a run that never goes unreachable still ends
-promptly. The cluster's job is to make the isolation itself land under 3 s (ADR 0032); the API's job is to not
+runner now keeps a quarantined pod until the victim poller has published an `unreachable` event at or after
+the response and then 3 s more, the whole wait bounded by `QuarantineLingerMax` (40 s) so a run that never goes
+unreachable still ends promptly. "At or after" is decided by time - the poller records when each cut was
+published, the runner when it observed Talon's response - not by draining a signal, because the cut is often
+published between the webhook's arrival and the run reaching the linger. Without a victim poller there is no
+cut to wait for, and a fixed 3 s stands in. The cluster's job is to make the isolation itself land under 3 s (ADR 0032); the API's job is to not
 delete the pod before the cut is visible.
 
 ## Consequences
@@ -80,9 +105,10 @@ delete the pod before the cut is visible.
   at a time, at most 30 per run, each non-TTY exec capped at 5 s, the whole run capped at 120 s, and only
   while holding a token the API handed to that one run. The RBAC is unchanged: `pods/exec create` in
   `sandbox`, which the scripted scenarios already needed.
-- The API streams attacker-controlled bytes to every subscriber. The caps (1 KiB per event, 4 KiB per
-  command, 32 KiB per run), the sanitiser (valid UTF-8, no control characters but newline/tab, no invisible
-  format characters) and the ADR 0021 scrubber bound what that can carry; the renderer is text-only under the
+- The API streams attacker-controlled bytes to every subscriber. The caps (1 KiB per event; 4 KiB and 64
+  events per command; 32 KiB and 300 events per run; lines over 2 KiB dropped), the sanitiser (valid UTF-8, no
+  control characters but newline/tab, no invisible format characters) and the ADR 0021 scrubber, applied to
+  whole lines only, bound what that can carry; the renderer is text-only under the
   Trusted Types CSP (ADR 0019), so markup in the output is shown, not run.
 - `detected`/`responded` are no longer terminal for a terminal run, and a run can be quarantined and then
   terminated; the run store and stats treat them as repeatable.
@@ -94,16 +120,28 @@ delete the pod before the cut is visible.
 
 ## What a mid-session viewer sees, and the compare hold
 
-The SSE hub replays its last 100 events to a client that joins mid-run, and `GET /api/runs/{id}`
-keeps each run's full history up to 500 events and 256 KiB (ADR 0021). A terminal run stays well
-inside both: at most 30 commands, each a `started`, a bounded burst of `output` (capped at 4 KiB per
-command and 32 KiB per run, so a few dozen chunks for the whole run) and an end event, plus the pod
-and victim events - a couple of hundred events in the worst case. So the run's final `finished`
-event is always in `/api/runs/{id}`; a viewer who joins late sees the recent tail live and can fetch
-the whole run from that endpoint. A viewer watching someone else's run sees the same `command`
-events read-only (the run's token is never needed to watch, only to drive).
+A terminal run is the largest run the API publishes. Its own events are bounded: at most 300 `output`
+events (the per-run cap), a `started` and an end event for each of at most 30 commands, its `run` states,
+and the pod and victim events - about 400 in the worst case. Falco and Talon events about its pod are not
+bounded by the API (a rule may fire in a loop).
+
+- **Joining mid-session.** The SSE hub replays its last 100 events to a client that connects (ADR 0021).
+  For a scripted run that is the whole run; for a busy terminal session it is the tail - it may begin in the
+  middle of a command's output. The page gets the whole session from `GET /api/runs/{id}`. A viewer watching
+  someone else's run sees the same `command` events read-only (the token is needed to drive a run, never to
+  watch it).
+- **Keeping up.** Each subscriber may fall 128 events behind before the hub drops it - room for one
+  command's largest burst (`started`, 64 `output` events, its end, and the run, Falco and Talon events around
+  it), so a reading client is not dropped by a momentary stall. A client that has stopped reading is dropped;
+  EventSource reconnects with `Last-Event-ID` and gets what it missed if that is still among the last 100
+  events, and otherwise reads the run from `GET /api/runs/{id}`.
+- **The record.** `GET /api/runs/{id}` keeps up to 500 events and 256 KiB per run (ADR 0021), of which 50
+  events and 32 KiB are reserved for terminal-state events: the final `run` event (`finished`, `failed`,
+  `timeout`) and each command's `exited`/`killed`. Everything else stops at the rest, so however many alerts
+  or output chunks a run produced, its record still says how each command ended and ends with the run's final
+  state (31 such events at most, a few KiB). Past the caps the record is marked `truncated`.
 
 The unguarded twin's extra linger, `compare_hold_seconds` (default 12), is an API environment
 setting (`COMPARE_HOLD_SECONDS`), not a catalogue field: it governs how the API runs a compare, not
-what an attack is. It belongs to the twin mechanism recorded in ADR 0031; it is noted here because
-the API owns the value.
+what an attack is. It belongs to the twin mechanism of ADR 0031, which is the cluster branch's and not on
+this branch, so the API, which owns the value, records it here.

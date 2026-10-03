@@ -7,10 +7,11 @@ package runner
 // Talon (a detected/terminate command), when the visitor leaves, after the idle timeout without a
 // command, or at the scenario deadline.
 //
-// Output is untrusted (it is whatever runs in the attacked pod printed): it is forced to valid
-// UTF-8, stripped of every control character except newline and tab (so no ANSI escapes) and of
-// invisible format characters, then run through the ADR 0021 scrubber (URLs, IPs and in-cluster
-// service names, loopback excepted), and capped at 4 KiB per command and 32 KiB per run. The run's
+// Output is untrusted (it is whatever runs in the attacked pod printed): each complete line is forced
+// to valid UTF-8, stripped of every control character except newline and tab (so no ANSI escapes) and
+// of invisible format characters, then run through the ADR 0021 scrubber (URLs, IPs and in-cluster
+// service names, loopback excepted); lines are batched into events and capped per command and per
+// run, in bytes and in events (cmdSink below). The run's
 // flag is not special-cased: it is this run's own secret and is meant to be seen by the visitor who
 // read it.
 
