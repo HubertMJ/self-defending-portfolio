@@ -189,10 +189,14 @@ type run struct {
 	selfDelete     atomic.Bool
 	victimGoneOnce sync.Once
 	// unreachable gets a non-blocking send from the victim poller every time it publishes an
-	// `unreachable` event (buffered 1). A quarantine run drains it at the response and then waits
-	// for the next one, so it lingers until the cut that follows the label is visible - not a cut
-	// seen before the response (FIX 1, ADR 0029).
-	unreachable chan struct{}
+	// `unreachable` event (buffered 1), after it has stored that event's time in lastUnreachable.
+	// respondedAt is when the runner observed Talon's response. A quarantine run lingers until an
+	// `unreachable` at or after the response is on record - the cut that follows the label, not one
+	// seen before it - however the two goroutines interleave (FIX 1, ADR 0029). Both are UnixNano of
+	// the runner's clock; 0 means none yet.
+	unreachable     chan struct{}
+	lastUnreachable atomic.Int64
+	respondedAt     atomic.Int64
 
 	// Terminal-run state (ADR 0029), guarded by tmu. A terminal run keeps its pod alive and runs
 	// catalogue commands on request, one at a time; the rest is nil/zero for a scripted run.
@@ -425,7 +429,10 @@ func (r *Runner) ObserveTalon(namespace, pod, status string) {
 		return
 	}
 	if !rn.terminal {
-		rn.respondOnce.Do(func() { close(rn.responded) })
+		rn.respondOnce.Do(func() {
+			rn.respondedAt.Store(r.now().UnixNano())
+			close(rn.responded)
+		})
 		return
 	}
 	r.terminalResponded(rn)
@@ -724,9 +731,10 @@ func (r *Runner) deletePodFound(ctx context.Context, namespace, name string) (bo
 // (FIX 1, ADR 0029). The old fixed 5 s linger deleted the pod before Cilium had finished isolating
 // it, so the probe was still answering and no `unreachable` event ever reached the page.
 //
-// With a victim poller running, it waits for an `unreachable` event *after* the response (it drains
-// any seen before, which belong to a different moment) and then QuarantineLinger (3 s) more; a pod
-// deleted during the wait (rn.gone) or the overall cap QuarantineLingerMax (40 s) end it early.
+// With a victim poller running, it waits until an `unreachable` event at or after the response is on
+// record (one from before the response belongs to a different moment; one published while the run
+// goroutine was still getting here counts) and then QuarantineLinger (3 s) more; a pod deleted
+// during the wait (rn.gone) or the overall cap QuarantineLingerMax (40 s) end it early.
 // Without a poller - no victim app, or the probe never started - there is nothing to wait for, so a
 // short fixed linger stands in rather than the full cap. A negative QuarantineLinger disables it.
 func (r *Runner) lingerForQuarantine(ctx context.Context, rn *run, pollerRunning bool) {
@@ -746,23 +754,26 @@ func (r *Runner) lingerForQuarantine(ctx context.Context, rn *run, pollerRunning
 		}
 		return
 	}
-	// An `unreachable` seen before the response is a different moment; wait for the next one.
-	select {
-	case <-rn.unreachable:
-	default:
-	}
-	select {
-	case <-rn.unreachable:
-		grace := time.NewTimer(r.cfg.QuarantineLinger)
-		defer grace.Stop()
+	// Compare times rather than drain the signal: the cut may well be published between Talon's
+	// webhook and this point, and draining would throw it away and wait for a second one that never
+	// comes (the poller publishes changes only). A signal from before the response just re-checks.
+	responded := rn.respondedAt.Load()
+	for rn.lastUnreachable.Load() < responded {
 		select {
-		case <-grace.C:
+		case <-rn.unreachable:
 		case <-rn.gone:
+			return // already deleted during the wait: no need to linger
 		case <-cap.C:
+			return
 		case <-ctx.Done():
+			return
 		}
+	}
+	grace := time.NewTimer(r.cfg.QuarantineLinger)
+	defer grace.Stop()
+	select {
+	case <-grace.C:
 	case <-rn.gone:
-		// Already deleted during the wait: no need to linger.
 	case <-cap.C:
 	case <-ctx.Done():
 	}

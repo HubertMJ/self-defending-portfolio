@@ -238,8 +238,9 @@ func (r *Runner) pollVictim(ctx context.Context, rn *run, podIP string, last Vic
 			ev.RunID, ev.Pod, ev.At = rn.id, rn.pod, r.now().UTC()
 			r.emitVictim(rn, ev)
 			if ev.Status == VictimUnreachable {
-				// Signal the quarantine linger that the cut is visible now (FIX 1); non-blocking,
-				// coalesced to the last one, so the linger waits on a cut after the response.
+				// Record when the cut became visible and wake the quarantine linger (FIX 1), which
+				// compares that time with the response's; the send is non-blocking and coalesced.
+				rn.lastUnreachable.Store(ev.At.UnixNano())
 				select {
 				case rn.unreachable <- struct{}{}:
 				default:
