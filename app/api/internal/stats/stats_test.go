@@ -224,3 +224,57 @@ func TestResponsePairedByCommand(t *testing.T) {
 		t.Fatalf("unpaired response recorded %+v", got)
 	}
 }
+
+// Hostile or nonsensical persisted blobs are refused, leaving the counters as they were: negative
+// latencies and samples, a since in year 9999, a counter at MaxInt64 (the next increment would
+// overflow), a best-objectives count no run can reach, a min above the max.
+func TestLoadRejectsOutOfRange(t *testing.T) {
+	for _, blob := range []string{
+		`{"RespMin":-5,"RespMax":-9,"RespLast":-1,"RespCount":3}`,
+		`{"RespLast":-1}`,
+		`{"RespSamples":[100,-200]}`,
+		`{"SurvivalSamples":[-1]}`,
+		`{"Since":"9999-12-31T00:00:00Z"}`,
+		`{"Runs":9223372036854775807}`,
+		`{"ByScenario":{"x":{"Runs":9223372036854775807}}}`,
+		`{"Commands":{"x":{"Attempts":1099511627777}}}`,
+		`{"BestObjectives":1000000,"TerminalRuns":5}`,
+		`{"BestObjectives":2,"TerminalRuns":0}`,
+		`{"RespCount":2,"RespMin":900,"RespMax":100}`,
+	} {
+		c := New(newStore(t), nil)
+		queuedRun(c, "r")
+		if err := c.Load([]byte(blob)); err == nil {
+			t.Fatalf("Load(%s) accepted it: %+v", blob, c.Snapshot())
+		}
+		if s := c.Snapshot(); s.Runs != 1 || s.ResponseMS != (ResponseMS{}) {
+			t.Fatalf("Load(%s) changed the counters on failure: %+v", blob, s)
+		}
+	}
+	// The bounds are not a reason to refuse a plausible blob.
+	c := New(newStore(t), nil)
+	if err := c.Load([]byte(`{"Since":"2026-01-01T00:00:00Z","Runs":412,"TerminalRuns":40,"BestObjectives":5,` +
+		`"RespCount":2,"RespMin":0,"RespMax":900,"RespLast":0,"RespSamples":[900,0],"SurvivalSamples":[0,120]}`)); err != nil {
+		t.Fatalf("a plausible blob was refused: %v", err)
+	}
+}
+
+// A blob saved before RespCount existed carries samples but a count of 0. The count is derived from
+// the samples, so the old min survives a slower response: min 200, not 900.
+func TestLoadDerivesRespCount(t *testing.T) {
+	c := New(newStore(t), nil)
+	if err := c.Load([]byte(`{"RespMin":200,"RespMax":200,"RespLast":200,"RespSamples":[200]}`)); err != nil {
+		t.Fatal(err)
+	}
+	base := time.Unix(100, 0).UTC()
+	queuedRun(c, "a")
+	c.Record(ev("run", map[string]any{"run_id": "a", "scenario": "shell-in-container", "state": "detected", "at": base}))
+	c.Record(ev("run", map[string]any{"run_id": "a", "scenario": "shell-in-container", "state": "responded", "at": base.Add(900 * time.Millisecond)}))
+	if m := c.Snapshot().ResponseMS; m.Min != 200 || m.Max != 900 || m.Last != 900 {
+		t.Fatalf("response_ms = %+v, want min 200 max 900 last 900", m)
+	}
+}
+
+func queuedRun(c *Collector, id string) {
+	c.Record(ev("run", map[string]any{"run_id": id, "scenario": "shell-in-container", "state": "queued"}))
+}

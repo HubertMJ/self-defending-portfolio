@@ -422,7 +422,7 @@ func (c *Collector) Load(data []byte) error {
 	if err := json.Unmarshal(data, &a); err != nil {
 		return err
 	}
-	if err := validateAgg(&a); err != nil {
+	if err := validateAgg(&a, c.now()); err != nil {
 		return err // keep the zero counters; do not install a bad aggregate
 	}
 	if a.Since.IsZero() {
@@ -481,9 +481,18 @@ func mergeAgg(p, cur *agg) *agg {
 	return p
 }
 
+// maxCounter bounds every persisted counter and latency. No real total comes near it (it is a
+// trillion), and a blob carrying more is nonsense: a counter at MaxInt64 would overflow on the next
+// increment and make the next load reject the blob and start everything over.
+const maxCounter = 1 << 40
+
 // validateAgg rejects a persisted aggregate that would break Snapshot or carry nonsense: a nil map
-// value (Snapshot dereferences it), a negative counter, or a sample array past its cap.
-func validateAgg(a *agg) error {
+// value (Snapshot dereferences it), a counter, latency or sample that is negative or past maxCounter,
+// a sample array past its cap, a `since` in the future, a best-objectives count no run could reach,
+// or a min above the max. A blob written before RespCount existed has it at 0 although it has
+// samples: the count is derived from them, so the old min is still a min (an old min of 200 and a
+// later 900 ms response give 200, not 900).
+func validateAgg(a *agg, now time.Time) error {
 	if a.ByScenario == nil {
 		a.ByScenario = map[string]*ScenarioStat{}
 	}
@@ -493,35 +502,62 @@ func validateAgg(a *agg) error {
 	if a.Objectives == nil {
 		a.Objectives = map[string]*ObjectiveStat{}
 	}
+	ok := func(vs ...int64) bool {
+		for _, v := range vs {
+			if v < 0 || v > maxCounter {
+				return false
+			}
+		}
+		return true
+	}
 	for k, v := range a.ByScenario {
 		if v == nil {
 			return fmt.Errorf("by_scenario[%q] is null", k)
 		}
-		if v.Runs < 0 || v.Detected < 0 || v.Responded < 0 {
-			return fmt.Errorf("by_scenario[%q] has a negative counter", k)
+		if !ok(int64(v.Runs), int64(v.Detected), int64(v.Responded)) {
+			return fmt.Errorf("by_scenario[%q] has a counter out of range", k)
 		}
 	}
 	for k, v := range a.Commands {
 		if v == nil {
 			return fmt.Errorf("commands[%q] is null", k)
 		}
-		if v.Attempts < 0 || v.Allowed < 0 || v.Prevented < 0 || v.Detected < 0 {
-			return fmt.Errorf("commands[%q] has a negative counter", k)
+		if !ok(int64(v.Attempts), int64(v.Allowed), int64(v.Prevented), int64(v.Detected)) {
+			return fmt.Errorf("commands[%q] has a counter out of range", k)
 		}
 	}
 	for k, v := range a.Objectives {
 		if v == nil {
 			return fmt.Errorf("objectives[%q] is null", k)
 		}
-		if v.Attempts < 0 || v.Achieved < 0 {
-			return fmt.Errorf("objectives[%q] has a negative counter", k)
+		if !ok(int64(v.Attempts), int64(v.Achieved)) {
+			return fmt.Errorf("objectives[%q] has a counter out of range", k)
 		}
 	}
-	if a.Runs < 0 || a.Unanswered < 0 || a.TerminalRuns < 0 || a.BestObjectives < 0 || a.RespCount < 0 {
-		return fmt.Errorf("a top-level counter is negative")
+	if !ok(int64(a.Runs), int64(a.Unanswered), int64(a.TerminalRuns), int64(a.BestObjectives), int64(a.RespCount),
+		a.RespLast, a.RespMin, a.RespMax) {
+		return fmt.Errorf("a top-level counter or latency is out of range")
 	}
 	if len(a.RespSamples) > maxResponseSamples || len(a.SurvivalSamples) > maxSurvivalSamples {
 		return fmt.Errorf("a sample array is over its cap")
+	}
+	if !ok(a.RespSamples...) || !ok(a.SurvivalSamples...) {
+		return fmt.Errorf("a sample is out of range")
+	}
+	// An hour of slack for the clock of the pod that wrote it; a year-9999 since is not a clock skew.
+	if a.Since.After(now.Add(time.Hour)) {
+		return fmt.Errorf("since %s is in the future", a.Since.Format(time.RFC3339))
+	}
+	// Each objective is reached by a command, and a run cannot run more distinct catalogue commands
+	// than the catalogue has; and no terminal run, no best.
+	if a.BestObjectives > scenarios.MaxCommands || (a.BestObjectives > 0 && a.TerminalRuns == 0) {
+		return fmt.Errorf("best_objectives %d is not reachable", a.BestObjectives)
+	}
+	if a.RespCount < len(a.RespSamples) {
+		a.RespCount = len(a.RespSamples)
+	}
+	if a.RespCount > 0 && a.RespMin > a.RespMax {
+		return fmt.Errorf("response min %d is above max %d", a.RespMin, a.RespMax)
 	}
 	return nil
 }
