@@ -1,6 +1,6 @@
 {
-  "timeout_seconds": 120,
-  "idle_seconds": 30,
+  "timeout_seconds": 300,
+  "idle_seconds": 90,
   "objectives": [
     {
       "id": "recon",

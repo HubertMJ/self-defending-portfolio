@@ -497,14 +497,15 @@ export class MockBackend {
     });
     this.later(t, 980, () => this.termVictim(t, "up", 4, { title: "SDP Shop", banner: "Open for business", checksum: "5e0c1a77d3b2f190" }));
     this.armIdle();
-    t.deadlineTimer = setTimeout(() => this.endTerminal("deadline"), 120_000 * this.speed);
+    // The catalogue's own limits (300 s, idle 90 s), as the API reads them from scenarios.yaml.
+    t.deadlineTimer = setTimeout(() => this.endTerminal("deadline"), (terminalDetails().timeout_seconds ?? 0) * 1000 * this.speed);
   }
 
   private armIdle(): void {
     const t = this.terminal;
     if (!t) return;
     clearTimeout(t.idleTimer);
-    t.idleTimer = setTimeout(() => this.endTerminal("idle"), 30_000 * this.speed);
+    t.idleTimer = setTimeout(() => this.endTerminal("idle"), (terminalDetails().idle_seconds ?? 0) * 1000 * this.speed);
   }
 
   /**

@@ -14,8 +14,8 @@ const EXCERPT = `# header comment
 - id: terminal
   title: Attacker's terminal
   interactive: true
-  timeout_seconds: 120
-  idle_seconds: 30
+  timeout_seconds: 300
+  idle_seconds: 90
   objectives:
     - {id: recon, title: "Look around"}
     - {id: tamper, title: "Deface the shop"}
@@ -58,8 +58,8 @@ const EXCERPT = `# header comment
 describe("terminal catalogue generator (scripts/terminal-catalogue.mjs)", () => {
   it("reads the terminal scenario out of the real file's YAML shapes", () => {
     const c = terminalCatalogue(EXCERPT);
-    expect(c.timeout_seconds).toBe(120);
-    expect(c.idle_seconds).toBe(30);
+    expect(c.timeout_seconds).toBe(300);
+    expect(c.idle_seconds).toBe(90);
     expect(c.objectives).toEqual([
       { id: "recon", title: "Look around" },
       { id: "tamper", title: "Deface the shop" },
@@ -90,6 +90,9 @@ describe("terminal catalogue generator (scripts/terminal-catalogue.mjs)", () => 
 describe("the committed ?mock=1 catalogue", () => {
   it("is the real one: five objectives, fourteen commands, deface's real 80-character line", () => {
     const parsed = parseScenarioDetails(terminalDetails());
+    // The session limits the API now sends: 300 s, and 90 s without a command.
+    expect(parsed.timeout_seconds).toBe(300);
+    expect(parsed.idle_seconds).toBe(90);
     expect(parsed.objectives).toHaveLength(5);
     expect(parsed.commands).toHaveLength(14); // none dropped by the page's own catalogue checks
     const deface = parsed.commands?.find((c) => c.id === "deface");

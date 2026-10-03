@@ -315,6 +315,27 @@ describe("MockBackend terminal (ADR 0033)", () => {
     expect(victims).toEqual(["up"]);
   });
 
+  it("ends the session after 90 s without a command, counted again from each command, and at 300 s at the latest", async () => {
+    const finished = (seen: { type: string; raw: string }[]) => seen.filter((e) => e.type === "run").map((e) => JSON.parse(e.raw)).find((d) => d.state === "finished")?.detail;
+    const quiet = await start();
+    await vi.advanceTimersByTimeAsync(88_000); // 89.3 s since the start
+    expect(finished(quiet.seen)).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(finished(quiet.seen)).toBe("idle");
+
+    const busy = await start();
+    // A quiet command every 80 s (at 81, 161 and 241 s) keeps the session from going idle…
+    for (let i = 0; i < 3; i++) {
+      await vi.advanceTimersByTimeAsync(79_700);
+      expect((await busy.settle(busy.api.runCommand(busy.runId, busy.token, "whoami"))).kind).toBe("accepted");
+    }
+    await vi.advanceTimersByTimeAsync(58_000); // 299.3 s
+    expect(finished(busy.seen)).toBeUndefined();
+    // …until its 300 s deadline, which comes before the idle limit (241 + 90 s).
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(finished(busy.seen)).toBe("deadline");
+  });
+
   it("runs an allowed command: started → output → exited, achieved for an objective", async () => {
     const { api, seen, token, runId } = await start();
     const r = await settle(api.runCommand(runId, token, "read-flag"));

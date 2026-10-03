@@ -328,7 +328,7 @@ describe("a command that exited without an exit code (review 2, item 2)", () => 
   });
 
   it("idle and deadline end the session with their own reason", async () => {
-    for (const [detail, want] of [["idle", "idle timeout"], ["deadline", "120-second deadline"]]) {
+    for (const [detail, want] of [["idle", "idle timeout"], ["deadline", "300-second deadline"]]) {
       const t = await harness();
       const f = new Feed().open();
       f.ran(1, "whoami", 3000, ["uid=10001"], 0, true);
