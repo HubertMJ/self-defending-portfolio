@@ -402,6 +402,26 @@ test.describe("defence map and live stats (mock, ADR 0033)", () => {
     await expect(hero.locator("a", { hasText: "Open an issue" })).toHaveAttribute("href", /\/issues$/);
     // No escapes/"got out" counter (review item 18).
     await expect(hero).not.toContainText(/got out|call-home/i);
+    // The never-reached count is readable in both themes: 4.5:1 against its row at least.
+    for (const scheme of ["light", "dark"] as const) {
+      await page.emulateMedia({ colorScheme: scheme });
+      const ratio = await hero.locator('.herostats__obj[data-never="true"] .herostats__objcount').first().evaluate((el) => {
+        const rgb = (c: string) => {
+          const n = (c.match(/[\d.]+/g) ?? []).map(Number);
+          return c.startsWith("color(") ? n.slice(0, 3).map((x) => x * 255) : n.slice(0, 3);
+        };
+        const lum = (c: number[]) => {
+          const [r, g, b] = c.map((x) => x / 255).map((x) => (x <= 0.03928 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4));
+          return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+        };
+        let bg = el as HTMLElement;
+        while (getComputedStyle(bg).backgroundColor === "rgba(0, 0, 0, 0)") bg = bg.parentElement as HTMLElement;
+        const row = el.closest(".herostats__obj") as HTMLElement;
+        const [a, b] = [lum(rgb(getComputedStyle(el).color)), lum(rgb(getComputedStyle(bg).backgroundColor))].sort((x, y) => y - x);
+        return Number(getComputedStyle(row).opacity) * ((a + 0.05) / (b + 0.05));
+      });
+      expect(ratio, scheme).toBeGreaterThanOrEqual(4.5);
+    }
   });
 });
 
