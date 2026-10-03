@@ -415,6 +415,18 @@ describe("code review (REQUEST_CHANGES) fixes", () => {
     expect(talon?.textContent).not.toContain("success");
   });
 
+  it("runs list: null (or zero) start and end times are absent, never a zero time on the card", () => {
+    const row = { run_id: "0123456789abcdef", scenario: "terminal", state: "queued", detected: false, responded: false, events: 1, truncated: false };
+    const [a, b] = parseRunList({ runs: [{ ...row, started_at: null, ended_at: null }, { ...row, run_id: "fedcba9876543210", started_at: "0001-01-01T00:00:00Z", ended_at: "2026-10-03T18:00:00Z" }] });
+    expect(a).not.toHaveProperty("started_at");
+    expect(a).not.toHaveProperty("ended_at");
+    expect(b.started_at).toBeUndefined();
+    expect(b.ended_at).toBe("2026-10-03T18:00:00Z");
+    const card = renderNoAttack({ latest: a, now: T });
+    expect(card.textContent).toContain("Latest recorded run 0123456789abcdef (terminal) - raw JSON");
+    expect(card.textContent).not.toMatch(/0001|1970|started/);
+  });
+
   it("the empty card names the latest recorded run from its summary, never 'No attack since'", () => {
     const latest = { run_id: "0123456789abcdef", scenario: "terminal", state: "finished" as const, started_at: "2026-10-03T12:01:57Z", detected: false, responded: false, events: 9, truncated: false };
     const el = renderNoAttack({ apiStartedAt: "2026-10-03T17:00:00Z", latest, now: T });

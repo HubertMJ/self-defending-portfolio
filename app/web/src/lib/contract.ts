@@ -444,7 +444,8 @@ export interface RunSummary {
   run_id: string;
   scenario: string;
   state: RunState;
-  started_at: string;
+  /** Absent when the API sends null (a run it has no start time for): never rendered as a zero time. */
+  started_at?: string;
   ended_at?: string;
   detected: boolean;
   responded: boolean;
@@ -1028,13 +1029,13 @@ export function parseRunList(v: unknown): RunSummary[] {
   if (!isObj(v) || !Array.isArray(v.runs)) throw new TypeError("runs: expected {runs: [...]}");
   const out: RunSummary[] = [];
   for (const r of v.runs.slice(0, 50)) {
-    if (!isObj(r) || !isRunId(r.run_id) || !isStr(r.scenario) || !(RUN_STATES as readonly unknown[]).includes(r.state) || !isTime(r.started_at)) continue;
+    if (!isObj(r) || !isRunId(r.run_id) || !isStr(r.scenario) || !(RUN_STATES as readonly unknown[]).includes(r.state)) continue;
     out.push({
       run_id: r.run_id,
       scenario: cap(r.scenario, 40),
       state: r.state as RunState,
-      started_at: r.started_at,
-      ...definedOnly({ ended_at: isTime(r.ended_at) ? r.ended_at : undefined }),
+      // null (or anything not a time) is "unknown": dropped, so a zero time never reaches the page.
+      ...definedOnly({ started_at: isRealTime(r.started_at) ? r.started_at : undefined, ended_at: isRealTime(r.ended_at) ? r.ended_at : undefined }),
       detected: r.detected === true,
       responded: r.responded === true,
       events: isCount(r.events) ? r.events : 0,
@@ -1043,6 +1044,9 @@ export function parseRunList(v: unknown): RunSummary[] {
   }
   return out;
 }
+
+/** A time that is not Go's zero time (0001-01-01T00:00:00Z) nor the Unix epoch's start. */
+const isRealTime = (v: unknown): v is string => isTime(v) && Date.parse(v) > 0;
 
 /** One `event: tick` frame; null if it is not one. It is a clock reading, never part of the run log. */
 export function parseTick(raw: string): Tick | null {

@@ -167,7 +167,7 @@ export function renderNoAttack(opts: { apiStartedAt?: string; lastRunAt?: string
   const l = opts.latest;
   if (l) {
     return empty(
-      h("p", { class: "evcard__none" }, "Latest recorded run ", h("code", {}, l.run_id), ` (${l.scenario}, started `, whenEl(l.started_at, opts.now), ") - ", extLink(rawUrl(l.run_id), "raw JSON")),
+      h("p", { class: "evcard__none" }, "Latest recorded run ", h("code", {}, l.run_id), ` (${l.scenario}`, l.started_at ? [", started ", whenEl(l.started_at, opts.now)] : null, ") - ", extLink(rawUrl(l.run_id), "raw JSON")),
       h("p", { class: "small" }, "Its events are loading into the record below."),
     );
   }
