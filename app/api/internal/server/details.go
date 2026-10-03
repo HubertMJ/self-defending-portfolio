@@ -1,10 +1,11 @@
 package server
 
-// The three read-only endpoints behind the page's technical mode and its "verify it yourself" panel
-// (ADR 0021): what a scenario actually is (details), everything one run published (runs), and where
-// the visitor stands against the limits (limits). All three are GET, JSON, under the same request
-// budget as everything else, and expose nothing the catalogue, the public repository or the event
-// stream do not already show.
+// The read-only endpoints behind the page's technical mode and its "verify it yourself" panel
+// (ADR 0021, 0035): what a scenario actually is (details), everything one run published (runs/{id})
+// and the list of kept runs (runs), where the visitor stands against the limits (limits), and what
+// the running images were built from (provenance). All are GET, JSON, under the same request budget
+// as everything else, and expose nothing the catalogue, the public repository, the registry's
+// signatures or the event stream do not already show.
 
 import (
 	"math"
