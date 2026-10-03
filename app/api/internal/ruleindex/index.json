@@ -2,7 +2,11 @@
   "falco": {
     "SDP network tool in sandbox": {
       "file": "cluster/infra/falco/kustomization.yaml",
-      "line": 151
+      "line": 159
+    },
+    "SDP execution from shop volume": {
+      "file": "cluster/infra/falco/kustomization.yaml",
+      "line": 180
     }
   },
   "talon": {
@@ -25,6 +29,11 @@
       "name": "Kill drifted binary in sandbox",
       "file": "cluster/infra/falco-response/talon/rules.yaml",
       "line": 80
+    },
+    "SDP execution from shop volume": {
+      "name": "Kill execution from shop volume in sandbox",
+      "file": "cluster/infra/falco-response/talon/rules.yaml",
+      "line": 95
     }
   },
   "policies": [
@@ -42,6 +51,11 @@
       "kind": "ClusterPolicy",
       "name": "require-pod-resources",
       "file": "cluster/infra/kyverno-policies/require-pod-resources.yaml"
+    },
+    {
+      "kind": "ClusterPolicy",
+      "name": "require-sandbox-deadline",
+      "file": "cluster/infra/kyverno-policies/require-sandbox-deadline.yaml"
     },
     {
       "kind": "ClusterPolicy",
