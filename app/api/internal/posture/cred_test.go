@@ -178,7 +178,7 @@ func TestKubeBenchFailingLive(t *testing.T) {
 		t.Fatalf("title = %q", kb.Failing[0].Title)
 	}
 	b, _ := json.Marshal(kb)
-	for _, leak := range []string{"k3s01", `"audit"`, `"actual_value"`, `"expected_result"`, `"reason"`, `"AuditEnv"`, `"AuditConfig"`, "journalctl", "10.4.1.20"} {
+	for _, leak := range []string{"node-fixture", `"audit"`, `"actual_value"`, `"expected_result"`, `"reason"`, `"AuditEnv"`, `"AuditConfig"`, "journalctl", "192.0.2.10"} {
 		if strings.Contains(string(b), leak) {
 			t.Errorf("published %q", leak)
 		}
@@ -197,10 +197,10 @@ func TestKubeBenchFailingRules(t *testing.T) {
 	}
 	fail := func(id, desc string) map[string]any {
 		return map[string]any{"test_number": id, "test_desc": desc, "remediation": "fix it", "status": "FAIL",
-			"audit": "cat /etc/x", "actual_value": "secret", "reason": "host k3s01"}
+			"audit": "cat /etc/x", "actual_value": "secret", "reason": "host node-fixture"}
 	}
 	kb, err := ParseKubeBench(doc(
-		fail("1.2.3", "Reach the API at 10.4.1.20 or https://k3s01.example:6443"),
+		fail("1.2.3", "Reach the API at 192.0.2.10 or https://node-fixture.example:6443"),
 		fail("1.2.3; rm -rf /", "bad id"),
 		fail("4", "too short"),
 		fail("1.2.3.4.5", "too long"),
@@ -213,7 +213,7 @@ func TestKubeBenchFailingRules(t *testing.T) {
 	if len(kb.Failing) != 2 || kb.Failing[0].ID != "1.2.3" || kb.Failing[1].ID != "5.1.1" {
 		t.Fatalf("failing = %+v", kb.Failing)
 	}
-	if got := kb.Failing[0].Title; strings.Contains(got, "10.4.1.20") || strings.Contains(got, "k3s01") || !strings.Contains(got, "[ip]") {
+	if got := kb.Failing[0].Title; strings.Contains(got, "192.0.2.10") || strings.Contains(got, "node-fixture") || !strings.Contains(got, "[ip]") {
 		t.Fatalf("title not scrubbed: %q", got)
 	}
 	if n := len([]rune(kb.Failing[1].Title)); n != maxBenchTitle {
