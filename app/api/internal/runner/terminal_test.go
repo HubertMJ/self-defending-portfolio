@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"sync"
 	"testing"
@@ -473,4 +474,66 @@ func TestTerminalLateAlertIsDetected(t *testing.T) {
 			}
 		})
 	}
+}
+
+// killExec stands in for the production ExecStream when Talon kills the pod under a command: the
+// container dies, the stream reports the shell's SIGKILL as a clean exit 137, and it does so at once,
+// before the pod watch has reported the deletion.
+type killExec struct {
+	fakeExec
+	c *fake.Clientset
+}
+
+func (k *killExec) ExecStream(ctx context.Context, ns, pod, _ string, _ []string, _ bool, _, _ io.Writer) (int, error) {
+	_ = k.c.CoreV1().Pods(ns).Delete(context.Background(), pod, metav1.DeleteOptions{})
+	return 137, nil
+}
+
+// A command whose pod is deleted under it ends `killed`, even when the exec returns (137, nil) before
+// the watch reports the deletion; before, it ended `exited` with exit_code 137 while the run ended
+// `killed`.
+func TestTerminalSignalExitIsKilled(t *testing.T) {
+	for i := 0; i < 5; i++ {
+		c := fake.NewClientset()
+		readyOnCreate(c)
+		rec := newRecorder()
+		r := terminalRunner(c, &killExec{c: c}, rec)
+		release, done := released()
+		id, token := r.StartTerminal(terminalScenario(), release)
+		rec.waitFor(t, StatePodReady)
+		seq := sendCommand(t, r, id, token, "shell")
+		if ev := rec.waitFor(t, StateFinished); ev.Detail != "killed" {
+			t.Fatalf("run detail = %q", ev.Detail)
+		}
+		<-done
+		for _, p := range rec.of("command") {
+			if ev := p.v.(CommandEvent); ev.Seq == seq && ev.State != CommandStarted && ev.State != CommandOutput {
+				if ev.State != CommandKilled || ev.ExitCode != nil {
+					t.Fatalf("iteration %d: command ended %s exit_code=%v, want killed", i, ev.State, ev.ExitCode)
+				}
+			}
+		}
+	}
+}
+
+// An exit status above 128 with no pod deletion is still the command's own exit, reported once the
+// bounded wait for a deletion has passed.
+func TestTerminalSignalExitWithoutDeletion(t *testing.T) {
+	c := fake.NewClientset()
+	readyOnCreate(c)
+	rec := newRecorder()
+	r := terminalRunner(c, &fakeExec{code: 137}, rec)
+	release, done := released()
+	id, token := r.StartTerminal(terminalScenario(), release)
+	rec.waitFor(t, StatePodReady)
+	seq := sendCommand(t, r, id, token, "whoami")
+	waitCommand(t, rec, seq, CommandExited)
+	for _, p := range rec.of("command") {
+		if ev := p.v.(CommandEvent); ev.Seq == seq && ev.State == CommandExited && (ev.ExitCode == nil || *ev.ExitCode != 137) {
+			t.Fatalf("exited without exit_code 137: %+v", ev)
+		}
+	}
+	_ = r.Leave(id, token)
+	rec.waitFor(t, StateFinished)
+	<-done
 }

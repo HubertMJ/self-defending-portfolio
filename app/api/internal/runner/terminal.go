@@ -280,10 +280,13 @@ func (r *Runner) runCommand(ctx context.Context, rn *run, req commandReq, log *s
 
 	// Otherwise the pod going away under the command is a kill, not an exit: if the exec ended
 	// unexpectedly, wait briefly for the watch to confirm a deletion (Talon's terminate deletes the
-	// pod a moment before the watch reports it). Not for our own timeout or a leave, which would
-	// otherwise stall the slot for DeleteWait with no kill coming.
+	// pod a moment before the watch reports it). "Unexpectedly" is a transport error, or an exit
+	// status above 128 - death by a signal (128+n): the exec stream reports a container killed under
+	// the command as a clean (137, nil) or (143, nil), often before the watch has seen the deletion.
+	// An ordinary exit (0-128) does not wait: that is the command's own result, and waiting on every
+	// command would stall the slot. Neither does our own timeout or a leave, with no kill coming.
 	killed := rn.isGone()
-	if !killed && err != nil && ctx.Err() == nil && !timedOut && !left {
+	if !killed && (err != nil || code > 128) && ctx.Err() == nil && !timedOut && !left {
 		t := time.NewTimer(r.cfg.DeleteWait)
 		select {
 		case <-rn.gone:
