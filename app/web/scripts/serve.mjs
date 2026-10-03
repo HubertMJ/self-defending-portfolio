@@ -3,8 +3,9 @@
 // drift between the two), the same cache headers, and the same text/plain 404 for /api/*. Used by
 // `npm run serve`, the dev loop and the Playwright suite. Not used in the image.
 //
-//   node scripts/serve.mjs [--port 4173] [--stub-events | --live-api | --terminal-api]
-//   then open http://localhost:4173/?mock=1 for mock mode, or / for the offline state.
+//   node scripts/serve.mjs [--port 4173] [--dir dist|dist-mock] [--stub-events | --live-api | --terminal-api]
+//   then open http://localhost:4173/?mock=1 for mock mode (with --dir dist-mock, the `npm run build:mock`
+//   output: the production dist/ has no mock, ADR 0035), or / for the offline state.
 //
 // --stub-events serves GET /api/events the way the API does (same headers, the retry + 2 KiB
 // preamble, a replayed run, a heartbeat comment every 2 s), so the Playwright suite can drive the
@@ -29,6 +30,14 @@
 // goes on live — `cat /etc/shadow` exits 0, Falco, Talon's terminate, the kill — each event exactly
 // as the API publishes it. Every connection gets its own run, so parallel tests do not share one.
 // With --slow-details the terminal's catalogue answers 1.5 s late, after the replay has arrived.
+//
+// --terminal-api also answers what ADR 0035 added: /api/stats with `last_run_at` and `last_24h`,
+// /api/provenance, the /api/runs list, a posture naming its failures (/api/posture with Kyverno
+// violations, failing kube-bench checks, Trivy's last scan, Falco's counted_since), /build.json, and
+// on `/api/events?tick=1` an `event: tick` frame (no id) after the replay and then every 2 s instead
+// of the heartbeat comment. `--terminal-api --no-cred` is the interactive API before ADR 0035: the
+// /api/stats of today's shape (no `last_run_at`, no `last_24h`), none of the rest, no tick (a new
+// page on the API deployed today).
 
 import { createServer } from "node:http";
 import { readFile, stat } from "node:fs/promises";
@@ -36,12 +45,18 @@ import { extname, join, normalize, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
-const dist = join(root, "dist");
+const dirArg = process.argv.indexOf("--dir");
+const dir = dirArg > 0 ? process.argv[dirArg + 1] : "dist";
+if (dir !== "dist" && dir !== "dist-mock") throw new Error(`serve.mjs: --dir must be dist or dist-mock, not ${dir}`);
+const dist = join(root, dir);
 const portArg = process.argv.indexOf("--port");
 const port = Number(portArg > 0 ? process.argv[portArg + 1] : process.env.PORT ?? 4173);
 const liveApi = process.argv.includes("--live-api");
 const terminalApi = process.argv.includes("--terminal-api");
 const slowDetails = process.argv.includes("--slow-details");
+const cred = terminalApi && !process.argv.includes("--no-cred");
+// This stub API "started" when the server did; the provenance and the ticks say so.
+const startedAt = new Date().toISOString();
 const stubEvents = liveApi || terminalApi || process.argv.includes("--stub-events");
 
 // One finished "shell-in-container" run, as the extended API replays it: [event name, payload].
@@ -130,7 +145,7 @@ const sessions = new Map();
 let nextSession = 0;
 let nextEventId = 1000;
 
-function eventStream(req, res) {
+function eventStream(req, res, tick) {
   res.writeHead(200, { ...base, "Content-Type": "text/event-stream", "Cache-Control": "no-store, no-transform", "X-Accel-Buffering": "no" });
   res.write("retry: 5000\n\n:" + " ".repeat(2048) + "\n\n");
   const frame = (id, event, data) => res.write(`id: ${id}\nevent: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
@@ -147,7 +162,10 @@ function eventStream(req, res) {
       else timers.push(setTimeout(() => frame(e.id, e.event, e.data), e.ms));
     }
   }
-  const heartbeat = setInterval(() => res.write(": heartbeat\n\n"), 2000);
+  // ADR 0035's opt-in tick: no id line, so Last-Event-ID and the replay are unaffected.
+  const tickFrame = () => res.write(`event: tick\ndata: ${JSON.stringify({ at: new Date().toISOString(), started_at: startedAt })}\n\n`);
+  if (tick) tickFrame();
+  const heartbeat = setInterval(() => (tick ? tickFrame() : res.write(": heartbeat\n\n")), 2000);
   req.on("close", () => {
     clearInterval(heartbeat);
     timers.forEach(clearTimeout);
@@ -156,8 +174,69 @@ function eventStream(req, res) {
 
 const CATALOGUE = JSON.parse(await readFile(join(root, "src", "lib", "terminal-catalogue.json"), "utf8"));
 
+const STUB_COMMIT = "0448cff5a1b2c3d4e5f60718293a4b5c6d7e8f90";
+const STUB_DIGEST = (c) => `sha256:${c.repeat(64)}`;
+
+/** What ADR 0035 added to the interactive API, as --terminal-api answers it; undefined for anything else. */
+function credAnswer(method, path) {
+  if (method !== "GET") return undefined;
+  const now = Date.now();
+  if (path === "/api/stats") {
+    return [200, {
+      since: "2026-10-03T06:44:28Z",
+      runs: 19,
+      by_scenario: { terminal: { runs: 12, detected: 9, responded: 9 }, "shell-in-container": { runs: 7, detected: 7, responded: 7 } },
+      response_ms: { last: 110, p50: 140, min: 90, max: 420 },
+      unanswered: 0,
+      commands: {},
+      objectives: {},
+      terminal: { runs: 12, best_objectives: 2, median_survival_s: 41 },
+      ...(cred ? { last_run_at: new Date(now - 8000).toISOString(), last_24h: { since: startedAt, runs: 3, detected: 2, responded: 2, falco_alerts: 4, talon_actions: 3 } } : {}),
+    }];
+  }
+  if (!cred) return undefined;
+  if (path === "/api/provenance") {
+    return [200, {
+      generated_at: new Date(now).toISOString(),
+      api: { commit: STUB_COMMIT, ci_run_id: "18234567890", started_at: startedAt, images: [`ghcr.io/hubertmj/self-defending-portfolio/api@${STUB_DIGEST("b")}`] },
+      web: { images: [`ghcr.io/hubertmj/self-defending-portfolio/web@${STUB_DIGEST("1")}`] },
+      images_observed_at: new Date(now - 20_000).toISOString(),
+    }];
+  }
+  if (path === "/build.json") return [200, { commit: STUB_COMMIT, ci_run_id: "18234567890" }];
+  if (path === "/api/runs") {
+    const runs = [...sessions.entries()].reverse().map(([run_id, s]) => ({ run_id, scenario: "terminal", state: "responded", started_at: new Date(s.connected - 8000).toISOString(), ended_at: null, detected: true, responded: true, events: s.events.length, truncated: false }));
+    return [200, { runs, kept: 50 }];
+  }
+  if (path === "/api/posture") {
+    return [200, {
+      ...LIVE_POSTURE,
+      kyverno: {
+        policies: [...LIVE_POSTURE.kyverno.policies, { name: "restrict-image-registries", pass: 61, fail: 7, warn: 0 }],
+        violations: [{ policy: "restrict-image-registries", rule: "autogen-validate-registries", kind: "ReplicaSet", namespace: "falco-response", count: 7, running: false, file: "cluster/infra/kyverno-policies/restrict-image-registries.yaml" }],
+        violations_truncated: false,
+      },
+      trivy: { ...LIVE_POSTURE.trivy, last_scan: "2026-10-01T10:10:31Z" },
+      kube_bench: {
+        ...LIVE_POSTURE.kube_bench,
+        fail: 3,
+        failing: [
+          { id: "1.1.9", title: "Ensure that the Container Network Interface file permissions are set to 600 or more restrictive", remediation: "Run the below command (based on the file location on your system) on the control plane node. For example, chmod 600 <path/to/cni/files>" },
+          { id: "1.1.10", title: "Ensure that the Container Network Interface file ownership is set to root:root", remediation: "Run the below command (based on the file location on your system) on the control plane node. For example, chown root:root <path/to/cni/files>" },
+          { id: "1.2.26", title: "Ensure that the --etcd-cafile argument is set as appropriate", remediation: "Follow the Kubernetes documentation and set up the TLS connection between the apiserver and etcd." },
+        ],
+      },
+      falco: { alerts_24h: 4, counted_since: startedAt },
+      talon: { actions_24h: 3 },
+    }];
+  }
+  return undefined;
+}
+
 /** The interactive API of --terminal-api (what the page reads while watching), else undefined. */
 function terminalApiAnswer(method, path) {
+  const added = credAnswer(method, path);
+  if (added) return added;
   if (method === "GET" && path === "/api/scenarios") {
     return [200, [...LIVE_SCENARIOS.map((s) => ({ ...s, interactive: false })), { id: "terminal", title: "Attacker's terminal", summary: "Type into a hardened pod.", technique: "T1059.004", detection: "", response: "", victim: true, interactive: true }]];
   }
@@ -238,7 +317,7 @@ const server = createServer(async (req, res) => {
     res.writeHead(status, { ...base, ...headers });
     res.end(req.method === "HEAD" ? undefined : body);
   };
-  if (stubEvents && url.pathname === "/api/events") return eventStream(req, res);
+  if (stubEvents && url.pathname === "/api/events") return eventStream(req, res, cred && url.searchParams.get("tick") === "1");
   if (slowDetails && url.pathname === "/api/scenarios/terminal/details") await new Promise((r) => setTimeout(r, 1500));
   const answer = terminalApi ? terminalApiAnswer(req.method, url.pathname) : liveApi ? liveApiAnswer(req.method, url.pathname) : undefined;
   if (answer) return send(answer[0], JSON.stringify(answer[1]), { "Content-Type": "application/json", "Cache-Control": "no-store" });
@@ -261,4 +340,4 @@ const server = createServer(async (req, res) => {
   }
 });
 
-server.listen(port, "127.0.0.1", () => console.log(`serving dist/ on http://127.0.0.1:${port}`));
+server.listen(port, "127.0.0.1", () => console.log(`serving ${dir}/ on http://127.0.0.1:${port}`));

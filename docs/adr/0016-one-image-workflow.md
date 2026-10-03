@@ -82,3 +82,26 @@ unverified image should be able to run.
   All three drop `|build-web` together, in a commit of its own once hello runs a digest built by
   `build-images.yml` and has been seen working; keeping the alternative until then is what lets
   that switch be reverted without a rebuild.
+
+## Amendment 2026-10-03: the web image gets the commit and the run too; every image gets a run label (ADR 0035)
+
+**Context.** The page now shows what is running and where it came from (ADR 0035). The api image already
+knew its commit, as the one image this workflow names (`GIT_SHA`, ADR 0021); the web image knew nothing,
+and no image knew the Actions run that built it.
+
+**Decision.** The named exception widens from api to api and web: both receive `GIT_SHA` (`github.sha`)
+and `CI_RUN_ID` (`github.run_id`) as build arguments, and only they, for the reason the exception exists:
+a build argument no Dockerfile declares is a warning, and a declared one invalidates the build cache from
+its `ARG` onward on every push, a cost only an image that uses the value should pay (digests change on
+every build anyway, through the run-id label). The api image puts both in its environment; the web image validates them and writes
+`/build.json` in its final stage, after the package upgrade and the bundle copy so its build stage stays
+cached. Every image is labelled `ski.hubertjablon.ci.run-id` beside `org.opencontainers.image.revision`.
+The web image's smoke test checks that `/build.json` names the commit and the run being built
+(`GITHUB_SHA`, `GITHUB_RUN_ID`) before anything signs the digest.
+
+**Consequences.** The workflow change itself rebuilds every image once (a change to this file selects all
+of them), and the run label gives every rebuild a new digest; only api and web are re-pinned. The
+TRANSITION alternative `|build-web` now also lives in `app/web/src/lib/provenance.ts`, the constant the
+page's `cosign verify` command is built from; `scripts/check-web-identity.sh` fails `make validate` if it
+differs from `scripts/verify-image.sh` or from the policy's `subjectRegExp`/`issuer`, or if another file
+under `app/web/src` carries its own copy, and the commit that drops the alternative edits it with the rest.

@@ -138,6 +138,8 @@ jobs:
 
       # No `latest`. A Kyverno policy forbids it in the cluster (ADR 0008) and the manifests pin a
       # digest anyway; `main` exists only so a human can see what the branch currently points at.
+      # Every image is labelled with the commit and the run that built it, so `docker inspect` on any
+      # digest leads back to a public Actions run (ADR 0035).
       - name: tags and labels
         id: meta
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
@@ -148,16 +150,19 @@ jobs:
             type=raw,value=main,enable={{is_default_branch}}
           labels: |
             org.opencontainers.image.revision=${{ github.sha }}
+            ski.hubertjablon.ci.run-id=${{ github.run_id }}
 
       # provenance/sbom off: buildx would attach its own attestation manifests to the image index,
       # which changes the digest shape and makes `cosign sign <image>@<digest>` ambiguous about what
       # it covered. We produce the SBOM explicitly below and sign the image manifest we pushed.
       # The GHA cache is scoped per image, so the images do not evict each other's layers.
       #
-      # GIT_SHA goes to the api image only: it links its rule and policy references to the exact
-      # commit it was built from (ADR 0021). The one place this file names an image, because a
-      # build argument no Dockerfile declares is a warning on every other build, and a commit baked
-      # into an image that has no use for it would only change its digest on every push.
+      # GIT_SHA and CI_RUN_ID go to the api and web images only: the page shows what each was built
+      # from and links the commit and the run (ADR 0035), and the api links its rule and policy
+      # references to the exact commit (ADR 0021). The one place this file names images, because a
+      # build argument no Dockerfile declares is a warning on every other build, and a declared one
+      # invalidates the build cache from its ARG onward on every push - a cost only an image that uses
+      # the value should pay. (Digests change on every build anyway, through the run-id label.)
       - name: build and push
         id: build
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
@@ -170,7 +175,9 @@ jobs:
           sbom: false
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          build-args: ${{ matrix.name == 'api' && format('GIT_SHA={0}', github.sha) || '' }}
+          build-args: |
+            ${{ contains(fromJSON('["api","web"]'), matrix.name) && format('GIT_SHA={0}', github.sha) || '' }}
+            ${{ contains(fromJSON('["api","web"]'), matrix.name) && format('CI_RUN_ID={0}', github.run_id) || '' }}
           cache-from: type=gha,scope=${{ matrix.name }}
           cache-to: type=gha,mode=max,scope=${{ matrix.name }}
 

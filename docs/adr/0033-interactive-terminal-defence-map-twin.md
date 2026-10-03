@@ -220,3 +220,23 @@ in `GET /api/scenarios/terminal/details` (ADR 0029 and 0032 amendments). The pag
   says what each does. Against an API without compare the card keeps its one "Launch attack" button.
 - **Mock.** `?mock=1` follows all of it: its catalogue is regenerated from `scenarios.yaml` (300 s,
   idle 90 s), its terminal ends on those limits, and its one-click cards launch side by side.
+
+## Amendment 2026-10-03: the mock is not shipped (ADR 0035)
+
+**Context.** This ADR kept the MockBackend in the production bundle, reachable with `?mock=1` behind a
+banner. On a page whose whole claim is "this is real", a switch that shows simulated data is the
+suspicion it has to dispel, and the bundle carried the mock's fixtures and terminal catalogue to every
+visitor.
+
+**Decision.** The production build no longer contains the mock. The page reaches it through one hook
+module, which the production build resolves to a stub that returns nothing (an esbuild alias); a `define`
+constant with a dead branch was rejected because the fixtures module has top-level code the bundler keeps.
+The `#mock-banner` markup is stripped from the production HTML. `npm run build:mock` builds the mock into
+`dist-mock/`, used by the dev server and by the `?mock` end-to-end suite; the layout and stub-API suites
+run against the production bundle. A unit test builds both and requires the mock markers in one and none
+in the other, the web image's smoke test checks the served bundle and that `/?mock=1` serves the ordinary
+page, and the live acceptance repeats the check on the site.
+
+**Consequences.** The Consequences above that say mock mode "still ships, visibly labelled" no longer
+hold: `?mock=1` on the live site is the live page. Everything the mock exercised is still exercised by
+`npm test` and `npm run test:e2e`, from `dist-mock/`.

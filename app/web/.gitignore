@@ -1,4 +1,5 @@
 node_modules/
 dist/
+dist-mock/
 test-results/
 playwright-report/

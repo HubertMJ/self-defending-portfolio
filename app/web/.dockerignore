@@ -14,3 +14,5 @@
 test/*
 !test/unit/
 **/.*
+# The mock build (npm run build:mock) is dev/test only and never enters an image (ADR 0035).
+dist-mock/

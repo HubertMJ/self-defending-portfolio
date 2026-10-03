@@ -18,17 +18,13 @@
 
 import type { ApiClient, Result } from "../lib/api";
 import type { Scenario, ScenarioDetails } from "../lib/contract";
-import { type Child, clockTime, h, prefersReducedMotion, replace } from "../lib/dom";
+import { type Child, h, prefersReducedMotion, replace, utcClock } from "../lib/dom";
 import { type Hop, type Schedule, TIMER_END, TIMER_START, humanAction, runHops, scheduleHops, timerReading } from "../lib/pipeline";
 import { type RunView, type TimelineView, QUARANTINE_LABEL, formatDuration, guardedFalco, guardedTalon, ts } from "../lib/timeline";
+import { cosignVerifyCommand, isPinnedImageRef, oneLine } from "../lib/provenance";
 import { copyButton, extLink, sourceUrl } from "./common";
 import { heldMs, heldText, renderTwin } from "./twin";
 import { labelOf, renderVictim, victimState } from "./victim";
-
-/** The workflow identity that signs the scenario image (ADR 0011, build-images.yml). */
-export const COSIGN_IDENTITY =
-  "https://github.com/HubertMJ/self-defending-portfolio/.github/workflows/build-images.yml@refs/heads/main";
-export const COSIGN_ISSUER = "https://token.actions.githubusercontent.com";
 
 export interface ConsoleHandle {
   update(view: TimelineView): void;
@@ -72,6 +68,9 @@ interface Panels {
 }
 
 type Kids = (Child | Child[])[];
+
+/** Every clock time on the console is UTC with milliseconds, like the raw records (ADR 0035). */
+const utcMs = (ms: number): string => utcClock(ms, Date.now(), { ms: true });
 
 const shortDigest = (image: string): string => {
   const at = image.indexOf("@sha256:");
@@ -160,9 +159,6 @@ function term(argv: readonly string[]): HTMLElement {
   );
 }
 
-export function cosignCommand(image: string): string {
-  return [`cosign verify ${image}`, `  --certificate-identity ${COSIGN_IDENTITY}`, `  --certificate-oidc-issuer ${COSIGN_ISSUER}`].join(" \\\n");
-}
 
 /** onDetails: a scenario's details as they load (their timeout bounds how long its runs may last). */
 export function mountConsole(root: HTMLElement, api: ApiClient, onDetails?: (scenario: string, details: ScenarioDetails) => void): ConsoleHandle {
@@ -341,11 +337,11 @@ export function mountConsole(root: HTMLElement, api: ApiClient, onDetails?: (sce
   const hopTime = (hops: Hop[], i: number): string => {
     const hp = hops[i];
     if (hp.at === undefined) return "";
-    if (i === 0) return clockTime(hp.at);
+    if (i === 0) return utcMs(hp.at);
     const zero = hops[TIMER_START].at;
     if (i < TIMER_START || zero === undefined) {
       const create = hops[0].at;
-      return create !== undefined ? `+${formatDuration(hp.at - create)}` : clockTime(hp.at);
+      return create !== undefined ? `+${formatDuration(hp.at - create)}` : utcMs(hp.at);
     }
     if (i === TIMER_START) return "t = 0";
     const d = hp.at - zero;
@@ -479,7 +475,7 @@ export function mountConsole(root: HTMLElement, api: ApiClient, onDetails?: (sce
       return h(
         "li",
         { class: "phase", "data-phase": p.deleted ? "deleted" : p.phase.toLowerCase() },
-        h("time", { datetime: p.at }, clockTime(Date.parse(p.at))),
+        h("time", { datetime: p.at }, utcMs(Date.parse(p.at))),
         h("span", { class: "phase__name" }, p.deleted ? "Deleted" : p.phase),
         p.reason && p.reason !== p.phase ? h("span", { class: "phase__reason" }, p.reason) : null,
         changes.map(([k, v]) => h("span", { class: `phase__label${k === QUARANTINE_LABEL ? " phase__label--q" : ""}` }, v === null ? `− ${k}` : `${k}=${v}`)),
@@ -586,7 +582,7 @@ export function mountConsole(root: HTMLElement, api: ApiClient, onDetails?: (sce
         { class: "proof" },
         check(run.quarantinedAt !== undefined, "Label set by Talon", [
           h("code", {}, `${QUARANTINE_LABEL}: false → true`),
-          run.quarantinedAt !== undefined ? ` at ${clockTime(run.quarantinedAt)}` : "",
+          run.quarantinedAt !== undefined ? ` at ${utcMs(run.quarantinedAt)}` : "",
         ]),
         check(stillRunning, "Pod still running", [stillRunning ? "phase Running after the label: isolated, not deleted" : lastPod ? `last phase seen: ${lastPod.phase}` : "waiting for the pod watch"]),
         check(after !== undefined, "Cilium dropped the probe", [
@@ -594,7 +590,7 @@ export function mountConsole(root: HTMLElement, api: ApiClient, onDetails?: (sce
           after ? `after it, no answer within ${after.probe_ms > 0 ? `${after.probe_ms} ms` : "its full timeout"} — the quarantine policy cut the pod off` : "waiting for the next probe",
         ]),
       ),
-      lastPod?.deleted ? h("p", { class: "small" }, `The API deleted the quarantined pod at the end of the run (${clockTime(Date.parse(lastPod.at))}).`) : null,
+      lastPod?.deleted ? h("p", { class: "small" }, `The API deleted the quarantined pod at the end of the run (${utcMs(Date.parse(lastPod.at))}).`) : null,
     ];
   };
 
@@ -641,10 +637,11 @@ export function mountConsole(root: HTMLElement, api: ApiClient, onDetails?: (sce
               )
             : null,
           ruleLinks.length ? [h("p", { class: "small" }, `Rules at commit ${det?.commit}:`), h("ul", { class: "rules" }, ruleLinks)] : null,
-          image
+          // Only a strictly validated pinned reference reaches a command a visitor copies (ADR 0035).
+          isPinnedImageRef(image)
             ? [
                 h("p", { class: "small" }, "The scenario image is signed in CI. Check the signature and who made it:"),
-                h("div", { class: "cmd" }, h("pre", { class: "term" }, h("code", {}, cosignCommand(image))), copyButton(() => cosignCommand(image).replace(/ \\\n\s*/g, " "))),
+                h("div", { class: "cmd" }, h("pre", { class: "term" }, h("code", {}, cosignVerifyCommand(image))), copyButton(() => oneLine(cosignVerifyCommand(image)))),
               ]
             : null,
         ),

@@ -54,6 +54,11 @@ spec:
           # One node; a second replica would only double the alerts forwarded per event if Falco ever
           # retried, and adds nothing to availability here.
           replicaCount: 1
+          # One previous revision kept for a rollback, not the default ten: the older ReplicaSets, at 0
+          # replicas, still carried upstream images from before ADR 0025 and failed
+          # restrict-image-registries forever (ADR 0035). 1, not 0: the chart renders the field only
+          # under an `if`, so 0 would be dropped.
+          revisionHistoryLimit: 1
           webui:
             enabled: false
           config:

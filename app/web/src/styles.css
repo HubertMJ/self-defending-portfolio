@@ -408,34 +408,6 @@ main {
   }
 }
 
-/* ---------- mock banner ---------- */
-
-/* In mock mode main.ts moves the banner into the sticky header, so no scroll — a link to #attack
-   included — can take it off screen. */
-.site-header .mock-banner {
-  padding-block: 0.35rem;
-  border-top: 1px solid color-mix(in srgb, var(--warning) 45%, transparent);
-  border-bottom: 0;
-  font-size: 0.82rem;
-}
-
-/* On a phone the sticky banner keeps to one line: what it is and the way out. */
-@media (max-width: 640px) {
-  .site-header .mock-banner__more {
-    display: none;
-  }
-}
-
-.mock-banner {
-  margin: 0;
-  padding: 0.6rem var(--gutter);
-  background: var(--warning-bg);
-  border-bottom: 1px solid color-mix(in srgb, var(--warning) 45%, transparent);
-  color: var(--text);
-  font-size: 0.9rem;
-  text-align: center;
-}
-
 /* ---------- buttons ---------- */
 
 .btn {
@@ -524,15 +496,18 @@ main {
   border-bottom: 1px solid var(--border);
 }
 
+/* Two columns from 1024 px: the copy (with the verify strip and the counters) and the evidence card.
+   Below that the card follows the counters (ADR 0035). Aligned to the top: a tall card must not push
+   the copy, and with it the verify strip, below the fold. */
 .hero__grid {
   display: grid;
-  gap: clamp(2rem, 5vw, 4rem);
-  align-items: center;
+  gap: clamp(2rem, 4vw, 3.5rem);
+  align-items: start;
 }
 
-@media (min-width: 900px) {
+@media (min-width: 1024px) {
   .hero__grid {
-    grid-template-columns: 1.35fr 1fr;
+    grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
   }
 }
 
@@ -1213,6 +1188,28 @@ main {
 
 .stage[data-reached="false"] .stage__title {
   color: var(--text-faint);
+}
+
+/* Not applicable to this run (recon only, nothing to detect): a neutral mark, not an unreached one. */
+.stage[data-reached="na"] {
+  border-top-color: var(--neutral);
+}
+
+.stage[data-reached="na"] .stage__dot {
+  border-color: var(--neutral);
+  background: var(--neutral-bg);
+  border-radius: 2px;
+}
+
+/* A detection was expected and none arrived: shown in the critical colour, never hidden. */
+.stage[data-reached="missed"] {
+  border-top-color: var(--critical);
+  background: var(--critical-bg);
+}
+
+.stage[data-reached="missed"] .stage__dot {
+  border-color: var(--critical);
+  background: var(--critical);
 }
 
 .stage__delta {
@@ -3549,4 +3546,272 @@ html[data-terminal="off"] .needs-terminal {
 .term__line,
 .term__explain {
   unicode-bidi: plaintext;
+}
+
+/* ---------- verify strip, evidence card, ticker, liveness, verify panel (ADR 0035) ---------- */
+
+.verifystrip {
+  margin-top: 1rem;
+}
+
+.vstrip__label {
+  font: 600 0.72rem/1.4 var(--font-mono);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  margin: 0 0 0.3rem;
+}
+
+.vstrip__rows {
+  display: grid;
+  gap: 0.2rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.vstrip__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.15rem 0.45rem;
+  font-size: 0.85rem;
+  line-height: 1.6;
+}
+
+.vstrip__row .btn--small {
+  padding-block: 0.05rem;
+}
+
+.vstrip__name {
+  font: 600 0.8rem/1.6 var(--font-mono);
+  min-width: 2rem;
+  color: var(--text-muted);
+}
+
+.vstrip__digest,
+.vstrip__more {
+  font-size: 0.8rem;
+  color: var(--text-faint);
+}
+
+.vstrip__foot {
+  margin: 0.25rem 0 0;
+  font-size: 0.85rem;
+}
+
+.vstrip__na {
+  color: var(--text-muted);
+}
+
+.evcard {
+  padding: 1rem 1.15rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--attack);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  font-size: 0.9rem;
+  min-width: 0;
+}
+
+.evcard--empty {
+  border-left-color: var(--neutral);
+}
+
+.evcard__eyebrow {
+  font: 600 0.72rem/1.4 var(--font-mono);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  margin: 0 0 0.35rem;
+}
+
+.evcard__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.35rem 0.75rem;
+}
+
+.evcard__title {
+  font-size: 1.15rem;
+  margin: 0;
+}
+
+.evcard__when,
+.evcard__lat,
+.evcard__more,
+.evcard__rule,
+.evcard__none {
+  margin: 0.45rem 0 0;
+  color: var(--text-muted);
+}
+
+.evcard__facts {
+  margin: 0.6rem 0 0;
+}
+
+.evcard__facts div {
+  grid-template-columns: 5.5rem minmax(0, 1fr);
+}
+
+.evcard__facts code,
+.evlist code {
+  overflow-wrap: anywhere;
+}
+
+.evlist {
+  display: grid;
+  gap: 0.3rem;
+  margin: 0.6rem 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.84rem;
+}
+
+.evlist__item time {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+}
+
+.section--evidence .section__head {
+  margin-bottom: 1.25rem;
+}
+
+.liveness {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  margin: 0 0 1rem;
+}
+
+.liveness:empty {
+  display: none;
+}
+
+.ticker {
+  display: grid;
+  gap: 0.25rem;
+  margin: 0 0 2rem;
+  padding: 0;
+  list-style: none;
+  font-size: 0.88rem;
+}
+
+.ticker__item {
+  padding: 0.35rem 0.6rem;
+  border-left: 3px solid var(--border-strong);
+  background: var(--surface-2);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  overflow-wrap: anywhere;
+}
+
+.ticker__item[data-type="falco"] {
+  border-left-color: var(--detect);
+}
+
+.ticker__item[data-type="talon"] {
+  border-left-color: var(--respond);
+}
+
+.ticker__item time {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+}
+
+.ticker__ago {
+  color: var(--text-faint);
+  font-size: 0.8rem;
+}
+
+.ticker__empty {
+  color: var(--text-muted);
+  margin: 0 0 2rem;
+}
+
+/* A new item fades in once, only where motion is welcome; nothing loops. */
+@media (prefers-reduced-motion: no-preference) {
+  html:not(.reduced-motion) .ticker__item[data-new="true"] {
+    animation: ticker-in 0.6s ease-out 1;
+  }
+}
+
+@keyframes ticker-in {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+.evdetail {
+  display: grid;
+  gap: 1rem;
+}
+
+.evdetail__fields {
+  margin-top: 0.6rem;
+}
+
+.vimages {
+  display: grid;
+  gap: 1rem;
+}
+
+@media (min-width: 1024px) {
+  .vimages {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.vimage,
+.verify-panel {
+  min-width: 0;
+}
+
+.vraw {
+  display: grid;
+  gap: 0.35rem;
+  margin: 0 0 1rem;
+  padding: 0;
+  list-style: none;
+  font-size: 0.85rem;
+}
+
+.vraw__row code {
+  overflow-wrap: anywhere;
+}
+
+.tile__list {
+  margin: 0.6rem 0 0;
+  padding-left: 1.1rem;
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+.tile__list li + li {
+  margin-top: 0.3rem;
+}
+
+.table-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.data-table--wrap th,
+.data-table--wrap td {
+  overflow-wrap: anywhere;
+}
+
+.tile__remedy summary {
+  cursor: pointer;
+  font-size: 0.8rem;
+}
+
+.tile__remedy p {
+  margin: 0.2rem 0 0;
 }

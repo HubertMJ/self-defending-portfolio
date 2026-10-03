@@ -2,9 +2,9 @@
 // say about the cluster right now, from GET /api/posture (cached server-side for 60 s).
 
 import type { ApiClient, Result } from "../lib/api";
-import type { ImageVulns, KyvernoPolicy, Posture, PostureTrivy } from "../lib/contract";
-import { h, relativeTime, replace } from "../lib/dom";
-import { offlinePanel } from "./common";
+import type { BenchCheck, ImageVulns, KyvernoPolicy, KyvernoViolation, Posture, PostureTrivy } from "../lib/contract";
+import { h, replace, timeEl, when } from "../lib/dom";
+import { extLink, offlinePanel, sourceUrl } from "./common";
 
 const REFRESH_MS = 60_000;
 /** Rows of the per-image breakdown shown; the rest are summarised in the caption. */
@@ -24,6 +24,8 @@ function tile(opts: {
   tone: Tone;
   status: string;
   foot: (Node | string)[];
+  /** Below the foot: what the number is made of (ADR 0035), when the API says. */
+  more?: HTMLElement | null;
 }): HTMLElement {
   return h(
     "article",
@@ -32,6 +34,75 @@ function tile(opts: {
     h("p", { class: "tile__value" }, opts.value, opts.unit ? h("span", { class: "tile__unit" }, ` ${opts.unit}`) : null),
     statusChip(opts.tone, opts.status),
     h("p", { class: "tile__foot" }, ...opts.foot),
+    opts.more ?? null,
+  );
+}
+
+/**
+ * The admission tile's tone (ADR 0035, decision O1). Amber "stale config, nothing running violates"
+ * only when every failure is accounted for by a group whose resource has no running pod: the list is
+ * complete (not truncated, nothing dropped as malformed, its counts add up to the policies' failures)
+ * and every group says `running === false`. Any `true`, any unknown, any gap: red. The count shown is
+ * never reduced either way.
+ */
+export function admissionTone(p: Posture): Tone {
+  const fail = p.kyverno.policies.reduce((a, x) => a + x.fail, 0);
+  const warn = p.kyverno.policies.reduce((a, x) => a + x.warn, 0);
+  if (fail === 0) return warn > 0 ? "warning" : "good";
+  const v = p.kyverno.violations;
+  const complete = v !== undefined && v.length > 0 && !p.kyverno.violations_truncated && !p.kyverno.violations_incomplete && v.reduce((a, x) => a + x.count, 0) === fail;
+  return complete && v.every((x) => x.running === false) ? "warning" : "critical";
+}
+
+const STALE_STATUS = "stale config, nothing running violates";
+
+/** "7 × restrict-image-registries / autogen-validate-registries on ReplicaSet in falco-response - 0 running: …" */
+function violationText(v: KyvernoViolation): string {
+  const running =
+    v.running === true
+      ? "running now"
+      : v.running === false
+        ? v.kind === "ReplicaSet"
+          ? "0 running: old revisions kept at 0 replicas"
+          : "0 running"
+        : "whether it runs is unknown";
+  return `${v.count} × ${v.policy} / ${v.rule} on ${v.kind}${v.namespace ? ` in ${v.namespace}` : ""} - ${running}`;
+}
+
+/** The policy's file at the API's commit, or the bare name when either is unknown. */
+function policyRef(v: KyvernoViolation, commit: string): Node | string {
+  const url = v.file ? sourceUrl(commit, v.file) : null;
+  return url ? extLink(url, v.policy) : v.policy;
+}
+
+/** The tiles list this many groups or checks; the rest are named in the table below or after the list. */
+export const TILE_ROWS = 5;
+
+function violationList(vs: KyvernoViolation[], truncated: boolean, commit: string): HTMLElement {
+  return h(
+    "ul",
+    { class: "tile__list" },
+    vs.slice(0, TILE_ROWS).map((v) => h("li", { "data-running": String(v.running) }, violationText(v), v.file && sourceUrl(commit, v.file) ? [" (", policyRef(v, commit), ")"] : null)),
+    vs.length > TILE_ROWS ? h("li", { class: "tile__more" }, `${vs.length - TILE_ROWS} more in the table below`) : null,
+    truncated ? h("li", {}, "…and more groups than the API lists (it sends the 50 largest).") : null,
+  );
+}
+
+function benchList(checks: BenchCheck[]): HTMLElement {
+  return h(
+    "ul",
+    { class: "tile__list tile__list--bench" },
+    checks.slice(0, TILE_ROWS).map((c) =>
+      h(
+        "li",
+        {},
+        h("code", {}, c.id),
+        " ",
+        c.title,
+        c.remediation ? h("details", { class: "tile__remedy", open: true }, h("summary", {}, "Remediation"), h("p", {}, c.remediation)) : null,
+      ),
+    ),
+    checks.length > TILE_ROWS ? h("li", { class: "tile__more" }, `${checks.length - TILE_ROWS} more: `, checks.slice(TILE_ROWS).flatMap((c, i) => [i ? ", " : "", h("code", {}, c.id)])) : null,
   );
 }
 
@@ -81,6 +152,40 @@ function kyvernoTable(policies: KyvernoPolicy[]): HTMLElement {
           h("td", {}, String(p.warn)),
         ),
       ),
+    ),
+  );
+}
+
+function violationTable(vs: KyvernoViolation[], commit: string): HTMLElement {
+  // Policy and rule names are long and unbreakable; the table scrolls inside its box on a phone
+  // rather than widening the page.
+  return h(
+    "div",
+    { class: "table-scroll" },
+    h(
+    "table",
+    { class: "data-table data-table--wrap" },
+    h("caption", {}, "Kyverno failures, grouped by policy, rule and what they are about (no resource names)"),
+    h(
+      "thead",
+      {},
+      h("tr", {}, h("th", { scope: "col" }, "Policy / rule"), h("th", { scope: "col" }, "Kind"), h("th", { scope: "col" }, "Namespace"), h("th", { scope: "col" }, "Count"), h("th", { scope: "col" }, "Running")),
+    ),
+    h(
+      "tbody",
+      {},
+      vs.map((v) =>
+        h(
+          "tr",
+          { "data-running": String(v.running) },
+          h("th", { scope: "row" }, policyRef(v, commit), " / ", h("code", {}, v.rule)),
+          h("td", {}, v.kind),
+          h("td", {}, v.namespace || "–"),
+          h("td", {}, String(v.count)),
+          h("td", {}, v.running === true ? "yes" : v.running === false ? "no" : "unknown"),
+        ),
+      ),
+    ),
     ),
   );
 }
@@ -142,7 +247,8 @@ function imageBreakdown(tr: PostureTrivy): HTMLElement | null {
   return h("div", { class: "posture-offenders" }, summary, table);
 }
 
-export function renderPostureData(p: Posture, now: number = Date.now()): HTMLElement {
+/** `commit`: the API's build commit (GET /api/provenance), for the policy file links; "" when unknown. */
+export function renderPostureData(p: Posture, now: number = Date.now(), commit = ""): HTMLElement {
   const ky = p.kyverno.policies.reduce((a, x) => ({ pass: a.pass + x.pass, fail: a.fail + x.fail, warn: a.warn + x.warn }), { pass: 0, fail: 0, warn: 0 });
   const kb = p.kube_bench;
   const kbScored = kb.pass + kb.fail + kb.warn;
@@ -156,9 +262,10 @@ export function renderPostureData(p: Posture, now: number = Date.now()): HTMLEle
       label: "Admission policy",
       value: String(ky.fail),
       unit: ky.fail === 1 ? "violation" : "violations",
-      tone: ky.fail > 0 ? "critical" : ky.warn > 0 ? "warning" : "good",
-      status: ky.fail > 0 ? "Failing checks" : ky.warn > 0 ? "Warnings only" : "All passing",
+      tone: admissionTone(p),
+      status: ky.fail > 0 ? (admissionTone(p) === "warning" ? STALE_STATUS : "Failing checks") : ky.warn > 0 ? "Warnings only" : "All passing",
       foot: [`${p.kyverno.policies.length} Kyverno policies · ${ky.pass} pass · ${ky.warn} warn`],
+      more: ky.fail > 0 && p.kyverno.violations?.length ? violationList(p.kyverno.violations, p.kyverno.violations_truncated === true, commit) : null,
     }),
     tile({
       label: "Image vulnerabilities",
@@ -170,6 +277,7 @@ export function renderPostureData(p: Posture, now: number = Date.now()): HTMLEle
         tr.own && tr.third_party
           ? `Trivy, ${tr.images} running images · own ${tr.own.critical + tr.own.high} · third-party ${tr.third_party.critical + tr.third_party.high}`
           : `Trivy, ${tr.images} running images`,
+        ...(tr.last_scan ? [" · last scan ", timeEl(tr.last_scan, when(tr.last_scan, now))] : []),
       ],
     }),
     tile({
@@ -178,15 +286,20 @@ export function renderPostureData(p: Posture, now: number = Date.now()): HTMLEle
       unit: "pass",
       tone: kb.fail > 0 ? "warning" : kbScored ? "good" : "neutral",
       status: kb.fail > 0 ? `${kb.fail} failing` : kbScored ? "No failures" : "Not run yet",
-      foot: [`kube-bench, last run ${relativeTime(kb.last_run, now)}`],
+      foot: kb.last_run ? ["kube-bench, last run ", timeEl(kb.last_run, when(kb.last_run, now))] : ["kube-bench, last run never"],
+      more: kb.failing?.length ? benchList(kb.failing) : null,
     }),
+    // The API's window covers the current hour and the 23 before it, and only since it started
+    // counting: it is labelled by the time it counts from, never as a bare "24 h" (ADR 0035).
     tile({
-      label: "Runtime, last 24 h",
+      label: p.falco.counted_since ? "Runtime" : "Runtime, last 24 h",
       value: String(p.falco.alerts_24h),
       unit: p.falco.alerts_24h === 1 ? "alert" : "alerts",
       tone: "neutral",
       status: `${p.talon.actions_24h} automated responses`,
-      foot: ["Falco detections → Falco Talon actions"],
+      foot: p.falco.counted_since
+        ? ["Falco detections → Falco Talon actions, counted since ", timeEl(p.falco.counted_since, when(p.falco.counted_since, now))]
+        : ["Falco detections → Falco Talon actions"],
     }),
   );
 
@@ -207,9 +320,10 @@ export function renderPostureData(p: Posture, now: number = Date.now()): HTMLEle
     ]),
     imageBreakdown(tr),
     kyvernoTable(p.kyverno.policies),
+    ky.fail > 0 && p.kyverno.violations?.length ? violationTable(p.kyverno.violations, commit) : null,
   );
 
-  const generated = h("time", { datetime: p.generated_at }, relativeTime(p.generated_at, now));
+  const generated = timeEl(p.generated_at, when(p.generated_at, now));
   return h(
     "div",
     { class: "posture" },
@@ -219,14 +333,25 @@ export function renderPostureData(p: Posture, now: number = Date.now()): HTMLEle
   );
 }
 
-export function mountPosture(root: HTMLElement, api: ApiClient): { refresh: () => Promise<void> } {
+export interface PostureHandle {
+  refresh: () => Promise<void>;
+  /** The API's build commit, once known: the policy links point at it. */
+  setCommit(commit: string): void;
+}
+
+/** `onData`: every fresh posture, for the liveness line (its generated_at, kube-bench, Trivy times). */
+export function mountPosture(root: HTMLElement, api: ApiClient, onData?: (p: Posture) => void): PostureHandle {
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let last: Posture | undefined;
+  let commit = "";
 
   const show = (res: Result<Posture>) => {
     root.setAttribute("aria-busy", "false");
     if (res.ok) {
       root.dataset.state = "live";
-      replace(root, renderPostureData(res.value));
+      last = res.value;
+      replace(root, renderPostureData(res.value, Date.now(), commit));
+      onData?.(res.value);
     } else {
       root.dataset.state = "offline";
       replace(
@@ -249,5 +374,12 @@ export function mountPosture(root: HTMLElement, api: ApiClient): { refresh: () =
   };
 
   void refresh();
-  return { refresh };
+  return {
+    refresh,
+    setCommit(c) {
+      if (c === commit) return;
+      commit = c;
+      if (last && root.dataset.state === "live") replace(root, renderPostureData(last, Date.now(), commit));
+    },
+  };
 }

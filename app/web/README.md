@@ -8,6 +8,7 @@ CSP rationale: [ADR 0019](../../docs/adr/0019-frontend-stack-and-csp.md).
 ```
 src/index.html         the page (static portfolio content; works without JavaScript)
 src/styles.css         all styles, system fonts, dark + light tokens
+src/mock.css           the mock banner's styles: copied into the mock build only, linked by mock-hook.ts
 src/main.ts            wires the live panels
 src/theme.ts           tiny blocking script: applies a stored theme before first paint
 src/lib/contract.ts    API types and runtime guards (phase 5/6/8 contract: runs, terminal, twin, stats)
@@ -15,7 +16,8 @@ src/lib/api.ts         HTTP client: timeouts, 202/404/409/429 + Retry-After; ter
 src/lib/sse.ts         reconnecting EventSource: backoff + jitter, replay dedup
 src/lib/timeline.ts    event log -> runs with latencies, pod/victim/command events, compare arms
 src/lib/pipeline.ts    a run's eight pipeline hops, the replay schedule (600 ms dwell) and the kill-timer
-src/lib/mock.ts        in-page fake API for ?mock=1, dev and tests (one-click, terminal, twin, stats)
+src/lib/mock.ts        in-page fake API for ?mock=1, dev and tests only (one-click, terminal, twin, stats)
+src/lib/mock-hook.ts   the page's only way to the mock; the production build swaps in mock-hook.prod.ts (null)
 src/lib/fixtures.ts    fixture data: scenarios, posture, stats, what each terminal command prints in the mock
 src/lib/terminal-catalogue.json  the mock's terminal catalogue, generated from the cluster's scenarios.yaml
 src/lib/backfill.ts    when to fetch a run's history from /api/runs/{id} (mid-session join, reconnect)
@@ -39,13 +41,17 @@ test/e2e/              Playwright smoke tests against the built site
 
 ```sh
 npm ci
-npm run build && npm run serve    # http://127.0.0.1:4173/?mock=1  (fixture data, simulated runs)
-                                  # http://127.0.0.1:4173/         (no API: offline states)
-npm run dev                       # rebuild on change (index.html changes need a restart)
+npm run build:mock && npm run serve -- --dir dist-mock   # http://127.0.0.1:4173/?mock=1  (fixture data, simulated runs)
+                                                         # http://127.0.0.1:4173/         (no API: offline states)
+npm run build && npm run serve                           # the production bundle (dist/, no mock)
+npm run dev                       # rebuild the mock build on change (index.html changes need a restart)
 ```
 
-Mock mode is also available on the live site with `?mock=1` and is announced by a banner; it never
-calls the API. Extra knobs: `&mock-speed=0.2` (faster runs), `&mock-limit=1` (hit the 429 sooner),
+The mock is dev/test only (ADR 0035). `npm run build` (dist/, what the image ships) does not contain
+it: the build resolves `src/lib/mock-hook.ts` to a stub that returns null and cuts the mock banner
+from index.html, the banner's styles live in `src/mock.css` (mock build only), and
+`test/unit/bundle.test.ts` fails if any trace of the mock reaches any file of dist/. `npm run build:mock` writes the same page with the mock into dist-mock/, where
+`?mock=1` turns it on, announced by a banner; it never calls the API. Extra knobs: `&mock-speed=0.2` (faster runs), `&mock-limit=1` (hit the 429 sooner),
 `&mock-stream-refuse=3&mock-stream-retry-after=2` (the event stream is refused with 429 first),
 `&mock-stream-stall=1` (the first accepted stream delivers nothing and dies), `&mock-visitor=500`
 (another visitor starts a quarantine run after 500 ms, watched read-only), `&mock-term-visitor=500`
@@ -67,7 +73,8 @@ interactive front end runs without a cluster.
 ```sh
 npm run lint        # tsc --noEmit + no HTML/code DOM sinks in src/
 npm test            # unit tests
-npm run test:e2e    # build + Playwright (Chromium) against scripts/serve.mjs
+npm run test:e2e    # both builds + Playwright (Chromium) against scripts/serve.mjs: the ?mock suite on
+                    # dist-mock/ (port 4173), the stub-API suites on the production dist/ (4174-4178)
 npm run todo-content  # placeholder copy still to be written (add --strict to fail on it)
 npm run catalogue -- <path to cluster/infra/sandbox/scenarios/scenarios.yaml>   # regenerate the mock catalogue
 SDP_SCENARIOS_YAML=<that path> npm test                                         # ...and fail if it drifted
@@ -82,6 +89,9 @@ docker build -t sdp-web:local app/web
 docker run --rm -d --name sdp-web --read-only --tmpfs /tmp --user 101 --cap-drop ALL -p 8080:8080 sdp-web:local
 BASE_URL=http://127.0.0.1:8080 npx playwright test
 ```
+
+The image has no mock, so against it the `?mock` tests fail by design; the stub-API tests still run
+against this checkout's dist/.
 
 The image build runs `npm run lint` and `npm test` in its first stage, so a failing unit test fails
 the build in CI too.

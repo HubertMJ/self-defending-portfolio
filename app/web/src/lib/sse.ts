@@ -18,7 +18,7 @@
 // type and payload alone from a server that sends no ids), which keeps the consumers free of dedup
 // logic. Two identical lines of output are two events with two ids, and both are kept.
 
-import { STREAM_EVENT_TYPES, type StreamEvent, parseStreamEvent } from "./contract";
+import { STREAM_EVENT_TYPES, type StreamEvent, type Tick, parseStreamEvent, parseTick } from "./contract";
 
 export type ConnectionState = "connecting" | "open" | "reconnecting" | "offline";
 
@@ -69,6 +69,11 @@ export interface StreamOptions {
   maxAttempts?: number;
   /** Optional; see RetryProbe. Without it the retry waits the backoff alone. */
   probe?: RetryProbe;
+  /**
+   * The opt-in `event: tick` frames of `?tick=1` (ADR 0035): the server's clock, after the replay and
+   * then every 15 s. A clock reading, not an event: it bypasses the dedup and never reaches onEvent.
+   */
+  onTick?: (tick: Tick) => void;
 }
 
 // Every named event the contract defines; an older API simply never sends the newer ones.
@@ -96,7 +101,7 @@ export function backoffDelay(attempt: number, base: number, max: number, random:
 }
 
 export class EventStream {
-  private readonly opts: Required<Omit<StreamOptions, "onState" | "probe">> & Pick<StreamOptions, "onState" | "probe">;
+  private readonly opts: Required<Omit<StreamOptions, "onState" | "probe" | "onTick">> & Pick<StreamOptions, "onState" | "probe" | "onTick">;
   private source: EventSourceLike | null = null;
   private retryTimer: unknown = null;
   private healthyTimer: unknown = null;
@@ -192,6 +197,15 @@ export class EventStream {
         this.setState(this.failures >= this.opts.offlineAfter ? "offline" : "reconnecting");
       }
     };
+
+    const { onTick } = this.opts;
+    if (onTick) {
+      source.addEventListener("tick", (msg: MessageEvent) => {
+        if (this.source !== source) return;
+        const tick = parseTick(typeof msg.data === "string" ? msg.data : "");
+        if (tick) onTick(tick);
+      });
+    }
 
     for (const type of EVENT_TYPES) {
       source.addEventListener(type, (msg: MessageEvent) => {

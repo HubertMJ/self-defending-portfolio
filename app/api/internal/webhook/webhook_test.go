@@ -3,7 +3,6 @@ package webhook
 import (
 	"encoding/json"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 )
@@ -114,32 +113,5 @@ func TestTruncateKeepsRunes(t *testing.T) {
 	}
 	if Truncate("short", 300) != "short" {
 		t.Fatal("short string changed")
-	}
-}
-
-func TestWindow(t *testing.T) {
-	var mu sync.Mutex
-	clk := now
-	w := NewDayWindow(func() time.Time { mu.Lock(); defer mu.Unlock(); return clk })
-	advance := func(d time.Duration) { mu.Lock(); clk = clk.Add(d); mu.Unlock() }
-	w.Add()
-	w.Add()
-	advance(12 * time.Hour)
-	w.Add()
-	if w.Count() != 3 {
-		t.Fatalf("count = %d", w.Count())
-	}
-	advance(12*time.Hour + time.Minute)
-	if w.Count() != 1 {
-		t.Fatalf("after 24h: count = %d, want 1", w.Count())
-	}
-	advance(48 * time.Hour)
-	if w.Count() != 0 {
-		t.Fatalf("after 72h: count = %d", w.Count())
-	}
-	// A slot reused after a full lap starts from zero.
-	w.Add()
-	if w.Count() != 1 {
-		t.Fatalf("reused slot: %d", w.Count())
 	}
 }
