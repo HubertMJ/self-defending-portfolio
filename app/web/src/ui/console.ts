@@ -21,7 +21,7 @@ import type { Scenario, ScenarioDetails } from "../lib/contract";
 import { type Child, clockTime, h, prefersReducedMotion, replace } from "../lib/dom";
 import { type Hop, type Schedule, TIMER_END, TIMER_START, humanAction, runHops, scheduleHops, timerReading } from "../lib/pipeline";
 import { type RunView, type TimelineView, QUARANTINE_LABEL, formatDuration, guardedFalco, guardedTalon, ts } from "../lib/timeline";
-import { cosignVerifyCommand, oneLine } from "../lib/provenance";
+import { cosignVerifyCommand, isPinnedImageRef, oneLine } from "../lib/provenance";
 import { copyButton, extLink, sourceUrl } from "./common";
 import { heldMs, heldText, renderTwin } from "./twin";
 import { labelOf, renderVictim, victimState } from "./victim";
@@ -634,7 +634,8 @@ export function mountConsole(root: HTMLElement, api: ApiClient, onDetails?: (sce
               )
             : null,
           ruleLinks.length ? [h("p", { class: "small" }, `Rules at commit ${det?.commit}:`), h("ul", { class: "rules" }, ruleLinks)] : null,
-          image
+          // Only a strictly validated pinned reference reaches a command a visitor copies (ADR 0035).
+          isPinnedImageRef(image)
             ? [
                 h("p", { class: "small" }, "The scenario image is signed in CI. Check the signature and who made it:"),
                 h("div", { class: "cmd" }, h("pre", { class: "term" }, h("code", {}, cosignVerifyCommand(image))), copyButton(() => oneLine(cosignVerifyCommand(image)))),

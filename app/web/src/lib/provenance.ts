@@ -11,8 +11,17 @@ import { REPO_URL } from "../ui/common";
 export const COSIGN_IDENTITY_REGEXP = String.raw`^https://github\.com/HubertMJ/self-defending-portfolio/\.github/workflows/(build-images|build-web)\.yml@refs/heads/main$`;
 export const COSIGN_ISSUER = "https://token.actions.githubusercontent.com";
 export function cosignVerifyCommand(imageAtDigest: string): string {
+  // A visitor pastes this into a shell: it is only ever built from a strictly validated pinned reference.
+  if (!isPinnedImageRef(imageAtDigest)) throw new TypeError("cosignVerifyCommand: not a pinned image reference");
   return [`cosign verify ${imageAtDigest}`, `  --certificate-identity-regexp '${COSIGN_IDENTITY_REGEXP}'`, `  --certificate-oidc-issuer ${COSIGN_ISSUER}`].join(" \\\n");
 }
+
+/**
+ * registry[:port]/path@sha256:<64 hex>, lowercase, nothing a shell would read as more than one word.
+ * The only thing a copied cosign command may name.
+ */
+const IMAGE_REF = /^[a-z0-9]+(?:[._-][a-z0-9]+)*(?::[0-9]{1,5})?(?:\/[a-z0-9]+(?:[._-][a-z0-9]+)*)+@sha256:[0-9a-f]{64}$/;
+export const isPinnedImageRef = (s: string): boolean => s.length <= 300 && IMAGE_REF.test(s);
 
 /** The command on one line, as the Copy buttons put it on the clipboard. */
 export const oneLine = (command: string): string => command.replace(/ \\\n\s*/g, " ");

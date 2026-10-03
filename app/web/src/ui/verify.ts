@@ -7,7 +7,7 @@
 
 import type { BuildInfo, Provenance } from "../lib/contract";
 import { h, replace, timeEl, when } from "../lib/dom";
-import { ciRunUrl, commitUrl, cosignVerifyCommand, digestOf, oneLine, rekorSearchUrl, shortDigest } from "../lib/provenance";
+import { ciRunUrl, commitUrl, cosignVerifyCommand, digestOf, isPinnedImageRef, oneLine, rekorSearchUrl, shortDigest } from "../lib/provenance";
 import { copyButton, extLink } from "./common";
 
 /** The public origin the raw-data commands name: the commands are for the visitor's own terminal. */
@@ -69,7 +69,7 @@ export function renderStrip(d: VerifyData): HTMLElement {
         " ",
         r.commit ? commitLink(r.commit) : null,
         digest ? [" ", h("code", { class: "vstrip__digest", title: digest }, shortDigest(digest))] : null,
-        image ? [" ", copyButton(() => oneLine(cosignVerifyCommand(image)), "Copy cosign")] : null,
+        image && isPinnedImageRef(image) ? [" ", copyButton(() => oneLine(cosignVerifyCommand(image)), "Copy cosign")] : null,
         rekor ? [" ", extLink(rekor, "Rekor")] : null,
         r.images.length > 1 ? h("span", { class: "vstrip__more" }, ` +${r.images.length - 1} during a rollout`) : null,
       );
@@ -116,7 +116,7 @@ export function renderVerifyPanel(d: VerifyData, now: number = Date.now()): HTML
               "div",
               { class: "vimage__digest" },
               h("p", { class: "small" }, h("code", {}, image)),
-              h("div", { class: "cmd" }, h("pre", { class: "term" }, h("code", {}, cosignVerifyCommand(image))), copyButton(() => oneLine(cosignVerifyCommand(image)))),
+              isPinnedImageRef(image) ? h("div", { class: "cmd" }, h("pre", { class: "term" }, h("code", {}, cosignVerifyCommand(image))), copyButton(() => oneLine(cosignVerifyCommand(image)))) : null,
               rekor ? h("p", { class: "small" }, extLink(rekor, "Rekor transparency log entries for this digest")) : null,
             );
           })

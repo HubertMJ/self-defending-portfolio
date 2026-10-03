@@ -9,7 +9,7 @@
 import { type CatalogueCommand, FALCO_FIELDS, type FalcoEvent, type Posture, type ScenarioDetails, type StreamEvent, type TalonEvent, type Tick, isRunId } from "../lib/contract";
 import { h, relativeTime, replace, timeEl, utc, utcClock, when } from "../lib/dom";
 import { humanAction } from "../lib/pipeline";
-import { cosignVerifyCommand, digestOf, oneLine, shortDigest } from "../lib/provenance";
+import { cosignVerifyCommand, digestOf, isPinnedImageRef, oneLine, shortDigest } from "../lib/provenance";
 import type { ConnectionState } from "../lib/sse";
 import { type RunView, type TimelineView, formatDuration, ts } from "../lib/timeline";
 import { copyButton, extLink, sourceUrl } from "./common";
@@ -222,7 +222,7 @@ export function renderEvidenceDetail(run: RunView, ctx: EvidenceContext): HTMLEl
     ),
     run.scenario === "terminal" && run.commands.length ? h("section", { class: "card" }, h("h4", {}, "Commands"), h("ol", { class: "evlist" }, commandItems(run, ctx, run.commands.length))) : null,
     latencies(run) ? h("p", { class: "small" }, latencies(run)) : null,
-    image && digestOf(image)
+    isPinnedImageRef(image)
       ? h(
           "div",
           {},
