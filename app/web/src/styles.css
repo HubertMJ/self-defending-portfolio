@@ -1315,6 +1315,10 @@ main {
   color: var(--respond);
 }
 
+.tag--arm {
+  color: var(--text-muted);
+}
+
 /* ---------- technical mode ---------- */
 
 /* Everything marked .tech-only exists in the DOM but is shown only in Technical Mode (ui/tech.ts). */

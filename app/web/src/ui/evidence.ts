@@ -48,6 +48,25 @@ function answers(run: RunView): Answer[] {
 }
 
 
+/**
+ * Which pod of a side-by-side run an event is about, from its namespace (ADR 0031): a Map, so a
+ * namespace such as "constructor" finds nothing. Any other namespace gets no label.
+ */
+const ARM_OF_NAMESPACE: ReadonlyMap<string, string> = new Map([
+  ["sandbox", "guarded"],
+  ["sandbox-unguarded", "twin, unguarded"],
+]);
+const armTag = (namespace: string) => {
+  const arm = ARM_OF_NAMESPACE.get(namespace);
+  return arm ? [h("span", { class: "tag tag--arm", "data-arm": namespace === "sandbox" ? "guarded" : "unguarded" }, arm), " "] : null;
+};
+
+/** The card's header follows the run's state, as the chip does: contained and over are not "in progress". */
+function eyebrow(run: RunView): string {
+  if (run.current === "responded") return "Attack contained";
+  return run.active ? "Attack in progress" : "Latest attack, as recorded";
+}
+
 const fact = (k: string, v: Node | string | null | undefined) => (v ? h("div", {}, h("dt", {}, k), h("dd", {}, v)) : null);
 const code = (s: string | undefined, title?: string) => (s ? h("code", title ? { title } : {}, s) : null);
 
@@ -60,6 +79,7 @@ function answerItem(a: Answer, now: number): HTMLElement {
       { class: "evlist__item", "data-type": "falco" },
       h("span", { class: "tag tag--detect" }, "falco"),
       " ",
+      armTag(f.namespace),
       h("strong", {}, f.rule),
       ` (${f.priority}) at `,
       timeEl(f.at, utcClock(f.at, now, { ms: true })),
@@ -73,6 +93,7 @@ function answerItem(a: Answer, now: number): HTMLElement {
     { class: "evlist__item", "data-type": "talon" },
     h("span", { class: "tag tag--respond" }, "talon"),
     " ",
+    armTag(t.namespace),
     h("strong", {}, humanAction(t.action, t.actionner)),
     " ",
     code(t.actionner ?? t.action),
@@ -124,7 +145,7 @@ export function renderEvidenceCard(run: RunView, ctx: EvidenceContext): HTMLElem
   return h(
     "article",
     { class: "evcard", "data-run": run.runId, "aria-labelledby": "evcard-title" },
-    h("p", { class: "evcard__eyebrow" }, run.active ? "Attack in progress" : "Latest attack, as recorded"),
+    h("p", { class: "evcard__eyebrow" }, eyebrow(run)),
     h(
       "header",
       { class: "evcard__head" },

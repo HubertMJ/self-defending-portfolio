@@ -61,7 +61,8 @@ answers a terminal command, so `sh -i` runs into its 10 s bound) and `&mock-deta
 one full run with every event type over a real event stream; `--live-api` answers like the API
 deployed today (a JSON 404 for the terminal and `/api/stats`, `?compare=1` ignored); `--terminal-api` replays another
 visitor's terminal session joined mid-way, exactly as the interactive API publishes it (with
-`--slow-details`, its catalogue answers 1.5 s late).
+`--slow-details`, its catalogue answers 1.5 s late; with `--twin`, a side-by-side run instead, contained
+while the twin is still held).
 
 The terminal, the unguarded twin (a one-click card's main button, "Launch side by side", whenever the
 API knows `?compare=1`; "Guarded pod only" beside it runs the one defended pod) and
@@ -74,7 +75,7 @@ interactive front end runs without a cluster.
 npm run lint        # tsc --noEmit + no HTML/code DOM sinks in src/
 npm test            # unit tests
 npm run test:e2e    # both builds + Playwright (Chromium) against scripts/serve.mjs: the ?mock suite on
-                    # dist-mock/ (port 4173), the stub-API suites on the production dist/ (4174-4178)
+                    # dist-mock/ (port 4173), the stub-API suites on the production dist/ (4174-4179)
 npm run todo-content  # placeholder copy still to be written (add --strict to fail on it)
 npm run catalogue -- <path to cluster/infra/sandbox/scenarios/scenarios.yaml>   # regenerate the mock catalogue
 SDP_SCENARIOS_YAML=<that path> npm test                                         # ...and fail if it drifted

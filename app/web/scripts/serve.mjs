@@ -38,6 +38,12 @@
 // of the heartbeat comment. `--terminal-api --no-cred` is the interactive API before ADR 0035: the
 // /api/stats of today's shape (no `last_run_at`, no `last_24h`), none of the rest, no tick (a new
 // page on the API deployed today).
+//
+// `--terminal-api --twin` replays, instead of the terminal session, a one-click run started side by
+// side (ADR 0031): the guarded pod in `sandbox`, answered by Talon, and its twin in
+// `sandbox-unguarded`, detected by Falco with nothing answering. The run is contained and still going
+// (the API publishes `finished` only once the twin's hold is over), the case the evidence card, the
+// history and the console must name the pod in and label each event of.
 
 import { createServer } from "node:http";
 import { readFile, stat } from "node:fs/promises";
@@ -54,6 +60,7 @@ const port = Number(portArg > 0 ? process.argv[portArg + 1] : process.env.PORT ?
 const liveApi = process.argv.includes("--live-api");
 const terminalApi = process.argv.includes("--terminal-api");
 const slowDetails = process.argv.includes("--slow-details");
+const twin = terminalApi && process.argv.includes("--twin");
 const cred = terminalApi && !process.argv.includes("--no-cred");
 // This stub API "started" when the server did; the provenance and the ticks say so.
 const startedAt = new Date().toISOString();
@@ -86,6 +93,49 @@ function replayedRun() {
     podEv(2051, "Deleted", { container_id: cid, deleted: true, labels_delta: {} }),
     ["victim", { run_id, pod, at: at(3850), status: "gone", title: "", banner: "", probe_ms: 0, checksum: "" }],
     ["run", { run_id, scenario, state: "finished", at: at(4100), detail: "", pod }],
+  ];
+}
+
+/**
+ * --twin: a side-by-side "network-tool" run, 6 s before `now` to now, as [event, data] in publish
+ * order. Every run event names both pods, every per-pod event says its arm (app/api runner/compare.go).
+ */
+function twinRun(now) {
+  const t0 = now - 6000;
+  const at = (ms) => new Date(t0 + ms).toISOString();
+  const run_id = "7e57aaaaaaaaaaaa";
+  const scenario = "network-tool";
+  const guarded = `scenario-network-tool-${run_id.slice(0, 10)}`;
+  const unguarded = `${guarded}-u`;
+  const pods = { guarded, unguarded };
+  const image = "ghcr.io/hubertmj/self-defending-portfolio/scenario@sha256:abe9585fe91fec1881895ae79418f6b756a4ca094c9e5e7f0b3dd8a1a76cdea0";
+  const cid = "9b2e7c4d1a0f";
+  const run = (ms, state, detail = "") => ["run", { run_id, scenario, state, at: at(ms), detail, pods }];
+  const podEv = (ms, arm, phase, extra = {}) => ["pod", { run_id, pod: pods[arm], uid: `0f6b2d1c-6a8e-4c39-b1f2-6c0d2e9a7b1${arm === "guarded" ? 1 : 2}`, phase, reason: "", container_id: cid, image, labels_delta: {}, deleted: false, at: at(ms), arm, ...extra }];
+  const victim = (ms, arm, status, title, checksum) => ["victim", { run_id, pod: pods[arm], at: at(ms), status, title, banner: "", probe_ms: status === "unreachable" ? 300 : 4, checksum, arm }];
+  const falco = (ms, arm) => {
+    const ns = arm === "guarded" ? "sandbox" : "sandbox-unguarded";
+    return ["falco", { at: at(ms), rule: "SDP network tool in sandbox", priority: "Warning", namespace: ns, pod: pods[arm], output: `Warning SDP network tool in sandbox | process=wget k8s_ns=${ns} k8s_pod_name=${pods[arm]}`, fields: { "proc.name": "wget", "k8s.pod.name": pods[arm], "k8s.ns.name": ns }, api_received_at: at(ms + 25), arm }];
+  };
+  return [
+    run(0, "queued"),
+    run(60, "started", "pod created"),
+    podEv(90, "guarded", "Pending", { container_id: "" }),
+    podEv(95, "unguarded", "Pending", { container_id: "" }),
+    podEv(1750, "guarded", "Running"),
+    podEv(1760, "unguarded", "Running"),
+    run(1790, "pod_ready", cid),
+    victim(1850, "guarded", "up", "SDP Shop", "5e0c1a77d3b2f190"),
+    victim(1860, "unguarded", "up", "SDP Shop", "5e0c1a77d3b2f190"),
+    victim(1990, "guarded", "compromised", "SDP Shop", "c0ffee00c0ffee00"),
+    victim(2000, "unguarded", "compromised", "SDP Shop", "c0ffee00c0ffee00"),
+    falco(2100, "guarded"),
+    run(2130, "detected", "SDP network tool in sandbox"),
+    falco(2120, "unguarded"),
+    podEv(2240, "guarded", "Running", { labels_delta: { "sdp.hubertjablon.ski/quarantine": "true" } }),
+    ["talon", { at: at(2245), action: "Quarantine Pod", actionner: "kubernetes:label", namespace: "sandbox", pod: guarded, status: "success", output: `the pod '${guarded}' in the namespace 'sandbox' has been labeled`, api_received_at: at(2260), arm: "guarded" }],
+    run(2270, "responded", "quarantine"),
+    victim(2700, "guarded", "unreachable", "", ""),
   ];
 }
 
@@ -149,9 +199,9 @@ function eventStream(req, res, tick) {
   res.writeHead(200, { ...base, "Content-Type": "text/event-stream", "Cache-Control": "no-store, no-transform", "X-Accel-Buffering": "no" });
   res.write("retry: 5000\n\n:" + " ".repeat(2048) + "\n\n");
   const frame = (id, event, data) => res.write(`id: ${id}\nevent: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
-  replayedRun().forEach(([event, data], i) => frame(i + 1, event, data));
+  (twin ? twinRun(Date.now()) : replayedRun()).forEach(([event, data], i) => frame(i + 1, event, data));
   const timers = [];
-  if (terminalApi) {
+  if (terminalApi && !twin) {
     const run_id = `7e57${String(++nextSession).padStart(12, "0")}`;
     const events = terminalSession(Date.now(), run_id).map(([ms, event, data]) => ({ ms, id: ++nextEventId, event, data }));
     sessions.set(run_id, { connected: Date.now(), events });

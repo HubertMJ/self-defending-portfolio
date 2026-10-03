@@ -3,7 +3,7 @@ import { chromium, defineConfig, devices } from "@playwright/test";
 
 // Smoke tests against the built site. By default they start scripts/serve.mjs (same headers as the
 // image's nginx): port 4173 serves dist-mock/ (`npm run build:mock`, the `?mock` suite), the stub-API
-// ports 4174-4178 serve dist/, the production bundle without the mock (ADR 0035). Set BASE_URL to run them against something else instead, e.g. the
+// ports 4174-4179 serve dist/, the production bundle without the mock (ADR 0035). Set BASE_URL to run them against something else instead, e.g. the
 // real image: `docker run --rm --read-only --tmpfs /tmp -p 8080:8080 <image>` and
 // BASE_URL=http://127.0.0.1:8080.
 //
@@ -73,6 +73,12 @@ export default defineConfig({
     {
       command: "node scripts/serve.mjs --port 4177 --dir dist --terminal-api --slow-details",
       url: "http://127.0.0.1:4177/",
+      reuseExistingServer: !process.env.CI,
+    },
+    // …and with a side-by-side run instead of the terminal session, contained, the twin still held.
+    {
+      command: "node scripts/serve.mjs --port 4179 --dir dist --terminal-api --twin",
+      url: "http://127.0.0.1:4179/",
       reuseExistingServer: !process.env.CI,
     },
     // The interactive API before ADR 0035: no provenance, no runs list, no stats window, no tick.
