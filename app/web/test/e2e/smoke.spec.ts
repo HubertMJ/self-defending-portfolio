@@ -774,6 +774,14 @@ test.describe("credibility on the production bundle (ADR 0035; serve.mjs --termi
     expect(problems).toEqual([]);
   });
 
+  test("?mock=1 on the production bundle is an ordinary query: no banner, no mock, the real header", async ({ page }) => {
+    await page.goto(`${CRED}?mock=1`);
+    await expect(page.locator("#header-conn")).toContainText("cluster");
+    await expect(page.locator("#mock-banner")).toHaveCount(0);
+    expect(await page.evaluate(() => (window as unknown as { sdpMock?: unknown }).sdpMock === undefined)).toBe(true);
+    expect(await page.evaluate(() => document.documentElement.dataset.mock)).toBeUndefined();
+  });
+
   for (const [label, base] of [["the interactive API before ADR 0035 (--terminal-api --no-cred)", "http://127.0.0.1:4178/"], ["the API deployed before the terminal (--live-api)", "http://127.0.0.1:4175/"]]) {
     test(`degrades on ${label}: provenance unavailable, liveness without server time, posture as before`, async ({ page }) => {
       const problems = guardConsole(page);
