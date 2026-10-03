@@ -419,6 +419,13 @@ main {
   font-size: 0.82rem;
 }
 
+/* On a phone the sticky banner keeps to one line: what it is and the way out. */
+@media (max-width: 640px) {
+  .site-header .mock-banner__more {
+    display: none;
+  }
+}
+
 .mock-banner {
   margin: 0;
   padding: 0.6rem var(--gutter);
@@ -2717,7 +2724,8 @@ html:not([data-tech="on"]) .tech-only {
 }
 
 .herostats__value {
-  font: 700 1.5rem/1 var(--font-sans);
+  font: 700 clamp(1.15rem, 4.6vw, 1.5rem)/1 var(--font-sans);
+  white-space: nowrap;
   letter-spacing: -0.02em;
   font-variant-numeric: tabular-nums;
 }
@@ -2851,6 +2859,7 @@ html[data-terminal="off"] .needs-terminal {
 
 .term__grid {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 1.25rem;
 }
 
@@ -2863,6 +2872,8 @@ html[data-terminal="off"] .needs-terminal {
 
 .term__pane {
   display: grid;
+  /* One column no wider than the pane: an unbreakable command (the token path) must not widen it. */
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: auto minmax(0, 1fr) auto auto;
   min-width: 0;
   border: 1px solid var(--border-strong);
@@ -3049,6 +3060,9 @@ html[data-terminal="off"] .needs-terminal {
   background: #161a21;
   color: #d7dae1;
   font: 500 0.78rem/1.3 var(--font-mono);
+  text-align: left;
+  max-width: 100%;
+  overflow-wrap: anywhere;
   cursor: pointer;
 }
 
@@ -3068,6 +3082,7 @@ html[data-terminal="off"] .needs-terminal {
 
 .term__side {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 1rem;
   min-width: 0;
 }
@@ -3129,11 +3144,27 @@ html[data-terminal="off"] .needs-terminal {
   color: var(--text-muted);
 }
 
+/* Two columns on a phone (an odd last tile takes the whole row rather than half of one), as many as
+   fit on a wide screen. */
 .term__sumstats {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 10rem), 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 0.75rem;
   margin: 1rem 0 1.5rem;
+}
+
+.term__sumstats > div:last-child:nth-child(odd) {
+  grid-column: 1 / -1;
+}
+
+@media (min-width: 900px) {
+  .term__sumstats {
+    grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+  }
+
+  .term__sumstats > div:last-child:nth-child(odd) {
+    grid-column: auto;
+  }
 }
 
 .term__sumstats div {
@@ -3209,6 +3240,7 @@ html[data-terminal="off"] .needs-terminal {
 
 .deflayer__head {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 0.5rem;
   margin-bottom: 0.4rem;
@@ -3365,6 +3397,10 @@ html[data-terminal="off"] .needs-terminal {
   font: 600 0.8rem/1.4 var(--font-mono);
   font-variant-numeric: tabular-nums;
   color: var(--critical);
+}
+
+.twin__dur {
+  white-space: nowrap;
 }
 
 .twin__foot {

@@ -188,7 +188,7 @@ export function mountConsole(root: HTMLElement, api: ApiClient): ConsoleHandle {
         const r = current();
         const el = panels?.victim.querySelector(".twin__held");
         const ms = r && heldMs(r, Date.now());
-        if (el && ms !== undefined) el.textContent = heldText(ms);
+        if (el && ms !== undefined) replace(el, ...heldText(ms));
       }, 1000);
     } else if (!live && twinClock !== undefined) {
       clearInterval(twinClock);

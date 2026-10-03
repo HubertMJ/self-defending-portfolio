@@ -44,7 +44,7 @@ function arm(title: string, sub: string, window: HTMLElement, sawFalco: boolean,
       { class: "twin__verdict", "data-answered": String(answered) },
       sawFalco ? h("span", { class: "twin__chip twin__chip--detect" }, "Falco saw it") : h("span", { class: "twin__chip" }, "watching…"),
       answered ? h("span", { class: "twin__chip twin__chip--respond" }, "Talon answered") : h("span", { class: "twin__chip twin__chip--none" }, "nothing answered"),
-      heldMs !== undefined ? h("span", { class: "twin__held" }, heldText(heldMs)) : null,
+      heldMs !== undefined ? h("span", { class: "twin__held" }, ...heldText(heldMs)) : null,
     ),
   );
 }
@@ -64,7 +64,8 @@ export function heldMs(run: RunView, now: number): number | undefined {
   return Math.max(0, (end ?? now) - tsOf(firstHit.at));
 }
 
-export const heldText = (ms: number): string => `attacker has held this pod ${formatDuration(ms)}`;
+/** The counter's words; the duration is one unbreakable piece, so "2.7 s" never splits over two lines. */
+export const heldText = (ms: number): (string | HTMLElement)[] => ["attacker has held this pod ", h("span", { class: "twin__dur" }, formatDuration(ms))];
 
 function waiting(): HTMLElement {
   return h("div", { class: "browser" }, h("div", { class: "browser__view" }, h("div", { class: "browser__blank" }, h("span", { class: "browser__spinner", "aria-hidden": "true" }), "Starting the pod…")));

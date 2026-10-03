@@ -27,6 +27,14 @@ async function noHorizontalScroll(page: Page) {
   expect(scroll, "page must not scroll horizontally").toBeLessThanOrEqual(client);
 }
 
+/** Nothing inside `selector` reaches past the right edge (clipped by an overflow:hidden parent, say). */
+async function nothingPastEdge(page: Page, selector: string) {
+  const past = await page.locator(selector).evaluate((root) =>
+    [...root.querySelectorAll("*")].filter((e) => e.getBoundingClientRect().width > 0 && e.getBoundingClientRect().right > document.documentElement.clientWidth + 1).map((e) => e.className),
+  );
+  expect(past, `${selector} must fit the screen`).toEqual([]);
+}
+
 test.describe("security headers", () => {
   test("index and assets carry the CSP and the right cache policy; /api is not served", async ({ request }) => {
     const index = await request.get("/");
@@ -295,6 +303,7 @@ test.describe("attacker's terminal (mock, ADR 0033)", () => {
     await expect(term.locator(".term__summary")).toContainText("Killed after your Enter");
     await expect(term.locator(".term__summary a", { hasText: "Open an issue" })).toHaveAttribute("href", /\/issues$/);
     await noHorizontalScroll(page);
+    await nothingPastEdge(page, "#terminal");
     expect(problems).toEqual([]);
   });
 
