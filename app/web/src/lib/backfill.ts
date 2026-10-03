@@ -53,6 +53,14 @@ export class Backfill {
     this.interrupted = false;
   }
 
+  /**
+   * Loads one run into the timeline on purpose: the newest run of GET /api/runs when the stream's
+   * replay held none, so the evidence card has the latest real attack to show (ADR 0035).
+   */
+  load(runId: string): void {
+    this.request(runId, true);
+  }
+
   private request(runId: string, again = false): void {
     const s = this.state.get(runId) ?? { busy: false, done: false, next: 0, delay: 0 };
     this.state.set(runId, s);

@@ -74,6 +74,45 @@ export function clockTime(ms: number): string {
   return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}.${pad(d.getMilliseconds(), 3)}`;
 }
 
+// Absolute times are UTC and say so (ADR 0035): a visitor in any zone reads the same instant as the
+// cluster's records and the raw JSON, and a relative "6 hours ago" only ever stands next to one.
+
+const toMs = (t: string | number): number => (typeof t === "number" ? t : Date.parse(t));
+const pad2 = (n: number, w = 2) => String(n).padStart(w, "0");
+const ymd = (d: Date) => `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}-${pad2(d.getUTCDate())}`;
+const hms = (d: Date, ms: boolean) =>
+  `${pad2(d.getUTCHours())}:${pad2(d.getUTCMinutes())}:${pad2(d.getUTCSeconds())}${ms ? `.${pad2(d.getUTCMilliseconds(), 3)}` : ""}`;
+
+/** "2026-10-03 18:01:57 UTC" ("…18:01:57.123 UTC" with ms); an unparseable string comes back as is. */
+export function utc(t: string | number, opts: { ms?: boolean } = {}): string {
+  const n = toMs(t);
+  if (Number.isNaN(n)) return typeof t === "string" ? t : "–";
+  const d = new Date(n);
+  return `${ymd(d)} ${hms(d, opts.ms ?? false)} UTC`;
+}
+
+/** "18:01:57 UTC" on the same UTC day as `now`, else with the date in front as utc() writes it. */
+export function utcClock(t: string | number, now: number = Date.now(), opts: { ms?: boolean } = {}): string {
+  const n = toMs(t);
+  if (Number.isNaN(n)) return typeof t === "string" ? t : "–";
+  const d = new Date(n);
+  return ymd(d) === ymd(new Date(now)) ? `${hms(d, opts.ms ?? false)} UTC` : utc(n, opts);
+}
+
+/** "18:01:57 UTC (6 hours ago)": the absolute time, then how long ago; "never" for none. */
+export function when(t: string | number | null | undefined, now: number = Date.now()): string {
+  if (t === null || t === undefined || t === "") return "never";
+  const n = toMs(t);
+  if (Number.isNaN(n)) return String(t);
+  return `${utcClock(n, now)} (${relativeTime(new Date(n).toISOString(), now)})`;
+}
+
+/** A <time> element whose datetime is the exact instant and whose text is `text` (utc() by default). */
+export function timeEl(t: string | number, text?: string, attrs: Attrs = {}): HTMLTimeElement {
+  const n = toMs(t);
+  return h("time", { ...attrs, datetime: Number.isNaN(n) ? null : new Date(n).toISOString() }, text ?? utc(t));
+}
+
 export function prefersReducedMotion(): boolean {
   return typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
 }

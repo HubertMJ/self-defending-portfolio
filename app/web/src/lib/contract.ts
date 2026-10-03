@@ -331,6 +331,19 @@ export interface Stats {
   commands: Record<string, { attempts: number; allowed: number; prevented: number; detected: number }>;
   objectives: Record<string, { attempts: number; achieved: number }>;
   terminal: { runs: number; best_objectives: number; median_survival_s: number };
+  /** Extension (ADR 0035): when the newest run was queued, persisted across restarts; absent from older APIs. */
+  last_run_at?: string;
+  /** Extension (ADR 0035): the persisted hourly window, 23-24 h, always shown with its `since`. */
+  last_24h?: Last24h;
+}
+
+export interface Last24h {
+  since: string;
+  runs: number;
+  detected: number;
+  responded: number;
+  falco_alerts: number;
+  talon_actions: number;
 }
 
 export interface KyvernoPolicy {
@@ -372,13 +385,77 @@ export interface PostureTrivy {
   by_image?: ImageVulns[];
 }
 
+/**
+ * Extension (ADR 0035): the failing Kyverno results grouped by what they are about, never naming the
+ * resource. `running`: true = a Pending/Running pod is the resource or is owned by it, false = such a
+ * kind with no such pod (old ReplicaSet revisions scaled to 0), null = unknown.
+ */
+export interface KyvernoViolation {
+  policy: string;
+  rule: string;
+  kind: string;
+  namespace: string;
+  count: number;
+  running: boolean | null;
+  /** The policy's file in the repository, "" when the API does not know it. */
+  file: string;
+}
+
+/** Extension (ADR 0035): one failing kube-bench check, as kube-bench names it (scrubbed, capped by the API). */
+export interface BenchCheck {
+  id: string;
+  title: string;
+  remediation: string;
+}
+
 export interface Posture {
   generated_at: string;
-  kyverno: { policies: KyvernoPolicy[] };
-  trivy: PostureTrivy;
-  kube_bench: { last_run: string | null; pass: number; fail: number; warn: number; info: number };
-  falco: { alerts_24h: number };
+  kyverno: {
+    policies: KyvernoPolicy[];
+    /** Extension (ADR 0035). */
+    violations?: KyvernoViolation[];
+    violations_truncated?: boolean;
+    /** Set by the parser when a malformed group was dropped: the list no longer describes every failure. */
+    violations_incomplete?: boolean;
+  };
+  trivy: PostureTrivy & { last_scan?: string };
+  kube_bench: { last_run: string | null; pass: number; fail: number; warn: number; info: number; failing?: BenchCheck[] };
+  falco: { alerts_24h: number; counted_since?: string };
   talon: { actions_24h: number };
+}
+
+/** GET /api/provenance (ADR 0035): what is running and what it was built from. */
+export interface Provenance {
+  generated_at?: string;
+  api: { commit: string; ci_run_id: string; started_at?: string; images: string[] };
+  web: { images: string[] };
+  /** The last successful pod list; the images are as of then. */
+  images_observed_at?: string;
+}
+
+/** GET /build.json, written into the web image at build time (ADR 0035). */
+export interface BuildInfo {
+  commit: string;
+  ci_run_id: string;
+}
+
+/** One run of GET /api/runs (ADR 0035), newest first; no pod, no commands, no output. */
+export interface RunSummary {
+  run_id: string;
+  scenario: string;
+  state: RunState;
+  started_at: string;
+  ended_at?: string;
+  detected: boolean;
+  responded: boolean;
+  events: number;
+  truncated: boolean;
+}
+
+/** The opt-in SSE heartbeat (`?tick=1`): the server's clock and the API's start, never a run event. */
+export interface Tick {
+  at: string;
+  started_at?: string;
 }
 
 type Obj = Record<string, unknown>;
@@ -797,7 +874,17 @@ export function parseStats(v: unknown): Stats {
     commands,
     objectives,
     terminal: { runs: count(term.runs), best_objectives: count(term.best_objectives), median_survival_s: count(term.median_survival_s) },
+    ...definedOnly({ last_run_at: isTime(v.last_run_at) ? v.last_run_at : undefined, last_24h: parseLast24h(v.last_24h) }),
   };
+}
+
+/** A timestamp the page will render: a string Date.parse understands, of a sane length. */
+export const isTime = (v: unknown): v is string => isStr(v) && v.length <= 40 && !Number.isNaN(Date.parse(v));
+
+/** All or nothing: a window without its `since`, or with a bad count, is not shown at all. */
+function parseLast24h(v: unknown): Last24h | undefined {
+  if (!hasCounts(v, ["runs", "detected", "responded", "falco_alerts", "talon_actions"]) || !isTime(v.since)) return undefined;
+  return { since: v.since, runs: v.runs as number, detected: v.detected as number, responded: v.responded as number, falco_alerts: v.falco_alerts as number, talon_actions: v.talon_actions as number };
 }
 
 /** GET /api/runs/{id}: either a bare array of {type, data} or {events: [...]}; invalid entries dropped. */
@@ -848,7 +935,7 @@ function isImageVulns(v: unknown): v is ImageVulns {
 export function parsePosture(v: unknown): Posture {
   if (!isPosture(v)) throw new TypeError("posture: response does not match the contract");
   const t = v.trivy as PostureTrivy & Obj;
-  const trivy: PostureTrivy = { images: t.images, critical: t.critical, high: t.high, medium: t.medium, low: t.low };
+  const trivy: Posture["trivy"] = { images: t.images, critical: t.critical, high: t.high, medium: t.medium, low: t.low };
   if (isGroup(t.own) && isGroup(t.third_party)) {
     trivy.own = { images: t.own.images, critical: t.own.critical, high: t.own.high, fixable: t.own.fixable };
     trivy.third_party = { images: t.third_party.images, critical: t.third_party.critical, high: t.third_party.high, fixable: t.third_party.fixable };
@@ -859,5 +946,112 @@ export function parsePosture(v: unknown): Posture {
       .slice(0, MAX_IMAGE_ROWS)
       .map((r) => ({ image: cap(r.image, 200), own: r.own, critical: r.critical, high: r.high, fixable: r.fixable }));
   }
-  return { ...v, trivy };
+  if (isTime(t.last_scan)) trivy.last_scan = t.last_scan;
+  const k = v.kyverno as Posture["kyverno"] & Obj;
+  const kyverno: Posture["kyverno"] = { policies: k.policies };
+  if (Array.isArray(k.violations)) {
+    const rows = k.violations.slice(0, MAX_VIOLATIONS).map(parseViolation);
+    kyverno.violations = rows.filter((r): r is KyvernoViolation => r !== null);
+    kyverno.violations_truncated = k.violations_truncated === true || k.violations.length > MAX_VIOLATIONS;
+    if (kyverno.violations.length < rows.length) kyverno.violations_incomplete = true;
+  }
+  const kb = v.kube_bench as Posture["kube_bench"] & Obj;
+  const kube_bench: Posture["kube_bench"] = { last_run: kb.last_run, pass: kb.pass, fail: kb.fail, warn: kb.warn, info: kb.info };
+  if (Array.isArray(kb.failing)) kube_bench.failing = kb.failing.slice(0, MAX_BENCH_CHECKS).map(parseBenchCheck).filter((c): c is BenchCheck => c !== null);
+  const f = v.falco as Posture["falco"] & Obj;
+  const falco: Posture["falco"] = { alerts_24h: f.alerts_24h };
+  if (isTime(f.counted_since)) falco.counted_since = f.counted_since;
+  return { generated_at: v.generated_at, kyverno, trivy, kube_bench, falco, talon: { actions_24h: v.talon.actions_24h } };
+}
+
+/** The API sends at most 50 of each; the page keeps no more whatever it is sent. */
+const MAX_VIOLATIONS = 50;
+const MAX_BENCH_CHECKS = 50;
+
+function parseViolation(v: unknown): KyvernoViolation | null {
+  if (!isObj(v) || !hasStrings(v, ["policy", "rule", "kind", "namespace"]) || !isCount(v.count)) return null;
+  return {
+    policy: cap(v.policy, 120),
+    rule: cap(v.rule, 120),
+    kind: cap(v.kind, 63),
+    namespace: cap(v.namespace, 63),
+    count: v.count,
+    // Anything but a boolean is "unknown", which never earns the amber "nothing running" tone.
+    running: typeof v.running === "boolean" ? v.running : null,
+    file: isRepoPath(v.file) ? v.file : "",
+  };
+}
+
+const BENCH_ID = /^[0-9]+(\.[0-9]+){1,3}$/;
+
+function parseBenchCheck(v: unknown): BenchCheck | null {
+  if (!isObj(v) || !isStr(v.id) || !BENCH_ID.test(v.id) || !isStr(v.title)) return null;
+  return { id: v.id, title: cap(v.title, 200), remediation: cap(v.remediation, 300) };
+}
+
+const OWN_IMAGE = (repo: "api" | "web") => new RegExp(`^ghcr\\.io/hubertmj/self-defending-portfolio/${repo}@sha256:[0-9a-f]{64}$`);
+const isRunNumber = (v: unknown): v is string => isStr(v) && /^[0-9]{1,20}$/.test(v);
+
+/** Only this repository's own api/web images pinned by digest; anything else is dropped. */
+function ownImages(v: unknown, repo: "api" | "web"): string[] {
+  if (!Array.isArray(v)) return [];
+  const re = OWN_IMAGE(repo);
+  return [...new Set(v.filter((x): x is string => isStr(x) && re.test(x)))].slice(0, 10);
+}
+
+/** GET /api/provenance. Lenient: a bad commit or run id becomes "", a bad image is dropped. */
+export function parseProvenance(v: unknown): Provenance {
+  if (!isObj(v)) throw new TypeError("provenance: expected an object");
+  const api = isObj(v.api) ? v.api : {};
+  const web = isObj(v.web) ? v.web : {};
+  return definedOnly({
+    generated_at: isTime(v.generated_at) ? v.generated_at : undefined,
+    api: definedOnly({
+      commit: isCommit(api.commit) ? api.commit : "",
+      ci_run_id: isRunNumber(api.ci_run_id) ? api.ci_run_id : "",
+      started_at: isTime(api.started_at) ? api.started_at : undefined,
+      images: ownImages(api.images, "api"),
+    }),
+    web: { images: ownImages(web.images, "web") },
+    images_observed_at: isTime(v.images_observed_at) ? v.images_observed_at : undefined,
+  });
+}
+
+/** GET /build.json: a full 40-hex commit and a numeric run id, else "". */
+export function parseBuildInfo(v: unknown): BuildInfo {
+  if (!isObj(v)) throw new TypeError("build.json: expected an object");
+  return { commit: isStr(v.commit) && /^[0-9a-f]{40}$/.test(v.commit) ? v.commit : "", ci_run_id: isRunNumber(v.ci_run_id) ? v.ci_run_id : "" };
+}
+
+/** GET /api/runs: malformed entries dropped, at most 50 kept. */
+export function parseRunList(v: unknown): RunSummary[] {
+  if (!isObj(v) || !Array.isArray(v.runs)) throw new TypeError("runs: expected {runs: [...]}");
+  const out: RunSummary[] = [];
+  for (const r of v.runs.slice(0, 50)) {
+    if (!isObj(r) || !isRunId(r.run_id) || !isStr(r.scenario) || !(RUN_STATES as readonly unknown[]).includes(r.state) || !isTime(r.started_at)) continue;
+    out.push({
+      run_id: r.run_id,
+      scenario: cap(r.scenario, 40),
+      state: r.state as RunState,
+      started_at: r.started_at,
+      ...definedOnly({ ended_at: isTime(r.ended_at) ? r.ended_at : undefined }),
+      detected: r.detected === true,
+      responded: r.responded === true,
+      events: isCount(r.events) ? r.events : 0,
+      truncated: r.truncated === true,
+    });
+  }
+  return out;
+}
+
+/** One `event: tick` frame; null if it is not one. It is a clock reading, never part of the run log. */
+export function parseTick(raw: string): Tick | null {
+  let v: unknown;
+  try {
+    v = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (!isObj(v) || !isTime(v.at)) return null;
+  return definedOnly({ at: v.at, started_at: isTime(v.started_at) ? v.started_at : undefined });
 }

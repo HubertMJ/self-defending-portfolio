@@ -21,14 +21,10 @@ import type { Scenario, ScenarioDetails } from "../lib/contract";
 import { type Child, clockTime, h, prefersReducedMotion, replace } from "../lib/dom";
 import { type Hop, type Schedule, TIMER_END, TIMER_START, humanAction, runHops, scheduleHops, timerReading } from "../lib/pipeline";
 import { type RunView, type TimelineView, QUARANTINE_LABEL, formatDuration, guardedFalco, guardedTalon, ts } from "../lib/timeline";
+import { cosignVerifyCommand, oneLine } from "../lib/provenance";
 import { copyButton, extLink, sourceUrl } from "./common";
 import { heldMs, heldText, renderTwin } from "./twin";
 import { labelOf, renderVictim, victimState } from "./victim";
-
-/** The workflow identity that signs the scenario image (ADR 0011, build-images.yml). */
-export const COSIGN_IDENTITY =
-  "https://github.com/HubertMJ/self-defending-portfolio/.github/workflows/build-images.yml@refs/heads/main";
-export const COSIGN_ISSUER = "https://token.actions.githubusercontent.com";
 
 export interface ConsoleHandle {
   update(view: TimelineView): void;
@@ -160,9 +156,6 @@ function term(argv: readonly string[]): HTMLElement {
   );
 }
 
-export function cosignCommand(image: string): string {
-  return [`cosign verify ${image}`, `  --certificate-identity ${COSIGN_IDENTITY}`, `  --certificate-oidc-issuer ${COSIGN_ISSUER}`].join(" \\\n");
-}
 
 /** onDetails: a scenario's details as they load (their timeout bounds how long its runs may last). */
 export function mountConsole(root: HTMLElement, api: ApiClient, onDetails?: (scenario: string, details: ScenarioDetails) => void): ConsoleHandle {
@@ -644,7 +637,7 @@ export function mountConsole(root: HTMLElement, api: ApiClient, onDetails?: (sce
           image
             ? [
                 h("p", { class: "small" }, "The scenario image is signed in CI. Check the signature and who made it:"),
-                h("div", { class: "cmd" }, h("pre", { class: "term" }, h("code", {}, cosignCommand(image))), copyButton(() => cosignCommand(image).replace(/ \\\n\s*/g, " "))),
+                h("div", { class: "cmd" }, h("pre", { class: "term" }, h("code", {}, cosignVerifyCommand(image))), copyButton(() => oneLine(cosignVerifyCommand(image)))),
               ]
             : null,
         ),
