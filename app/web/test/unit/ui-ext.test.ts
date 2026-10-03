@@ -83,6 +83,21 @@ describe("timeline backfill dedup (review item 8)", () => {
   });
 });
 
+describe("the timeline's staleness bound follows the scenario's details (ADR 0033, 2026-10-03 limits)", () => {
+  it("a run 160 s old with no end event: running while its timeout is unknown, over once it is 90 s", async () => {
+    const { mountTimeline } = await import("../../src/ui/timeline");
+    let latest: import("../../src/lib/timeline").TimelineView | undefined;
+    const handle = mountTimeline(document.createElement("div"), document.createElement("div"), document.createElement("div"), (v) => (latest = v), () => {});
+    const at = new Date(Date.now() - 160_000).toISOString();
+    handle.push(parseStreamEvent("run", JSON.stringify({ run_id: "r", scenario: "network-tool", state: "started", at, detail: "" }), "1")!);
+    await new Promise((r) => setTimeout(r, 30));
+    expect(latest?.activeRun?.runId).toBe("r");
+    handle.setScenarioTimeout("network-tool", 90);
+    await new Promise((r) => setTimeout(r, 30));
+    expect(latest?.activeRun).toBeUndefined();
+  });
+});
+
 describe("parseScenarioDetails commands (review item 13)", () => {
   it("keeps the whole real catalogue and rejects duplicate or unusable spellings", async () => {
     const { parseScenarioDetails } = await import("../../src/lib/contract");

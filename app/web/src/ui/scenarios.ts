@@ -6,12 +6,12 @@
 import type { ApiClient, AttackResult } from "../lib/api";
 import type { Scenario } from "../lib/contract";
 import { h, replace } from "../lib/dom";
-import { STALE_RUN_MS } from "../lib/timeline";
+import { staleRunMs } from "../lib/timeline";
 import { attackUrl, offlinePanel } from "./common";
 
 export interface LauncherState {
-  /** A run reported active by the event stream. */
-  activeRun?: { runId: string; scenario: string; since: number };
+  /** A run reported active by the event stream, with how long it may last without an end event. */
+  activeRun?: { runId: string; scenario: string; since: number; staleMs?: number };
   /** Epoch ms until which the server asked us to wait (429 Retry-After). */
   cooldownUntil?: number;
   /** A POST in flight. */
@@ -37,8 +37,8 @@ export function formatCountdown(seconds: number): string {
 /** Why launching is blocked right now, or null if it is not. */
 export function blockedReason(state: LauncherState, now: number): string | null {
   if (state.pending) return "Starting…";
-  // A lock older than any run can last is a lost "finished" event, not a run (see STALE_RUN_MS).
-  if (state.activeRun && now - state.activeRun.since < STALE_RUN_MS) return "A run is in progress";
+  // A lock older than any run can last is a lost "finished" event, not a run (see staleRunMs).
+  if (state.activeRun && now - state.activeRun.since < (state.activeRun.staleMs ?? staleRunMs(state.activeRun.scenario))) return "A run is in progress";
   if (state.cooldownUntil && state.cooldownUntil > now) return "Rate limited";
   return null;
 }

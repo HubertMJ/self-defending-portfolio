@@ -89,11 +89,15 @@ function main(): void {
   const limits = mountLimits(byId("limits-panel"), api);
   setupTechMode(byId("tech-toggle"), (on) => limits.setEnabled(on));
 
-  const runConsole = mountConsole(byId("console"), api);
+  // Each scenario's timeout, as its details load, bounds how long the timeline believes a run without
+  // an end event (lib/timeline.ts staleRunMs).
+  const runConsole = mountConsole(byId("console"), api, (scenario, d) => {
+    if (d.timeout_seconds !== undefined) timeline.setScenarioTimeout(scenario, d.timeout_seconds);
+  });
 
   // What blocks a fresh run right now (another run active, or a cooldown) — shown on the terminal's
   // own start button. The server is the authority (409/429); this is only the up-front label.
-  let launcherState: { activeRun?: { runId: string; scenario: string; since: number }; cooldownUntil?: number } = {};
+  let launcherState: { activeRun?: { runId: string; scenario: string; since: number; staleMs?: number }; cooldownUntil?: number } = {};
   const terminal = mountTerminal(byId("terminal"), api, {
     blocked: () => blockedReason(launcherState, Date.now()),
     cooldownSeconds: () => Math.max(0, Math.ceil(((launcherState.cooldownUntil ?? 0) - Date.now()) / 1000)),
@@ -102,9 +106,10 @@ function main(): void {
     onRateLimited: (seconds) => {
       launcherState = { ...launcherState, cooldownUntil: Date.now() + seconds * 1000 };
     },
-    onAvailable: (available, objectives) => {
+    onAvailable: (available, objectives, timeoutSeconds) => {
       if (available) stats.setObjectives(objectives);
       else degradeToOneClick();
+      if (timeoutSeconds !== undefined) timeline.setScenarioTimeout("terminal", timeoutSeconds);
     },
   });
 
@@ -153,7 +158,7 @@ function main(): void {
       const r = view.activeRun;
       const wasActive = activeId;
       activeId = r?.runId;
-      const active = r ? { runId: r.runId, scenario: r.scenario, since: r.states.started ?? r.states.queued ?? Date.now() } : undefined;
+      const active = r ? { runId: r.runId, scenario: r.scenario, since: r.states.started ?? r.states.queued ?? Date.now(), staleMs: r.staleAfterMs } : undefined;
       launcherState = { ...launcherState, activeRun: active };
       launcher.setActiveRun(active);
       runConsole.update(view);

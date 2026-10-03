@@ -116,6 +116,11 @@ describe("launcher helpers", () => {
     expect(blockedReason({ pending: "x" }, now)).toMatch(/Starting/);
     expect(blockedReason({ activeRun: { runId: "r", scenario: "x", since: now - 1000 } }, now)).toMatch(/in progress/);
     expect(blockedReason({ activeRun: { runId: "r", scenario: "x", since: now - 10 * 60_000 } }, now)).toBeNull();
+    // The lock lasts as long as the run may (timeline.ts staleRunMs): a terminal session four
+    // minutes in still holds it, with or without the bound the timeline computed for it.
+    expect(blockedReason({ activeRun: { runId: "r", scenario: "terminal", since: now - 240_000 } }, now)).toMatch(/in progress/);
+    expect(blockedReason({ activeRun: { runId: "r", scenario: "terminal", since: now - 240_000, staleMs: 360_000 } }, now)).toMatch(/in progress/);
+    expect(blockedReason({ activeRun: { runId: "r", scenario: "x", since: now - 160_000, staleMs: 150_000 } }, now)).toBeNull();
     expect(blockedReason({ cooldownUntil: now + 5000 }, now)).toMatch(/Rate limited/);
     expect(blockedReason({ cooldownUntil: now - 1 }, now)).toBeNull();
   });

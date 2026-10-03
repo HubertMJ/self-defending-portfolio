@@ -29,6 +29,8 @@ export interface TimelineHandle {
   setTitles(titles: Map<string, string>): void;
   /** The run the live run panel shows, marked on its "Show" button (undefined: following live). */
   setShown(runId: string | undefined): void;
+  /** A scenario's `timeout_seconds` from its details: how long its runs may last (staleRunMs). */
+  setScenarioTimeout(scenario: string, seconds: number): void;
 }
 
 function stage(opts: {
@@ -182,6 +184,7 @@ export function mountTimeline(
   let lastAnnounced = "";
   let renderQueued = false;
   let shown: string | undefined;
+  const timeouts = new Map<string, number>();
   // The one countdown of the connection line. Replaced, never stacked: every setConnection clears it.
   let countdownTimer: ReturnType<typeof setInterval> | undefined;
 
@@ -189,7 +192,7 @@ export function mountTimeline(
 
   const render = () => {
     renderQueued = false;
-    const view = buildTimeline(log);
+    const view = buildTimeline(log, Date.now(), timeouts);
     onView(view);
     // The list is rebuilt; a focused button inside it is found again by its data-focus-key.
     const active = document.activeElement;
@@ -271,6 +274,11 @@ export function mountTimeline(
     },
     setShown(runId) {
       shown = runId;
+      schedule();
+    },
+    setScenarioTimeout(scenario, seconds) {
+      if (timeouts.get(scenario) === seconds) return;
+      timeouts.set(scenario, seconds);
       schedule();
     },
   };

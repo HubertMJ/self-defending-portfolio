@@ -27,8 +27,9 @@ interface Catalogue {
   details: ScenarioDetails;
   commands: CatalogueCommand[];
   objectives: Objective[];
-  idleSeconds: number;
-  timeoutSeconds: number;
+  /** The run's limits from the details; undefined only from an API that does not send them. */
+  idleSeconds?: number;
+  timeoutSeconds?: number;
 }
 
 /** Resolve a typed line to a catalogue command: exact input or alias, trimmed, case-insensitive. */
@@ -54,8 +55,8 @@ export function mountTerminal(
     blocked?: () => string | null;
     cooldownSeconds?: () => number;
     onRateLimited?: (seconds: number) => void;
-    /** Whether this API has the terminal, with its objectives: told once the catalogue has loaded or failed to. */
-    onAvailable?: (available: boolean, objectives: Objective[]) => void;
+    /** Whether this API has the terminal, with its objectives and run timeout: told once the catalogue has loaded or failed to. */
+    onAvailable?: (available: boolean, objectives: Objective[], timeoutSeconds?: number) => void;
   } = {},
 ): TerminalHandle {
   const reduced = prefersReducedMotion();
@@ -122,8 +123,10 @@ export function mountTerminal(
         details: r.value,
         commands: r.value.commands ?? [],
         objectives: r.value.objectives ?? [],
-        idleSeconds: r.value.idle_seconds ?? 30,
-        timeoutSeconds: r.value.timeout_seconds ?? 120,
+        // No default: an API that sends no limits gets words without numbers (the staleness bound
+        // then falls back to the contract's ceiling, timeline.ts staleRunMs).
+        idleSeconds: r.value.idle_seconds,
+        timeoutSeconds: r.value.timeout_seconds,
       };
       if (mode === "session") {
         // Another visitor's run reached the page first and is already shown read-only: fill in what
@@ -135,7 +138,7 @@ export function mountTerminal(
       } else {
         renderIdle();
       }
-      hooks.onAvailable?.(true, catalogue.objectives);
+      hooks.onAvailable?.(true, catalogue.objectives, catalogue.timeoutSeconds);
     } else if (r.ok || (r.status === 404 && r.json)) {
       renderUnavailable();
     } else {
@@ -752,7 +755,7 @@ export function mountTerminal(
         : detail === "idle"
           ? [`${You} went quiet; the pod was reclaimed after the idle timeout.`]
           : detail === "deadline"
-            ? [`The pod reached its ${catalogue.timeoutSeconds}-second deadline.`]
+            ? [catalogue.timeoutSeconds !== undefined ? `The pod reached its ${catalogue.timeoutSeconds}-second deadline.` : "The pod reached its deadline."]
             : detail === "left"
               ? [`${You} left; the pod was cleaned up.`]
               : quarantine
