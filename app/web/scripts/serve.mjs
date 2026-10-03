@@ -28,6 +28,7 @@
 // then `id`), GET /api/runs/{id} has the whole history with the same event ids, and the session then
 // goes on live — `cat /etc/shadow` exits 0, Falco, Talon's terminate, the kill — each event exactly
 // as the API publishes it. Every connection gets its own run, so parallel tests do not share one.
+// With --slow-details the terminal's catalogue answers 1.5 s late, after the replay has arrived.
 
 import { createServer } from "node:http";
 import { readFile, stat } from "node:fs/promises";
@@ -40,6 +41,7 @@ const portArg = process.argv.indexOf("--port");
 const port = Number(portArg > 0 ? process.argv[portArg + 1] : process.env.PORT ?? 4173);
 const liveApi = process.argv.includes("--live-api");
 const terminalApi = process.argv.includes("--terminal-api");
+const slowDetails = process.argv.includes("--slow-details");
 const stubEvents = liveApi || terminalApi || process.argv.includes("--stub-events");
 
 // One finished "shell-in-container" run, as the extended API replays it: [event name, payload].
@@ -237,6 +239,7 @@ const server = createServer(async (req, res) => {
     res.end(req.method === "HEAD" ? undefined : body);
   };
   if (stubEvents && url.pathname === "/api/events") return eventStream(req, res);
+  if (slowDetails && url.pathname === "/api/scenarios/terminal/details") await new Promise((r) => setTimeout(r, 1500));
   const answer = terminalApi ? terminalApiAnswer(req.method, url.pathname) : liveApi ? liveApiAnswer(req.method, url.pathname) : undefined;
   if (answer) return send(answer[0], JSON.stringify(answer[1]), { "Content-Type": "application/json", "Cache-Control": "no-store" });
   if (req.method !== "GET" && req.method !== "HEAD") return send(405, "method not allowed\n", { "Content-Type": "text/plain" });

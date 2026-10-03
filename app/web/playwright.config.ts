@@ -68,6 +68,12 @@ export default defineConfig({
       url: "http://127.0.0.1:4176/",
       reuseExistingServer: !process.env.CI,
     },
+    // …and with the terminal's catalogue answering after the stream's replay.
+    {
+      command: "node scripts/serve.mjs --port 4177 --terminal-api --slow-details",
+      url: "http://127.0.0.1:4177/",
+      reuseExistingServer: !process.env.CI,
+    },
     // The same site in front of a stub of the API deployed today (serve.mjs --live-api).
     {
       command: "node scripts/serve.mjs --port 4175 --live-api",

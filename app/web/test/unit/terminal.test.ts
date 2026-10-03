@@ -78,7 +78,7 @@ const flush = async () => {
 
 type Hooks = Parameters<typeof mountTerminal>[2];
 
-async function harness(opts: { start?: boolean; hooks?: Hooks; hangAttack?: boolean; timeoutMs?: number; attackStatus?: () => [number, unknown, Record<string, string>?]; commandStatus?: (id: string) => [number, unknown, Record<string, string>?] } = {}): Promise<Harness> {
+async function harness(opts: { start?: boolean; hooks?: Hooks; details?: () => Promise<[number, unknown, string?]>; hangAttack?: boolean; timeoutMs?: number; attackStatus?: () => [number, unknown, Record<string, string>?]; commandStatus?: (id: string) => [number, unknown, Record<string, string>?] } = {}): Promise<Harness> {
   const calls: Harness["calls"] = [];
   let seq = 0;
   const fetch: FetchLike = async (input, init) => {
@@ -87,7 +87,13 @@ async function harness(opts: { start?: boolean; hooks?: Hooks; hangAttack?: bool
     calls.push({ method, path, body: typeof init?.body === "string" ? init.body : undefined });
     const json = (status: number, body: unknown, headers: Record<string, string> = {}) =>
       new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json", ...headers } });
-    if (path === "/api/scenarios/terminal/details") return json(200, terminalDetails());
+    if (path === "/api/scenarios/terminal/details") {
+      if (opts.details) {
+        const [status, body, type] = await opts.details();
+        return new Response(typeof body === "string" ? body : JSON.stringify(body), { status, headers: { "Content-Type": type ?? "application/json" } });
+      }
+      return json(200, terminalDetails());
+    }
     if (path === "/api/posture") return json(404, { error: "not found" });
     if (method === "POST" && path === "/api/attack/terminal" && opts.hangAttack) {
       // The server takes the request and never answers in time: the client's own timeout aborts it.
@@ -571,3 +577,27 @@ describe("Tab and the completion hint (review 2, item 14)", () => {
     expect(live.textContent).toContain("chown 0 /srv/shop/index.html");
   });
 });
+
+describe("the catalogue arriving after a watched run (final review, item 1)", () => {
+  it("fills the read-only session in instead of replacing it with the start panel", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const t = await harness({ start: false, details: async () => (await gate, [200, terminalDetails()]) });
+    const f = new Feed().open();
+    f.ran(1, "whoami", 3000, ["uid=10001"], 0, true);
+    t.show(f); // the stream's replay beats GET …/details
+    const status = t.root.querySelector(".term__status");
+    expect(text(status)).toContain("read-only");
+    release();
+    await flush();
+    expect(t.root.querySelector(".term-start")).toBeNull();
+    expect(status?.isConnected).toBe(true);
+    expect(t.root.querySelectorAll(".term__obj")).toHaveLength(5);
+    expect(text(t.root.querySelector(".term__objhead"))).toContain("1/5");
+    // Later events still land in the page, not in detached nodes.
+    f.ran(2, "hostname", 4000, [POD], 0, true);
+    t.show(f);
+    expect(lines(t.root, 2)).toEqual([POD]);
+  });
+});
+

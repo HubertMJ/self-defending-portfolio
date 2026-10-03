@@ -470,7 +470,8 @@ test.describe("against the API deployed today (serve.mjs --live-api: JSON 404 on
 });
 
 test.describe("a terminal session replayed as the API publishes it (serve.mjs --terminal-api)", () => {
-  test("joined mid-session: backfilled in order, watched read-only, summarised from the API's own events", async ({ page }) => {
+  for (const [label, base] of [["", "http://127.0.0.1:4176/"], [" (the catalogue answering after the replay)", "http://127.0.0.1:4177/"]]) {
+  test(`joined mid-session: backfilled in order, watched read-only, summarised from the API's own events${label}`, async ({ page }) => {
     const problems = guardConsole(page);
     const backfills: string[] = [];
     const posts: string[] = [];
@@ -478,7 +479,7 @@ test.describe("a terminal session replayed as the API publishes it (serve.mjs --
       if (/\/api\/runs\/[0-9a-f]{16}$/.test(r.url())) backfills.push(r.url());
       if (r.method() !== "GET") posts.push(`${r.method()} ${r.url()}`);
     });
-    await page.goto("http://127.0.0.1:4176/");
+    await page.goto(base);
     const term = page.locator("#terminal");
     // The replay held only the run's later events; the page still knows it is a live terminal run.
     await expect(term.locator(".term__status")).toContainText("read-only");
@@ -499,9 +500,11 @@ test.describe("a terminal session replayed as the API publishes it (serve.mjs --
     await expect(ended).toHaveText(["cat /etc/shadow"]);
     expect(backfills).toHaveLength(1);
     expect(posts).toEqual([]); // a watcher sends nothing
+    await expect(term.locator(".term__obj")).toHaveCount(5); // the catalogue's objectives, filled in
     await noHorizontalScroll(page);
     expect(problems).toEqual([]);
   });
+  }
 });
 
 test.describe("real EventSource against a streaming server", () => {

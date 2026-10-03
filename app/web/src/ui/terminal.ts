@@ -116,7 +116,16 @@ export function mountTerminal(
         idleSeconds: r.value.idle_seconds ?? 30,
         timeoutSeconds: r.value.timeout_seconds ?? 120,
       };
-      renderIdle();
+      if (mode === "session") {
+        // Another visitor's run reached the page first and is already shown read-only: fill in what
+        // needed the catalogue there, rather than replacing the session with the start panel.
+        buildChips();
+        renderObjectives();
+        renderMap();
+        patchFromView();
+      } else {
+        renderIdle();
+      }
       hooks.onAvailable?.(true, catalogue.objectives);
     } else {
       renderUnavailable();
