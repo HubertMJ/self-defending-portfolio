@@ -285,8 +285,8 @@ func checkGolden(t *testing.T, name, raw string, golden map[string]string) {
 		for _, seg := range strings.Split(path, ".") {
 			var next []any
 			for _, v := range vals {
-				switch {
-				case seg == "*" || seg == "[]":
+				switch seg {
+				case "*", "[]":
 					switch c := v.(type) {
 					case map[string]any:
 						for _, x := range c {
