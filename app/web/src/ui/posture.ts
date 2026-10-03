@@ -75,11 +75,15 @@ function policyRef(v: KyvernoViolation, commit: string): Node | string {
   return url ? extLink(url, v.policy) : v.policy;
 }
 
+/** The tiles list this many groups or checks; the rest are named in the table below or after the list. */
+export const TILE_ROWS = 5;
+
 function violationList(vs: KyvernoViolation[], truncated: boolean, commit: string): HTMLElement {
   return h(
     "ul",
     { class: "tile__list" },
-    vs.map((v) => h("li", { "data-running": String(v.running) }, violationText(v), v.file && sourceUrl(commit, v.file) ? [" (", policyRef(v, commit), ")"] : null)),
+    vs.slice(0, TILE_ROWS).map((v) => h("li", { "data-running": String(v.running) }, violationText(v), v.file && sourceUrl(commit, v.file) ? [" (", policyRef(v, commit), ")"] : null)),
+    vs.length > TILE_ROWS ? h("li", { class: "tile__more" }, `${vs.length - TILE_ROWS} more in the table below`) : null,
     truncated ? h("li", {}, "…and more groups than the API lists (it sends the 50 largest).") : null,
   );
 }
@@ -88,7 +92,7 @@ function benchList(checks: BenchCheck[]): HTMLElement {
   return h(
     "ul",
     { class: "tile__list tile__list--bench" },
-    checks.map((c) =>
+    checks.slice(0, TILE_ROWS).map((c) =>
       h(
         "li",
         {},
@@ -98,6 +102,7 @@ function benchList(checks: BenchCheck[]): HTMLElement {
         c.remediation ? h("details", { class: "tile__remedy", open: true }, h("summary", {}, "Remediation"), h("p", {}, c.remediation)) : null,
       ),
     ),
+    checks.length > TILE_ROWS ? h("li", { class: "tile__more" }, `${checks.length - TILE_ROWS} more: `, checks.slice(TILE_ROWS).flatMap((c, i) => [i ? ", " : "", h("code", {}, c.id)])) : null,
   );
 }
 
@@ -152,9 +157,14 @@ function kyvernoTable(policies: KyvernoPolicy[]): HTMLElement {
 }
 
 function violationTable(vs: KyvernoViolation[], commit: string): HTMLElement {
+  // Policy and rule names are long and unbreakable; the table scrolls inside its box on a phone
+  // rather than widening the page.
   return h(
+    "div",
+    { class: "table-scroll" },
+    h(
     "table",
-    { class: "data-table" },
+    { class: "data-table data-table--wrap" },
     h("caption", {}, "Kyverno failures, grouped by policy, rule and what they are about (no resource names)"),
     h(
       "thead",
@@ -175,6 +185,7 @@ function violationTable(vs: KyvernoViolation[], commit: string): HTMLElement {
           h("td", {}, v.running === true ? "yes" : v.running === false ? "no" : "unknown"),
         ),
       ),
+    ),
     ),
   );
 }

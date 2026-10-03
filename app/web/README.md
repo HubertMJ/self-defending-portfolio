@@ -74,7 +74,7 @@ interactive front end runs without a cluster.
 npm run lint        # tsc --noEmit + no HTML/code DOM sinks in src/
 npm test            # unit tests
 npm run test:e2e    # both builds + Playwright (Chromium) against scripts/serve.mjs: the ?mock suite on
-                    # dist-mock/ (port 4173), the stub-API suites on the production dist/ (4174-4177)
+                    # dist-mock/ (port 4173), the stub-API suites on the production dist/ (4174-4178)
 npm run todo-content  # placeholder copy still to be written (add --strict to fail on it)
 npm run catalogue -- <path to cluster/infra/sandbox/scenarios/scenarios.yaml>   # regenerate the mock catalogue
 SDP_SCENARIOS_YAML=<that path> npm test                                         # ...and fail if it drifted

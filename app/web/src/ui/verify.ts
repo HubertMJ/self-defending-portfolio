@@ -77,7 +77,7 @@ export function renderStrip(d: VerifyData): HTMLElement {
   return h(
     "div",
     { class: "vstrip" },
-    h("p", { class: "vstrip__label" }, "Running now, signed in CI"),
+    lines.length ? h("p", { class: "vstrip__label" }, "Running now, signed in CI") : null,
     lines.length ? h("ul", { class: "vstrip__rows", role: "list" }, lines) : null,
     h(
       "p",
@@ -151,7 +151,8 @@ export function mountVerify(strip: HTMLElement, panel: HTMLElement): VerifyHandl
   let key = "";
   const draw = () => {
     // Redrawn only when what it shows changes, so a Copy button's "Copied" is not cut short.
-    const k = JSON.stringify(data);
+    // The response's own generated_at changes on every refresh and is not shown.
+    const k = JSON.stringify({ ...data, provenance: data.provenance ? { ...data.provenance, generated_at: undefined } : data.provenance });
     if (k === key) return;
     key = k;
     if (data.provenance !== undefined || data.build !== undefined) {

@@ -35,8 +35,9 @@
 // /api/provenance, the /api/runs list, a posture naming its failures (/api/posture with Kyverno
 // violations, failing kube-bench checks, Trivy's last scan, Falco's counted_since), /build.json, and
 // on `/api/events?tick=1` an `event: tick` frame (no id) after the replay and then every 2 s instead
-// of the heartbeat comment. `--terminal-api --no-cred` is the interactive API before ADR 0035: none
-// of that, no tick (a new page on the API deployed today).
+// of the heartbeat comment. `--terminal-api --no-cred` is the interactive API before ADR 0035: the
+// /api/stats of today's shape (no `last_run_at`, no `last_24h`), none of the rest, no tick (a new
+// page on the API deployed today).
 
 import { createServer } from "node:http";
 import { readFile, stat } from "node:fs/promises";
@@ -190,10 +191,10 @@ function credAnswer(method, path) {
       commands: {},
       objectives: {},
       terminal: { runs: 12, best_objectives: 2, median_survival_s: 41 },
-      last_run_at: new Date(now - 8000).toISOString(),
-      last_24h: { since: startedAt, runs: 3, detected: 2, responded: 2, falco_alerts: 4, talon_actions: 3 },
+      ...(cred ? { last_run_at: new Date(now - 8000).toISOString(), last_24h: { since: startedAt, runs: 3, detected: 2, responded: 2, falco_alerts: 4, talon_actions: 3 } } : {}),
     }];
   }
+  if (!cred) return undefined;
   if (path === "/api/provenance") {
     return [200, {
       generated_at: new Date(now).toISOString(),
@@ -234,7 +235,7 @@ function credAnswer(method, path) {
 
 /** The interactive API of --terminal-api (what the page reads while watching), else undefined. */
 function terminalApiAnswer(method, path) {
-  const added = cred ? credAnswer(method, path) : undefined;
+  const added = credAnswer(method, path);
   if (added) return added;
   if (method === "GET" && path === "/api/scenarios") {
     return [200, [...LIVE_SCENARIOS.map((s) => ({ ...s, interactive: false })), { id: "terminal", title: "Attacker's terminal", summary: "Type into a hardened pod.", technique: "T1059.004", detection: "", response: "", victim: true, interactive: true }]];

@@ -306,7 +306,7 @@ describe("the evidence card, the ticker and the hero's last run (B4)", () => {
   it("the ticker lists only real events, newest first, and says when nothing happened", () => {
     const view = buildTimeline(scripted(2), T + 4000);
     const items = tickerItems(view);
-    expect(items.map((i) => i.text)).toEqual(["shell-in-container: Finished", "Talon: Talon deleted the pod (success)", "Falco: Rule 1", "Falco: Rule 0", "shell-in-container: Attack running", "shell-in-container: Queued"]);
+    expect(items.map((i) => i.text)).toEqual(["shell-in-container: Finished", "Talon: Talon deleted the pod", "Falco: Rule 1", "Falco: Rule 0", "shell-in-container: Attack running", "shell-in-container: Queued"]);
     expect(tickerItems(view, 3)).toHaveLength(3);
     const empty = renderTicker([], { now: T, since: T - 60_000, connected: true, tickAt: at(0) });
     expect(empty.textContent).toBe("No events since 2026-10-03 18:00:57 UTC; the stream is connected (server time 2026-10-03 18:01:57 UTC).");

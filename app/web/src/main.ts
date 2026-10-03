@@ -80,7 +80,7 @@ function main(): void {
   // run loads the newest the run store keeps, so the card shows the last real attack.
   const evidence = mountEvidence(
     byId("evidence-card"),
-    { ticker: byId("ticker"), liveness: byId("liveness"), detail: byId("evidence-detail") },
+    { ticker: byId("ticker"), liveness: byId("liveness"), detail: byId("evidence-detail"), announce: byId("ticker-live") },
     () => {
       if (latestView.runs.length) return;
       evidence.setLoading(true);
@@ -88,10 +88,9 @@ function main(): void {
         const newest = r.ok ? r.value[0] : undefined;
         if (newest) {
           verify.set({ latestRunId: newest.run_id });
+          // Named from its summary until its events arrive as ordinary timeline events.
+          evidence.setLatest(newest);
           backfill.load(newest.run_id);
-          // The run arrives as ordinary timeline events and replaces this state; should the store have
-          // lost it meanwhile, the card falls back to "no attack since …" rather than loading forever.
-          setTimeout(() => evidence.setLoading(false), 8000);
         } else evidence.setLoading(false);
       });
     },
@@ -100,18 +99,23 @@ function main(): void {
 
   const verify = mountVerify(byId("verify-strip"), byId("verify-panel"));
   const posture = mountPosture(byId("posture-panel"), api, (p) => evidence.setPosture(p));
-  // Provenance follows the posture refresh (the API derives its digests from the same pod list).
+  // Provenance follows the posture refresh (the API derives its digests from the same pod list). A
+  // failure keeps the last good answer on the page; an API without the endpoint (a 404, as during a
+  // rollout of an older API) is asked again only every 10 minutes.
+  let provenanceTimer: ReturnType<typeof setTimeout> | undefined;
+  let haveProvenance = false;
   const loadProvenance = async () => {
+    clearTimeout(provenanceTimer);
     const r = await api.provenance();
     if (r.ok) {
+      haveProvenance = true;
       verify.set({ provenance: r.value });
       posture.setCommit(r.value.api.commit);
       if (r.value.api.started_at) evidence.setApiStart(r.value.api.started_at);
-      setTimeout(() => void loadProvenance(), 60_000);
+      provenanceTimer = setTimeout(() => void loadProvenance(), 60_000);
     } else {
-      verify.set({ provenance: null });
-      // An API without the endpoint (a JSON or plain 404) is not asked again.
-      if (r.status !== 404) setTimeout(() => void loadProvenance(), 120_000);
+      if (!haveProvenance) verify.set({ provenance: null });
+      provenanceTimer = setTimeout(() => void loadProvenance(), r.status === 404 ? 10 * 60_000 : 120_000);
     }
   };
   void loadProvenance();

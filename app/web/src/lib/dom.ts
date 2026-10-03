@@ -67,13 +67,6 @@ export function relativeTime(iso: string | null | undefined, now: number = Date.
   return rtf.format(Math.round(s / 86_400), "day");
 }
 
-/** HH:MM:SS.mmm in the visitor's local time, for timeline rows. */
-export function clockTime(ms: number): string {
-  const d = new Date(ms);
-  const pad = (n: number, w = 2) => String(n).padStart(w, "0");
-  return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}.${pad(d.getMilliseconds(), 3)}`;
-}
-
 // Absolute times are UTC and say so (ADR 0035): a visitor in any zone reads the same instant as the
 // cluster's records and the raw JSON, and a relative "6 hours ago" only ever stands next to one.
 
@@ -115,4 +108,27 @@ export function timeEl(t: string | number, text?: string, attrs: Attrs = {}): HT
 
 export function prefersReducedMotion(): boolean {
   return typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+}
+
+/** A <time> reading when(t); refreshRelative() keeps its "x ago" current in place. */
+export function whenEl(t: string | number, now: number = Date.now(), attrs: Attrs = {}): HTMLTimeElement {
+  const n = toMs(t);
+  return timeEl(t, when(t, now), Number.isNaN(n) ? attrs : { ...attrs, "data-when": String(n) });
+}
+
+/**
+ * Rewrites the relative texts under `root` ([data-when]: when(), [data-ago]: " (x ago)") by changing
+ * text node data only: no element is replaced, so focus, selection and the DOM's structure stay.
+ */
+export function refreshRelative(root: ParentNode, now: number = Date.now()): void {
+  for (const el of root.querySelectorAll<HTMLElement>("[data-when]")) setText(el, when(Number(el.dataset.when), now));
+  for (const el of root.querySelectorAll<HTMLElement>("[data-ago]")) setText(el, ` (${relativeTime(new Date(Number(el.dataset.ago)).toISOString(), now)})`);
+}
+
+/** Sets an element's text through its one text node when it has exactly one (a characterData change, not a child list one). */
+export function setText(el: Element, text: string): void {
+  const n = el.firstChild;
+  if (n instanceof Text && !n.nextSibling) {
+    if (n.data !== text) n.data = text;
+  } else el.textContent = text;
 }

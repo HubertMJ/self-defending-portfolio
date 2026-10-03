@@ -328,7 +328,12 @@ export function postureAdditions(now: number = Date.now()): Posture {
   const p = posture(now);
   return {
     ...p,
-    kyverno: { ...p.kyverno, violations: [{ policy: "pod-security-restricted", rule: "restricted", kind: "Pod", namespace: "sandbox", count: 2, running: true, file: "" }], violations_truncated: false },
+    // The live names, long and unbreakable, so the layout is tested with them (a running pod: red).
+    kyverno: {
+      policies: p.kyverno.policies.map((x) => (x.name === "pod-security-restricted" ? { ...x, fail: 0 } : x.name === "restrict-image-registries" ? { ...x, fail: 2 } : x)),
+      violations: [{ policy: "restrict-image-registries", rule: "autogen-validate-registries", kind: "ReplicaSet", namespace: "falco-response", count: 2, running: true, file: "cluster/infra/kyverno-policies/restrict-image-registries.yaml" }],
+      violations_truncated: false,
+    },
     trivy: { ...p.trivy, last_scan: new Date(now - 2 * 3600_000).toISOString() },
     falco: { ...p.falco, counted_since: new Date(now - 3 * 3600_000).toISOString() },
   };

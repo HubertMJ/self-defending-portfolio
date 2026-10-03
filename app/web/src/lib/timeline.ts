@@ -404,6 +404,14 @@ export function noDetection(run: RunView, outcomes?: ReadonlyMap<string, Command
   return known.includes("prevented") ? "prevented" : "recon";
 }
 
+/**
+ * The run's pod name where the page may publish it (ADR 0021): a sandbox scenario pod, i.e. every
+ * Falco/Talon event of the run that names a namespace names `sandbox`. Otherwise undefined.
+ */
+export function publishedPod(run: RunView): string | undefined {
+  return run.pod && [...run.falco, ...run.talon].every((e) => !e.namespace || e.namespace === "sandbox") ? run.pod : undefined;
+}
+
 /** Human-readable duration: "840 ms", "2.4 s", "1 min 12 s". */
 export function formatDuration(ms: number | undefined): string {
   if (ms === undefined || !Number.isFinite(ms)) return "–";

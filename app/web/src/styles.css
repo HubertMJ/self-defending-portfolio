@@ -3797,6 +3797,16 @@ html[data-terminal="off"] .needs-terminal {
   margin-top: 0.3rem;
 }
 
+.table-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.data-table--wrap th,
+.data-table--wrap td {
+  overflow-wrap: anywhere;
+}
+
 .tile__remedy summary {
   cursor: pointer;
   font-size: 0.8rem;

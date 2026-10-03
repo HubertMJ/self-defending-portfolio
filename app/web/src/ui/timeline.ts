@@ -5,7 +5,7 @@ import { type CommandOutcome, type StreamEvent, isRunId } from "../lib/contract"
 import { h, replace, timeEl, utcClock } from "../lib/dom";
 import { humanAction } from "../lib/pipeline";
 import type { ConnectionState } from "../lib/sse";
-import { type NoDetection, type RunView, type TimelineView, buildTimeline, formatDuration, guardedFalco, guardedTalon, noDetection, ts } from "../lib/timeline";
+import { type NoDetection, type RunView, type TimelineView, buildTimeline, formatDuration, guardedFalco, guardedTalon, noDetection, publishedPod, ts } from "../lib/timeline";
 import { CONNECTION_LONG, extLink } from "./common";
 
 // A run with victim probes every 500 ms produces a few hundred events; keep a handful of runs' worth.
@@ -131,7 +131,7 @@ export function renderRun(
         note: startedAt !== undefined ? undefined : run.active ? "pending" : "not reached",
         at: startedAt,
         now,
-        what: run.pod ? h("code", {}, run.pod) : "starting the pod…",
+        what: publishedPod(run) ? h("code", {}, publishedPod(run)) : run.pod ? "pod outside the sandbox" : "starting the pod…",
       }),
       detectedAt !== undefined
         ? stage({

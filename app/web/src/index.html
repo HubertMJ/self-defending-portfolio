@@ -72,7 +72,7 @@
         <div class="verifystrip" id="verify-strip" hidden></div>
         <div class="herostats-wrap" id="hero-stats" hidden></div>
       </div>
-      <div class="evcard-wrap" id="evidence-card" aria-live="polite">
+      <div class="evcard-wrap" id="evidence-card">
       <figure class="loop" aria-label="Attack, detect, respond loop">
         <ol class="loop__steps">
           <li class="loop__step loop__step--attack"><span class="loop__k">01</span><span class="loop__t">Attack</span><span class="loop__d">a scenario pod misbehaves in <code>sandbox</code></span></li>
@@ -93,7 +93,8 @@
         <p class="section__lead">The latest events as the API published them, newest first, with absolute times in UTC. Nothing here is generated in your browser: when nothing happens, it says since when.</p>
       </header>
       <p class="liveness" id="liveness"></p>
-      <div class="ticker-wrap" id="ticker" aria-live="polite">
+      <p class="visually-hidden" id="ticker-live" role="status"></p>
+      <div class="ticker-wrap" id="ticker">
         <noscript><p class="offline__body">The live evidence needs JavaScript. The rest of this page does not.</p></noscript>
       </div>
       <div class="evdetail-wrap" id="evidence-detail"></div>

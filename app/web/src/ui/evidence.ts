@@ -6,12 +6,12 @@
 // page says since when, and the only thing that changes on its own is the server's clock (the opt-in
 // SSE tick) and "x minutes ago" next to an absolute UTC time.
 
-import { type CatalogueCommand, FALCO_FIELDS, type FalcoEvent, type Posture, type ScenarioDetails, type StreamEvent, type TalonEvent, type Tick, isRunId } from "../lib/contract";
-import { h, relativeTime, replace, timeEl, utc, utcClock, when } from "../lib/dom";
+import { type CatalogueCommand, type CommandOutcome, FALCO_FIELDS, type RunSummary, type FalcoEvent, type Posture, type ScenarioDetails, type StreamEvent, type TalonEvent, type Tick, isRunId } from "../lib/contract";
+import { h, refreshRelative, relativeTime, replace, setText, timeEl, utc, utcClock, whenEl } from "../lib/dom";
 import { humanAction } from "../lib/pipeline";
 import { cosignVerifyCommand, digestOf, isPinnedImageRef, oneLine, shortDigest } from "../lib/provenance";
 import type { ConnectionState } from "../lib/sse";
-import { type RunView, type TimelineView, formatDuration, ts } from "../lib/timeline";
+import { type RunView, type TimelineView, formatDuration, noDetection, publishedPod, ts } from "../lib/timeline";
 import { copyButton, extLink, sourceUrl } from "./common";
 
 /** The card shows this many Falco/Talon events and terminal commands; the rest are in #evidence and the raw JSON. */
@@ -47,10 +47,6 @@ function answers(run: RunView): Answer[] {
   return [...run.falco.map((data) => ({ type: "falco" as const, data })), ...run.talon.map((data) => ({ type: "talon" as const, data }))].sort((a, b) => ts(a.data.at) - ts(b.data.at));
 }
 
-/** The pod's name is published only for a sandbox scenario pod (ADR 0021): every event naming a namespace says sandbox. */
-function sandboxPod(run: RunView): string | undefined {
-  return run.pod && [...run.falco, ...run.talon].every((e) => !e.namespace || e.namespace === "sandbox") ? run.pod : undefined;
-}
 
 const fact = (k: string, v: Node | string | null | undefined) => (v ? h("div", {}, h("dt", {}, k), h("dd", {}, v)) : null);
 const code = (s: string | undefined, title?: string) => (s ? h("code", title ? { title } : {}, s) : null);
@@ -80,7 +76,8 @@ function answerItem(a: Answer, now: number): HTMLElement {
     h("strong", {}, humanAction(t.action, t.actionner)),
     " ",
     code(t.actionner ?? t.action),
-    ` ${t.status} at `,
+    // Talon's own status word only when it is not plain success.
+    `${t.status === "success" ? "" : ` (${t.status})`} at `,
     timeEl(t.at, utcClock(t.at, now, { ms: true })),
   );
 }
@@ -89,7 +86,8 @@ function commandItems(run: RunView, ctx: EvidenceContext, max: number): HTMLElem
   return run.commands.slice(0, max).map((c) => {
     const cat = ctx.commands?.get(c.id);
     const exit = c.exitCode !== undefined ? `exit ${c.exitCode}` : c.killed ? "killed" : c.endedAt !== undefined ? "ended, no exit code" : "running";
-    return h("li", { class: "evlist__item", "data-type": "command" }, h("code", {}, cat?.input ?? c.id), ` · ${exit}`, cat ? ` · ${cat.outcome}` : null);
+    return h("li", { class: "evlist__item", "data-type": "command" }, h("code", {}, cat?.input ?? c.id), ` · ${exit}`, // The catalogue's class is what the command is expected to meet, not a record of what happened.
+      cat ? ` · expected: ${cat.outcome}` : null);
   });
 }
 
@@ -120,6 +118,9 @@ export function renderEvidenceCard(run: RunView, ctx: EvidenceContext): HTMLElem
   const start = runStart(run);
   const digest = run.image ? digestOf(run.image) : "";
   const failed = run.current === "failed" || run.current === "timeout";
+  const outcomes = new Map<string, CommandOutcome>([...(ctx.commands ?? new Map<string, CatalogueCommand>()).values()].map((c) => [c.id, c.outcome]));
+  // A detection the catalogue expected and that never came is said in the chip, in the critical colour.
+  const missed = noDetection(run, outcomes) === "missed";
   return h(
     "article",
     { class: "evcard", "data-run": run.runId, "aria-labelledby": "evcard-title" },
@@ -128,13 +129,15 @@ export function renderEvidenceCard(run: RunView, ctx: EvidenceContext): HTMLElem
       "header",
       { class: "evcard__head" },
       h("h2", { class: "evcard__title", id: "evcard-title" }, ctx.title),
-      h("span", { class: `chip chip--${failed ? "critical" : run.active ? "warning" : "good"}` }, STATE_WORD[run.current] ?? run.current),
+      missed
+        ? h("span", { class: "chip chip--critical" }, "Detection expected, none arrived")
+        : h("span", { class: `chip chip--${failed ? "critical" : run.active ? "warning" : "good"}` }, STATE_WORD[run.current] ?? run.current),
     ),
-    Number.isFinite(start) ? h("p", { class: "evcard__when" }, "last attack ", timeEl(start, when(start, now))) : null,
+    Number.isFinite(start) ? h("p", { class: "evcard__when" }, "last attack ", whenEl(start, now)) : null,
     h(
       "dl",
       { class: "facts facts--mono evcard__facts" },
-      fact("Pod", code(sandboxPod(run))),
+      fact("Pod", code(publishedPod(run))),
       fact("Pod UID", code(run.podUid)),
       fact("Image", digest ? code(shortDigest(digest), digest) : null),
       fact("Container", code(run.containerId)),
@@ -153,19 +156,28 @@ export function renderEvidenceCard(run: RunView, ctx: EvidenceContext): HTMLElem
   );
 }
 
-/** No run in memory: say when the API started and when the last run was recorded, and offer one. */
-export function renderNoAttack(opts: { apiStartedAt?: string; lastRunAt?: string; now: number; loading?: boolean }): HTMLElement {
-  if (opts.loading) return h("article", { class: "evcard evcard--empty" }, h("p", { class: "evcard__eyebrow" }, "Latest attack"), h("p", {}, "Loading the latest recorded attack…"));
-  return h(
-    "article",
-    { class: "evcard evcard--empty" },
-    h("p", { class: "evcard__eyebrow" }, "Latest attack"),
+/**
+ * No run in the timeline. With the newest run of GET /api/runs known (its events still loading), that
+ * run is named from its summary; otherwise the card says what it knows: since when there was none
+ * (the API's start, if known; else only that the stream's replay held none) and when the last run was
+ * recorded.
+ */
+export function renderNoAttack(opts: { apiStartedAt?: string; lastRunAt?: string; latest?: RunSummary; now: number; loading?: boolean }): HTMLElement {
+  const empty = (...body: (Node | string | null)[]) => h("article", { class: "evcard evcard--empty" }, h("p", { class: "evcard__eyebrow" }, "Latest attack"), ...body);
+  const l = opts.latest;
+  if (l) {
+    return empty(
+      h("p", { class: "evcard__none" }, "Latest recorded run ", h("code", {}, l.run_id), ` (${l.scenario}, started `, whenEl(l.started_at, opts.now), ") - ", extLink(rawUrl(l.run_id), "raw JSON")),
+      h("p", { class: "small" }, "Its events are loading into the record below."),
+    );
+  }
+  if (opts.loading) return empty(h("p", {}, "Loading the latest recorded attack…"));
+  return empty(
     h(
       "p",
       { class: "evcard__none" },
-      "No attack since the API started",
-      opts.apiStartedAt ? [" at ", timeEl(opts.apiStartedAt)] : null,
-      opts.lastRunAt ? [" - last attack recorded ", timeEl(opts.lastRunAt, when(opts.lastRunAt, opts.now))] : null,
+      opts.apiStartedAt ? ["No attack since the API started at ", timeEl(opts.apiStartedAt)] : "No attack in the stream's replay",
+      opts.lastRunAt ? [" - last attack recorded ", whenEl(opts.lastRunAt, opts.now)] : null,
       ".",
     ),
     h("p", {}, h("a", { class: "btn btn--ghost btn--small", href: "#attack" }, "Launch one yourself")),
@@ -184,7 +196,7 @@ export function renderEvidenceDetail(run: RunView, ctx: EvidenceContext): HTMLEl
       "dl",
       { class: "facts facts--wide facts--mono" },
       fact("Run id", code(run.runId)),
-      fact("Pod", code(sandboxPod(run))),
+      fact("Pod", code(publishedPod(run))),
       fact("Pod UID", code(run.podUid)),
       fact("Image", code(run.image)),
       fact("Container", code(run.containerId)),
@@ -257,7 +269,7 @@ export function tickerItems(view: TimelineView, max = TICKER_ITEMS): TickerItem[
         add(ev, `Falco: ${ev.data.rule}`);
         break;
       case "talon":
-        add(ev, `Talon: ${humanAction(ev.data.action, ev.data.actionner)} (${ev.data.status})`);
+        add(ev, `Talon: ${humanAction(ev.data.action, ev.data.actionner)}${ev.data.status === "success" ? "" : ` (${ev.data.status})`}`);
         break;
       case "command":
         if (ev.data.state === "exited") add(ev, `command ${ev.data.id}: ${ev.data.exit_code !== undefined ? `exit ${ev.data.exit_code}` : "ended, no exit code"}`);
@@ -276,7 +288,7 @@ export function renderTicker(items: TickerItem[], opts: { now: number; since?: s
       { class: "ticker__empty" },
       opts.since !== undefined ? ["No events since ", timeEl(opts.since), "; "] : "No events yet; ",
       opts.connected ? "the stream is connected" : "the stream is not connected",
-      opts.connected && opts.tickAt ? [" (server time ", timeEl(opts.tickAt, utc(opts.tickAt)), ")"] : null,
+      opts.connected && opts.tickAt ? [" (server time ", timeEl(opts.tickAt, utc(opts.tickAt), { class: "ticker__server" }), ")"] : null,
       ".",
     );
   }
@@ -288,7 +300,7 @@ export function renderTicker(items: TickerItem[], opts: { now: number; since?: s
         "li",
         { class: "ticker__item", "data-type": i.type, "data-new": opts.fresh?.has(i.key) ? "true" : null },
         timeEl(i.at, utcClock(i.at, opts.now, { ms: true })),
-        h("span", { class: "ticker__ago" }, ` (${relativeTime(new Date(i.at).toISOString(), opts.now)})`),
+        h("span", { class: "ticker__ago", "data-ago": String(i.at) }, ` (${relativeTime(new Date(i.at).toISOString(), opts.now)})`),
         " ",
         h("span", { class: "ticker__text" }, i.text),
       ),
@@ -319,9 +331,9 @@ export function renderLiveness(l: Liveness, now: number): HTMLElement {
   const parts: (Node | string)[][] = [];
   if (l.apiStartedAt) parts.push([`API up ${uptime((l.tickAt ? Date.parse(l.tickAt) : now) - Date.parse(l.apiStartedAt))} (since `, timeEl(l.apiStartedAt), ")"]);
   if (l.tickAt) parts.push(["server time ", timeEl(l.tickAt, utc(l.tickAt), { class: "liveness__server" })]);
-  if (l.postureAt) parts.push(["posture refreshed ", timeEl(l.postureAt, when(l.postureAt, now))]);
-  if (l.kubeBench) parts.push(["kube-bench ", timeEl(l.kubeBench, when(l.kubeBench, now))]);
-  if (l.trivy) parts.push(["Trivy ", timeEl(l.trivy, when(l.trivy, now))]);
+  if (l.postureAt) parts.push(["posture refreshed ", whenEl(l.postureAt, now)]);
+  if (l.kubeBench) parts.push(["kube-bench ", whenEl(l.kubeBench, now)]);
+  if (l.trivy) parts.push(["Trivy ", whenEl(l.trivy, now)]);
   return h("p", { class: "liveness" }, parts.flatMap((p, i) => (i ? [" · ", ...p] : p)));
 }
 
@@ -337,8 +349,10 @@ export interface EvidenceHandle {
   setPosture(p: Posture): void;
   setApiStart(iso: string): void;
   setLastRunAt(iso: string): void;
-  /** The newest run of GET /api/runs is being loaded into the timeline (or there is none). */
+  /** GET /api/runs is being asked for the newest run. */
   setLoading(loading: boolean): void;
+  /** The newest run GET /api/runs knows, named on the card until its events arrive. */
+  setLatest(summary: RunSummary): void;
 }
 
 const LIVENESS_FALLBACK_MS = 3000;
@@ -351,7 +365,7 @@ const RELATIVE_REFRESH_MS = 30_000;
  */
 export function mountEvidence(
   card: HTMLElement,
-  section: { ticker: HTMLElement; liveness: HTMLElement; detail: HTMLElement },
+  section: { ticker: HTMLElement; liveness: HTMLElement; detail: HTMLElement; announce: HTMLElement },
   onDecided: () => void,
 ): EvidenceHandle {
   let view: TimelineView = { runs: [], unmatched: [] };
@@ -363,6 +377,8 @@ export function mountEvidence(
   let connected = false;
   let decided = false;
   let loading = false;
+  let latest: RunSummary | undefined;
+  let tickerShape = "";
   let livenessShown = false;
   let fallback: ReturnType<typeof setTimeout> | undefined;
   const openedAt = Date.now();
@@ -374,7 +390,7 @@ export function mountEvidence(
 
   const drawRun = (force = false) => {
     const run = view.runs[0];
-    const key = run ? `${run.runId}|${run.events.length}|${run.current}|${run.active}|${titles.get(run.scenario) ?? ""}|${details.has(run.scenario)}|${commands.size}` : `none|${decided}|${loading}|${live.apiStartedAt ?? ""}|${lastRunAt ?? ""}`;
+    const key = run ? `${run.runId}|${run.events.length}|${run.current}|${run.active}|${titles.get(run.scenario) ?? ""}|${details.has(run.scenario)}|${commands.size}` : `none|${decided}|${loading}|${latest?.run_id ?? ""}|${live.apiStartedAt ?? ""}|${lastRunAt ?? ""}`;
     if (!force && key === lastKey) return;
     lastKey = key;
     const now = Date.now();
@@ -383,19 +399,35 @@ export function mountEvidence(
       replace(card, renderEvidenceCard(run, ctxFor(run, now)));
       replace(section.detail, renderEvidenceDetail(run, ctxFor(run, now)));
     } else if (decided) {
-      replace(card, renderNoAttack({ apiStartedAt: live.apiStartedAt, lastRunAt, now, loading }));
+      replace(card, renderNoAttack({ apiStartedAt: live.apiStartedAt, lastRunAt, latest, now, loading }));
       replace(section.detail, h("p", { class: "small" }, "The full record of the next attack appears here as it happens."));
     }
   };
 
   const drawTicker = () => {
     const items = tickerItems(view);
-    // Items that were not on screen before are marked new (a short fade where motion is allowed);
-    // the first drawing marks none.
-    const fresh = tickerDrawn ? new Set(items.map((i) => i.key).filter((k) => !seen.has(k))) : new Set<string>();
+    const now = Date.now();
+    // The list is rebuilt only when what it lists changes. Otherwise (a tick, a reconnect, the clock)
+    // only its texts change in place, so a screen reader, a selection or a focused link is left alone.
+    const since = live.apiStartedAt ?? openedAt;
+    const shape = items.length ? items.map((i) => i.key).join("\n") : `empty|${connected}|${since}|${live.tickAt !== undefined}`;
+    if (shape === tickerShape) {
+      refreshRelative(section.ticker, now);
+      const server = section.ticker.querySelector<HTMLTimeElement>(".ticker__server");
+      if (server && live.tickAt) {
+        setText(server, utc(live.tickAt));
+        server.dateTime = new Date(live.tickAt).toISOString();
+      }
+      return;
+    }
+    tickerShape = shape;
+    // Items that were not on screen before are marked new (a short fade where motion is allowed) and
+    // spoken once through the visually hidden status line; the first drawing marks and speaks none.
+    const fresh = tickerDrawn ? items.filter((i) => !seen.has(i.key)) : [];
     seen = new Set(items.map((i) => i.key));
     tickerDrawn = true;
-    replace(section.ticker, renderTicker(items, { now: Date.now(), since: live.apiStartedAt ?? openedAt, connected, tickAt: live.tickAt, fresh }));
+    replace(section.ticker, renderTicker(items, { now, since, connected, tickAt: live.tickAt, fresh: new Set(fresh.map((i) => i.key)) }));
+    if (fresh.length) replace(section.announce, `New event${fresh.length === 1 ? "" : "s"}: ${fresh.map((i) => i.text).join("; ")}`);
   };
 
   const drawLiveness = () => {
@@ -414,11 +446,11 @@ export function mountEvidence(
     onDecided();
   };
 
-  // Relative texts ("6 minutes ago") follow the clock; nothing else is redrawn on a timer.
+  // Relative texts ("6 minutes ago") follow the clock, rewritten in place: nothing is redrawn on a
+  // timer, so a link focused in the card keeps its focus.
   setInterval(() => {
-    drawRun(true);
-    drawTicker();
-    drawLiveness();
+    const now = Date.now();
+    for (const el of [card, section.detail, section.ticker, section.liveness]) refreshRelative(el, now);
   }, RELATIVE_REFRESH_MS);
 
   return {
@@ -467,6 +499,11 @@ export function mountEvidence(
     },
     setLoading(l) {
       loading = l;
+      drawRun();
+    },
+    setLatest(summary) {
+      latest = summary;
+      loading = false;
       drawRun();
     },
   };
