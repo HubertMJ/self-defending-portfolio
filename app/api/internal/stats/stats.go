@@ -719,9 +719,10 @@ const maxCounter = 1 << 40
 // The hourly window (ADR 0035) is sanitised rather than rejected, because losing a day's buckets is
 // no reason to lose the all-time totals beside them: buckets outside [now-23 h, now+1 h] are dropped,
 // buckets of the same hour summed, and a window start or last run time in the future clamped to now.
-// Only a count that is negative or past maxCounter, or more buckets in range than any writer keeps
-// (maxHourly, counted before same-hour buckets are merged), rejects the blob as unparseable. A blob
-// from before the window has none of these fields and loads unchanged.
+// A window no writer produces - a count that is negative or past maxCounter, or more buckets in range
+// than any writer keeps (maxHourly, counted before same-hour buckets are merged) - is discarded as a
+// whole and restarts now, and the all-time totals still load: only a malformed all-time section
+// rejects the blob. A blob from before the window has none of these fields and loads unchanged.
 func validateAgg(a *agg, now time.Time) error {
 	if a.ByScenario == nil {
 		a.ByScenario = map[string]*ScenarioStat{}
@@ -783,8 +784,14 @@ func validateAgg(a *agg, now time.Time) error {
 	if a.BestObjectives > scenarios.MaxCommands || (a.BestObjectives > 0 && a.TerminalRuns == 0) {
 		return fmt.Errorf("best_objectives %d is not reachable", a.BestObjectives)
 	}
-	if err := sanitiseWindow(a, now, ok); err != nil {
-		return err
+	if sanitiseWindow(a, now, ok) != nil {
+		a.Hourly, a.WindowSince = nil, now.UTC()
+	}
+	if a.WindowSince.After(now) {
+		a.WindowSince = now.UTC()
+	}
+	if a.LastRunAt.After(now) {
+		a.LastRunAt = now.UTC()
 	}
 	if a.RespCount < len(a.RespSamples) {
 		a.RespCount = len(a.RespSamples)
@@ -795,6 +802,8 @@ func validateAgg(a *agg, now time.Time) error {
 	return nil
 }
 
+// sanitiseWindow drops and merges a's buckets in place, or says the window is malformed (the caller
+// then discards it).
 func sanitiseWindow(a *agg, now time.Time, ok func(...int64) bool) error {
 	nowH := unixHour(now)
 	kept := a.Hourly[:0:0]
@@ -815,12 +824,6 @@ func sanitiseWindow(a *agg, now time.Time, ok func(...int64) bool) error {
 		if !ok(int64(b.Runs), int64(b.Detected), int64(b.Responded), int64(b.Alerts), int64(b.Actions)) {
 			return fmt.Errorf("hourly bucket %d has a counter out of range", b.H)
 		}
-	}
-	if a.WindowSince.After(now) {
-		a.WindowSince = now.UTC()
-	}
-	if a.LastRunAt.After(now) {
-		a.LastRunAt = now.UTC()
 	}
 	return nil
 }

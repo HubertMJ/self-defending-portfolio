@@ -174,19 +174,31 @@ func TestWindowSanitising(t *testing.T) {
 	if err := New(newStore(t), func() time.Time { return t0 }).Load(windowBlob(t, map[string]any{"Hourly": inRange(maxHourly)})); err != nil {
 		t.Fatalf("%d buckets in range rejected: %v", maxHourly, err)
 	}
+	// A window no writer produces is discarded whole and restarts now; the all-time totals load.
 	for name, hourly := range map[string]any{
-		"negative":        []map[string]any{{"H": nowH, "Runs": -1}},
-		"past 2^40":       []map[string]any{{"H": nowH, "Alerts": int64(maxCounter) + 1}},
-		"negative, stale": []map[string]any{{"H": nowH - 100, "Detected": -5}},
+		"negative":        []map[string]any{{"H": nowH - 1, "Runs": 1}, {"H": nowH, "Runs": -1}},
+		"past 2^40":       []map[string]any{{"H": nowH - 1, "Runs": 1}, {"H": nowH, "Alerts": int64(maxCounter) + 1}},
+		"negative, stale": []map[string]any{{"H": nowH - 1, "Runs": 1}, {"H": nowH - 100, "Detected": -5}},
 		"26 in range":     inRange(maxHourly + 1),
 	} {
-		c := New(newStore(t), func() time.Time { return t0 })
-		if err := c.Load(windowBlob(t, map[string]any{"Hourly": hourly})); err == nil {
-			t.Errorf("%s: loaded, want the blob rejected", name)
+		later := t0.Add(10 * time.Minute)
+		c := New(newStore(t), func() time.Time { return later })
+		if err := c.Load(windowBlob(t, map[string]any{"Hourly": hourly, "WindowSince": t0.Add(-5 * time.Hour)})); err != nil {
+			t.Errorf("%s: the blob was rejected (%v), want only its window discarded", name, err)
+			continue
 		}
-		if s := c.Snapshot(); s.Runs != 0 {
-			t.Errorf("%s: a rejected blob installed totals: %+v", name, s)
+		s := c.Snapshot()
+		if s.Runs != 7 || s.ByScenario["shell-in-container"].Detected != 5 {
+			t.Errorf("%s: the all-time totals were lost: %+v", name, s)
 		}
+		if s.Last24h != (Window{Since: later}) || len(persisted(t, c).Hourly) != 0 {
+			t.Errorf("%s: last_24h %+v, want an empty window since %s", name, s.Last24h, later)
+		}
+	}
+	// A malformed all-time section still rejects the blob, window or not.
+	c = New(newStore(t), func() time.Time { return t0 })
+	if err := c.Load(windowBlob(t, map[string]any{"Runs": -1, "Hourly": inRange(3)})); err == nil || c.Snapshot().Runs != 0 {
+		t.Errorf("a negative all-time counter loaded (err %v): %+v", err, c.Snapshot())
 	}
 }
 
