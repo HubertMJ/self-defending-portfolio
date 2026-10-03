@@ -245,9 +245,11 @@ func (c *Collector) recordRun(data []byte) {
 			if rs.interactive {
 				c.a.TerminalRuns++
 			}
-			at := e.At
-			if at.IsZero() {
-				at = c.now()
+			// No time, or one ahead of this clock (a skewed publisher), is "now": a future hour would sit
+			// outside the window until it arrives, and a future last run would read as one to come.
+			at, now := e.At, c.now()
+			if at.IsZero() || at.After(now) {
+				at = now
 			}
 			at = at.UTC()
 			rs.hour = unixHour(at)

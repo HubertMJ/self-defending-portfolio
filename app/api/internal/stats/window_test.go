@@ -279,6 +279,23 @@ func TestBucketedByQueuedHour(t *testing.T) {
 	}
 }
 
+// A run event stamped ahead of this clock counts in the current hour and as a run now, not later.
+func TestFutureRunClamped(t *testing.T) {
+	c := New(newStore(t), func() time.Time { return t0 })
+	c.Record(ev("run", map[string]any{"run_id": "r1", "scenario": "shell-in-container", "state": "queued", "at": t0.Add(3 * time.Hour)}))
+	c.Record(ev("run", map[string]any{"run_id": "r1", "scenario": "shell-in-container", "state": "detected", "at": t0.Add(3 * time.Hour)}))
+	s := c.Snapshot()
+	if s.LastRunAt == nil || !s.LastRunAt.Equal(t0) {
+		t.Fatalf("last_run_at = %v, want clamped to %s", s.LastRunAt, t0)
+	}
+	if s.Last24h.Runs != 1 || s.Last24h.Detected != 1 {
+		t.Fatalf("last_24h = %+v, want the run in the current hour", s.Last24h)
+	}
+	if a := persisted(t, c); len(a.Hourly) != 1 || a.Hourly[0].H != hourOf(t0) {
+		t.Fatalf("hourly = %+v, want only the current hour", a.Hourly)
+	}
+}
+
 // runs >= detected >= responded in every window of three days of random runs, whatever hour
 // boundaries the runs straddle.
 func TestWindowOrderingRandomised(t *testing.T) {
