@@ -302,17 +302,45 @@ describe("degrading against today's API (review 2, items 8 and 13)", () => {
     }
   });
 
-  it("offers the twin only when the API's scenarios say it knows ?compare=1 (an `interactive` field)", async () => {
+  it("runs side by side by default only when the API's scenarios say it knows ?compare=1 (an `interactive` field)", async () => {
     const { mountScenarios } = await import("../../src/ui/scenarios");
     const { ApiClient } = await import("../../src/lib/api");
     const old = [{ id: "network-tool", title: "t", summary: "s", technique: "T1071.001", detection: "d", response: "quarantine", victim: true }];
-    for (const [list, twins] of [[old, 0], [old.map((s) => ({ ...s, interactive: false })), 1]] as const) {
+    const press = async (list: unknown, button: string) => {
+      const posts: string[] = [];
+      const fetch = async (input: string, init?: RequestInit) => {
+        const url = new URL(input, "http://x");
+        if ((init?.method ?? "GET") === "POST") {
+          posts.push(url.pathname + url.search);
+          return new Response(JSON.stringify({ run_id: "0123456789abcdef", scenario: "network-tool", state: "queued" }), { status: 202, headers: { "Content-Type": "application/json" } });
+        }
+        return new Response(JSON.stringify(list), { status: 200, headers: { "Content-Type": "application/json" } });
+      };
       const root = document.createElement("div");
-      mountScenarios(root, document.createElement("p"), new ApiClient({ fetch: jsonFetch(200, list, { n: 0 }) }));
+      mountScenarios(root, document.createElement("p"), new ApiClient({ fetch }));
       await new Promise((r) => setTimeout(r, 10));
-      expect(root.querySelectorAll(".scenario .btn--attack")).toHaveLength(1);
-      expect(root.querySelectorAll(".scenario__twin")).toHaveLength(twins);
-    }
+      const label = root.querySelector(".scenario .btn--attack")?.textContent;
+      (root.querySelector(button) as HTMLButtonElement | null)?.click();
+      await new Promise((r) => setTimeout(r, 10));
+      return { root, posts, label };
+    };
+    // Today's API: one plain button, as before; nothing offers the twin.
+    const today = await press(old, ".scenario .btn--attack");
+    expect(today.posts).toEqual(["/api/attack/network-tool"]);
+    expect(today.root.querySelector(".scenario__alt")).toBeNull();
+    expect(today.root.querySelector(".scenario__launchnote")).toBeNull();
+    expect(today.label).toBe("▶Launch attack");
+    // The interactive API: the main button runs both pods, the small one the guarded pod alone…
+    const both = old.map((s) => ({ ...s, interactive: false }));
+    const main = await press(both, ".scenario .btn--attack");
+    expect(main.posts).toEqual(["/api/attack/network-tool?compare=1"]);
+    expect(main.label).toBe("▶Launch side by side");
+    expect((await press(both, ".scenario__alt")).posts).toEqual(["/api/attack/network-tool"]);
+    // …and the card says what each does, tied to both buttons for a screen reader.
+    const note = main.root.querySelector(".scenario__launchnote") as HTMLElement;
+    expect(note.textContent).toBe("Side by side runs it in two pods at once: one the cluster defends, and an unguarded twin where Falco sees it and nothing answers. Guarded pod only runs the defended pod alone.");
+    expect(main.root.querySelector(".scenario .btn--attack")?.getAttribute("aria-describedby")?.split(" ")).toContain(note.id);
+    expect(main.root.querySelector(".scenario__alt")?.getAttribute("aria-describedby")).toBe(note.id);
   });
 });
 

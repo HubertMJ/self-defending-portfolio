@@ -3440,9 +3440,16 @@ html[data-terminal="off"] .needs-terminal {
   margin-top: auto;
 }
 
-.scenario__twin[aria-disabled="true"] {
+.scenario__alt[aria-disabled="true"] {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+.scenario__launchnote {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  line-height: 1.45;
 }
 
 @media (prefers-reduced-motion: reduce) {

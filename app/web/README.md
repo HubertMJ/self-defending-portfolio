@@ -57,7 +57,8 @@ deployed today (a JSON 404 for the terminal and `/api/stats`, `?compare=1` ignor
 visitor's terminal session joined mid-way, exactly as the interactive API publishes it (with
 `--slow-details`, its catalogue answers 1.5 s late).
 
-The terminal, the unguarded twin (the "With & without the response" button on a one-click card) and
+The terminal, the unguarded twin (a one-click card's main button, "Launch side by side", whenever the
+API knows `?compare=1`; "Guarded pod only" beside it runs the one defended pod) and
 the hero's live counters are all simulated in mock mode from `src/lib/fixtures.ts`, so the whole
 interactive front end runs without a cluster.
 

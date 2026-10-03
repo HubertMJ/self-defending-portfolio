@@ -89,9 +89,9 @@ export function mountScenarios(
       btn.setAttribute("aria-disabled", String(blocked));
       const running = state.activeRun?.scenario === id || state.pending === id;
       btn.dataset.running = String(running);
-      replace(btn.querySelector(".btn__label") as HTMLElement, running ? "Running…" : blocked ? reason : "Launch attack");
+      replace(btn.querySelector(".btn__label") as HTMLElement, running ? "Running…" : blocked ? reason : launchLabel());
     }
-    for (const t of root.querySelectorAll<HTMLButtonElement>(".scenario__twin")) t.setAttribute("aria-disabled", String(reason !== null));
+    for (const t of root.querySelectorAll<HTMLButtonElement>(".scenario__alt")) t.setAttribute("aria-disabled", String(reason !== null));
     if (state.cooldownUntil && state.cooldownUntil > now) {
       replace(countdown, `Unlocks in ${formatCountdown((state.cooldownUntil - now) / 1000)}`);
       if (!countdown.isConnected) statusEl.append(countdown);
@@ -129,24 +129,37 @@ export function mountScenarios(
     sync();
   };
 
-  // Only an API that knows `?compare=1` gets the twin button: an older one ignores the parameter and
-  // would start an ordinary run instead. Such an API also predates the terminal, and its scenarios
-  // carry no `interactive` field — that is how it is told apart.
+  // An API that knows `?compare=1` runs every one-click attack side by side by default: the same
+  // attack in sandbox and in sandbox-unguarded (C), with the guarded pod alone one small button away.
+  // An older API ignores the parameter and would start an ordinary run instead, so it keeps the one
+  // plain button. Such an API also predates the terminal, and its scenarios carry no `interactive`
+  // field — that is how it is told apart.
   let compare = false;
+  const launchLabel = () => (compare ? "Launch side by side" : "Launch attack");
 
   const card = (s: Scenario): HTMLElement => {
     const url = attackUrl(s.technique);
+    const note = `scn-${s.id}-launch`;
     const btn = h(
       "button",
-      { type: "button", class: "btn btn--attack", "aria-describedby": `scn-${s.id}-summary` },
+      { type: "button", class: "btn btn--attack", "aria-describedby": compare ? `scn-${s.id}-summary ${note}` : `scn-${s.id}-summary` },
       h("span", { class: "btn__icon", "aria-hidden": "true" }, "▶"),
-      h("span", { class: "btn__label" }, "Launch attack"),
+      h("span", { class: "btn__label" }, launchLabel()),
     );
-    btn.addEventListener("click", () => void launch(s));
+    btn.addEventListener("click", () => void launch(s, { compare }));
     buttons.set(s.id, btn);
-    // "Run it with and without the response": the same attack in sandbox and in sandbox-unguarded (C).
-    const twin = compare ? h("button", { type: "button", class: "btn btn--ghost btn--small scenario__twin" }, "With & without the response") : null;
-    twin?.addEventListener("click", () => void launch(s, { compare: true }));
+    const alt = compare ? h("button", { type: "button", class: "btn btn--ghost btn--small scenario__alt", "aria-describedby": note }, "Guarded pod only") : null;
+    alt?.addEventListener("click", () => void launch(s));
+    const howTo = compare
+      ? h(
+          "p",
+          { class: "scenario__launchnote", id: note },
+          h("strong", {}, "Side by side"),
+          " runs it in two pods at once: one the cluster defends, and an unguarded twin where Falco sees it and nothing answers. ",
+          h("strong", {}, "Guarded pod only"),
+          " runs the defended pod alone.",
+        )
+      : null;
     const response = RESPONSE_LABEL[s.response] ?? s.response;
     return h(
       "li",
@@ -166,7 +179,7 @@ export function mountScenarios(
         h("div", {}, h("dt", {}, "Detected by"), h("dd", {}, h("code", {}, s.detection))),
         h("div", {}, h("dt", {}, "Response"), h("dd", { class: `response response--${s.response}` }, response)),
       ),
-      h("div", { class: "scenario__actions" }, btn, twin),
+      h("div", { class: "scenario__actions" }, btn, alt, howTo),
     );
   };
 
