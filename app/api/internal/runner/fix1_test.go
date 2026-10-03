@@ -149,3 +149,34 @@ func TestQuarantineCutBeforeLingerCounts(t *testing.T) {
 		t.Fatalf("the run lingered %v after a cut that followed the response; want ~QuarantineLinger, not the 3 s cap", d)
 	}
 }
+
+// FIX 1: Cilium's cut is not instant. When it becomes visible 600 ms after the response - well past the
+// 50 ms grace - the linger still waits for it: the cut is published before the run finishes. A run
+// that took no note of when the response came would count "no unreachable yet" as already satisfied
+// and delete the pod before the visitor sees the cut.
+func TestQuarantineLingerWaitsForSlowCut(t *testing.T) {
+	app := newVictimApp(t)
+	c := fake.NewClientset()
+	readyOnCreate(c)
+	rec := newRecorder()
+	r := New(c, defacer{app}, rec, nil, Config{PollInterval: 10 * time.Millisecond,
+		QuarantineLinger: 50 * time.Millisecond, QuarantineLingerMax: 3 * time.Second,
+		VictimPort: app.port, VictimInterval: 20 * time.Millisecond, VictimTimeout: 200 * time.Millisecond})
+	release, done := released()
+	sc := scenario("quarantine", true)
+	sc.Victim, sc.TimeoutSeconds = true, 30
+	id := start(t, r, sc, release)
+	pod := podName(sc.ID, id)
+	waitOrder(t, rec, "victim:defaced")
+	r.ObserveTalon("sandbox", pod, "success", "")
+	rec.waitFor(t, StateResponded)
+	time.Sleep(600 * time.Millisecond)
+	app.srv.CloseClientConnections()
+	_ = app.srv.Listener.Close()
+	rec.waitFor(t, StateFinished)
+	<-done
+	o := rec.order()
+	if !strings.Contains(o, "victim:unreachable") || strings.Index(o, "victim:unreachable") > strings.LastIndex(o, "run:finished") {
+		t.Fatalf("finished before the cut was published: %s", o)
+	}
+}
