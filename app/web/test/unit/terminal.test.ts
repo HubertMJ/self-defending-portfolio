@@ -328,16 +328,118 @@ describe("a command that exited without an exit code (review 2, item 2)", () => 
   });
 
   it("idle and deadline end the session with their own reason", async () => {
-    for (const [detail, want] of [["idle", "idle timeout"], ["deadline", "300-second deadline"]]) {
+    for (const [detail, want] of [["idle", "ended after 90 s without a command"], ["deadline", "the 5-minute session limit"]]) {
       const t = await harness();
       const f = new Feed().open();
       f.ran(1, "whoami", 3000, ["uid=10001"], 0, true);
-      f.run("finished", detail === "idle" ? 33_100 : 120_000, detail);
-      t.show(f, T0 + 200_000);
+      f.run("finished", detail === "idle" ? 93_100 : 300_000, detail);
+      t.show(f, T0 + 400_000);
       expect(text(t.root.querySelector(".term__sumlead"))).toContain(want);
       expect(stat(t.root, "Killed after your Enter")).toBeUndefined();
       expect(ended(t.root)).toEqual([]);
     }
+  });
+});
+
+describe("the session's countdowns in the bar (ADR 0033, 2026-10-03 limits)", () => {
+  const left = (root: HTMLElement) => text(root.querySelector(".term__left"));
+  const idle = (root: HTMLElement) => text(root.querySelector(".term__idleleft"));
+  const clock = (root: HTMLElement) => root.querySelector(".term__clock") as HTMLElement;
+  const status = (root: HTMLElement) => text(root.querySelector(".term__status"));
+  const fake = (at: number) => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
+    vi.setSystemTime(at);
+  };
+
+  it("session and idle time left from the details' 300 s and 90 s, ticking once a second on its own", async () => {
+    fake(T0 + 1950); // the page sees the first probe as it is published
+    const t = await harness();
+    const f = new Feed();
+    f.run("queued", 0);
+    f.run("started", 40, "pod created");
+    t.show(f, Date.now());
+    // Before pod_ready the clock keeps its place but is not shown.
+    expect(clock(t.root).dataset.live).toBe("false");
+    f.open();
+    t.show(f.events.slice(2), Date.now());
+    expect(clock(t.root).dataset.live).toBe("true");
+    expect(left(t.root)).toBe("Session time: 4:59 left"); // 300 s from the run's start, 1.95 s in
+    expect(idle(t.root)).toBe("Idle limit in idle 1:30"); // 90 s from pod_ready at 1.9 s
+    vi.advanceTimersByTime(1000); // no event, no update()
+    expect(left(t.root)).toBe("Session time: 4:58 left");
+    expect(idle(t.root)).toBe("Idle limit in idle 1:29");
+  });
+
+  it("the idle countdown starts again with each command's start", async () => {
+    fake(T0 + 1950);
+    const t = await harness();
+    const f = new Feed().open();
+    t.show(f, Date.now());
+    vi.setSystemTime(T0 + 30_000);
+    f.cmd(1, "whoami", "started", 30_000);
+    t.show(f, Date.now());
+    expect(idle(t.root)).toContain("idle 1:30");
+    expect(left(t.root)).toContain("4:30 left");
+    vi.advanceTimersByTime(20_000); // the command's end does not restart it
+    f.cmd(1, "whoami", "exited", 30_040, { exit_code: 0, achieved: true });
+    t.show(f, Date.now());
+    expect(idle(t.root)).toContain("idle 1:10");
+  });
+
+  it("is read from the API's clock, not the visitor's: an hour-fast device shows the same", async () => {
+    fake(T0 + 1950 + 3_600_000);
+    const t = await harness();
+    t.show(new Feed().open(), T0 + 1950);
+    expect(left(t.root)).toContain("4:59 left");
+    expect(idle(t.root)).toContain("idle 1:30");
+  });
+
+  it("is shown to a watcher of someone else's session too", async () => {
+    fake(T0 + 1950);
+    const t = await harness({ start: false });
+    t.show(new Feed().open(), Date.now());
+    expect(status(t.root)).toContain("read-only");
+    expect(clock(t.root).dataset.live).toBe("true");
+    expect(left(t.root)).toContain("4:59 left");
+  });
+
+  it("at the end, the bar and the summary name the run's reason, and the clock stops", async () => {
+    for (const [detail, bar, lead, other] of [
+      ["idle", "session over — ended after 90 s without a command", "ended after 90 s without a command", false],
+      ["deadline", "session over — reached the 5-minute session limit", "the 5-minute session limit", false],
+      ["left", "session over — you left", "You left", false],
+      ["left", "session over — the visitor left", "The visitor left", true],
+      ["killed", "session over — the cluster deleted the pod", "deleted the pod", false],
+    ] as const) {
+      fake(T0 + 1950);
+      const t = await harness({ start: !other });
+      const f = new Feed().open();
+      t.show(f, Date.now());
+      if (detail === "killed") killedBy(f, 1, 3000);
+      else f.run("finished", 5000, detail);
+      vi.setSystemTime(T0 + 6000);
+      t.show(f, Date.now());
+      expect(status(t.root), detail).toBe(bar);
+      expect(text(t.root.querySelector(".term__sumlead")), detail).toContain(lead);
+      expect(clock(t.root).hidden).toBe(true);
+      const shown = left(t.root);
+      vi.advanceTimersByTime(3000);
+      expect(left(t.root)).toBe(shown);
+      vi.useRealTimers();
+    }
+  });
+
+  it("an API that sends no limits gets no countdowns, and words without numbers", async () => {
+    const { timeout_seconds: _t, idle_seconds: _i, ...bare } = terminalDetails();
+    fake(T0 + 1950);
+    const t = await harness({ details: async () => [200, bare] });
+    const f = new Feed().open();
+    t.show(f, Date.now());
+    expect(clock(t.root).dataset.live).toBe("false");
+    expect(left(t.root)).toBe("");
+    f.run("finished", 5000, "deadline");
+    t.show(f, Date.now());
+    expect(status(t.root)).toBe("session over — reached the session's time limit");
   });
 });
 
