@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -54,7 +55,8 @@ const terminalCatalogue = `
     containers: [{name: target, image: "` + img + `"}]
 `
 
-func newTerminalEnv(t *testing.T) (*env, *stats.Collector) {
+// newTerminalEnv is a server with the terminal catalogue; opts adjust the runner's config.
+func newTerminalEnv(t *testing.T, opts ...func(*runner.Config)) (*env, *stats.Collector) {
 	t.Helper()
 	path := t.TempDir() + "/scenarios.yaml"
 	if err := os.WriteFile(path, []byte(terminalCatalogue), 0o600); err != nil {
@@ -73,9 +75,13 @@ func newTerminalEnv(t *testing.T) (*env, *stats.Collector) {
 	collector := stats.New(store, nil)
 	hub.Tap(func(ev events.Event) { runs.Record(ev); collector.Record(ev) })
 	rules, _ := ruleindex.Load()
-	run := runner.New(kube, noopExec{}, hub, nil, runner.Config{
+	rcfg := runner.Config{
 		PollInterval: 5 * time.Millisecond, QuarantineLinger: -1, CommandTimeout: 80 * time.Millisecond,
-		UnguardedNamespace: "sandbox-unguarded", CompareHold: 50 * time.Millisecond})
+		UnguardedNamespace: "sandbox-unguarded", CompareHold: 50 * time.Millisecond}
+	for _, o := range opts {
+		o(&rcfg)
+	}
+	run := runner.New(kube, noopExec{}, hub, nil, rcfg)
 	attacks := limits.NewAttacks(limits.DefaultAttackConfig(), nil)
 	srv := New(Config{
 		Scenarios: store, Runner: run, Hub: hub, Posture: stubPosture{},
@@ -291,16 +297,26 @@ func TestTerminalCommandLimitsAndTokenSecrecy(t *testing.T) {
 	if ok != 30 {
 		t.Fatalf("only %d commands accepted", ok)
 	}
-	// The 31st, once no command is running, is 429.
-	for time.Now().Before(deadline) {
-		code, _ := e.command(t, ar.RunID, ar.Token, `{"id":"whoami"}`)
+	// The 31st, once no command is running, is 429 - and must be seen before the deadline, not
+	// assumed when the loop runs out of time, and must be the command cap's 429, not the
+	// per-visitor request limiter's that this polling loop would reach on its own.
+	saw429 := false
+	for !saw429 && time.Now().Before(deadline) {
+		code, body := e.command(t, ar.RunID, ar.Token, `{"id":"whoami"}`)
 		if code == http.StatusTooManyRequests {
+			if !strings.Contains(body, "too many commands in this run") {
+				t.Fatalf("429 from something other than the command cap: %s", body)
+			}
+			saw429 = true
 			break
 		}
 		if code != http.StatusConflict {
 			t.Fatalf("31st command: %d", code)
 		}
 		time.Sleep(5 * time.Millisecond)
+	}
+	if !saw429 {
+		t.Fatal("the 31st command never got 429")
 	}
 
 	// The token is in neither the run's events nor the run record.
@@ -329,19 +345,209 @@ func TestTerminalEndedRunIs409(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer "+ar.Token)
 	dr, _ := http.DefaultClient.Do(req)
 	_ = dr.Body.Close()
-	// Wait for it to actually finish, then a command is 409, and an unknown run is 404.
+	// Wait until the run has ended completely - pod deleted, slot released, the run no longer
+	// registered - so the 409 comes from the record of ended runs, not from a run still finishing.
 	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		code, _ := e.command(t, ar.RunID, ar.Token, `{"id":"whoami"}`)
-		if code == http.StatusConflict {
-			break
+	for e.attacks.Active() != 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("the run never released its slot")
 		}
-		if code != http.StatusAccepted && code != http.StatusConflict {
-			t.Fatalf("ended run command: %d", code)
-		}
-		time.Sleep(10 * time.Millisecond)
+		time.Sleep(5 * time.Millisecond)
+	}
+	if code, _ := e.command(t, ar.RunID, ar.Token, `{"id":"whoami"}`); code != http.StatusConflict {
+		t.Fatalf("command on an ended run: %d, want 409", code)
+	}
+	req, _ = http.NewRequest("DELETE", e.public.URL+"/api/runs/"+ar.RunID, nil)
+	req.Header.Set("Authorization", "Bearer "+ar.Token)
+	dr, _ = http.DefaultClient.Do(req)
+	_ = dr.Body.Close()
+	if dr.StatusCode != http.StatusConflict {
+		t.Fatalf("leave on an ended run: %d, want 409", dr.StatusCode)
 	}
 	if code, _ := e.command(t, "ffffffffffffffff", ar.Token, `{"id":"whoami"}`); code != http.StatusNotFound {
 		t.Fatalf("unknown run: %d", code)
 	}
+}
+
+// startTerminal POSTs /api/attack/terminal and returns the run id and token.
+func startTerminal(t *testing.T, e *env, ip string) (string, string) {
+	t.Helper()
+	resp := e.post(t, "/api/attack/terminal", ip, nil)
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("attack: %d", resp.StatusCode)
+	}
+	ar := decode[struct {
+		RunID string `json:"run_id"`
+		Token string `json:"token"`
+	}](t, resp.Body)
+	return ar.RunID, ar.Token
+}
+
+// commandWithin POSTs a command and returns its status, failing the test if it takes longer than d -
+// a command is answered at once, never held until the run can take it.
+func commandWithin(t *testing.T, e *env, runID, token string, d time.Duration) int {
+	t.Helper()
+	got := make(chan int, 1)
+	go func() {
+		req, _ := http.NewRequest("POST", e.public.URL+"/api/runs/"+runID+"/commands", strings.NewReader(`{"id":"whoami"}`))
+		req.Header.Set("Authorization", "Bearer "+token)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			got <- 0
+			return
+		}
+		_ = resp.Body.Close()
+		got <- resp.StatusCode
+	}()
+	select {
+	case code := <-got:
+		return code
+	case <-time.After(d):
+		t.Fatalf("the command was not answered within %v", d)
+		return 0
+	}
+}
+
+// 409 before the pod is ready (the run exists, the command cannot run yet) and 409 while another
+// command is running - answered at once in both cases.
+func TestTerminalCommandNotReadyAndBusy(t *testing.T) {
+	e, _ := newTerminalEnv(t, func(c *runner.Config) { c.CommandTimeout = 3 * time.Second })
+	created := make(chan struct{})
+	var once sync.Once
+	create := func() { once.Do(func() { close(created) }) }
+	// Registered after newTerminalEnv's cleanup, so it runs first: a held pod create (and any command
+	// waiting on it) is let go before the servers and the runner are shut down.
+	t.Cleanup(create)
+	e.kube.PrependReactor("create", "pods", func(k8stesting.Action) (bool, runtime.Object, error) {
+		<-created // the pod is not created, so never ready, until the test says so
+		return false, nil, nil
+	})
+	runID, token := startTerminal(t, e, "198.51.100.20")
+	if code := commandWithin(t, e, runID, token, time.Second); code != http.StatusConflict {
+		t.Fatalf("command before pod_ready: %d, want 409", code)
+	}
+	create()
+
+	// Ready: the first command is accepted and runs (noopExec holds it for CommandTimeout, 3 s).
+	deadline := time.Now().Add(3 * time.Second)
+	for code := commandWithin(t, e, runID, token, time.Second); code != http.StatusAccepted; code = commandWithin(t, e, runID, token, time.Second) {
+		if code != http.StatusConflict || time.Now().After(deadline) {
+			t.Fatalf("first command: %d", code)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if code := commandWithin(t, e, runID, token, time.Second); code != http.StatusConflict {
+		t.Fatalf("command while another runs: %d, want 409", code)
+	}
+}
+
+// Concurrent POSTs on one run: while a command runs, exactly one of a burst is accepted, the rest
+// are 409, and no seq is handed out twice.
+func TestTerminalConcurrentCommands(t *testing.T) {
+	e, _ := newTerminalEnv(t, func(c *runner.Config) { c.CommandTimeout = 3 * time.Second })
+	runID, token := startTerminal(t, e, "198.51.100.21")
+	waitRunState(t, e, runID, "pod_ready") // accepting commands, none run yet
+
+	const n = 12
+	var wg sync.WaitGroup
+	codes := make(chan int, n)
+	seqs := make(chan int, n)
+	start := make(chan struct{})
+	for range n {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			code, body := e.command(t, runID, token, `{"id":"whoami"}`)
+			codes <- code
+			if code == http.StatusAccepted {
+				seqs <- decode[struct {
+					Seq int `json:"seq"`
+				}](t, strings.NewReader(body)).Seq
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(codes)
+	close(seqs)
+	accepted, conflict := 0, 0
+	for c := range codes {
+		switch c {
+		case http.StatusAccepted:
+			accepted++
+		case http.StatusConflict:
+			conflict++
+		default:
+			t.Fatalf("concurrent command: %d", c)
+		}
+	}
+	if accepted != 1 || conflict != n-1 {
+		t.Fatalf("%d accepted, %d conflicts; want exactly one accepted while it runs", accepted, conflict)
+	}
+	if s := <-seqs; s != 1 {
+		t.Fatalf("seq = %d, want 1", s)
+	}
+}
+
+// The run's token never appears on the event stream: not in the attack's events, not in a
+// command's, not in the run's end.
+func TestTerminalTokenNotOnStream(t *testing.T) {
+	e, _ := newTerminalEnv(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	stream := openStream(t, ctx, e, "198.51.100.22", "")
+	runID, token := startTerminal(t, e, "198.51.100.23")
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		code, _ := e.command(t, runID, token, `{"id":"whoami"}`)
+		if code == http.StatusAccepted {
+			break
+		}
+		if code != http.StatusConflict || time.Now().After(deadline) {
+			t.Fatalf("command: %d", code)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	waitRunState(t, e, runID, "exited")
+	req, _ := http.NewRequest("DELETE", e.public.URL+"/api/runs/"+runID, nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	if dr, err := http.DefaultClient.Do(req); err == nil {
+		_ = dr.Body.Close()
+	}
+	// Every frame of the stream, up to and including the run's end.
+	var frames []string
+	for !strings.Contains(strings.Join(frames, "\n"), `"state":"finished"`) {
+		f := stream.next(t, 5*time.Second)
+		if f == "" {
+			t.Fatalf("stream ended before the run finished: %v", frames)
+		}
+		frames = append(frames, f)
+	}
+	all := strings.Join(frames, "\n")
+	if !strings.Contains(all, runID) {
+		t.Fatal("the stream did not carry the run (the check would prove nothing)")
+	}
+	if strings.Contains(all, token) {
+		t.Fatal("the run's token appeared on the event stream")
+	}
+}
+
+// waitRunState waits until GET /api/runs/{id} holds an event whose state is state.
+func waitRunState(t *testing.T, e *env, runID, state string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		resp, err := http.Get(e.public.URL + "/api/runs/" + runID)
+		if err == nil {
+			b, _ := io.ReadAll(resp.Body)
+			_ = resp.Body.Close()
+			if strings.Contains(string(b), `"state":"`+state+`"`) {
+				return
+			}
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("run %s never reached %q", runID, state)
 }
