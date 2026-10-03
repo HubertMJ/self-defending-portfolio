@@ -167,3 +167,20 @@ validates every new catalogue field (ids, unique inputs, outcomes, layers, per-c
   overlayfs snapshotter and on emptyDir being a separate mount; the live test covers the link.
 - Live checks integration must run (no cluster here): `tests/scenarios/run.sh` for the <3 s bound and the
   terminal's end states, and the live `make scenario-test`.
+
+## Amendment 2026-10-03: the measured cause was `identity-max-jitter`, not allocation or the grace period
+
+With part 1 deployed on its own (identity labels and the 500 ms grace), `tests/scenarios/run.sh` measured
+label-to-cut live: 25.0 s cold, 10.8 s warm. Against a pod labelled by hand, the agent's log showed the whole
+wait between "Resolving identity labels (non-blocking)" and "Identity of endpoint changed" (10.05 s), with the
+BPF reload 65 ms after that and the probe dropped on the next poll. In `pkg/endpoint` (1.19.8),
+`runIdentityResolver` hands the change to a controller with `Jitter: option.Config.CiliumIdentityMaxJitter`:
+the agent waits a random time up to `--identity-max-jitter` (default 30 s) before acting on changed pod labels,
+to spread identity churn across a large cluster. Every number measured so far (10-36 s) is that uniform delay
+plus, cold, the allocation. On one node there is nothing to spread, so the value is `0s`, set through the
+chart's `extraConfig` (the chart has no value for it). Both the `labels` change and the shorter grace stay:
+they were right, they were not the bulk.
+
+Also added: `rollOutCiliumPods: true`, because the first deployment showed that a ConfigMap change syncs and
+then waits for a manual `rollout restart` of the agent; now a changed value takes effect on sync. The
+measurement after this amendment is in the integration record, cold and warm.
