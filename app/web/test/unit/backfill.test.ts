@@ -24,7 +24,7 @@ describe("a run joined mid-session (review 2, item 6)", () => {
 
   it("…and is backfilled anyway, because it lacks its start", async () => {
     const asked: string[] = [];
-    const b = new Backfill(async (id) => (asked.push(id), { ok: true, value: [] }), () => {});
+    const b = new Backfill(async (id) => (asked.push(id), { ok: true, value: { events: [], truncated: false } }), () => {});
     b.view(buildTimeline(joined, T0 + 7000));
     b.view(buildTimeline(joined, T0 + 7000));
     await Promise.resolve();
@@ -34,7 +34,7 @@ describe("a run joined mid-session (review 2, item 6)", () => {
   it("after a failed backfill, waits before trying again instead of refetching on every render", async () => {
     let now = T0;
     const asked: number[] = [];
-    const fail: Result<StreamEvent[]> = { ok: false, error: "offline", message: "HTTP 503", status: 503, json: true };
+    const fail: Result<{ events: StreamEvent[]; truncated: boolean }> = { ok: false, error: "offline", message: "HTTP 503", status: 503, json: true };
     const b = new Backfill(async () => (asked.push(now), fail), () => {}, () => now);
     const view = buildTimeline(joined, T0 + 7000);
     for (let i = 0; i < 50; i++) {
@@ -55,7 +55,7 @@ describe("a run joined mid-session (review 2, item 6)", () => {
 
   it("backfills the active run when the stream opens again after a hidden-tab stop", async () => {
     const asked: string[] = [];
-    const b = new Backfill(async (id) => (asked.push(id), { ok: true, value: [] }), () => {});
+    const b = new Backfill(async (id) => (asked.push(id), { ok: true, value: { events: [], truncated: false } }), () => {});
     b.stream("open", "r1");
     expect(asked).toEqual([]); // a first open is not a gap
     b.stopped(); // hidden for 60 s: the page closed the stream itself
@@ -73,7 +73,7 @@ describe("a run joined mid-session (review 2, item 6)", () => {
 describe("backfill of events that name a run the feed never showed (final review, item 5)", () => {
   it("fetches that run", async () => {
     const asked: string[] = [];
-    const b = new Backfill(async (id) => (asked.push(id), { ok: true, value: [] }), () => {});
+    const b = new Backfill(async (id) => (asked.push(id), { ok: true, value: { events: [], truncated: false } }), () => {});
     const orphan = ev("victim", { run_id: "0123456789abcdef", pod: "p", at: at(0), status: "up", title: "", banner: "", probe_ms: 3, checksum: "" }, 9);
     b.view({ runs: [], unmatched: [orphan] });
     await Promise.resolve();
@@ -85,7 +85,7 @@ describe("a backfill the run store answers with a 404 (final review, item 7)", (
   it("is not asked again, however long the page stays", async () => {
     let now = T0;
     const asked: number[] = [];
-    const gone: Result<StreamEvent[]> = { ok: false, error: "offline", message: "HTTP 404", status: 404, json: true };
+    const gone: Result<{ events: StreamEvent[]; truncated: boolean }> = { ok: false, error: "offline", message: "HTTP 404", status: 404, json: true };
     const b = new Backfill(async () => (asked.push(now), gone), () => {}, () => now);
     const view = buildTimeline(joined, T0 + 7000);
     for (let i = 0; i < 20; i++) {
@@ -94,5 +94,16 @@ describe("a backfill the run store answers with a 404 (final review, item 7)", (
       now += 60_000;
     }
     expect(asked).toHaveLength(1);
+  });
+});
+
+describe("a backfill the store had to cut short (final review, item 7)", () => {
+  it("reports it, so the terminal can say its history has gaps", async () => {
+    const cut: string[] = [];
+    const b = new Backfill(async () => ({ ok: true, value: { events: [], truncated: true } }), () => {}, Date.now, (id) => cut.push(id));
+    b.view(buildTimeline(joined, T0 + 7000));
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(cut).toEqual(["4f1c2a9e8b7d6c5a"]);
   });
 });

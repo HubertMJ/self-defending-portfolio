@@ -801,6 +801,11 @@ export function parseStats(v: unknown): Stats {
 }
 
 /** GET /api/runs/{id}: either a bare array of {type, data} or {events: [...]}; invalid entries dropped. */
+/** GET /api/runs/{id} with its `truncated` flag: the store hit its per-run cap and kept no more. */
+export function parseRunHistory(v: unknown): { events: StreamEvent[]; truncated: boolean } {
+  return { events: parseRunEvents(v), truncated: isObj(v) && v.truncated === true };
+}
+
 export function parseRunEvents(v: unknown): StreamEvent[] {
   const list = Array.isArray(v) ? v : isObj(v) && Array.isArray(v.events) ? v.events : null;
   if (!list) throw new TypeError("run: expected an event list");

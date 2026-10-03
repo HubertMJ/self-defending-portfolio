@@ -24,9 +24,11 @@ export class Backfill {
   private interrupted = false;
 
   constructor(
-    private readonly fetchRun: (runId: string) => Promise<Result<StreamEvent[]>>,
+    private readonly fetchRun: (runId: string) => Promise<Result<{ events: StreamEvent[]; truncated: boolean }>>,
     private readonly push: (ev: StreamEvent) => void,
     private readonly now: () => number = Date.now,
+    /** The store kept only part of this run (its per-run cap): what the page shows may have gaps. */
+    private readonly onTruncated: (runId: string) => void = () => {},
   ) {}
 
   /** Every new view of the feed: backfill what it shows without a start. */
@@ -61,7 +63,8 @@ export class Backfill {
       if (r.ok) {
         s.done = true;
         s.delay = 0;
-        for (const ev of r.value) this.push(ev);
+        for (const ev of r.value.events) this.push(ev);
+        if (r.value.truncated) this.onTruncated(runId);
       } else if (r.status === 404 && r.json) {
         // The run store does not have it (it keeps the last 50 runs): asking again will not change
         // that. Only a reconnect asks once more.

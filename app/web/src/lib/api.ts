@@ -19,7 +19,7 @@ import {
   isRunId,
   isTerminalAccepted,
   parsePosture,
-  parseRunEvents,
+  parseRunHistory,
   parseScenarioDetails,
   parseScenarios,
   parseStats,
@@ -199,10 +199,10 @@ export class ApiClient {
   }
 
   /** GET /api/runs/{id}: the stored events of a run, for backfilling a session joined mid-way. */
-  runEvents(id: string): Promise<Result<StreamEvent[]>> {
+  runEvents(id: string): Promise<Result<{ events: StreamEvent[]; truncated: boolean }>> {
     // The id comes from the event stream; one that is not a run id never becomes a URL.
     if (!isRunId(id)) return Promise.resolve({ ok: false, error: "bad-response", message: "not a run id" });
-    return this.getJson(`/runs/${encodeURIComponent(id)}`, parseRunEvents);
+    return this.getJson(`/runs/${encodeURIComponent(id)}`, parseRunHistory);
   }
 
   /** `compare: true` runs the same catalogue attack in two pods at once (?compare=1). */

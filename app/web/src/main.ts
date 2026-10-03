@@ -139,7 +139,12 @@ function main(): void {
   let activeId: string | undefined;
 
   // A run's history from /api/runs/{id} when the live feed missed part of it (lib/backfill.ts).
-  const backfill = new Backfill((id) => api.runEvents(id), (ev) => timeline.push(ev));
+  const backfill = new Backfill(
+    (id) => api.runEvents(id),
+    (ev) => timeline.push(ev),
+    Date.now,
+    (id) => terminal.historyTruncated(id),
+  );
   const timeline = mountTimeline(
     byId("timeline-panel"),
     byId("timeline-conn"),

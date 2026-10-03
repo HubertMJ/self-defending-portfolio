@@ -19,6 +19,8 @@ import { renderVictim } from "./victim";
 
 export interface TerminalHandle {
   update(view: TimelineView): void;
+  /** The API's stored history of this run is incomplete (GET /api/runs/{id} said `truncated`). */
+  historyTruncated(runId: string): void;
 }
 
 interface Catalogue {
@@ -866,7 +868,14 @@ export function mountTerminal(
   if (typeof addEventListener === "function") addEventListener("pagehide", onPageHide);
 
   void loadCatalogue();
-  return { update };
+  const truncatedNoted = new Set<string>();
+  const historyTruncated = (runId: string) => {
+    if (!els || truncatedNoted.has(runId) || (session?.runId ?? watching) !== runId) return;
+    truncatedNoted.add(runId);
+    els.out.appendChild(h("p", { class: "term__line term__line--sys" }, "— the API kept only part of this run's history (its per-run limit), so some of what came before may be missing here —"));
+  };
+
+  return { update, historyTruncated };
 }
 
 function stat(label: string, value: string): HTMLElement {

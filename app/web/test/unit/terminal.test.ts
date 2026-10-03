@@ -67,6 +67,7 @@ class Feed {
 
 interface Harness {
   root: HTMLElement;
+  term: ReturnType<typeof mountTerminal>;
   calls: { method: string; path: string; body?: string }[];
   show(feed: Feed | StreamEvent[], now?: number): void;
 }
@@ -127,6 +128,7 @@ async function harness(opts: { start?: boolean; hooks?: Hooks; details?: () => P
   }
   return {
     root,
+    term,
     calls,
     show(feed, now) {
       const events = Array.isArray(feed) ? feed : feed.events;
@@ -685,5 +687,17 @@ describe("a 404 for a command (final review, item 7)", () => {
     chips(t.root)[1].click();
     await flush();
     expect(text(t.root.querySelector(".term__out"))).toContain("the run has ended");
+  });
+});
+
+describe("a run history the API had to cut short (final review, item 7)", () => {
+  it("is said in the terminal of that run, once", async () => {
+    const t = await harness({ start: false });
+    t.show(new Feed().open());
+    t.term.historyTruncated("ffffffffffffffff"); // another run: nothing
+    t.term.historyTruncated(RUN);
+    t.term.historyTruncated(RUN);
+    const notes = [...t.root.querySelectorAll(".term__out .term__line--sys")].filter((p) => /only part of this run's history/.test(p.textContent ?? ""));
+    expect(notes).toHaveLength(1);
   });
 });
