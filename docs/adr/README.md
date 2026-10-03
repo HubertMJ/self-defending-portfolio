@@ -38,13 +38,15 @@ decision are appended as dated amendments in the same file.
 | [0032](0032-terminal-scenario-and-quarantine-latency.md) | The attacker's terminal (a fifth, interactive scenario run by command id) and bringing quarantine isolation under 3 s (per-run labels out of the Cilium identity, 500 ms grace period) | 5 | accepted, amended 2026-10-03 (fifteenth command `dns-exfil`, ADR 0034) |
 | [0033](0033-interactive-terminal-defence-map-twin.md) | The front end becomes interactive: an attacker's terminal, a defence map, an unguarded twin and live stats; real-time-first playback, probe-based quarantine proof, placeholder copy stripped from production | 8 | accepted |
 | [0034](0034-siem-opensearch-security-analytics.md) | A ready-made SIEM: OpenSearch 3.9 with Security Analytics on its own VM `siem01`, Sigma rules and Alerting monitors synced from git, write-only, certificate-authenticated ingest into daily data streams whose rolled indices are write-blocked, host identities HMAC-pseudonymised, order/periodicity/intervals in the API; a DNS-exfiltration scenario Falco cannot see and correlation catches | 9 | accepted |
+| [0035](0035-credibility-provenance-evidence-persisted-window.md) | Credibility: provenance on the page (commit, CI run, digests, one checked cosign identity), evidence by default, the 24 h Falco/Talon counters in the persisted stats as hourly buckets, no MockBackend in production, stale Talon/Falcosidekick ReplicaSets pruned | 8 | accepted |
 
 Phases 5 and 6 were built on parallel branches and merged together; the numbers they had reserved
 are all in use except 0020 (phase 6 documentation needed no decision of its own), which is released.
 0020 stays unused. 0025-0033 are in use: the interactive demo was built on three parallel branches (0029 terminal
 runs and command output, 0030 stats and persistence - API; 0031 unguarded twin, 0032 terminal catalogue and
-quarantine latency - cluster; 0033 terminal, defence map, twin view - web). 0034 is the SIEM decision (phase 9).
-The next free ADR is 0035.
+quarantine latency - cluster; 0033 terminal, defence map, twin view - web). 0034 is the SIEM decision (phase 9);
+0035 makes the existing page verifiable (provenance, evidence, the persisted 24 h window, no mock in production).
+The next free ADR is 0036.
 
 ## Open items carried by accepted ADRs
 
@@ -63,7 +65,7 @@ Decisions are accepted with their known costs written down. The ones still open:
 | `ClusterPolicy` is deprecated in Kyverno 1.19; migration to ImageValidatingPolicy / CEL policies deferred | [0011](0011-supply-chain.md), [0012](0012-pod-security-and-resource-policy.md) |
 | The signer identity still accepts the phase 3 `build-web.yml` (transition); dropped once hello runs a `build-images.yml` digest | [0016](0016-one-image-workflow.md) |
 | Digest bumps are manual commits (`scripts/bump-image-digest.sh`) until Renovate is enabled | [0008](0008-pinned-versions.md), [0011](0011-supply-chain.md), [0016](0016-one-image-workflow.md) |
-| The API's 24 h counters and run history are in memory only; one replica by design | [0015](0015-portfolio-api.md) |
+| The API's rate-limit windows and per-run history are in memory only; one replica by design (the 24 h counters persist since ADR 0035) | [0015](0015-portfolio-api.md), [0035](0035-credibility-provenance-evidence-persisted-window.md) |
 | No Hubble flow events: a Relay client is too heavy for the API today | [0021](0021-evidence-events-and-victim-poller.md) |
 
 The full list of gaps and residual risks, including ones no ADR records yet, is in the
