@@ -233,11 +233,14 @@ func (c *Collector) finishLocked(runID string, rs *runState, state, detail strin
 	// scenario's time ran out. A run that ended because the visitor left, went idle, was killed, or
 	// the API shut down is not an escape (ADR 0030). A scripted run that ran out ends `timeout`; a
 	// terminal run never does - it ends `finished` with detail `deadline` - and is unanswered when one
-	// of its detected commands got no response by then (a response tied to no command answers any).
+	// of its detections got no response by then. Responses and detections are matched by command_seq
+	// only: the runner already pairs a response with the detection it answers and publishes it under
+	// that seq, so a response tied to no command (seq 0) answers the detection tied to no command,
+	// not any other - one published that way met no unanswered detection of its kind in the runner.
 	switch {
 	case state == "timeout" && rs.detected && !rs.responded:
 		c.a.Unanswered++
-	case rs.interactive && state == "finished" && detail == "deadline" && !rs.answered[0]:
+	case rs.interactive && state == "finished" && detail == "deadline":
 		for seq := range rs.detectedAt {
 			if !rs.answered[seq] {
 				c.a.Unanswered++

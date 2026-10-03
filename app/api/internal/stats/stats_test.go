@@ -297,7 +297,9 @@ func TestTerminalUnanswered(t *testing.T) {
 		{"two unanswered commands count once", []step{{"detected", 2}, {"detected", 5}}, "deadline", 1},
 		{"one answered, a later one not", []step{{"detected", 2}, {"responded", 2}, {"detected", 5}}, "deadline", 1},
 		{"all answered", []step{{"detected", 2}, {"responded", 2}}, "deadline", 0},
-		{"answered by an uncorrelated response", []step{{"detected", 2}, {"responded", 0}}, "deadline", 0},
+		{"a response tied to no command is not command 2's", []step{{"detected", 2}, {"responded", 0}}, "deadline", 1},
+		{"a response tied to no command answers the detection tied to none", []step{{"detected", 0}, {"responded", 0}}, "deadline", 0},
+		{"a response that came before its alert", []step{{"responded", 3}, {"detected", 3}}, "deadline", 0},
 		{"unanswered, but the visitor left", []step{{"detected", 2}}, "left", 0},
 		{"unanswered, but idle", []step{{"detected", 2}}, "idle", 0},
 		{"nothing detected", nil, "deadline", 0},
@@ -312,5 +314,34 @@ func TestTerminalUnanswered(t *testing.T) {
 		if got := c.Snapshot().Unanswered; got != tc.want {
 			t.Fatalf("%s: unanswered = %d, want %d", tc.name, got, tc.want)
 		}
+	}
+}
+
+// A late alert (no command_seq) answered by a late response (no command_seq): the two are a pair, so
+// the latency is measured and the run is answered. A response tied to no command does not pair with a
+// command's detection, however late: no latency, and that command stays unanswered (the runner would
+// have published the response under the command's seq had it answered it).
+func TestResponseTiedToNoCommand(t *testing.T) {
+	at := time.Unix(1000, 0).UTC()
+	run := func(c *Collector, state string, d time.Duration, seq int, detail string) {
+		c.Record(ev("run", map[string]any{"run_id": "t", "scenario": "terminal", "state": state,
+			"at": at.Add(d), "command_seq": seq, "detail": detail}))
+	}
+	c := New(newStore(t), nil)
+	run(c, "queued", 0, 0, "")
+	run(c, "detected", time.Second, 0, "")
+	run(c, "responded", 1700*time.Millisecond, 0, "")
+	run(c, "finished", 3*time.Second, 0, "deadline")
+	if s := c.Snapshot(); s.ResponseMS != (ResponseMS{Last: 700, P50: 700, Min: 700, Max: 700}) || s.Unanswered != 0 {
+		t.Fatalf("seq-0 pair: response_ms %+v unanswered %d, want 700 ms and answered", s.ResponseMS, s.Unanswered)
+	}
+
+	c = New(newStore(t), nil)
+	run(c, "queued", 0, 0, "")
+	run(c, "detected", time.Second, 4, "")
+	run(c, "responded", 1700*time.Millisecond, 0, "")
+	run(c, "finished", 3*time.Second, 0, "deadline")
+	if s := c.Snapshot(); s.ResponseMS != (ResponseMS{}) || s.Unanswered != 1 {
+		t.Fatalf("unmatched: response_ms %+v unanswered %d, want none and unanswered", s.ResponseMS, s.Unanswered)
 	}
 }
