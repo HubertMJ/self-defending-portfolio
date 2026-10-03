@@ -44,6 +44,7 @@ func main() {
 }
 
 func run(log *slog.Logger) error {
+	startedAt := time.Now()
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
 
@@ -153,6 +154,10 @@ func run(log *slog.Logger) error {
 		// Set by the Dockerfile from the build's --build-arg GIT_SHA (build-images.yml passes
 		// github.sha), so the rule links point at the exact source of this image.
 		Commit: os.Getenv("GIT_SHA"),
+		// Set by the Dockerfile from --build-arg CI_RUN_ID (github.run_id): the run that built this
+		// image, published by GET /api/provenance with StartedAt (ADR 0035).
+		CIRunID:   os.Getenv("CI_RUN_ID"),
+		StartedAt: startedAt,
 	})
 
 	errc := make(chan error, 2)

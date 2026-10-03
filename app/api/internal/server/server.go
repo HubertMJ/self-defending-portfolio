@@ -82,6 +82,11 @@ type Config struct {
 	Rules  *ruleindex.Index
 	Commit string
 	Stats  StatsReader
+	// StartedAt is when the process started and CIRunID the GitHub Actions run that built the image
+	// (env CI_RUN_ID), both for GET /api/provenance and the SSE tick (ADR 0035). A zero StartedAt is
+	// New's time; a CIRunID that is not 1-20 digits is published as "".
+	StartedAt time.Time
+	CIRunID   string
 
 	// AllowedOrigin is the only Origin a browser may POST from (the site itself).
 	AllowedOrigin string
@@ -99,6 +104,9 @@ type Config struct {
 // Server holds both handlers.
 type Server struct {
 	cfg Config
+	// policyFiles maps a Kyverno policy name to its file in the repository (the rule index), for
+	// /api/posture's violations.
+	policyFiles map[string]string
 }
 
 // New fills defaults and returns the server.
@@ -124,7 +132,22 @@ func New(cfg Config) *Server {
 	if !commitPattern.MatchString(cfg.Commit) {
 		cfg.Commit = ""
 	}
-	return &Server{cfg: cfg}
+	if !ciRunIDPattern.MatchString(cfg.CIRunID) {
+		cfg.CIRunID = ""
+	}
+	if cfg.StartedAt.IsZero() {
+		cfg.StartedAt = cfg.Now()
+	}
+	cfg.StartedAt = cfg.StartedAt.UTC()
+	files := map[string]string{}
+	if cfg.Rules != nil {
+		for _, p := range cfg.Rules.Policies {
+			if p.Kind == "ClusterPolicy" || p.Kind == "Policy" {
+				files[p.Name] = p.File
+			}
+		}
+	}
+	return &Server{cfg: cfg, policyFiles: files}
 }
 
 // Public is the handler for :8080. Every path is under /api, matching the HTTPRoute.
@@ -136,15 +159,18 @@ func (s *Server) Public() http.Handler {
 	mux.HandleFunc("GET /api/events", s.events)
 	mux.HandleFunc("GET /api/posture", s.posture)
 	mux.HandleFunc("GET /api/scenarios/{id}/details", s.details)
+	mux.HandleFunc("GET /api/runs", s.runs)
 	mux.HandleFunc("GET /api/runs/{id}", s.run)
 	mux.HandleFunc("POST /api/runs/{id}/commands", s.command)
 	mux.HandleFunc("DELETE /api/runs/{id}", s.leave)
 	mux.HandleFunc("GET /api/stats", s.stats)
 	mux.HandleFunc("GET /api/limits", s.limits)
+	mux.HandleFunc("GET /api/provenance", s.provenance)
 	// The same paths without a method: a wrong method gets a JSON 405 instead of net/http's plain
 	// text one, so every /api answer is JSON (the page parses errors too).
 	for _, p := range []string{"/api/healthz", "/api/scenarios", "/api/attack/{id}", "/api/events", "/api/posture",
-		"/api/scenarios/{id}/details", "/api/runs/{id}", "/api/runs/{id}/commands", "/api/stats", "/api/limits"} {
+		"/api/scenarios/{id}/details", "/api/runs", "/api/runs/{id}", "/api/runs/{id}/commands", "/api/stats", "/api/limits",
+		"/api/provenance"} {
 		mux.HandleFunc(p, methodNotAllowed)
 	}
 	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
@@ -280,8 +306,18 @@ func (s *Server) attack(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, resp)
 }
 
+// posture answers the cached snapshot with each violation's policy file filled in from the rule
+// index (ADR 0035): here rather than in posture, which reads the cluster only. The violations are
+// copied first - the snapshot's slice is the cache's.
 func (s *Server) posture(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, s.cfg.Posture.Get(r.Context()))
+	snap := s.cfg.Posture.Get(r.Context())
+	vs := make([]posture.Violation, len(snap.Kyverno.Violations))
+	copy(vs, snap.Kyverno.Violations)
+	for i := range vs {
+		vs[i].File = s.policyFiles[vs[i].Policy]
+	}
+	snap.Kyverno.Violations = vs
+	writeJSON(w, http.StatusOK, snap)
 }
 
 // maxWebhookBody: a Falco alert with every output field is a few KiB.
@@ -358,6 +394,11 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 	}
 	defer release()
 
+	// ?tick=1 (ADR 0035) asks for a `tick` event in place of each heartbeat comment, and one right
+	// after the replay, carrying the server's time: the page's "server time" is a real clock, not a
+	// browser timer. A tick has no id, so Last-Event-ID and resumption are untouched; without the
+	// parameter the stream is exactly what it was.
+	tick := r.URL.Query().Get("tick") == "1"
 	var after uint64
 	if v := r.Header.Get("Last-Event-ID"); v != "" {
 		after, _ = strconv.ParseUint(v, 10, 64)
@@ -395,6 +436,9 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if tick && !write(s.tickFrame()) {
+		return
+	}
 
 	heartbeat := time.NewTicker(s.cfg.Heartbeat)
 	defer heartbeat.Stop()
@@ -407,7 +451,11 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 		case <-lifetime.C:
 			return
 		case <-heartbeat.C:
-			if !write(": heartbeat\n\n") {
+			beat := ": heartbeat\n\n"
+			if tick {
+				beat = s.tickFrame()
+			}
+			if !write(beat) {
 				return
 			}
 		case ev, open := <-sub.C:
@@ -426,6 +474,15 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 // something to fill that buffer with, so the replay and the first live event are not held back
 // behind it. EventSource ignores comments.
 var streamPreamble = "retry: 5000\n\n:" + strings.Repeat(" ", 2048) + "\n\n"
+
+// tickFrame is the opt-in `tick` event: the server's time now and the process start, no id line.
+func (s *Server) tickFrame() string {
+	data, _ := json.Marshal(struct {
+		At        string    `json:"at"`
+		StartedAt time.Time `json:"started_at"`
+	}{s.cfg.Now().UTC().Format(time.RFC3339Nano), s.cfg.StartedAt})
+	return "event: tick\ndata: " + string(data) + "\n\n"
+}
 
 func frame(ev events.Event) string {
 	return fmt.Sprintf("id: %d\nevent: %s\ndata: %s\n\n", ev.ID, ev.Type, ev.Data)
