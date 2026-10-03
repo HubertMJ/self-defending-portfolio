@@ -43,9 +43,12 @@ type Hub struct {
 	tap     func(Event)
 }
 
-// subscriberBuffer is how far a client may fall behind before it is dropped. A run produces well under
-// a dozen events, so 64 is only ever exceeded by a client that has stopped reading.
-const subscriberBuffer = 64
+// subscriberBuffer is how far a client may fall behind before it is dropped. A scripted run produces a
+// few dozen events over many seconds; the largest burst is one terminal command, published as fast as
+// the pod prints: `started`, up to 64 `output` events (its per-command cap, ADR 0029), its end, and
+// the run, Falco and Talon events around it. 128 holds that burst whole, so a reading client is not
+// dropped for a moment's network stall; only one that has stopped reading is.
+const subscriberBuffer = 128
 
 // NewHub returns a hub that replays the last `replay` events to new subscribers.
 func NewHub(replay int) *Hub {

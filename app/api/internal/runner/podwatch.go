@@ -43,6 +43,8 @@ type PodEvent struct {
 	LabelsDelta map[string]*string `json:"labels_delta"`
 	Deleted     bool               `json:"deleted"`
 	At          time.Time          `json:"at"`
+	// Arm is "guarded"/"unguarded" on a compare run (ADR 0031), absent otherwise.
+	Arm string `json:"arm,omitempty"`
 }
 
 // podView is the published subset of a pod, for change detection.
@@ -168,8 +170,8 @@ func labelsDelta(prev, cur map[string]string, first bool) map[string]*string {
 }
 
 // openPodWatch starts a watch on the run's pod only.
-func (r *Runner) openPodWatch(ctx context.Context, name string) (watch.Interface, error) {
-	return r.client.CoreV1().Pods(r.cfg.Namespace).Watch(ctx, metav1.ListOptions{
+func (r *Runner) openPodWatch(ctx context.Context, namespace, name string) (watch.Interface, error) {
+	return r.client.CoreV1().Pods(namespace).Watch(ctx, metav1.ListOptions{
 		FieldSelector: fields.OneTermEqualSelector("metadata.name", name).String(),
 	})
 }
@@ -194,12 +196,12 @@ func (r *Runner) watchPod(ctx context.Context, rn *run, container string, w watc
 		}
 		first, prev = false, v
 		r.emit(rn, "pod", PodEvent{RunID: rn.id, Pod: rn.pod, UID: v.uid, Phase: v.phase, Reason: v.reason,
-			ContainerID: v.containerID, Image: v.image, LabelsDelta: delta, Deleted: v.deleted, At: r.now().UTC()})
+			ContainerID: v.containerID, Image: v.image, LabelsDelta: delta, Deleted: v.deleted, At: r.now().UTC(), Arm: rn.arm})
 	}
 	for {
 		if w == nil {
 			var err error
-			if w, err = r.openPodWatch(ctx, rn.pod); err != nil {
+			if w, err = r.openPodWatch(ctx, rn.namespace, rn.pod); err != nil {
 				if ctx.Err() != nil {
 					return
 				}

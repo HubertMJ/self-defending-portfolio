@@ -3,6 +3,7 @@ package runner
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"strings"
 	"sync"
 	"testing"
@@ -118,6 +119,12 @@ type fakeExec struct {
 	tty   bool
 	ttys  []bool
 	block bool
+
+	// Terminal (ExecStream) behaviour, optional: stdout/stderr written and the code returned.
+	stdout, stderr string
+	code           int
+	streamErr      error
+	streamBlock    bool
 }
 
 func (f *fakeExec) Exec(ctx context.Context, ns, pod, container string, cmd []string, tty bool) error {
@@ -131,6 +138,25 @@ func (f *fakeExec) Exec(ctx context.Context, ns, pod, container string, cmd []st
 		return ctx.Err()
 	}
 	return nil
+}
+
+func (f *fakeExec) ExecStream(ctx context.Context, ns, pod, container string, cmd []string, tty bool, stdout, stderr io.Writer) (int, error) {
+	f.mu.Lock()
+	f.calls = append(f.calls, ns+"/"+pod+"/"+container+":"+strings.Join(cmd, " "))
+	f.ttys = append(f.ttys, tty)
+	out, errOut, code, serr, block := f.stdout, f.stderr, f.code, f.streamErr, f.streamBlock
+	f.mu.Unlock()
+	if out != "" {
+		_, _ = io.WriteString(stdout, out)
+	}
+	if errOut != "" {
+		_, _ = io.WriteString(stderr, errOut)
+	}
+	if block {
+		<-ctx.Done()
+		return -1, ctx.Err()
+	}
+	return code, serr
 }
 
 func (f *fakeExec) count() int { f.mu.Lock(); defer f.mu.Unlock(); return len(f.calls) }
@@ -169,6 +195,25 @@ func newTestRunner(c *fake.Clientset, ex Execer, rec *recorder) *Runner {
 	return New(c, ex, rec, nil, Config{PollInterval: 10 * time.Millisecond, QuarantineLinger: -1})
 }
 
+// start and startCompare start a scripted run and fail the test if the runner refuses it.
+func start(t *testing.T, r *Runner, sc scenarios.Scenario, release func()) string {
+	t.Helper()
+	id, err := r.Start(sc, release)
+	if err != nil {
+		t.Fatalf("Start(%q): %v", sc.ID, err)
+	}
+	return id
+}
+
+func startCompare(t *testing.T, r *Runner, sc scenarios.Scenario, release func()) string {
+	t.Helper()
+	id, err := r.StartCompare(sc, release)
+	if err != nil {
+		t.Fatalf("StartCompare(%q): %v", sc.ID, err)
+	}
+	return id
+}
+
 func released() (func(), <-chan struct{}) {
 	ch := make(chan struct{})
 	var once sync.Once
@@ -194,7 +239,7 @@ func TestTerminateRunLifecycle(t *testing.T) {
 
 	sc := scenario("terminate", true)
 	sc.TimeoutSeconds = 30
-	id := r.Start(sc, release)
+	id := start(t, r, sc, release)
 	pod := podName(sc.ID, id)
 
 	rec.waitFor(t, StateQueued)
@@ -220,16 +265,16 @@ func TestTerminateRunLifecycle(t *testing.T) {
 	}
 
 	// Unrelated pods and failed actions do not move the run.
-	r.ObserveFalco("someone-else")
-	r.ObserveTalon(pod, "failure")
-	r.ObserveFalco(pod)
-	r.ObserveFalco(pod) // duplicates are harmless
+	r.ObserveFalco("sandbox", "someone-else", "")
+	r.ObserveTalon("sandbox", pod, "failure", "")
+	r.ObserveFalco("sandbox", pod, "")
+	r.ObserveFalco("sandbox", pod, "") // duplicates are harmless
 	if ev := rec.waitFor(t, StateDetected); ev.Detail != "Terminal shell in container" {
 		t.Fatalf("detected detail %q", ev.Detail)
 	}
 	// Talon deletes the pod before it reports.
 	_ = c.CoreV1().Pods("sandbox").Delete(context.Background(), pod, metav1.DeleteOptions{})
-	r.ObserveTalon(pod, "success")
+	r.ObserveTalon("sandbox", pod, "success", "")
 	rec.waitFor(t, StateResponded)
 	rec.waitFor(t, StateFinished)
 	<-done
@@ -240,7 +285,7 @@ func TestTerminateRunLifecycle(t *testing.T) {
 	if ex.count() != 1 || !ex.tty {
 		t.Fatalf("exec calls = %v tty=%v", ex.calls, ex.tty)
 	}
-	if r.lookup(pod) != nil {
+	if r.lookup("sandbox", pod) != nil {
 		t.Fatal("run still registered after it ended")
 	}
 }
@@ -253,11 +298,11 @@ func TestQuarantineRunDeletesPod(t *testing.T) {
 	release, done := released()
 	sc := scenario("quarantine", true)
 	sc.TimeoutSeconds = 30
-	id := r.Start(sc, release)
+	id := start(t, r, sc, release)
 	pod := podName(sc.ID, id)
 	rec.waitFor(t, StateStarted)
 	// The response arrives before the alert: detected is still reported, first.
-	r.ObserveTalon(pod, "success")
+	r.ObserveTalon("sandbox", pod, "success", "")
 	<-done
 	if got := strings.Join(rec.states(), ","); got != "queued,started,pod_ready,detected,responded,finished" {
 		t.Fatalf("states = %s", got)
@@ -274,9 +319,9 @@ func TestTimeoutCleansUp(t *testing.T) {
 	r := newTestRunner(c, &fakeExec{}, rec)
 	release, done := released()
 	sc := scenario("terminate", false)
-	id := r.Start(sc, release)
+	id := start(t, r, sc, release)
 	rec.waitFor(t, StateStarted)
-	r.ObserveFalco(podName(sc.ID, id))
+	r.ObserveFalco("sandbox", podName(sc.ID, id), "")
 	ev := rec.waitFor(t, StateTimeout)
 	<-done
 	if !strings.Contains(ev.Detail, "detected") {
@@ -293,7 +338,7 @@ func TestPodNeverReady(t *testing.T) {
 	r := newTestRunner(c, &fakeExec{}, rec)
 	release, done := released()
 	sc := scenario("terminate", true)
-	id := r.Start(sc, release)
+	id := start(t, r, sc, release)
 	rec.waitFor(t, StateTimeout)
 	<-done
 	if podExists(t, c, podName(sc.ID, id)) {
@@ -310,7 +355,7 @@ func TestAdmissionRejection(t *testing.T) {
 	rec := newRecorder()
 	r := newTestRunner(c, &fakeExec{}, rec)
 	release, done := released()
-	r.Start(scenario("terminate", true), release)
+	start(t, r, scenario("terminate", true), release)
 	ev := rec.waitFor(t, StateFailed)
 	<-done
 	if !strings.Contains(ev.Detail, "admission refused") {
@@ -330,7 +375,7 @@ func TestShutdownCleansUp(t *testing.T) {
 	release, done := released()
 	sc := scenario("terminate", true)
 	sc.TimeoutSeconds = 60
-	id := r.Start(sc, release)
+	id := start(t, r, sc, release)
 	rec.waitFor(t, StateStarted)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -386,7 +431,7 @@ func TestPreExecRunsFirstWithoutTTY(t *testing.T) {
 	sc := scenario("terminate", true)
 	sc.TimeoutSeconds = 30
 	sc.PreExec = &scenarios.Exec{Command: []string{"sh", "-c", "deface"}}
-	id := r.Start(sc, release)
+	id := start(t, r, sc, release)
 	pod := podName(sc.ID, id)
 	rec.waitFor(t, StatePodReady)
 	deadline := time.Now().Add(5 * time.Second)
@@ -394,7 +439,7 @@ func TestPreExecRunsFirstWithoutTTY(t *testing.T) {
 		time.Sleep(5 * time.Millisecond)
 	}
 	_ = c.CoreV1().Pods("sandbox").Delete(context.Background(), pod, metav1.DeleteOptions{})
-	r.ObserveTalon(pod, "success")
+	r.ObserveTalon("sandbox", pod, "success", "")
 	rec.waitFor(t, StateFinished)
 	<-done
 

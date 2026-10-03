@@ -2,6 +2,7 @@ package runner
 
 import (
 	"context"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -133,6 +134,12 @@ func (d defacer) Exec(ctx context.Context, _, _, _ string, _ []string, _ bool) e
 	return ctx.Err()
 }
 
+func (d defacer) ExecStream(ctx context.Context, _, _, _ string, _ []string, _ bool, _, _ io.Writer) (int, error) {
+	d.app.set(func(a *victimApp) { a.body = `{"status":"defaced","title":"pwned","banner":"owned","checksum":"beef"}` })
+	<-ctx.Done()
+	return -1, ctx.Err()
+}
+
 func victimRunner(c *fake.Clientset, app *victimApp, rec *recorder) *Runner {
 	return New(c, defacer{app}, rec, nil, Config{PollInterval: 10 * time.Millisecond, QuarantineLinger: -1,
 		VictimPort: app.port, VictimInterval: 20 * time.Millisecond, VictimTimeout: 200 * time.Millisecond})
@@ -147,7 +154,7 @@ func TestVictimTerminatedByTalon(t *testing.T) {
 	release, done := released()
 	sc := scenario("terminate", true)
 	sc.Victim, sc.TimeoutSeconds = true, 30
-	id := r.Start(sc, release)
+	id := start(t, r, sc, release)
 	pod := podName(sc.ID, id)
 
 	waitOrder(t, rec, "victim:up")
@@ -158,7 +165,7 @@ func TestVictimTerminatedByTalon(t *testing.T) {
 	// Talon deletes the pod, then reports.
 	_ = c.CoreV1().Pods("sandbox").Delete(context.Background(), pod, metav1.DeleteOptions{})
 	waitOrder(t, rec, "victim:gone")
-	r.ObserveTalon(pod, "success")
+	r.ObserveTalon("sandbox", pod, "success", "")
 	<-done
 	o := rec.order()
 	if strings.Count(o, "victim:gone") != 1 || !strings.HasSuffix(o, "run:finished") ||
@@ -184,13 +191,13 @@ func TestVictimQuarantinedIsUnreachableNotGone(t *testing.T) {
 	release, done := released()
 	sc := scenario("quarantine", true)
 	sc.Victim, sc.TimeoutSeconds = true, 30
-	id := r.Start(sc, release)
+	id := start(t, r, sc, release)
 	waitOrder(t, rec, "victim:defaced")
 	// The quarantine policy: the app stops answering.
 	app.srv.CloseClientConnections()
-	app.srv.Listener.Close()
+	_ = app.srv.Listener.Close()
 	waitOrder(t, rec, "victim:unreachable")
-	r.ObserveTalon(podName(sc.ID, id), "success")
+	r.ObserveTalon("sandbox", podName(sc.ID, id), "success", "")
 	<-done
 	if o := rec.order(); strings.Contains(o, "victim:gone") {
 		t.Fatalf("the API's own cleanup reported as a kill: %s", o)
@@ -206,10 +213,10 @@ func TestNoVictimProbeWithoutFlag(t *testing.T) {
 	release, done := released()
 	sc := scenario("terminate", true)
 	sc.TimeoutSeconds = 30
-	id := r.Start(sc, release)
+	id := start(t, r, sc, release)
 	rec.waitFor(t, StatePodReady)
 	time.Sleep(60 * time.Millisecond)
-	r.ObserveTalon(podName(sc.ID, id), "success")
+	r.ObserveTalon("sandbox", podName(sc.ID, id), "success", "")
 	<-done
 	if n := len(rec.of("victim")); n != 0 {
 		t.Fatalf("%d victim events for a scenario without the app", n)
@@ -229,7 +236,7 @@ func TestVictimStartingAndDyingAreNotUnreachable(t *testing.T) {
 	release, done := released()
 	sc := scenario("terminate", true)
 	sc.Victim, sc.TimeoutSeconds = true, 30
-	id := r.Start(sc, release)
+	id := start(t, r, sc, release)
 	pod := podName(sc.ID, id)
 	rec.waitFor(t, StatePodReady)
 	time.Sleep(150 * time.Millisecond)
@@ -237,11 +244,11 @@ func TestVictimStartingAndDyingAreNotUnreachable(t *testing.T) {
 	waitOrder(t, rec, "victim:up")
 	// The app dies first, the deletion is reported a moment later.
 	app.srv.CloseClientConnections()
-	app.srv.Listener.Close()
+	_ = app.srv.Listener.Close()
 	time.Sleep(10 * time.Millisecond)
 	_ = c.CoreV1().Pods("sandbox").Delete(context.Background(), pod, metav1.DeleteOptions{})
 	waitOrder(t, rec, "victim:gone")
-	r.ObserveTalon(pod, "success")
+	r.ObserveTalon("sandbox", pod, "success", "")
 	<-done
 	if o := rec.order(); strings.Contains(o, "victim:unreachable") || strings.Count(o, "victim:") != 2 {
 		t.Fatalf("order: %s", o)

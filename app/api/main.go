@@ -32,6 +32,7 @@ import (
 	"github.com/hubertmj/self-defending-portfolio/app/api/internal/runner"
 	"github.com/hubertmj/self-defending-portfolio/app/api/internal/scenarios"
 	"github.com/hubertmj/self-defending-portfolio/app/api/internal/server"
+	"github.com/hubertmj/self-defending-portfolio/app/api/internal/stats"
 	"github.com/hubertmj/self-defending-portfolio/app/api/internal/webhook"
 )
 
@@ -83,19 +84,44 @@ func run(log *slog.Logger) error {
 	}
 
 	sandbox := env("SANDBOX_NAMESPACE", "sandbox")
-	// The replay buffer covers the run in progress for a visitor who arrives mid-run: a run with its
-	// pod and victim evidence publishes a few dozen events (ADR 0021). Complete runs are in the run
-	// store, fed by a tap so it never misses one.
+	unguarded := env("UNGUARDED_NAMESPACE", "sandbox-unguarded")
+	// How long the unguarded twin is kept after the guarded arm's response, so the contrast is
+	// visible (ADR 0031). An API setting, not a catalogue field; the default is the contract's 12 s.
+	compareHoldS, err := envInt("COMPARE_HOLD_SECONDS", 12)
+	if err != nil {
+		return err
+	}
+	scenarioStore := scenarios.NewStore(env("SCENARIOS_FILE", "/etc/portfolio-api/scenarios/scenarios.yaml"), log)
+	// The replay buffer covers a scripted run in progress for a visitor who arrives mid-run: such a
+	// run, with its pod and victim evidence, publishes a few dozen events (ADR 0021). A terminal
+	// session can publish a few hundred, so a viewer joining it mid-session gets its last 100 events
+	// and the page fetches the whole session from the run store (ADR 0029), which - like the
+	// cross-visitor counters - is fed by the same tap, so neither misses an event.
 	hub := events.NewHub(100)
 	runs := runlog.New(0, 0, 0, 0) // the defaults: 50 runs, 500 events and 256 KiB each, 8 MiB in all
-	hub.Tap(runs.Record)
+	statsCollector := stats.New(scenarioStore, nil)
+	hub.Tap(func(ev events.Event) {
+		runs.Record(ev)
+		statsCollector.Record(ev)
+	})
 	rules, err := ruleindex.Load()
 	if err != nil {
 		return fmt.Errorf("rule index: %w", err)
 	}
+
+	// The counters survive a restart through one ConfigMap in this namespace (ADR 0030). Read once
+	// at start; a background loop writes it at most once a minute and once more on shutdown.
+	statsStore := stats.NewStore(kube, env("POD_NAMESPACE", "portfolio-api"), env("STATS_CONFIGMAP", "portfolio-stats"), log)
+	lctx, lcancel := context.WithTimeout(ctx, 10*time.Second)
+	statsStore.Load(lctx, statsCollector)
+	lcancel()
+	go statsStore.Run(ctx, statsCollector, time.Minute)
+
 	falcoAlerts := webhook.NewDayWindow(nil)
 	talonActions := webhook.NewDayWindow(nil)
-	run := runner.New(kube, &runner.KubeExecer{Config: restCfg, Client: kube}, hub, log, runner.Config{Namespace: sandbox})
+	run := runner.New(kube, &runner.KubeExecer{Config: restCfg, Client: kube}, hub, log,
+		runner.Config{Namespace: sandbox, UnguardedNamespace: unguarded,
+			CompareHold: time.Duration(compareHoldS) * time.Second})
 
 	octx, ocancel := context.WithTimeout(ctx, 30*time.Second)
 	if err := run.CleanupOrphans(octx); err != nil {
@@ -104,23 +130,25 @@ func run(log *slog.Logger) error {
 	ocancel()
 
 	srv := server.New(server.Config{
-		Scenarios: scenarios.NewStore(env("SCENARIOS_FILE", "/etc/portfolio-api/scenarios/scenarios.yaml"), log),
+		Scenarios: scenarioStore,
 		Runner:    run,
 		Hub:       hub,
 		Posture: posture.New(posture.Config{
 			Dynamic: dyn, Kube: kube, KubeBenchNS: env("KUBE_BENCH_NAMESPACE", "kube-bench"),
 			FalcoAlerts: falcoAlerts, TalonActions: talonActions, Log: log,
 		}),
-		Attacks:       limits.NewAttacks(attackCfg, nil),
-		Requests:      limits.NewRequests(120, time.Minute, 50000, nil),
-		Streams:       limits.NewConns(4, 200),
-		FalcoAlerts:   falcoAlerts,
-		TalonActions:  talonActions,
-		Log:           log,
-		AllowedOrigin: env("ALLOWED_ORIGIN", "https://hubertjablon.ski"),
-		Namespace:     sandbox,
-		Runs:          runs,
-		Rules:         rules,
+		Attacks:            limits.NewAttacks(attackCfg, nil),
+		Requests:           limits.NewRequests(120, time.Minute, 50000, nil),
+		Streams:            limits.NewConns(4, 200),
+		FalcoAlerts:        falcoAlerts,
+		TalonActions:       talonActions,
+		Log:                log,
+		AllowedOrigin:      env("ALLOWED_ORIGIN", "https://hubertjablon.ski"),
+		Namespace:          sandbox,
+		UnguardedNamespace: unguarded,
+		Runs:               runs,
+		Rules:              rules,
+		Stats:              statsCollector,
 		// Set by the Dockerfile from the build's --build-arg GIT_SHA (build-images.yml passes
 		// github.sha), so the rule links point at the exact source of this image.
 		Commit: os.Getenv("GIT_SHA"),
@@ -149,6 +177,9 @@ func run(log *slog.Logger) error {
 	if err := run.Shutdown(sctx); err != nil {
 		log.Warn("runs still cleaning up at exit", "err", err)
 	}
+	// After the runs have published their final events, write the counters one last time and wait
+	// for it, so the last run's numbers reach the ConfigMap (ADR 0030).
+	statsStore.Flush(statsCollector)
 	if first != nil && !errors.Is(first, http.ErrServerClosed) {
 		return first
 	}

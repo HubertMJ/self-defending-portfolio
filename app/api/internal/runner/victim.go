@@ -66,6 +66,8 @@ type VictimEvent struct {
 	Banner   string    `json:"banner"`
 	ProbeMS  int64     `json:"probe_ms"`
 	Checksum string    `json:"checksum"`
+	// Arm is "guarded" or "unguarded" on a compare run (ADR 0031), absent otherwise.
+	Arm string `json:"arm,omitempty"`
 }
 
 // same reports whether two observations show the same thing (time and latency aside).
@@ -234,7 +236,16 @@ func (r *Runner) pollVictim(ctx context.Context, rn *run, podIP string, last Vic
 		if ev.Status != "" && (last.Status == "" || !ev.same(last)) {
 			last = ev
 			ev.RunID, ev.Pod, ev.At = rn.id, rn.pod, r.now().UTC()
-			r.emit(rn, "victim", ev)
+			r.emitVictim(rn, ev)
+			if ev.Status == VictimUnreachable {
+				// Record when the cut became visible and wake the quarantine linger (FIX 1), which
+				// compares that time with the response's; the send is non-blocking and coalesced.
+				rn.lastUnreachable.Store(ev.At.UnixNano())
+				select {
+				case rn.unreachable <- struct{}{}:
+				default:
+				}
+			}
 		}
 		select {
 		case <-ctx.Done():
@@ -249,6 +260,6 @@ func (r *Runner) pollVictim(ctx context.Context, rn *run, podIP string, last Vic
 
 func (r *Runner) publishVictimGone(rn *run) {
 	rn.victimGoneOnce.Do(func() {
-		r.emit(rn, "victim", VictimEvent{RunID: rn.id, Pod: rn.pod, At: r.now().UTC(), Status: VictimGone})
+		r.emitVictim(rn, VictimEvent{RunID: rn.id, Pod: rn.pod, At: r.now().UTC(), Status: VictimGone})
 	})
 }

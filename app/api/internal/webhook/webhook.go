@@ -52,6 +52,12 @@ type FalcoEvent struct {
 	Output        string         `json:"output"`
 	Fields        map[string]any `json:"fields"`
 	APIReceivedAt time.Time      `json:"api_received_at"`
+	// CommandSeq ties the alert to the terminal command that was running (or ended less than 2 s
+	// before) when it arrived (ADR 0029); 0/absent for a scripted run or when none applies. Set by
+	// the server from the runner, best effort.
+	CommandSeq int `json:"command_seq,omitempty"`
+	// Arm is "guarded"/"unguarded" on a compare run (ADR 0031), absent otherwise. Set by the server.
+	Arm string `json:"arm,omitempty"`
 }
 
 // TalonEvent is the public `event: talon` payload. Talon's notification carries no timestamp of its
@@ -66,6 +72,10 @@ type TalonEvent struct {
 	Status        string    `json:"status"`
 	Output        string    `json:"output"`
 	APIReceivedAt time.Time `json:"api_received_at"`
+	// CommandSeq: see FalcoEvent.CommandSeq.
+	CommandSeq int `json:"command_seq,omitempty"`
+	// Arm: see FalcoEvent.Arm.
+	Arm string `json:"arm,omitempty"`
 }
 
 // falcoPayload is Falcosidekick's webhook body: the Falco alert as Falco emitted it
