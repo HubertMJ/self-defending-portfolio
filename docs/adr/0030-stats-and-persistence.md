@@ -91,7 +91,8 @@ alerts and Talon actions), `WindowSince` (when this window started counting) and
 the most recent `queued` run event; one timestamp, no identifier). `/api/stats` publishes `last_run_at` and
 `last_24h` (`since` and the five sums over the current hour and the 23 before it); the posture's 24 h counts
 read the same buckets, so the two pages cannot disagree beyond the documented in-flight exception (ADR
-0035). A run's runs, detected and responded are all counted in the hour it was queued, so
+0035): a detection published before its Falco webhook, until the webhook arrives or, if it never does,
+until the run's hour leaves the window. A run's runs, detected and responded are all counted in the hour it was queued, so
 `runs >= detected >= responded` holds in every window; alerts and actions are counted in the hour they
 arrive. Buckets older than the window are pruned on every write; nothing else about writing changes (one
 object, `get`/`update`, written only after a successful read, at most once a minute when dirty).
