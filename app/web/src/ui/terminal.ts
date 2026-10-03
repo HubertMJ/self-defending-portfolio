@@ -771,7 +771,8 @@ export function mountTerminal(
       .map((o) => {
         const c = firstReach.get(o.id) as CommandRun;
         const after = endT !== undefined && c.endedAt !== undefined && endT > c.endedAt ? formatDuration(endT - c.endedAt) : undefined;
-        return h("li", {}, h("strong", {}, o.title), " — ", input(c), " exited 0", after ? `; the pod ${killedRun ? "was deleted" : "lasted"} ${after} later` : "", ".");
+        // Measured from the command's exit, and said so: "Killed after your Enter" counts from its start.
+        return h("li", {}, h("strong", {}, o.title), " — ", input(c), " exited 0", after ? `; the ${killedRun ? "pod was deleted" : "session went on"} ${after} after that exit` : "", ".");
       });
     // "Killed N ms after your Enter": the terminate's response time minus the start of the command it
     // answered, with Falco-to-response beside it — that command's alert, else the last one before.

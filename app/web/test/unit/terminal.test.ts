@@ -552,7 +552,7 @@ describe("what 'reached' means in the summary (cross-side point)", () => {
     killedBy(f, 1, 3000); // `cat /etc/shadow` exits at 3 040 ms, the run ends at 3 600 ms
     t.show(f);
     const items = [...t.root.querySelectorAll(".term__sumreached li")].map((li) => text(li));
-    expect(items).toEqual(["Steal credentials — cat /etc/shadow exited 0; the pod was deleted 560 ms later."]);
+    expect(items).toEqual(["Steal credentials — cat /etc/shadow exited 0; the pod was deleted 560 ms after that exit."]);
     expect(stat(t.root, "Objectives reached")).toBe("1 of 5");
   });
 });
