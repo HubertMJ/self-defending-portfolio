@@ -29,7 +29,7 @@ import (
 	"github.com/hubertmj/self-defending-portfolio/app/api/internal/runlog"
 	"github.com/hubertmj/self-defending-portfolio/app/api/internal/runner"
 	"github.com/hubertmj/self-defending-portfolio/app/api/internal/scenarios"
-	"github.com/hubertmj/self-defending-portfolio/app/api/internal/webhook"
+	"github.com/hubertmj/self-defending-portfolio/app/api/internal/stats"
 )
 
 const img = "ghcr.io/hubertmj/self-defending-portfolio/scenario:main@sha256:0000000000000000000000000000000000000000000000000000000000000000"
@@ -114,16 +114,18 @@ func newEnv(t *testing.T, cfg limits.AttackConfig) *env {
 	}
 	run := runner.New(kube, noopExec{}, hub, nil, runner.Config{PollInterval: 5 * time.Millisecond, QuarantineLinger: -1})
 	attacks := limits.NewAttacks(cfg, nil)
+	store := scenarios.NewStore(path, nil)
+	collector := stats.New(store, nil)
 	srv := New(Config{
-		Scenarios:     scenarios.NewStore(path, nil),
+		Scenarios:     store,
 		Runner:        run,
 		Hub:           hub,
 		Posture:       stubPosture{},
 		Attacks:       attacks,
 		Requests:      limits.NewRequests(1000, time.Minute, 1000, nil),
 		Streams:       limits.NewConns(2, 10),
-		FalcoAlerts:   webhook.NewDayWindow(nil),
-		TalonActions:  webhook.NewDayWindow(nil),
+		FalcoAlerts:   collector.AlertCounter(),
+		TalonActions:  collector.ActionCounter(),
 		AllowedOrigin: "https://hubertjablon.ski",
 		Heartbeat:     50 * time.Millisecond,
 		Runs:          runs,

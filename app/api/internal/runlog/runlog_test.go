@@ -180,3 +180,77 @@ func TestTerminalStateByteReserve(t *testing.T) {
 		}
 	}
 }
+
+// The list is newest first, capped like the store, consistent with it after evictions, and built
+// from the runs' own `run` events only.
+func TestList(t *testing.T) {
+	s := New(3, 0, 0, 0)
+	h := events.NewHub(10)
+	h.Tap(s.Record)
+	at := func(sec int) string { return fmt.Sprintf("2026-10-03T18:00:%02dZ", sec) }
+	for i := range 5 {
+		id := fmt.Sprintf("r%d", i)
+		feed(h, "run", map[string]string{"run_id": id, "scenario": "network-tool", "state": "queued", "at": at(i * 10)})
+		feed(h, "run", map[string]string{"run_id": id, "scenario": "network-tool", "state": "started", "pod": "p" + id, "at": at(i*10 + 1)})
+	}
+	feed(h, "falco", map[string]string{"pod": "pr4", "rule": "x", "state": "detected"})
+	feed(h, "command", map[string]string{"run_id": "r4", "id": "whoami", "state": "exited"})
+	feed(h, "run", map[string]string{"run_id": "r4", "state": "detected", "at": at(43)})
+	feed(h, "run", map[string]string{"run_id": "r4", "state": "responded", "at": at(44)})
+	feed(h, "run", map[string]string{"run_id": "r4", "state": "finished", "at": at(45)})
+	feed(h, "command", map[string]string{"run_id": "r4", "id": "whoami", "state": "started"})
+	feed(h, "falco", map[string]string{"pod": "pr3", "rule": "y"})
+	feed(h, "command", map[string]string{"run_id": "r3", "id": "whoami", "state": "exited"})
+
+	list := s.List()
+	var ids []string
+	for _, r := range list {
+		ids = append(ids, r.RunID)
+		if _, ok := s.Get(r.RunID); !ok {
+			t.Errorf("listed run %s is not in the store", r.RunID)
+		}
+	}
+	if strings.Join(ids, ",") != "r4,r3,r2" || s.Kept() != 3 {
+		t.Fatalf("list = %v kept %d, want r4,r3,r2 of 3", ids, s.Kept())
+	}
+	r4, r3 := list[0], list[1]
+	if r4.State != "finished" || !r4.Detected || !r4.Responded || r4.EndedAt == nil || r4.EndedAt.Format("15:04:05") != "18:00:45" ||
+		r4.StartedAt == nil || r4.StartedAt.Format("15:04:05") != "18:00:40" || r4.Events != 8 || r4.Scenario != "network-tool" || r4.Truncated {
+		t.Fatalf("r4 = %+v", r4)
+	}
+	if r3.State != "started" || r3.Detected || r3.EndedAt != nil || r3.Events != 4 {
+		t.Fatalf("r3 = %+v (a falco event must not make it detected)", r3)
+	}
+	b, _ := json.Marshal(r3)
+	if !strings.Contains(string(b), `"ended_at":null`) || strings.Contains(string(b), "pr3") {
+		t.Fatalf("%s", b)
+	}
+	if b, _ := json.Marshal(New(0, 0, 0, 0).List()); string(b) != "[]" {
+		t.Fatalf("empty list = %s", b)
+	}
+}
+
+// The first terminal state is final; the start is the queued time; no zero time is published.
+func TestSummaryStates(t *testing.T) {
+	s := New(0, 0, 0, 0)
+	h := events.NewHub(10)
+	h.Tap(s.Record)
+	feed(h, "run", map[string]string{"run_id": "r1", "state": "started", "at": "2026-10-03T18:00:01Z"})
+	feed(h, "run", map[string]string{"run_id": "r1", "state": "queued", "at": "2026-10-03T18:00:00Z"})
+	feed(h, "run", map[string]string{"run_id": "r1", "state": "finished", "at": "2026-10-03T18:00:09Z"})
+	feed(h, "run", map[string]string{"run_id": "r1", "state": "failed", "at": "2026-10-03T18:00:30Z"})
+	feed(h, "run", map[string]string{"run_id": "r1", "state": "detected", "at": "2026-10-03T18:00:31Z"})
+	feed(h, "run", map[string]string{"run_id": "r2", "state": "queued"})
+	feed(h, "run", map[string]string{"run_id": "r2", "state": "timeout"})
+	l := s.List()
+	r2, r1 := l[0], l[1]
+	if r1.State != "finished" || r1.EndedAt == nil || r1.EndedAt.Format("15:04:05") != "18:00:09" || !r1.Detected ||
+		r1.StartedAt == nil || r1.StartedAt.Format("15:04:05") != "18:00:00" {
+		t.Fatalf("r1 = %+v", r1)
+	}
+	b, _ := json.Marshal(r2)
+	if r2.State != "timeout" || !strings.Contains(string(b), `"started_at":null`) || !strings.Contains(string(b), `"ended_at":null`) ||
+		strings.Contains(string(b), "0001-01-01") {
+		t.Fatalf("r2 = %s", b)
+	}
+}

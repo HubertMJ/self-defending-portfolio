@@ -1,10 +1,11 @@
 package server
 
-// The three read-only endpoints behind the page's technical mode and its "verify it yourself" panel
-// (ADR 0021): what a scenario actually is (details), everything one run published (runs), and where
-// the visitor stands against the limits (limits). All three are GET, JSON, under the same request
-// budget as everything else, and expose nothing the catalogue, the public repository or the event
-// stream do not already show.
+// The read-only endpoints behind the page's technical mode and its "verify it yourself" panel
+// (ADR 0021, 0035): what a scenario actually is (details), everything one run published (runs/{id})
+// and the list of kept runs (runs), where the visitor stands against the limits (limits), and what
+// the running images were built from (provenance). All are GET, JSON, under the same request budget
+// as everything else, and expose nothing the catalogue, the public repository, the registry's
+// signatures or the event stream do not already show.
 
 import (
 	"math"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/hubertmj/self-defending-portfolio/app/api/internal/clientip"
 	"github.com/hubertmj/self-defending-portfolio/app/api/internal/ruleindex"
+	"github.com/hubertmj/self-defending-portfolio/app/api/internal/runlog"
 	"github.com/hubertmj/self-defending-portfolio/app/api/internal/scenarios"
 	"github.com/hubertmj/self-defending-portfolio/app/api/internal/stats"
 )
@@ -24,6 +26,9 @@ import (
 // commitPattern: the build's commit, as GitHub Actions passes it (github.sha), or a short form.
 // Anything else (unset, "unknown") is published as "", and the page links to the default branch.
 var commitPattern = regexp.MustCompile(`^[0-9a-f]{7,40}$`)
+
+// ciRunIDPattern: a GitHub Actions run id (github.run_id) as the Dockerfile passes it in CI_RUN_ID.
+var ciRunIDPattern = regexp.MustCompile(`^[0-9]{1,20}$`)
 
 // runIDPattern is newRunID's format.
 var runIDPattern = regexp.MustCompile(`^[0-9a-f]{16}$`)
@@ -173,7 +178,8 @@ func (s *Server) stats(w http.ResponseWriter, _ *http.Request) {
 	if s.cfg.Stats == nil {
 		writeJSON(w, http.StatusOK, stats.Snapshot{
 			Since: s.cfg.Now().UTC(), ByScenario: map[string]stats.ScenarioStat{},
-			Commands: map[string]stats.CommandStat{}, Objectives: map[string]stats.ObjectiveStat{}})
+			Commands: map[string]stats.CommandStat{}, Objectives: map[string]stats.ObjectiveStat{},
+			Last24h: stats.Window{Since: s.cfg.Now().UTC()}})
 		return
 	}
 	writeJSON(w, http.StatusOK, s.cfg.Stats.Snapshot())
@@ -191,6 +197,58 @@ func (s *Server) run(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, run)
+}
+
+// RunList is the GET /api/runs payload (ADR 0035): the kept runs, newest first, and how many are
+// kept. Each row says only what the run's own state events say; the events are at /api/runs/{id}.
+type RunList struct {
+	Runs []runlog.Summary `json:"runs"`
+	Kept int              `json:"kept"`
+}
+
+func (s *Server) runs(w http.ResponseWriter, _ *http.Request) {
+	if s.cfg.Runs == nil {
+		writeJSON(w, http.StatusOK, RunList{Runs: []runlog.Summary{}})
+		return
+	}
+	writeJSON(w, http.StatusOK, RunList{Runs: s.cfg.Runs.List(), Kept: s.cfg.Runs.Kept()})
+}
+
+// Provenance is the GET /api/provenance payload (ADR 0035): what this API was built from (commit and
+// CI run, from the image's environment), when it started, and the api and web image digests the
+// cluster's Running pods run, from posture's pod list - so a visitor can check each digest's
+// signature and find its Rekor entry. Never a pod name or a namespace.
+type Provenance struct {
+	GeneratedAt      time.Time     `json:"generated_at"`
+	API              ProvenanceAPI `json:"api"`
+	Web              ProvenanceWeb `json:"web"`
+	ImagesObservedAt *time.Time    `json:"images_observed_at"`
+}
+
+// ProvenanceAPI is the API's own build and its running images.
+type ProvenanceAPI struct {
+	Commit    string    `json:"commit"`
+	CIRunID   string    `json:"ci_run_id"`
+	StartedAt time.Time `json:"started_at"`
+	Images    []string  `json:"images"`
+}
+
+// ProvenanceWeb is the web's running images; its commit and run are in the web image's /build.json.
+type ProvenanceWeb struct {
+	Images []string `json:"images"`
+}
+
+func (s *Server) provenance(w http.ResponseWriter, r *http.Request) {
+	p := Provenance{GeneratedAt: s.cfg.Now().UTC(),
+		API: ProvenanceAPI{Commit: s.cfg.Commit, CIRunID: s.cfg.CIRunID, StartedAt: s.cfg.StartedAt, Images: []string{}},
+		Web: ProvenanceWeb{Images: []string{}}}
+	if s.cfg.Posture != nil {
+		d := s.cfg.Posture.Get(r.Context()).Deployed
+		p.API.Images = append(p.API.Images, d.API...)
+		p.Web.Images = append(p.Web.Images, d.Web...)
+		p.ImagesObservedAt = d.ObservedAt
+	}
+	writeJSON(w, http.StatusOK, p)
 }
 
 // Limits is the GET /api/limits payload.

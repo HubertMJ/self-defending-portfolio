@@ -25,7 +25,6 @@ import (
 	"github.com/hubertmj/self-defending-portfolio/app/api/internal/runner"
 	"github.com/hubertmj/self-defending-portfolio/app/api/internal/scenarios"
 	"github.com/hubertmj/self-defending-portfolio/app/api/internal/stats"
-	"github.com/hubertmj/self-defending-portfolio/app/api/internal/webhook"
 )
 
 const terminalCatalogue = `
@@ -86,7 +85,7 @@ func newTerminalEnv(t *testing.T, opts ...func(*runner.Config)) (*env, *stats.Co
 	srv := New(Config{
 		Scenarios: store, Runner: run, Hub: hub, Posture: stubPosture{},
 		Attacks: attacks, Requests: limits.NewRequests(1000, time.Minute, 1000, nil),
-		Streams: limits.NewConns(2, 10), FalcoAlerts: webhook.NewDayWindow(nil), TalonActions: webhook.NewDayWindow(nil),
+		Streams: limits.NewConns(2, 10), FalcoAlerts: collector.AlertCounter(), TalonActions: collector.ActionCounter(),
 		AllowedOrigin: "https://hubertjablon.ski", Namespace: "sandbox", UnguardedNamespace: "sandbox-unguarded",
 		Runs: runs, Rules: rules, Stats: collector,
 	})
