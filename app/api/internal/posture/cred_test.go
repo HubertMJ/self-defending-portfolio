@@ -232,6 +232,38 @@ func TestKubeBenchFailingRules(t *testing.T) {
 	}
 }
 
+// The bench pod's node name never reaches a published text, even when kube-bench quotes it in a
+// title or a remediation - including at the edge of the cap, where a cut could leave half of it.
+func TestKubeBenchRedactsNode(t *testing.T) {
+	const node = "node-fixture"
+	log, err := os.ReadFile("testdata/kube-bench-live.log")
+	if err != nil {
+		t.Fatal(err)
+	}
+	quoting := strings.Replace(string(log), `"test_desc":"Ensure that the --etcd-cafile`, `"test_desc":"On `+node+`, ensure that the --etcd-cafile`, 1)
+	quoting = strings.Replace(quoting, `"remediation":"By default, K3s sets the CNI`, `"remediation":"`+strings.Repeat("x", maxBenchRemedy-8)+node+` By default, K3s sets the CNI`, 1)
+	if quoting == string(log) || strings.Count(quoting, node) < 3 {
+		t.Fatal("the fixture no longer has the texts this test edits")
+	}
+	kb, err := parseKubeBench([]byte(quoting), node)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(kb.Failing) != 3 {
+		t.Fatalf("failing = %+v", kb.Failing)
+	}
+	for _, f := range kb.Failing {
+		for _, v := range []string{f.ID, f.Title, f.Remediation} {
+			if strings.Contains(v, node) || strings.Contains(v, "node-f") {
+				t.Errorf("%s publishes the node name: %q", f.ID, v)
+			}
+		}
+	}
+	if !strings.Contains(kb.Failing[2].Title, "On [node], ensure") || !strings.Contains(kb.Failing[0].Remediation, "[node]") {
+		t.Fatalf("not redacted in place: %q / %q", kb.Failing[2].Title, kb.Failing[0].Remediation)
+	}
+}
+
 // last_scan is the newest report of a running image; a newer report of an image nothing runs (an
 // old ReplicaSet's) does not count.
 func TestTrivyLastScan(t *testing.T) {

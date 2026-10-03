@@ -783,7 +783,7 @@ func (a *Aggregator) kubeBench(ctx context.Context) (*KubeBench, error) {
 	if err != nil {
 		return nil, err
 	}
-	kb, err := ParseKubeBench(data)
+	kb, err := parseKubeBench(data, newest.Spec.NodeName)
 	if err != nil {
 		return nil, err
 	}
@@ -860,7 +860,19 @@ var ErrNoBenchJSON = errors.New("no kube-bench JSON document in the log")
 // Totals and one document per target, so every line that starts a JSON object is tried, and the
 // totals of every document found are added up (from Totals, or summed over Controls). The FAIL
 // results are listed in Failing, in the order the benchmark gives them, capped at maxFailing.
-func ParseKubeBench(log []byte) (KubeBench, error) {
+func ParseKubeBench(log []byte) (KubeBench, error) { return parseKubeBench(log, "") }
+
+// parseKubeBench is ParseKubeBench for a run on the node called node: its name is replaced in the
+// published texts, after the scrubber and before the cap (ADR 0021 never publishes node names, and
+// kube-bench may quote the host it ran on). "" redacts nothing.
+func parseKubeBench(log []byte, node string) (KubeBench, error) {
+	text := func(s string, n int) string {
+		s = webhook.Scrub(s)
+		if node != "" {
+			s = strings.ReplaceAll(s, node, "[node]")
+		}
+		return webhook.Truncate(s, n)
+	}
 	kb := KubeBench{Failing: []BenchCheck{}}
 	found := false
 	sc := bufio.NewScanner(bytes.NewReader(log))
@@ -901,8 +913,7 @@ func ParseKubeBench(log []byte) (KubeBench, error) {
 						continue
 					}
 					kb.Failing = append(kb.Failing, BenchCheck{ID: r.TestNumber,
-						Title:       webhook.Truncate(webhook.Scrub(r.TestDesc), maxBenchTitle),
-						Remediation: webhook.Truncate(webhook.Scrub(r.Remediation), maxBenchRemedy)})
+						Title: text(r.TestDesc, maxBenchTitle), Remediation: text(r.Remediation, maxBenchRemedy)})
 				}
 			}
 		}
