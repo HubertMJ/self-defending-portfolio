@@ -7,8 +7,9 @@
 //     feed has never shown, once per run;
 //   * the active run again whenever the stream opens after an interruption — a drop, or a stop while
 //     the tab was hidden (that reconnect starts as "connecting", not "reconnecting");
-//   * after a failed fetch (a 404 for a run the store no longer keeps, the network), not again on
-//     every render: the next try waits 30 s, then twice as long each time, up to 10 minutes.
+//   * after a failed fetch, not again on every render: a JSON 404 (a run the store no longer keeps)
+//     is final; anything else (the network, a 5xx) waits 30 s, then twice as long each time, up to
+//     10 minutes.
 
 import type { Result } from "./api";
 import type { StreamEvent } from "./contract";
@@ -61,6 +62,10 @@ export class Backfill {
         s.done = true;
         s.delay = 0;
         for (const ev of r.value) this.push(ev);
+      } else if (r.status === 404 && r.json) {
+        // The run store does not have it (it keeps the last 50 runs): asking again will not change
+        // that. Only a reconnect asks once more.
+        s.done = true;
       } else {
         s.delay = s.delay ? Math.min(MAX_RETRY_MS, s.delay * 2) : FIRST_RETRY_MS;
         s.next = this.now() + s.delay;

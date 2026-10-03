@@ -34,7 +34,7 @@ describe("a run joined mid-session (review 2, item 6)", () => {
   it("after a failed backfill, waits before trying again instead of refetching on every render", async () => {
     let now = T0;
     const asked: number[] = [];
-    const fail: Result<StreamEvent[]> = { ok: false, error: "offline", message: "HTTP 404" };
+    const fail: Result<StreamEvent[]> = { ok: false, error: "offline", message: "HTTP 503", status: 503, json: true };
     const b = new Backfill(async () => (asked.push(now), fail), () => {}, () => now);
     const view = buildTimeline(joined, T0 + 7000);
     for (let i = 0; i < 50; i++) {
@@ -78,5 +78,21 @@ describe("backfill of events that name a run the feed never showed (final review
     b.view({ runs: [], unmatched: [orphan] });
     await Promise.resolve();
     expect(asked).toEqual(["0123456789abcdef"]);
+  });
+});
+
+describe("a backfill the run store answers with a 404 (final review, item 7)", () => {
+  it("is not asked again, however long the page stays", async () => {
+    let now = T0;
+    const asked: number[] = [];
+    const gone: Result<StreamEvent[]> = { ok: false, error: "offline", message: "HTTP 404", status: 404, json: true };
+    const b = new Backfill(async () => (asked.push(now), gone), () => {}, () => now);
+    const view = buildTimeline(joined, T0 + 7000);
+    for (let i = 0; i < 20; i++) {
+      b.view(view);
+      await Promise.resolve();
+      now += 60_000;
+    }
+    expect(asked).toHaveLength(1);
   });
 });
