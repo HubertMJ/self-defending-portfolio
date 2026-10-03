@@ -6,7 +6,7 @@
 
 import type { ApiClient } from "../lib/api";
 import type { Objective, Stats } from "../lib/contract";
-import { h, relativeTime, replace } from "../lib/dom";
+import { h, relativeTime, replace, timeEl, utcClock, when } from "../lib/dom";
 import { humanSpeed } from "./console";
 
 const REPO_ISSUES = "https://github.com/HubertMJ/self-defending-portfolio/issues";
@@ -25,10 +25,14 @@ export function renderStats(s: Stats, objectives: Objective[], last?: LastRun, n
   const detected = Object.values(s.by_scenario).reduce((a, x) => a + x.detected, 0);
   const responded = Object.values(s.by_scenario).reduce((a, x) => a + x.responded, 0);
 
+  // The newest run the feed showed; without one, the API's persisted time of the last run (ADR 0035).
+  const lastAt = last ? last.at : s.last_run_at ? Date.parse(s.last_run_at) : undefined;
+  const ago = (t: number) => relativeTime(new Date(t).toISOString(), now);
   const list = [
     // The last run names what ran; how fast the answer came is the API's one figure, the tile below.
-    last ? statTile(relativeTime(new Date(last.at).toISOString(), now), "last run", last.title) : null,
-    statTile(String(s.runs), "attacks, all visitors", s.since ? `since ${relativeTime(s.since, now)}` : ""),
+    // Absolute UTC first, how long ago beside it.
+    lastAt !== undefined ? statTile(timeEl(lastAt, utcClock(lastAt, now)), "last run", last ? `${ago(lastAt)} · ${last.title}` : ago(lastAt)) : null,
+    statTile(String(s.runs), "attacks, all visitors", s.since ? `since ${when(s.since, now)}` : ""),
     // Both counts are runs: of the runs Falco detected, how many Talon answered at least once; and how
     // many ran out of time with a detection still unanswered (a terminal run can be both).
     statTile(`${responded} of ${detected}`, "detected runs answered", `${s.unanswered} ran out of time with a detection unanswered`),
@@ -79,7 +83,7 @@ export function renderStats(s: Stats, objectives: Objective[], last?: LastRun, n
   );
 }
 
-function statTile(value: string, label: string, foot: string): HTMLElement {
+function statTile(value: string | Node, label: string, foot: string): HTMLElement {
   return h("div", { class: "herostats__tile" }, h("span", { class: "herostats__value" }, value), h("span", { class: "herostats__name" }, label), foot ? h("span", { class: "herostats__foot" }, foot) : null);
 }
 
