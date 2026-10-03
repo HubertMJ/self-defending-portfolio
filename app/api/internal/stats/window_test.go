@@ -171,15 +171,20 @@ func TestWindowSanitising(t *testing.T) {
 		}
 		return bs
 	}
-	if err := New(newStore(t), func() time.Time { return t0 }).Load(windowBlob(t, map[string]any{"Hourly": inRange(maxHourly)})); err != nil {
-		t.Fatalf("%d buckets in range rejected: %v", maxHourly, err)
+	// The cap counts buckets after same-hour ones are summed: 26 entries over 24 hours load, summed.
+	c26 := New(newStore(t), func() time.Time { return t0 })
+	if err := c26.Load(windowBlob(t, map[string]any{"Hourly": inRange(maxHourly + 1)})); err != nil {
+		t.Fatalf("%d entries in range rejected: %v", maxHourly+1, err)
+	}
+	if w := c26.Snapshot().Last24h; w.Runs != maxHourly+1 || len(persisted(t, c26).Hourly) != windowHours {
+		t.Fatalf("26 entries: last_24h %+v, want %d runs in %d buckets", w, maxHourly+1, windowHours)
 	}
 	// A window no writer produces is discarded whole and restarts now; the all-time totals load.
 	for name, hourly := range map[string]any{
-		"negative":        []map[string]any{{"H": nowH - 1, "Runs": 1}, {"H": nowH, "Runs": -1}},
-		"past 2^40":       []map[string]any{{"H": nowH - 1, "Runs": 1}, {"H": nowH, "Alerts": int64(maxCounter) + 1}},
-		"negative, stale": []map[string]any{{"H": nowH - 1, "Runs": 1}, {"H": nowH - 100, "Detected": -5}},
-		"26 in range":     inRange(maxHourly + 1),
+		"negative":                     []map[string]any{{"H": nowH - 1, "Runs": 1}, {"H": nowH, "Runs": -1}},
+		"past 2^40":                    []map[string]any{{"H": nowH - 1, "Runs": 1}, {"H": nowH, "Alerts": int64(maxCounter) + 1}},
+		"negative, stale":              []map[string]any{{"H": nowH - 1, "Runs": 1}, {"H": nowH - 100, "Detected": -5}},
+		"duplicates summing past 2^40": []map[string]any{{"H": nowH, "Alerts": int64(maxCounter)}, {"H": nowH, "Alerts": int64(maxCounter)}},
 	} {
 		later := t0.Add(10 * time.Minute)
 		c := New(newStore(t), func() time.Time { return later })
@@ -296,6 +301,102 @@ func TestFutureRunClamped(t *testing.T) {
 	}
 }
 
+// The next hour's bucket (a writer whose clock ran ahead) is kept but not counted until that hour.
+func TestNextHourNotCounted(t *testing.T) {
+	c := New(newStore(t), func() time.Time { return t0 })
+	if err := c.Load(windowBlob(t, map[string]any{"Hourly": []map[string]any{{"H": hourOf(t0) + 1, "Actions": 2, "Alerts": 3}}})); err != nil {
+		t.Fatal(err)
+	}
+	if w := c.Snapshot().Last24h; w.TalonActions != 0 || w.FalcoAlerts != 0 || c.ActionCounter().Count() != 0 {
+		t.Fatalf("last_24h %+v counts the next hour", w)
+	}
+	if a := persisted(t, c); len(a.Hourly) != 1 {
+		t.Fatalf("hourly = %+v, want the next hour kept", a.Hourly)
+	}
+}
+
+// A run whose queued hour left the window before its detection arrived adds no stale bucket.
+func TestDetectionAfterRolloverNoStaleBucket(t *testing.T) {
+	queued := time.Date(2026, 10, 3, 10, 59, 30, 0, time.UTC)
+	clk := &clock{t: queued}
+	c := New(newStore(t), clk.now)
+	c.Record(ev("run", map[string]any{"run_id": "r1", "scenario": "shell-in-container", "state": "queued", "at": queued}))
+	clk.set(queued.Add(23*time.Hour + time.Minute)) // 10:00 has left the window (oldest hour 11:00)
+	c.Record(ev("run", map[string]any{"run_id": "r1", "scenario": "shell-in-container", "state": "detected", "at": clk.now()}))
+	c.Record(ev("run", map[string]any{"run_id": "r1", "scenario": "shell-in-container", "state": "responded", "at": clk.now()}))
+	if a := persisted(t, c); len(a.Hourly) != 0 {
+		t.Fatalf("hourly = %+v, want no bucket for the hour that left", a.Hourly)
+	}
+	if s := c.Snapshot(); s.ByScenario["shell-in-container"].Detected != 1 {
+		t.Fatalf("the all-time detection was lost: %+v", s.ByScenario)
+	}
+}
+
+// A run never seen queued adds no detection to any window.
+func TestNeverQueuedNotInWindow(t *testing.T) {
+	c := New(newStore(t), func() time.Time { return t0 })
+	c.Record(ev("run", map[string]any{"run_id": "r2", "scenario": "shell-in-container", "state": "detected", "at": t0}))
+	c.Record(ev("run", map[string]any{"run_id": "r2", "scenario": "shell-in-container", "state": "responded", "at": t0}))
+	if w := c.Snapshot().Last24h; w.Detected != 0 || w.Responded != 0 {
+		t.Fatalf("never-queued run in the window: %+v", w)
+	}
+}
+
+// Terminal Talon-first: `responded` comes before any `detected`. The window counts the response
+// with the detection, never before it.
+func TestRespondedBeforeDetected(t *testing.T) {
+	c := New(newStore(t), func() time.Time { return t0 })
+	c.Record(ev("run", map[string]any{"run_id": "r1", "scenario": "terminal", "state": "queued", "at": t0}))
+	c.Record(ev("run", map[string]any{"run_id": "r1", "scenario": "terminal", "state": "responded", "at": t0, "command_seq": 1}))
+	if w := c.Snapshot().Last24h; w.Runs != 1 || w.Detected != 0 || w.Responded != 0 {
+		t.Fatalf("before the detection: %+v, want the response held back", w)
+	}
+	c.Record(ev("run", map[string]any{"run_id": "r1", "scenario": "terminal", "state": "detected", "at": t0, "command_seq": 1}))
+	if w := c.Snapshot().Last24h; w.Detected != 1 || w.Responded != 1 {
+		t.Fatalf("after the detection: %+v, want 1 and 1", w)
+	}
+	if s := c.Snapshot().ByScenario["terminal"]; s.Responded != 1 || s.Detected != 1 {
+		t.Fatalf("all-time: %+v", s)
+	}
+}
+
+// The last run time only moves forward: an older queued time arriving later does not replace it.
+func TestLastRunAtMonotonic(t *testing.T) {
+	c := New(newStore(t), func() time.Time { return t0 })
+	c.Record(ev("run", map[string]any{"run_id": "r1", "scenario": "shell-in-container", "state": "queued", "at": t0}))
+	c.Record(ev("run", map[string]any{"run_id": "r2", "scenario": "shell-in-container", "state": "queued", "at": t0.Add(-time.Hour)}))
+	if s := c.Snapshot(); s.LastRunAt == nil || !s.LastRunAt.Equal(t0) {
+		t.Fatalf("last_run_at = %v, want %s", s.LastRunAt, t0)
+	}
+}
+
+// A webhook delivery is a change to persist, like every other counter.
+func TestWindowCounterMarksDirty(t *testing.T) {
+	for name, counter := range map[string]func(*Collector) WindowCounter{
+		"alerts": (*Collector).AlertCounter, "actions": (*Collector).ActionCounter,
+	} {
+		c := New(newStore(t), func() time.Time { return t0 })
+		c.TakeDirty()
+		counter(c).Add()
+		if !c.TakeDirty() {
+			t.Errorf("%s: Add did not mark the counters dirty", name)
+		}
+	}
+	// And it reaches the ConfigMap with nothing else having happened.
+	cm := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "portfolio-stats", Namespace: "portfolio-api"}}
+	kube := fake.NewClientset(cm)
+	store := NewStore(kube, "portfolio-api", "portfolio-stats", nil)
+	c := New(newStore(t), func() time.Time { return t0 })
+	store.Load(context.Background(), c)
+	c.AlertCounter().Add()
+	store.tick(context.Background(), c)
+	c2 := New(newStore(t), func() time.Time { return t0 })
+	store.Load(context.Background(), c2)
+	if n := c2.AlertCounter().Count(); n != 1 {
+		t.Fatalf("alerts after a tick and a reload = %d, want 1", n)
+	}
+}
+
 // runs >= detected >= responded in every window of three days of random runs, whatever hour
 // boundaries the runs straddle.
 func TestWindowOrderingRandomised(t *testing.T) {
@@ -310,7 +411,20 @@ func TestWindowOrderingRandomised(t *testing.T) {
 			c.Record(ev("run", map[string]any{"run_id": id, "scenario": "shell-in-container", "state": state, "at": clk.now()}))
 		}
 		send("queued")
-		if r.IntN(4) > 0 {
+		if r.IntN(6) == 0 {
+			// Terminal Talon-first: the response is published before the detection.
+			clk.set(clk.now().Add(time.Duration(r.IntN(90)) * time.Second))
+			c.ActionCounter().Add()
+			send("responded")
+			if w := c.Snapshot().Last24h; w.Detected < w.Responded {
+				t.Fatalf("talon-first at %s: %+v", clk.now(), w)
+			}
+			if r.IntN(3) > 0 {
+				clk.set(clk.now().Add(time.Duration(r.IntN(3)) * time.Second))
+				c.AlertCounter().Add()
+				send("detected")
+			}
+		} else if r.IntN(4) > 0 {
 			clk.set(clk.now().Add(time.Duration(r.IntN(90)) * time.Second))
 			if r.IntN(3) > 0 {
 				c.AlertCounter().Add()

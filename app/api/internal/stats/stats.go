@@ -182,10 +182,14 @@ type runState struct {
 	// scripted run, or a terminal detection or response tied to no command); a response is measured
 	// only against the detection of the same key. answered marks the keys a response was seen for.
 	// Both are bounded by the commands a run accepts.
-	detectedAt   map[int]time.Time
-	answered     map[int]bool
-	detected     bool
-	responded    bool
+	detectedAt map[int]time.Time
+	answered   map[int]bool
+	detected   bool
+	responded  bool
+	// respPending: a response came before any detection (a terminal run's Talon-first path publishes
+	// `responded` first). Its window count waits for the detection, so a window never holds a response
+	// without its detection.
+	respPending  bool
 	counted      bool            // counted into Runs/ByScenario already
 	objAttempted map[string]bool // objectives this run has tried (counted once per run)
 	objAchieved  map[string]bool // objectives this run has reached (counted once per run)
@@ -270,7 +274,14 @@ func (c *Collector) recordRun(data []byte) {
 			// 11:00:01 is one run and one detection of the 10:00 hour. A run never seen queued is
 			// not in any hour's Runs, so it adds no detection to one either.
 			if rs.counted {
-				c.addHourLocked(rs.hour, func(b *HourBucket) { b.Detected++ })
+				pending := rs.respPending
+				rs.respPending = false
+				c.addHourLocked(rs.hour, func(b *HourBucket) {
+					b.Detected++
+					if pending {
+						b.Responded++
+					}
+				})
 			}
 			c.dirty = true
 		}
@@ -278,8 +289,14 @@ func (c *Collector) recordRun(data []byte) {
 		if !rs.responded {
 			rs.responded = true
 			c.scenarioStat(rs.scenario).Responded++
-			if rs.counted {
+			switch {
+			case !rs.counted:
+			case rs.detected:
 				c.addHourLocked(rs.hour, func(b *HourBucket) { b.Responded++ })
+			default:
+				// Talon first: counted with the detection when it arrives. A run that ends without one
+				// adds no response to the window (its action is still in the window's actions).
+				rs.respPending = true
 			}
 			c.dirty = true
 		}
@@ -721,10 +738,10 @@ const maxCounter = 1 << 40
 // The hourly window (ADR 0035) is sanitised rather than rejected, because losing a day's buckets is
 // no reason to lose the all-time totals beside them: buckets outside [now-23 h, now+1 h] are dropped,
 // buckets of the same hour summed, and a window start or last run time in the future clamped to now.
-// A window no writer produces - a count that is negative or past maxCounter, or more buckets in range
-// than any writer keeps (maxHourly, counted before same-hour buckets are merged) - is discarded as a
-// whole and restarts now, and the all-time totals still load: only a malformed all-time section
-// rejects the blob. A blob from before the window has none of these fields and loads unchanged.
+// A window no writer produces - a count that is negative or past maxCounter (also after same-hour
+// buckets are summed), or more than maxHourly buckets after the merge - is discarded as a whole and
+// restarts now, and the all-time totals still load: only a malformed all-time section rejects the
+// blob. A blob from before the window has none of these fields and loads unchanged.
 func validateAgg(a *agg, now time.Time) error {
 	if a.ByScenario == nil {
 		a.ByScenario = map[string]*ScenarioStat{}
@@ -818,10 +835,12 @@ func sanitiseWindow(a *agg, now time.Time, ok func(...int64) bool) error {
 		}
 		kept = append(kept, b)
 	}
-	if len(kept) > maxHourly {
-		return fmt.Errorf("%d hourly buckets in range, at most %d", len(kept), maxHourly)
-	}
 	a.Hourly = sumHours(kept)
+	// After the merge the range filter above allows at most maxHourly distinct hours; the bound is the
+	// contract's backstop should that filter ever be widened.
+	if len(a.Hourly) > maxHourly {
+		return fmt.Errorf("%d hourly buckets in range, at most %d", len(a.Hourly), maxHourly)
+	}
 	for _, b := range a.Hourly {
 		if !ok(int64(b.Runs), int64(b.Detected), int64(b.Responded), int64(b.Alerts), int64(b.Actions)) {
 			return fmt.Errorf("hourly bucket %d has a counter out of range", b.H)
