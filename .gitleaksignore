@@ -1,0 +1,6 @@
+# Fingerprints gitleaks must not report: commit:file:rule:line. Each one is a false positive that is
+# already in history and cannot be rewritten away; say what it was.
+#
+# A unit test's placeholder bearer token for the terminal (32 hex, the format the page validates); a
+# later commit replaced it with an obviously fake value, but the earlier revision stays in history.
+e2bcbb833f0a8667dffb12d64f32fe69c82668a2:app/web/test/unit/terminal.test.ts:generic-api-key:14
