@@ -169,7 +169,7 @@ func TestTrivyBreakdown(t *testing.T) {
 		runningPod("hello", "web", "ghcr.io/hubertmj/self-defending-portfolio/web@sha256:5555555555555555eeee"),
 		runningPod("x", "other", "ghcr.io/hubertmj/other@sha256:6666666666666666ffff"),
 	)})
-	tr, err := a.trivy(context.Background())
+	tr, err := a.trivy(context.Background(), mustPods(t, a))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -201,6 +201,15 @@ func TestTrivyBreakdown(t *testing.T) {
 			t.Errorf("by_image[%d] = %+v, want %+v", i, tr.ByImage[i], want[i])
 		}
 	}
+}
+
+func mustPods(t *testing.T, a *Aggregator) *podView {
+	t.Helper()
+	pv, err := a.listPods(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return pv
 }
 
 // runningPod is a started pod whose containers the runtime resolved to the given imageIDs.
@@ -253,7 +262,8 @@ func TestTrivyCountsOnlyRunningImages(t *testing.T) {
 		runningPod("trivy-system", "trivy-operator-1", "ghcr.io/hubertmj/self-defending-portfolio/trivy-operator@sha256:new"),
 		cilium, bench, pulling,
 	)
-	tr, err := New(Config{Dynamic: dyn, Kube: kube}).trivy(context.Background())
+	a := New(Config{Dynamic: dyn, Kube: kube})
+	tr, err := a.trivy(context.Background(), mustPods(t, a))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -273,7 +283,12 @@ func TestTrivyFailsWhenPodsCannotBeListed(t *testing.T) {
 		return true, nil, errors.New("forbidden")
 	})
 	dyn := newDyn(vulnReport("hello", "rs", "ghcr.io", "a/b", "1", "sha256:x", finding("HIGH", "")))
-	if _, err := New(Config{Dynamic: dyn, Kube: kube}).trivy(context.Background()); err == nil {
+	a := New(Config{Dynamic: dyn, Kube: kube})
+	pods, err := a.listPods(context.Background())
+	if err == nil {
+		t.Fatal("the pod list succeeded against a failing API server")
+	}
+	if _, err := a.trivy(context.Background(), pods); err == nil {
 		t.Fatal("trivy succeeded without the pod list; it would have reported zero images")
 	}
 }
