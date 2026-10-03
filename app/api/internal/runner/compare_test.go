@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -24,7 +25,10 @@ func TestCompareTwoArms(t *testing.T) {
 	rec := newRecorder()
 	ex := &fakeExec{} // returns at once, so the exec follows the pre-exec
 	r := compareRunner(c, ex, rec)
-	release, done := released()
+	var mu sync.Mutex
+	var releasedAt time.Time
+	done := make(chan struct{})
+	release := func() { mu.Lock(); releasedAt = time.Now(); mu.Unlock(); close(done) }
 
 	sc := scenario("terminate", true)
 	sc.TimeoutSeconds = 30
@@ -53,9 +57,32 @@ func TestCompareTwoArms(t *testing.T) {
 	// then the API deletes it - which the watch reports as a `pod` Deleted event for that arm.
 	_ = c.CoreV1().Pods("sandbox").Delete(context.Background(), guardedPod, metav1.DeleteOptions{})
 	r.ObserveTalon("sandbox", guardedPod, "success")
-	rec.waitFor(t, StateFinished)
+	finished := rec.waitFor(t, StateFinished)
 	waitArm(t, rec, "unguarded", true) // the twin was cleaned up
 	<-done
+
+	// The run is `finished` only once both pods are gone - the twin's deletion is published before it
+	// - and the slot is released only after it, so the page cannot start a new run while the twin is
+	// still up.
+	twinDeleted, finishedAt := -1, -1
+	rec.mu.Lock()
+	for i, p := range rec.all {
+		if ev, ok := p.v.(PodEvent); ok && ev.Arm == "unguarded" && ev.Deleted {
+			twinDeleted = i
+		}
+		if ev, ok := p.v.(RunEvent); ok && ev.State == StateFinished {
+			finishedAt = i
+		}
+	}
+	rec.mu.Unlock()
+	if twinDeleted < 0 || twinDeleted > finishedAt {
+		t.Fatalf("finished (event %d) published before the twin was deleted (event %d): %s", finishedAt, twinDeleted, rec.order())
+	}
+	mu.Lock()
+	if releasedAt.Before(finished.At) {
+		t.Fatal("the slot was released before the run finished")
+	}
+	mu.Unlock()
 
 	// The same attack in both pods: the pre-exec, then the exec, in each.
 	ex.mu.Lock()
@@ -153,4 +180,50 @@ func TestStartRefusesInteractive(t *testing.T) {
 			}
 		}
 	}
+}
+
+// The API's own deletion of the twin is not the victim being killed: the unguarded arm publishes no
+// `gone` (ADR 0021: `gone` is someone else's delete) and no `unreachable`, while the guarded arm, which
+// Talon terminated, does publish `gone`.
+func TestCompareTwinDeleteIsNotGone(t *testing.T) {
+	app := newVictimApp(t)
+	c := fake.NewClientset()
+	readyOnCreate(c)
+	rec := newRecorder()
+	r := New(c, &fakeExec{block: true}, rec, nil, Config{PollInterval: 10 * time.Millisecond, QuarantineLinger: -1,
+		DeleteWait: 100 * time.Millisecond, UnguardedNamespace: "sandbox-unguarded", CompareHold: 200 * time.Millisecond,
+		VictimPort: app.port, VictimInterval: 20 * time.Millisecond, VictimTimeout: 200 * time.Millisecond})
+	release, done := released()
+	sc := scenario("terminate", true)
+	sc.Victim, sc.TimeoutSeconds = true, 30
+	id := startCompare(t, r, sc, release)
+	guardedPod := podName(sc.ID, id)
+	rec.waitFor(t, StatePodReady)
+	waitVictim(t, rec, "guarded", VictimUp)
+	waitVictim(t, rec, "unguarded", VictimUp)
+	_ = c.CoreV1().Pods("sandbox").Delete(context.Background(), guardedPod, metav1.DeleteOptions{})
+	r.ObserveTalon("sandbox", guardedPod, "success")
+	rec.waitFor(t, StateFinished)
+	<-done
+	waitVictim(t, rec, "guarded", VictimGone)
+	for _, p := range rec.of("victim") {
+		if ev := p.v.(VictimEvent); ev.Arm == "unguarded" && (ev.Status == VictimGone || ev.Status == VictimUnreachable) {
+			t.Fatalf("the twin's own cleanup was published as victim %q", ev.Status)
+		}
+	}
+}
+
+// waitVictim waits for a `victim` event of the given arm and status.
+func waitVictim(t *testing.T, rec *recorder, arm, status string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		for _, p := range rec.of("victim") {
+			if ev := p.v.(VictimEvent); ev.Arm == arm && ev.Status == status {
+				return
+			}
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("no victim %q event for arm %q; order=%s", status, arm, rec.order())
 }
