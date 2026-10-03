@@ -2,6 +2,7 @@
 // adds the live panels on top, each of which degrades to its own offline state independently.
 
 import { ApiClient } from "./lib/api";
+import { Backfill } from "./lib/backfill";
 import { byId, h, prefersReducedMotion, replace } from "./lib/dom";
 import { MockBackend, mockOptionsFromUrl } from "./lib/mock";
 import { type ConnectionState, type EventSourceFactory, EventStream } from "./lib/sse";
@@ -112,19 +113,8 @@ function main(): void {
   let stream: EventStream | undefined;
   let activeId: string | undefined;
 
-  // Backfill a run's events from /api/runs/{id} when the live feed did not carry its start — a
-  // visitor who joined mid-session, or output lost across a reconnect (review item 8). The timeline
-  // drops events it already has, so a backfill never double-counts.
-  let reconnected = false; // the stream dropped and is coming back, so a backfill is due on "open"
-  const backfilled = new Set<string>();
-  const backfill = (runId: string) => {
-    if (!runId || backfilled.has(runId)) return;
-    backfilled.add(runId);
-    void api.runEvents(runId).then((r) => {
-      if (r.ok) for (const ev of r.value) timeline.push(ev);
-      else backfilled.delete(runId); // let a later trigger try again
-    });
-  };
+  // A run's history from /api/runs/{id} when the live feed missed part of it (lib/backfill.ts).
+  const backfill = new Backfill((id) => api.runEvents(id), (ev) => timeline.push(ev));
   const timeline = mountTimeline(
     byId("timeline-panel"),
     byId("timeline-conn"),
@@ -148,11 +138,7 @@ function main(): void {
         });
       }
       if (wasActive && !activeId) limits.refresh();
-      // A run whose events arrived without a start we ever saw (joined mid-session): fetch its history.
-      for (const ev of view.unmatched) {
-        const id = "run_id" in ev.data ? ev.data.run_id : undefined;
-        if (id && !view.runs.some((run) => run.runId === id)) backfill(id);
-      }
+      backfill.view(view);
     },
     () => stream?.retryNow(),
     (runId) => {
@@ -172,14 +158,9 @@ function main(): void {
     onState: (state, { retryInMs, gaveUp }) => {
       timeline.setConnection(state, retryInMs, gaveUp);
       setHeaderConn(state);
-      // On reconnecting after a drop, re-fetch the active run so output lost across the gap is
-      // recovered (the replay buffer may not reach back to its start).
-      if (state === "open" && reconnected && activeId) {
-        backfilled.delete(activeId);
-        backfill(activeId);
-      }
-      reconnected = state === "offline" || state === "reconnecting" || reconnected;
-      if (state === "open") reconnected = false;
+      // On opening after a drop or a hidden-tab stop, re-fetch the active run so output lost across
+      // the gap is recovered (the replay buffer may not reach back to its start).
+      backfill.stream(state, activeId);
     },
   });
   stream = events;
@@ -190,7 +171,10 @@ function main(): void {
   let hiddenTimer: ReturnType<typeof setTimeout> | undefined;
   document.addEventListener("visibilitychange", () => {
     if (document.hidden) {
-      hiddenTimer = setTimeout(() => events.stop(), HIDDEN_DISCONNECT_MS);
+      hiddenTimer = setTimeout(() => {
+        events.stop();
+        backfill.stopped();
+      }, HIDDEN_DISCONNECT_MS);
     } else {
       clearTimeout(hiddenTimer);
       // Restart a stopped stream; skip the backoff wait of one that is still trying.

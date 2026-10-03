@@ -486,3 +486,17 @@ describe("what the terminal tells the visitor (review 2, item 12)", () => {
     expect(text(t.root.querySelector(".term__out .term__line--sys"))).toContain("may be the run you just started");
   });
 });
+
+describe("joining a terminal run mid-session (review 2, item 6)", () => {
+  it("shows the watcher's view though the replay held none of the run's start", async () => {
+    const t = await harness({ start: false });
+    const f = new Feed().open();
+    quarantined(f, 1, 3000);
+    f.ran(2, "whoami", 6000, ["uid=10001"], 0, true);
+    // Only what a 50-event replay still holds: everything from the quarantine's `responded` on.
+    const cut = f.events.findIndex((e) => e.type === "run" && e.data.state === "responded");
+    t.show(f.events.slice(cut), T0 + 7000);
+    expect(text(t.root.querySelector(".term__status"))).toContain("read-only");
+    expect(lines(t.root, 2)).toEqual(["uid=10001"]);
+  });
+});

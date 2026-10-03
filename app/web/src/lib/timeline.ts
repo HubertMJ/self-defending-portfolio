@@ -192,7 +192,9 @@ export function buildTimeline(events: readonly StreamEvent[], now: number = Date
   }
 
   const list = [...runs.values()];
-  const start = (r: RunView) => r.states.started ?? r.states.queued ?? 0;
+  // A run joined mid-session may show no queued/started at all (only, say, `responded`): its earliest
+  // reported state stands in, so it reads as the live run it is rather than as one from 1970.
+  const start = (r: RunView) => r.states.started ?? r.states.queued ?? minDefined(...Object.values(r.states)) ?? 0;
   const end = (r: RunView) => {
     const t = minDefined(r.states.finished, r.states.failed, r.states.timeout);
     return t === undefined ? Infinity : t + GRACE_MS;
