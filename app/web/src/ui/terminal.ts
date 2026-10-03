@@ -82,6 +82,7 @@ export function mountTerminal(
     form: HTMLFormElement;
     input: HTMLInputElement;
     hint: HTMLElement;
+    said: HTMLElement;
     chips: HTMLElement;
     shop: HTMLElement;
     objectives: HTMLElement;
@@ -261,6 +262,9 @@ export function mountTerminal(
     const input = h("input", { type: "text", class: "term__input", id: "term-input", autocomplete: "off", autocapitalize: "off", autocorrect: "off", spellcheck: "false", "aria-label": "Command to run in the pod", "aria-describedby": "term-hint", placeholder: "starting the pod…", disabled: true }) as HTMLInputElement;
     input.disabled = true;
     const hint = h("p", { class: "term__hint", id: "term-hint" });
+    // What a screen reader is told (a Tab's choices, a note): a live region that is always live, so
+    // nothing depends on switching aria-live on in the same moment the text changes.
+    const said = h("p", { class: "visually-hidden", "aria-live": "polite" });
     const prompt = h("span", { class: "term__prompt", "aria-hidden": "true" }, "sandbox$");
     const send = h("button", { type: "submit", class: "btn btn--small term__send" }, "Run") as HTMLButtonElement;
     const form = h("form", { class: "term__form" }, prompt, input, send) as HTMLFormElement;
@@ -281,18 +285,20 @@ export function mountTerminal(
       if (e.key !== "Tab" || e.shiftKey) return;
       const typed = input.value.trim();
       const opts = catalogue ? completions(catalogue, input.value) : [];
-      // Let Tab move focus normally when there is nothing to complete, or the text already is a
-      // complete command — so a finished word never traps focus on the input (review item 23).
-      if (opts.length === 0 || (opts.length === 1 && opts[0].toLowerCase() === typed.toLowerCase())) return;
-      e.preventDefault();
       const prefix = commonPrefix(opts);
-      if (prefix.length > typed.length) input.value = prefix;
-      else if (opts.length === 1) input.value = opts[0];
+      const next = prefix.length > typed.length ? prefix : opts.length === 1 ? opts[0] : typed;
+      // Tab completes only when it changes the text. Otherwise — nothing to complete, a complete
+      // command already (`ps`, though `ps aux` also exists), or the choices already listed — it moves
+      // focus as it always does, so the input never traps the keyboard.
+      const listed = els?.hint.dataset.opts === opts.join("\u0000");
+      if (opts.length === 0 || (next === typed && (resolve(catalogue!, typed) !== undefined || listed))) return;
+      e.preventDefault();
+      input.value = next;
       showHint(opts, true);
     });
     input.addEventListener("input", () => showHint(catalogue ? completions(catalogue, input.value) : []));
 
-    els = { out, form, input, hint, chips, shop, objectives, map, summary, status, send, exit };
+    els = { out, form, input, hint, said, chips, shop, objectives, map, summary, status, send, exit };
     replace(
       root,
       h(
@@ -308,6 +314,7 @@ export function mountTerminal(
             out,
             form,
             hint,
+            said,
             chips,
           ),
           h("aside", { class: "term__side" }, h("h4", { class: "term__sideheading" }, "The shop, from the pod's own :8080"), shop, objectives, h("h4", { class: "term__sideheading" }, "Which layer answers each move"), map),
@@ -328,12 +335,18 @@ export function mountTerminal(
       ? h("p", { class: "term__line term__line--sys" }, ownRunLost() ? "Read-only: this may be the run you just started — its start timed out before the page got the key to type into it. " : "Another visitor's session, read-only. ", "Their pod runs as uid 10001, non-root, with no network and a read-only root filesystem; each command and its output appears here as they type.")
       : h("p", { class: "term__line term__line--sys" }, "Pod starting. You will be uid 10001, non-root, no network, read-only root filesystem. When it is ready, try ", h("code", {}, "id"), " or tap a command below.");
 
-  // The completion hint. aria-live only while the visitor is actively completing (Tab), so routine
-  // typing does not chatter to a screen reader (review item 23).
+  // The completion hint. Read out only when the visitor asks for it (Tab), so routine typing does
+  // not chatter to a screen reader.
   const showHint = (opts: string[], announce = false) => {
     if (!els) return;
-    els.hint.setAttribute("aria-live", announce ? "polite" : "off");
-    els.hint.textContent = opts.length && opts.length <= 6 ? `completes to: ${opts.join("  ·  ")}` : "";
+    const text = opts.length && opts.length <= 6 ? `completes to: ${opts.join("  ·  ")}` : "";
+    els.hint.textContent = text;
+    els.hint.dataset.opts = text ? opts.join("\u0000") : "";
+    if (announce) say(text);
+  };
+
+  const say = (text: string) => {
+    if (els && els.said.textContent !== text) els.said.textContent = text;
   };
 
   /** True once the session can take no more commands: the run ended, or this page left it. */
@@ -465,8 +478,9 @@ export function mountTerminal(
   /** A transient note in the hint line, cleared on the next keystroke. */
   const noteHint = (msg: string) => {
     if (!els) return;
-    els.hint.setAttribute("aria-live", "polite");
     els.hint.textContent = msg;
+    els.hint.dataset.opts = "";
+    say(msg);
   };
 
   /** A line the page answered itself (unknown command, or a rejected send): shown, never sent. */

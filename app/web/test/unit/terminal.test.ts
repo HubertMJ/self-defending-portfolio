@@ -529,3 +529,45 @@ describe("what 'reached' means in the summary (cross-side point)", () => {
     expect(stat(t.root, "Objectives reached")).toBe("1 of 5");
   });
 });
+
+describe("Tab and the completion hint (review 2, item 14)", () => {
+  const tab = (input: HTMLInputElement) => {
+    const e = new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true });
+    input.dispatchEvent(e);
+    return e.defaultPrevented; // true: Tab stayed in the input
+  };
+
+  it("never traps focus on a complete command that is also a prefix of another", async () => {
+    const t = await harness();
+    t.show(new Feed().open());
+    const input = t.root.querySelector("#term-input") as HTMLInputElement;
+    for (const typed of ["ps", "wget", "id"]) {
+      input.value = typed;
+      expect(tab(input), typed).toBe(false);
+      expect(input.value).toBe(typed);
+    }
+    // A partial word is completed (Tab stays), then the next Tab moves on.
+    input.value = "wg";
+    expect(tab(input)).toBe(true);
+    expect(input.value).toBe("wget");
+    expect(tab(input)).toBe(false);
+    // An ambiguous prefix lists its choices once, then lets Tab go.
+    input.value = "c";
+    expect(tab(input)).toBe(true);
+    expect(tab(input)).toBe(false);
+  });
+
+  it("tells a screen reader through a region that is always live, not by toggling aria-live", async () => {
+    const t = await harness();
+    t.show(new Feed().open());
+    const input = t.root.querySelector("#term-input") as HTMLInputElement;
+    const live = [...t.root.querySelectorAll('[aria-live="polite"]')].find((e) => e.classList.contains("visually-hidden")) as HTMLElement;
+    expect(live).toBeDefined();
+    expect(t.root.querySelector(".term__hint")?.hasAttribute("aria-live")).toBe(false);
+    input.value = "ch";
+    input.dispatchEvent(new Event("input"));
+    expect(live.textContent).toBe(""); // typing alone is not read out
+    tab(input);
+    expect(live.textContent).toContain("chown 0 /srv/shop/index.html");
+  });
+});
