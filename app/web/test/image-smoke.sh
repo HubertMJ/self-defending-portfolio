@@ -73,12 +73,10 @@ fi
 # The scan must be able to see the tree at all, or an empty answer would read as "clean".
 check "the marker scan reads the served tree" \
   "$($DOCKER exec "$name" grep -rlF -- '/assets/main-' /usr/share/nginx/html 2>/dev/null | grep -c 'index\.html$')" 1
-for marker in sdpMock mock-speed mock-stream-refuse; do
+for marker in sdpMock mock-speed mock-stream-refuse mock-banner; do
   check "no served file carries the mock marker '$marker'" \
     "$($DOCKER exec "$name" grep -rlF -- "$marker" /usr/share/nginx/html 2>/dev/null | tr '\n' ' ')" ""
 done
-# The banner's markup, not its name: styles.css may keep a `#mock-banner` rule for the mock build.
-check "index.html has no mock banner" "$(grep -c -F 'mock-banner' <<<"$index")" 0
 check "/?mock=1 serves the same index.html" "$([ "$(curl -fsS "$base/?mock=1")" = "$index" ] && echo same)" same
 
 if [ "$failures" -ne 0 ]; then
