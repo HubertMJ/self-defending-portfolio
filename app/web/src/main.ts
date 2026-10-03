@@ -18,7 +18,7 @@ import { mountStats } from "./ui/stats";
 import { mountTerminal } from "./ui/terminal";
 import { mountLimits, setupTechMode } from "./ui/tech";
 import { mountTimeline } from "./ui/timeline";
-import { mountVerify } from "./ui/verify";
+import { mountVerify, pollProvenance } from "./ui/verify";
 import { blockedReason } from "./ui/scenarios";
 
 const HIDDEN_DISCONNECT_MS = 60_000;
@@ -99,26 +99,14 @@ function main(): void {
 
   const verify = mountVerify(byId("verify-strip"), byId("verify-panel"));
   const posture = mountPosture(byId("posture-panel"), api, (p) => evidence.setPosture(p));
-  // Provenance follows the posture refresh (the API derives its digests from the same pod list). A
-  // failure keeps the last good answer on the page; an API without the endpoint (a 404, as during a
-  // rollout of an older API) is asked again only every 10 minutes.
-  let provenanceTimer: ReturnType<typeof setTimeout> | undefined;
-  let haveProvenance = false;
-  const loadProvenance = async () => {
-    clearTimeout(provenanceTimer);
-    const r = await api.provenance();
-    if (r.ok) {
-      haveProvenance = true;
-      verify.set({ provenance: r.value });
-      posture.setCommit(r.value.api.commit);
-      if (r.value.api.started_at) evidence.setApiStart(r.value.api.started_at);
-      provenanceTimer = setTimeout(() => void loadProvenance(), 60_000);
-    } else {
-      if (!haveProvenance) verify.set({ provenance: null });
-      provenanceTimer = setTimeout(() => void loadProvenance(), r.status === 404 ? 10 * 60_000 : 120_000);
-    }
-  };
-  void loadProvenance();
+  pollProvenance(() => api.provenance(), {
+    data: (p) => {
+      verify.set({ provenance: p });
+      posture.setCommit(p.api.commit);
+      if (p.api.started_at) evidence.setApiStart(p.api.started_at);
+    },
+    unavailable: () => verify.set({ provenance: null }),
+  });
   void api.buildInfo().then((r) => verify.set({ build: r.ok ? r.value : null }));
 
   const stats = mountStats(

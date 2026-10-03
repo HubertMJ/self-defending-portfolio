@@ -774,6 +774,32 @@ test.describe("credibility on the production bundle (ADR 0035; serve.mjs --termi
     expect(problems).toEqual([]);
   });
 
+  test("ticks without new events change no element of the ticker (nothing re-announced, focus kept)", async ({ page }) => {
+    test.setTimeout(40_000);
+    await page.goto(CRED);
+    await expect(page.locator("#liveness .liveness__server")).toBeVisible();
+    // The replayed session ends live about 2.5 s after the connect; after that only ticks arrive.
+    await page.waitForTimeout(4000);
+    await page.evaluate(() => {
+      const w = window as unknown as { tickerMutations: number };
+      w.tickerMutations = 0;
+      new MutationObserver((records) => (w.tickerMutations += records.filter((r) => r.type === "childList").length)).observe(document.getElementById("ticker") as HTMLElement, { childList: true, subtree: true });
+    });
+    const server = page.locator("#liveness .liveness__server");
+    const before = await server.getAttribute("datetime");
+    await page.waitForTimeout(10_000);
+    expect(await server.getAttribute("datetime")).not.toBe(before); // ticks did arrive
+    expect(await page.evaluate(() => (window as unknown as { tickerMutations: number }).tickerMutations)).toBe(0);
+  });
+
+  test("no horizontal scroll at 360 px with the live policy names", async ({ page }) => {
+    await page.setViewportSize({ width: 360, height: 780 });
+    await page.goto(CRED);
+    await expect(page.locator("#posture-panel table", { hasText: "autogen-validate-registries" })).toBeAttached();
+    await expect(page.locator("#evidence-card .evcard")).toBeVisible();
+    await noHorizontalScroll(page);
+  });
+
   test("?mock=1 on the production bundle is an ordinary query: no banner, no mock, the real header", async ({ page }) => {
     await page.goto(`${CRED}?mock=1`);
     await expect(page.locator("#header-conn")).toContainText("cluster");

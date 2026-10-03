@@ -383,7 +383,8 @@ export function mountEvidence(
   let fallback: ReturnType<typeof setTimeout> | undefined;
   const openedAt = Date.now();
   let seen = new Set<string>();
-  let tickerDrawn = false;
+  // New items are marked and spoken only once the replay is in: replayed history stays silent.
+  let primed = false;
   let lastKey = "";
 
   const ctxFor = (run: RunView, now: number): EvidenceContext => ({ title: titles.get(run.scenario) ?? run.scenario, now, details: details.get(run.scenario), commands });
@@ -411,6 +412,8 @@ export function mountEvidence(
     // only its texts change in place, so a screen reader, a selection or a focused link is left alone.
     const since = live.apiStartedAt ?? openedAt;
     const shape = items.length ? items.map((i) => i.key).join("\n") : `empty|${connected}|${since}|${live.tickAt !== undefined}`;
+    const wasPrimed = primed;
+    primed ||= decided;
     if (shape === tickerShape) {
       refreshRelative(section.ticker, now);
       const server = section.ticker.querySelector<HTMLTimeElement>(".ticker__server");
@@ -422,10 +425,9 @@ export function mountEvidence(
     }
     tickerShape = shape;
     // Items that were not on screen before are marked new (a short fade where motion is allowed) and
-    // spoken once through the visually hidden status line; the first drawing marks and speaks none.
-    const fresh = tickerDrawn ? items.filter((i) => !seen.has(i.key)) : [];
+    // spoken once through the visually hidden status line.
+    const fresh = wasPrimed ? items.filter((i) => !seen.has(i.key)) : [];
     seen = new Set(items.map((i) => i.key));
-    tickerDrawn = true;
     replace(section.ticker, renderTicker(items, { now, since, connected, tickAt: live.tickAt, fresh: new Set(fresh.map((i) => i.key)) }));
     if (fresh.length) replace(section.announce, `New event${fresh.length === 1 ? "" : "s"}: ${fresh.map((i) => i.text).join("; ")}`);
   };

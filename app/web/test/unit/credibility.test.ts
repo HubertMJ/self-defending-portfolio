@@ -1,18 +1,18 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
-import { ApiClient } from "../../src/lib/api";
-import { type CommandOutcome, type Posture, type StreamEvent, parseBuildInfo, parsePosture, parseProvenance, parseRunList, parseStats, parseTick, toStreamEvent } from "../../src/lib/contract";
+import { describe, expect, it, vi } from "vitest";
+import { ApiClient, type Result } from "../../src/lib/api";
+import { type CatalogueCommand, type CommandOutcome, type Posture, type Provenance, type StreamEvent, parseBuildInfo, parsePosture, parseProvenance, parseRunList, parseStats, parseTick, toStreamEvent } from "../../src/lib/contract";
 import { utc, utcClock, when } from "../../src/lib/dom";
 import { posture, stats, TERMINAL_OBJECTIVES } from "../../src/lib/fixtures";
 import { COSIGN_IDENTITY_REGEXP, COSIGN_ISSUER, ciRunUrl, commitUrl, cosignVerifyCommand, isPinnedImageRef, rekorSearchUrl } from "../../src/lib/provenance";
 import { mountConsole } from "../../src/ui/console";
 import { buildTimeline, noDetection } from "../../src/lib/timeline";
-import { renderEvidenceCard, renderEvidenceDetail, renderNoAttack, renderTicker, tickerItems } from "../../src/ui/evidence";
+import { mountEvidence, renderEvidenceCard, renderEvidenceDetail, renderNoAttack, renderTicker, tickerItems } from "../../src/ui/evidence";
 import { admissionTone, renderPostureData } from "../../src/ui/posture";
 import { renderStats } from "../../src/ui/stats";
 import { renderRun } from "../../src/ui/timeline";
-import { renderStrip, renderVerifyPanel } from "../../src/ui/verify";
+import { mountVerify, pollProvenance, renderStrip, renderVerifyPanel } from "../../src/ui/verify";
 
 // ADR 0035: absolute times in UTC, the single cosign identity, the parsers of the additions, the
 // posture naming its failures, finished runs saying why nothing was detected, and the evidence card.
@@ -387,5 +387,156 @@ describe("a copied cosign command names only a strictly validated pinned image (
     const d = { provenance: { api: { commit: "", ci_run_id: "", images: [EVIL] }, web: { images: [] } }, build: null };
     expect(renderStrip(d).textContent).not.toContain("Copy cosign");
     expect(renderVerifyPanel(d).querySelector(".cmd")).toBeNull();
+  });
+});
+
+describe("code review (REQUEST_CHANGES) fixes", () => {
+  const OUT = new Map<string, CommandOutcome>([["read-shadow", "detected"], ["whoami", "allowed"]]);
+  const cat = new Map([
+    ["read-shadow", { id: "read-shadow", input: "cat /etc/shadow", outcome: "detected" }],
+    ["whoami", { id: "whoami", input: "id", outcome: "allowed" }],
+  ]) as unknown as ReadonlyMap<string, CatalogueCommand>;
+
+  it("the card labels a command's class as expected, and a missed detection in a critical chip", () => {
+    const run = buildTimeline(termRun(["read-shadow"]), T + 6000).runs[0];
+    expect(noDetection(run, OUT)).toBe("missed");
+    const card = renderEvidenceCard(run, { title: "t", now: T + 6000, commands: cat });
+    expect(card.querySelector('[data-type="command"]')?.textContent).toContain("expected: detected");
+    const chip = card.querySelector(".evcard__head .chip") as HTMLElement;
+    expect(chip.className).toContain("chip--critical");
+    expect(chip.textContent).toBe("Detection expected, none arrived");
+    const recon = renderEvidenceCard(buildTimeline(termRun(["whoami"]), T + 6000).runs[0], { title: "t", now: T + 6000, commands: cat });
+    expect(recon.querySelector(".evcard__head .chip")?.textContent).toBe("Finished");
+  });
+
+  it("Talon lines carry no raw 'success' token", () => {
+    const run = buildTimeline(scripted(1), T + 4000).runs[0];
+    const talon = renderEvidenceCard(run, { title: "x", now: T + 4000 }).querySelector('[data-type="talon"]');
+    expect(talon?.textContent).not.toContain("success");
+  });
+
+  it("the empty card names the latest recorded run from its summary, never 'No attack since'", () => {
+    const latest = { run_id: "0123456789abcdef", scenario: "terminal", state: "finished" as const, started_at: "2026-10-03T12:01:57Z", detected: false, responded: false, events: 9, truncated: false };
+    const el = renderNoAttack({ apiStartedAt: "2026-10-03T17:00:00Z", latest, now: T });
+    expect(el.textContent).toContain("Latest recorded run 0123456789abcdef (terminal, started 12:01:57 UTC (6 hours ago)) - raw JSON");
+    expect(el.textContent).not.toContain("No attack since");
+    expect(renderNoAttack({ now: T }).textContent).toContain("No attack in the stream's replay.");
+  });
+
+  it("a pod outside the sandbox is never named, on the card or in the history", () => {
+    const evs = scripted(1).map((e) => (e.type === "falco" ? ({ ...e, data: { ...e.data, namespace: "portfolio-api" } } as StreamEvent) : e));
+    const run = buildTimeline(evs, T + 4000).runs[0];
+    expect(renderEvidenceCard(run, { title: "x", now: T + 4000 }).textContent).not.toContain(POD);
+    expect(renderEvidenceDetail(run, { title: "x", now: T + 4000 }).querySelector("dl")?.textContent).not.toContain(POD);
+    expect(renderRun(run, "x", new Set(), undefined, undefined, undefined, T + 4000).querySelector(".stage--attack")?.textContent).not.toContain(POD);
+    const ok = buildTimeline(scripted(1), T + 4000).runs[0];
+    expect(renderRun(ok, "x", new Set(), undefined, undefined, undefined, T + 4000).querySelector(".stage--attack")?.textContent).toContain(POD);
+  });
+
+  it("violations that do not add up to the failures stay red", () => {
+    const p = withViolations([{ running: false, count: 7 }]);
+    expect(admissionTone(p)).toBe("warning");
+    expect(admissionTone({ ...p, kyverno: { ...p.kyverno, policies: p.kyverno.policies.map((x) => (x.fail ? { ...x, fail: 9 } : x)) } })).toBe("critical");
+  });
+
+  it("tiles list five groups or checks, then point at the rest; the violations table scrolls in its box", () => {
+    const p = withViolations(Array.from({ length: 7 }, () => ({ running: null, count: 1 })));
+    const failing = Array.from({ length: 7 }, (_, i) => ({ id: `1.1.${i + 1}`, title: `check ${i}`, remediation: "r" }));
+    const el = renderPostureData({ ...p, kube_bench: { ...p.kube_bench, failing } }, 0);
+    const [adm, , cis] = [...el.querySelectorAll(".tile")];
+    expect(adm.querySelectorAll(".tile__list > li:not(.tile__more)")).toHaveLength(5);
+    expect(adm.querySelector(".tile__more")?.textContent).toBe("2 more in the table below");
+    expect(cis.querySelectorAll(".tile__list > li:not(.tile__more)")).toHaveLength(5);
+    expect(cis.querySelector(".tile__more")?.textContent).toBe("2 more: 1.1.6, 1.1.7");
+    expect(el.querySelector(".table-scroll > table.data-table--wrap")?.textContent).toContain("autogen-validate-registries");
+  });
+
+  it("console and shop-window times are UTC with ms", async () => {
+    const api = new ApiClient({ fetch: async () => new Response("{}", { status: 404, headers: { "Content-Type": "application/json" } }) });
+    const root = document.createElement("section");
+    document.body.append(root);
+    const evs = [...scripted(1), ev("pod", { run_id: "0f0e0d0c0b0a0908", pod: POD, uid: "u", phase: "Running", reason: "", container_id: "9b2e7c4d1a0f", image: GOOD, labels_delta: {}, deleted: false, at: at(100) }, 60), ev("victim", { run_id: "0f0e0d0c0b0a0908", pod: POD, at: at(200), status: "up", title: "SDP Shop", banner: "", probe_ms: 3, checksum: "" }, 61)];
+    mountConsole(root, api).update(buildTimeline(evs, T + 4000));
+    expect(root.querySelector(".phase time")?.textContent).toMatch(/^(\d{4}-\d\d-\d\d )?\d\d:\d\d:\d\d\.\d{3} UTC$/);
+    expect(root.textContent).toMatch(/seen (\d{4}-\d\d-\d\d )?\d\d:\d\d:\d\d\.\d{3} UTC/);
+  });
+
+  it("the verify strip is not redrawn for a new generated_at, and has no label without rows", () => {
+    const strip = document.createElement("div");
+    const v = mountVerify(strip, document.createElement("div"));
+    const prov = (g: string) => ({ generated_at: g, api: { commit: "0448cff", ci_run_id: "1", images: [] }, web: { images: [] } });
+    v.set({ provenance: prov("2026-10-03T18:00:00Z") });
+    const first = strip.firstElementChild;
+    v.set({ provenance: prov("2026-10-03T18:01:00Z") });
+    expect(strip.firstElementChild).toBe(first);
+    expect(renderStrip({ provenance: null, build: null }).querySelector(".vstrip__label")).toBeNull();
+  });
+
+  it("provenance: a failure keeps the last good answer; a 404 is asked again after 10 minutes", async () => {
+    vi.useFakeTimers();
+    try {
+      const seq: Result<Provenance>[] = [
+        { ok: true, value: { api: { commit: "", ci_run_id: "", images: [] }, web: { images: [] } } },
+        { ok: false, error: "offline", message: "HTTP 503", status: 503 },
+      ];
+      const calls = { data: 0, unavailable: 0, loads: 0 };
+      pollProvenance(async () => (calls.loads++, seq.shift() ?? { ok: false, error: "offline", message: "x", status: 503 }), { data: () => calls.data++, unavailable: () => calls.unavailable++ });
+      await vi.advanceTimersByTimeAsync(61_000);
+      expect(calls).toEqual({ data: 1, unavailable: 0, loads: 2 });
+      const missing = { n: 0, unavailable: 0 };
+      pollProvenance(async () => (missing.n++, { ok: false, error: "offline", message: "HTTP 404", status: 404, json: true }), { data: () => {}, unavailable: () => missing.unavailable++ });
+      await vi.advanceTimersByTimeAsync(9 * 60_000);
+      expect(missing.n).toBe(1);
+      await vi.advanceTimersByTimeAsync(61_000);
+      expect(missing.n).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  describe("mountEvidence redraws nothing a tick or the clock does not change", () => {
+    const mount = () => {
+      const card = document.createElement("div");
+      const section = { ticker: document.createElement("div"), liveness: document.createElement("p"), detail: document.createElement("div"), announce: document.createElement("p") };
+      document.body.append(card, section.ticker, section.announce);
+      return { card, section, ev: mountEvidence(card, section, () => {}) };
+    };
+
+    it("ticks and repeated views leave the ticker's child list alone; new items are spoken once", () => {
+      const { section, ev: e } = mount();
+      const view = buildTimeline(scripted(1), Date.now());
+      e.setConnection("open");
+      e.update(view);
+      e.tick({ at: new Date().toISOString() });
+      const obs = new MutationObserver(() => {});
+      obs.observe(section.ticker, { childList: true, subtree: true });
+      e.update(view);
+      e.tick({ at: new Date(Date.now() + 15_000).toISOString() });
+      e.setConnection("open");
+      expect(obs.takeRecords().filter((r) => r.type === "childList")).toEqual([]);
+      expect(section.announce.textContent).toBe("");
+      e.update(buildTimeline(scripted(2), Date.now()));
+      expect(obs.takeRecords().some((r) => r.type === "childList")).toBe(true);
+      expect(section.announce.textContent).toBe("New event: Falco: Rule 1");
+      obs.disconnect();
+    });
+
+    it("the 30 s refresh keeps the card and a focused link in it, and updates the relative text", () => {
+      vi.useFakeTimers();
+      try {
+        vi.setSystemTime(T + 4000);
+        const { card, ev: e } = mount();
+        e.update(buildTimeline(scripted(1), T + 4000));
+        const link = card.querySelector("a") as HTMLAnchorElement;
+        link.focus();
+        const before = card.querySelector(".evcard__when")?.textContent;
+        vi.advanceTimersByTime(30_000);
+        expect(card.querySelector("a")).toBe(link);
+        expect(document.activeElement).toBe(link);
+        expect(card.querySelector(".evcard__when")?.textContent).not.toBe(before);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 });

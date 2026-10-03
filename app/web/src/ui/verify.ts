@@ -5,6 +5,7 @@
 // GET /api/provenance; the web's commit and CI run from /build.json; either may be missing (an API
 // before ADR 0035, a local build), and then the panel shows what is known and says what is not.
 
+import type { Result } from "../lib/api";
 import type { BuildInfo, Provenance } from "../lib/contract";
 import { h, replace, timeEl, when } from "../lib/dom";
 import { ciRunUrl, commitUrl, cosignVerifyCommand, digestOf, isPinnedImageRef, oneLine, rekorSearchUrl, shortDigest } from "../lib/provenance";
@@ -140,6 +141,28 @@ export function renderVerifyPanel(d: VerifyData, now: number = Date.now()): HTML
     ),
     d.latestRunId ? h("p", {}, extLink(`/api/runs/${encodeURIComponent(d.latestRunId)}`, "Latest run raw JSON")) : null,
   );
+}
+
+/**
+ * Polls GET /api/provenance with the posture's rhythm (the API derives the digests from the same pod
+ * list): every 60 s. A failure keeps the last good answer on the page (`unavailable` only fires while
+ * there has never been one); an API without the endpoint (a 404, e.g. an older API during a rollout)
+ * is asked again every 10 minutes, anything else after 2.
+ */
+export function pollProvenance(load: () => Promise<Result<Provenance>>, on: { data: (p: Provenance) => void; unavailable: () => void }): void {
+  let good = false;
+  const run = async () => {
+    const r = await load();
+    if (r.ok) {
+      good = true;
+      on.data(r.value);
+      setTimeout(() => void run(), 60_000);
+      return;
+    }
+    if (!good) on.unavailable();
+    setTimeout(() => void run(), r.status === 404 ? 10 * 60_000 : 120_000);
+  };
+  void run();
 }
 
 export interface VerifyHandle {
