@@ -58,6 +58,8 @@ export function mountTerminal(
   let endedShown = false;
   let ready = false; // the run reached pod_ready — commands are accepted only then
   let pendingSeq: number | undefined; // a command sent and not yet ended on the client
+  let sending = false; // a POST of a command is in flight (its 202 not back yet)
+  let leaveSent = false; // this session's DELETE has gone out (by the button, `exit`, or pagehide)
   let mode: "idle" | "session" | "unavailable" = "unavailable";
 
   /** The run id shape the API uses; a value from the 202 that does not match is never put in a URL. */
@@ -76,6 +78,7 @@ export function mountTerminal(
     summary: HTMLElement;
     status: HTMLElement;
     send: HTMLButtonElement;
+    exit: HTMLButtonElement;
   } | null = null;
 
   // Posture (for the result map's evidence) is fetched once, lazily, the first time it is needed —
@@ -232,6 +235,8 @@ export function mountTerminal(
     endedShown = false;
     ready = false;
     pendingSeq = undefined;
+    sending = false;
+    leaveSent = false;
     rendered.clear();
   };
 
@@ -273,7 +278,7 @@ export function mountTerminal(
     });
     input.addEventListener("input", () => showHint(catalogue ? completions(catalogue, input.value) : []));
 
-    els = { out, form, input, hint, chips, shop, objectives, map, summary, status, send };
+    els = { out, form, input, hint, chips, shop, objectives, map, summary, status, send, exit };
     replace(
       root,
       h(
@@ -315,8 +320,13 @@ export function mountTerminal(
     els.hint.textContent = opts.length && opts.length <= 6 ? `completes to: ${opts.join("  ·  ")}` : "";
   };
 
+  /** True once the session can take no more commands: the run ended, or this page left it. */
+  const over = (): boolean => endedShown || leaveSent || myRun()?.active === false;
+
   const leave = async () => {
-    if (!session || watching) return;
+    if (!session || watching || leaveSent || over()) return;
+    leaveSent = true;
+    syncControls();
     await api.leaveRun(session.runId, session.token);
     // The run's `finished` event arrives on the stream and drives the summary; nothing else to do.
   };
@@ -349,7 +359,7 @@ export function mountTerminal(
               "div",
               { class: "term__chiprow" },
               cmds.map((c) => {
-                const b = h("button", { type: "button", class: `term__chip term__chip--${c.outcome}`, title: c.explain }, c.input);
+                const b = h("button", { type: "button", class: `term__chip term__chip--${c.outcome}`, title: c.explain, disabled: true }, c.input);
                 b.addEventListener("click", () => void submit(c.input));
                 return b;
               }),
@@ -364,8 +374,7 @@ export function mountTerminal(
     if (!catalogue || !session || watching) return;
     const line = raw.trim();
     if (!line) return;
-    const run = myRun();
-    if (run && !run.active) {
+    if (over()) {
       noteHint("the session is over — start another below");
       return;
     }
@@ -373,35 +382,62 @@ export function mountTerminal(
       noteHint("the pod is still starting — one moment");
       return;
     }
-    // One command at a time: a line typed while one runs is held back with a note, not queued and not
-    // dropped under the still-streaming block (review item 11).
-    if (pendingSeq !== undefined) {
+    // One command at a time: a line typed (or a chip tapped) while one is being sent or runs is held
+    // back with a note — not queued, and never a second POST before the first one's 202.
+    if (sending || pendingSeq !== undefined) {
       noteHint("wait for the current command to finish");
       return;
     }
     if (els) els.input.value = "";
     showHint([]);
+    // `exit` does what it does in a shell: it ends the session (the Leave button).
+    if (/^(exit|logout)$/i.test(line)) {
+      appendLocal(line, "logout — ending the session");
+      void leave();
+      return;
+    }
     const cmd = resolve(catalogue, line);
     if (!cmd) {
       // An unknown line is answered here and never sent anywhere.
       appendLocal(line, "sh: " + line.split(/\s+/)[0] + ": not in this sandbox's catalogue. Tab shows what is.");
       return;
     }
-    setInFlight(true);
+    sending = true;
+    syncControls();
     const r = await api.runCommand(session.runId, session.token, cmd.id);
+    sending = false;
     if (r.kind === "accepted") {
-      pendingSeq = r.seq; // cleared when this command's exited/killed event arrives
+      // Cleared when this command's exited/killed event arrives — which may already have, before the
+      // 202 did: then it is cleared right here.
+      pendingSeq = r.seq;
+      resolvePending();
       return; // output arrives over the event stream
     }
-    setInFlight(false);
+    syncControls();
     const why =
       r.kind === "conflict" ? "the pod is not ready, the session is over, or a command is still running" : r.kind === "rate-limited" ? "you have run the most commands a session allows" : r.kind === "unauthorized" ? "this session is not yours" : r.kind === "not-found" ? "the run has ended" : r.kind === "too-large" ? "that was too long" : r.kind === "error" ? `the server refused it (HTTP ${r.status})` : "the API is not reachable";
     appendLocal(line, `sh: not run (${why})`);
   };
 
-  /** Toggle the "a command is in flight" lock on the Run button. */
-  const setInFlight = (on: boolean) => {
-    if (els) els.send.disabled = on || els.input.disabled;
+  /**
+   * The controls follow the session: nothing is offered before pod_ready or after the end, and the
+   * Run button and the chips rest while a command is being sent or runs.
+   */
+  const syncControls = () => {
+    if (!els || watching) return;
+    const closed = !ready || over();
+    const busy = closed || sending || pendingSeq !== undefined;
+    els.input.disabled = closed;
+    els.send.disabled = busy;
+    for (const b of els.chips.querySelectorAll<HTMLButtonElement>(".term__chip")) b.disabled = busy;
+    els.chips.setAttribute("aria-disabled", String(busy));
+    els.exit.disabled = over();
+  };
+
+  /** Releases the one-command lock once the sent command has ended, whichever of the 202 and its end came first. */
+  const resolvePending = () => {
+    if (pendingSeq !== undefined && myRun()?.commands.find((c) => c.seq === pendingSeq)?.endedAt !== undefined) pendingSeq = undefined;
+    syncControls();
   };
 
   /** A transient note in the hint line, cleared on the next keystroke. */
@@ -444,13 +480,7 @@ export function mountTerminal(
     if (nowReady && !ready && !watching) enableInput();
     ready = ready || nowReady;
     for (const c of run.commands) appendCommand(c);
-    if (pendingSeq !== undefined) {
-      const p = run.commands.find((c) => c.seq === pendingSeq);
-      if (p && p.endedAt !== undefined) {
-        pendingSeq = undefined;
-        setInFlight(false);
-      }
-    }
+    resolvePending();
     patchShop(run);
     renderObjectives(run);
     renderMap(run);
@@ -460,10 +490,9 @@ export function mountTerminal(
 
   const enableInput = () => {
     if (!els) return;
-    els.input.disabled = false;
     els.input.placeholder = "type a command, then Enter (Tab to complete)";
-    els.send.disabled = false;
-    els.chips.removeAttribute("aria-disabled");
+    ready = true;
+    syncControls();
     setTimeout(() => els && !els.input.disabled && els.input.focus(), 0);
   };
 
@@ -615,8 +644,7 @@ export function mountTerminal(
   const renderSummary = (run: RunView) => {
     if (!els || !catalogue) return;
     endedShown = true;
-    els.input.disabled = true;
-    els.send.disabled = true;
+    syncControls();
     const lit = litFromRun(run);
     const reached = new Set<string>();
     for (const c of run.commands) {
@@ -734,7 +762,9 @@ export function mountTerminal(
   // The visitor closing the tab ends their run, freeing the single slot at once rather than after the
   // idle timeout (review item 10). keepalive lets the DELETE outlive the page.
   const onPageHide = () => {
-    if (session && !watching) void api.leaveRun(session.runId, session.token);
+    // Once only, and only while the run is live: not after it ended (the API would answer 409), and
+    // not again when a page restored from the back/forward cache is hidden a second time.
+    if (session && !watching && !over()) void leave();
   };
   if (typeof addEventListener === "function") addEventListener("pagehide", onPageHide);
 

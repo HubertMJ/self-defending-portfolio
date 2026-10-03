@@ -347,3 +347,79 @@ describe("the start panel between sessions (review 2, item 5)", () => {
     expect(btn.getAttribute("aria-disabled")).toBe("false");
   });
 });
+
+const posts = (t: Harness) => t.calls.filter((c) => c.method === "POST" && c.path.endsWith("/commands"));
+const deletes = (t: Harness) => t.calls.filter((c) => c.method === "DELETE");
+const chips = (root: HTMLElement) => [...root.querySelectorAll<HTMLButtonElement>(".term__chip")];
+const send = (root: HTMLElement) => root.querySelector(".term__send") as HTMLButtonElement;
+
+describe("one command at a time (review 2, items 7 and 12)", () => {
+  it("frees the input when the command's end arrives before its 202", async () => {
+    const t = await harness();
+    const f = new Feed().open();
+    t.show(f);
+    chips(t.root)[0].click(); // POST sent; its 202 is still on the way…
+    f.ran(1, "whoami", 3000, ["uid=10001"], 0, true); // …when the whole command has already run
+    t.show(f);
+    await flush(); // now the 202 arrives, and nothing else will
+    expect(posts(t)).toHaveLength(1);
+    expect(send(t.root).disabled).toBe(false);
+    expect(chips(t.root).every((b) => !b.disabled)).toBe(true);
+  });
+
+  it("a second tap before the 202 sends nothing", async () => {
+    const t = await harness();
+    t.show(new Feed().open());
+    chips(t.root)[0].click();
+    chips(t.root)[1].click();
+    await flush();
+    expect(posts(t)).toHaveLength(1);
+  });
+
+  it("offers nothing before pod_ready or after the end; Leave rests after the end", async () => {
+    const t = await harness();
+    const f = new Feed();
+    f.run("queued", 0);
+    f.run("started", 40, "pod created");
+    t.show(f);
+    expect(chips(t.root).every((b) => b.disabled)).toBe(true);
+    expect((t.root.querySelector("#term-input") as HTMLInputElement).disabled).toBe(true);
+    f.run("pod_ready", 1900, "9b2e7c4d1a0f");
+    t.show(f);
+    expect(chips(t.root).every((b) => !b.disabled)).toBe(true);
+    killedBy(f, 1, 3000);
+    t.show(f);
+    expect(chips(t.root).every((b) => b.disabled)).toBe(true);
+    expect((t.root.querySelector(".term__exit") as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("pagehide leaves once while live, never after the end, never again after a back/forward restore", async () => {
+    const t = await harness();
+    const f = new Feed().open();
+    t.show(f);
+    dispatchEvent(new Event("pagehide"));
+    dispatchEvent(new Event("pagehide")); // hidden again after a bfcache restore
+    await flush();
+    expect(deletes(t)).toHaveLength(1);
+
+    const u = await harness();
+    const g = new Feed().open();
+    g.run("finished", 5000, "idle");
+    u.show(g);
+    dispatchEvent(new Event("pagehide"));
+    await flush();
+    expect(deletes(u)).toHaveLength(0);
+  });
+
+  it("`exit` ends the session, as in a shell", async () => {
+    const t = await harness();
+    t.show(new Feed().open());
+    const input = t.root.querySelector("#term-input") as HTMLInputElement;
+    input.value = "exit";
+    input.form?.requestSubmit();
+    await flush();
+    expect(deletes(t)).toHaveLength(1);
+    expect(posts(t)).toHaveLength(0);
+    expect(text(t.root.querySelector(".term__out"))).not.toContain("not in this sandbox's catalogue");
+  });
+});
