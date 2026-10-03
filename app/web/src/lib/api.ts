@@ -47,14 +47,18 @@ export type TerminalResult =
   | { kind: "offline"; message: string }
   | { kind: "error"; status: number; message: string };
 
-/** Sending one command id to a running terminal (POST /api/runs/{id}/commands). */
+/**
+ * Sending one command id to a running terminal (POST /api/runs/{id}/commands). A 429 is either the
+ * run's command budget or the per-visitor request limiter; only the body tells them apart, so its
+ * `error` text is kept as `reason`.
+ */
 export type CommandResult =
   | { kind: "accepted"; seq: number }
   | { kind: "unauthorized" }
   | { kind: "not-found" }
   | { kind: "conflict" }
   | { kind: "too-large" }
-  | { kind: "rate-limited"; retryAfterSeconds: number }
+  | { kind: "rate-limited"; retryAfterSeconds: number; reason: string }
   | { kind: "offline"; message: string }
   | { kind: "error"; status: number; message: string };
 
@@ -286,7 +290,7 @@ export class ApiClient {
       case 413:
         return { kind: "too-large" };
       case 429:
-        return { kind: "rate-limited", retryAfterSeconds: parseRetryAfter(res.headers.get("Retry-After")) };
+        return { kind: "rate-limited", retryAfterSeconds: parseRetryAfter(res.headers.get("Retry-After")), reason: await errorText(res) };
       case 502:
       case 503:
       case 504:
@@ -311,6 +315,12 @@ export class ApiClient {
       return false;
     }
   }
+}
+
+/** The `error` field of a JSON error body, or "". */
+async function errorText(res: Response): Promise<string> {
+  const body: unknown = isJson(res) ? await res.json().catch(() => null) : null;
+  return typeof body === "object" && body !== null && typeof (body as { error?: unknown }).error === "string" ? (body as { error: string }).error.slice(0, 200) : "";
 }
 
 function isJson(res: Response): boolean {

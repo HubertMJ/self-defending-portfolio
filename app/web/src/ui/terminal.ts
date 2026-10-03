@@ -60,6 +60,10 @@ export function mountTerminal(
   let pendingSeq: number | undefined; // a command sent and not yet ended on the client
   let sending = false; // a POST of a command is in flight (its 202 not back yet)
   let leaveSent = false; // this session's DELETE has gone out (by the button, `exit`, or pagehide)
+  // When this page's start timed out: the server may still have started the run, which then shows
+  // up read-only (the 202 with its key never arrived), and the page says why.
+  let startTimedOutAt: number | undefined;
+  const ownRunLost = () => startTimedOutAt !== undefined && Date.now() - startTimedOutAt < 60_000;
   let mode: "idle" | "session" | "unavailable" = "unavailable";
 
   /** The run id shape the API uses; a value from the 202 that does not match is never put in a URL. */
@@ -222,11 +226,12 @@ export function mountTerminal(
       renderUnavailable();
     } else {
       if (r.kind === "rate-limited") hooks.onRateLimited?.(r.retryAfterSeconds);
+      if (r.kind === "offline" && r.message === "timed out") startTimedOutAt = Date.now();
       syncIdle();
       // The note is set after the sync, so the cooldown it explains does not clear it.
       if (idle) idle.shown = blockedNow();
       setNote(
-        r.kind === "busy" ? "Another run is in progress — only one runs at a time. Try again when it finishes." : r.kind === "rate-limited" ? `Rate limit reached: try again in ${Math.ceil(r.retryAfterSeconds)} s.` : r.kind === "error" ? `The server refused the request (HTTP ${r.status}).` : "The attack API is not reachable right now.",
+        r.kind === "busy" ? "Another run is in progress — only one runs at a time. Try again when it finishes." : r.kind === "rate-limited" ? `Rate limit reached: try again in ${Math.ceil(r.retryAfterSeconds)} s.` : r.kind === "error" ? `The server refused the request (HTTP ${r.status}).` : startTimedOutAt !== undefined && ownRunLost() ? "The start request timed out. The server may have started the run anyway: if it shows up here, it is read-only, because its key never reached this page." : "The attack API is not reachable right now.",
       );
     }
   };
@@ -310,7 +315,9 @@ export function mountTerminal(
   };
 
   const bannerLine = () =>
-    h("p", { class: "term__line term__line--sys" }, "Pod starting. You will be uid 10001, non-root, no network, read-only root filesystem. When it is ready, try ", h("code", {}, "id"), " or tap a command below.");
+    watching
+      ? h("p", { class: "term__line term__line--sys" }, ownRunLost() ? "Read-only: this may be the run you just started — its start timed out before the page got the key to type into it. " : "Another visitor's session, read-only. ", "Their pod runs as uid 10001, non-root, with no network and a read-only root filesystem; each command and its output appears here as they type.")
+      : h("p", { class: "term__line term__line--sys" }, "Pod starting. You will be uid 10001, non-root, no network, read-only root filesystem. When it is ready, try ", h("code", {}, "id"), " or tap a command below.");
 
   // The completion hint. aria-live only while the visitor is actively completing (Tab), so routine
   // typing does not chatter to a screen reader (review item 23).
@@ -415,7 +422,13 @@ export function mountTerminal(
     }
     syncControls();
     const why =
-      r.kind === "conflict" ? "the pod is not ready, the session is over, or a command is still running" : r.kind === "rate-limited" ? "you have run the most commands a session allows" : r.kind === "unauthorized" ? "this session is not yours" : r.kind === "not-found" ? "the run has ended" : r.kind === "too-large" ? "that was too long" : r.kind === "error" ? `the server refused it (HTTP ${r.status})` : "the API is not reachable";
+      r.kind === "conflict"
+        ? "the pod is not ready, the session is over, or a command is still running"
+        : r.kind === "rate-limited"
+          ? /too many commands/i.test(r.reason)
+            ? "you have run the most commands a session allows"
+            : `too many requests from your address — try again in ${r.retryAfterSeconds} s`
+          : r.kind === "unauthorized" ? "this session is not yours" : r.kind === "not-found" ? "the run has ended" : r.kind === "too-large" ? "that was too long" : r.kind === "error" ? `the server refused it (HTTP ${r.status})` : "the API is not reachable";
     appendLocal(line, `sh: not run (${why})`);
   };
 
@@ -563,7 +576,9 @@ export function mountTerminal(
   const renderStatus = (run: RunView) => {
     if (!els) return;
     const text = watching
-      ? "watching another visitor — read-only"
+      ? ownRunLost()
+        ? "read-only — the start timed out"
+        : "watching another visitor — read-only"
       : !run.active
         ? "session over"
         : run.quarantinedAt !== undefined
@@ -652,7 +667,8 @@ export function mountTerminal(
       const cmd = catalogue.commands.find((x) => x.id === c.id);
       if (cmd?.objective) reached.add(cmd.objective);
     }
-    const start = run.states.started ?? run.states.queued;
+    // Survived: from the moment the pod could take a command (pod_ready) to the run's end.
+    const start = run.states.pod_ready ?? run.states.started ?? run.states.queued;
     const endT = run.states.finished ?? run.states.failed ?? run.states.timeout;
     const survived = start !== undefined && endT !== undefined ? endT - start : undefined;
     // The outcome is read from the run (its detail, and each response with the command it answered),
@@ -662,19 +678,27 @@ export function mountTerminal(
     const ender = enderOf(run);
     const quarantine = responseOf(run, "quarantine");
     const input = (c?: CommandRun) => (c ? h("code", {}, catalogue?.commands.find((x) => x.id === c.id)?.input ?? c.id) : null);
-    const outcome: (Node | string | null)[] = killedRun
-      ? quarantine
-        ? ["Quarantined after ", input(quarantine.cmd) ?? "a command", ", you kept the shell; then the cluster deleted the pod under you after ", input(ender?.cmd) ?? "a later command", "."]
-        : ["The cluster deleted the pod under you after ", input(ender?.cmd) ?? "a command", " — marked below."]
-      : detail === "idle"
-        ? ["You went quiet; the pod was reclaimed after the idle timeout."]
-        : detail === "deadline"
-          ? [`The pod reached its ${catalogue.timeoutSeconds}-second deadline.`]
-          : detail === "left"
-            ? ["You left; the pod was cleaned up."]
-            : quarantine
-              ? ["You were quarantined, then the session ended."]
-              : ["The session ended."];
+    // A watcher reads the same summary about someone else: "the visitor", not "you".
+    const other = watching !== undefined;
+    const you = other ? "the visitor" : "you";
+    const You = other ? "The visitor" : "You";
+    const failed = run.current === "failed" || run.current === "timeout";
+    const outcome: (Node | string | null)[] = failed
+      ? [`The session could not run: ${detail || (run.current === "timeout" ? "it timed out" : "the API reported a failure")}.`]
+      : killedRun
+        ? quarantine
+          ? ["Quarantined after ", input(quarantine.cmd) ?? "a command", `, ${you} kept the shell; then the cluster deleted the pod under ${other ? "them" : "you"} after `, input(ender?.cmd) ?? "a later command", "."]
+          : [`The cluster deleted the pod under ${other ? "them" : "you"} after `, input(ender?.cmd) ?? "a command", " — marked below."]
+        : detail === "idle"
+          ? [`${You} went quiet; the pod was reclaimed after the idle timeout.`]
+          : detail === "deadline"
+            ? [`The pod reached its ${catalogue.timeoutSeconds}-second deadline.`]
+            : detail === "left"
+              ? [`${You} left; the pod was cleaned up.`]
+              : quarantine
+                ? [`${You} ${other ? "was" : "were"} quarantined, then the session ended.`]
+                : ["The session ended."];
+    const enter = other ? "their Enter" : "your Enter";
     // "Killed N ms after your Enter": the terminate's response time minus the start of the command it
     // answered, with Falco-to-response beside it — that command's alert, else the last one before.
     const killMs = afterEnter(ender);
@@ -693,8 +717,8 @@ export function mountTerminal(
         stat("Objectives reached", `${reached.size} of ${catalogue.objectives.length}`),
         stat("Commands run", String(run.commands.length)),
         survived !== undefined ? stat("Survived", formatDuration(survived)) : null,
-        quarantineMs !== undefined ? stat("Quarantined after your Enter", formatDuration(quarantineMs)) : null,
-        killMs !== undefined ? stat("Killed after your Enter", formatDuration(killMs)) : null,
+        quarantineMs !== undefined ? stat(`Quarantined after ${enter}`, formatDuration(quarantineMs)) : null,
+        killMs !== undefined ? stat(`Killed after ${enter}`, formatDuration(killMs)) : null,
         falcoToResp !== undefined ? stat("Falco to response", formatDuration(falcoToResp)) : null,
       ),
       h("h4", { class: "term__sumhead" }, "Which layer answered which move"),
@@ -703,7 +727,7 @@ export function mountTerminal(
         "div",
         { class: "term__again" },
         (() => {
-          const b = h("button", { type: "button", class: "btn btn--ghost" }, "Run another session");
+          const b = h("button", { type: "button", class: "btn btn--ghost" }, other ? "Start your own session" : "Run another session");
           b.addEventListener("click", () => {
             session = null;
             endedShown = false;

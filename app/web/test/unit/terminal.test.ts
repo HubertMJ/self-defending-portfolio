@@ -78,7 +78,7 @@ const flush = async () => {
 
 type Hooks = Parameters<typeof mountTerminal>[2];
 
-async function harness(opts: { start?: boolean; hooks?: Hooks; attackStatus?: () => [number, unknown, Record<string, string>?]; commandStatus?: (id: string) => [number, unknown, Record<string, string>?] } = {}): Promise<Harness> {
+async function harness(opts: { start?: boolean; hooks?: Hooks; hangAttack?: boolean; timeoutMs?: number; attackStatus?: () => [number, unknown, Record<string, string>?]; commandStatus?: (id: string) => [number, unknown, Record<string, string>?] } = {}): Promise<Harness> {
   const calls: Harness["calls"] = [];
   let seq = 0;
   const fetch: FetchLike = async (input, init) => {
@@ -89,6 +89,10 @@ async function harness(opts: { start?: boolean; hooks?: Hooks; attackStatus?: ()
       new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json", ...headers } });
     if (path === "/api/scenarios/terminal/details") return json(200, terminalDetails());
     if (path === "/api/posture") return json(404, { error: "not found" });
+    if (method === "POST" && path === "/api/attack/terminal" && opts.hangAttack) {
+      // The server takes the request and never answers in time: the client's own timeout aborts it.
+      return new Promise<Response>((_, reject) => init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError"))));
+    }
     if (method === "POST" && path === "/api/attack/terminal") {
       if (opts.attackStatus) {
         const [status, body, headers] = opts.attackStatus();
@@ -109,7 +113,7 @@ async function harness(opts: { start?: boolean; hooks?: Hooks; attackStatus?: ()
   };
   const root = document.createElement("div");
   document.body.replaceChildren(root);
-  const term = mountTerminal(root, new ApiClient({ fetch }), opts.hooks);
+  const term = mountTerminal(root, new ApiClient({ fetch, timeoutMs: opts.timeoutMs }), opts.hooks);
   await flush();
   if (opts.start ?? true) {
     (root.querySelector(".term-start__btn") as HTMLButtonElement).click();
@@ -421,5 +425,64 @@ describe("one command at a time (review 2, items 7 and 12)", () => {
     expect(deletes(t)).toHaveLength(1);
     expect(posts(t)).toHaveLength(0);
     expect(text(t.root.querySelector(".term__out"))).not.toContain("not in this sandbox's catalogue");
+  });
+});
+
+describe("what the terminal tells the visitor (review 2, item 12)", () => {
+  it("a watcher reads about someone else: no 'You will be uid 10001', no 'your Enter'", async () => {
+    const t = await harness({ start: false });
+    const f = new Feed().open();
+    t.show(f);
+    expect(text(t.root.querySelector(".term__status"))).toContain("read-only");
+    const banner = text(t.root.querySelector(".term__out .term__line--sys"));
+    expect(banner).toContain("Another visitor's session");
+    expect(banner).not.toMatch(/\bYou\b/);
+    killedBy(f, 1, 3000);
+    t.show(f);
+    expect(text(t.root.querySelector(".term__sumlead"))).toContain("under them");
+    expect(stat(t.root, "Killed after their Enter")).toBe("150 ms");
+    expect(stat(t.root, "Killed after your Enter")).toBeUndefined();
+  });
+
+  it("a failed or timed-out run says why", async () => {
+    const t = await harness();
+    const f = new Feed();
+    f.run("queued", 0);
+    f.run("started", 40, "pod created");
+    f.run("timeout", 120_000, "pod did not become ready in time");
+    t.show(f, T0 + 130_000);
+    expect(text(t.root.querySelector(".term__sumlead"))).toBe("The session could not run: pod did not become ready in time.");
+  });
+
+  it("'Survived' counts from pod_ready, when the pod could first take a command", async () => {
+    const t = await harness();
+    const f = new Feed().open(); // pod_ready at 1 900 ms
+    killedBy(f, 1, 3000); // finished at 3 600 ms
+    t.show(f);
+    expect(stat(t.root, "Survived")).toBe("1.7 s");
+  });
+
+  it("tells the run's command budget from the request limiter by the 429's body", async () => {
+    let body = "too many commands in this run";
+    const t = await harness({ commandStatus: () => [429, { error: body }, { "Retry-After": "1" }] });
+    const f = new Feed().open();
+    t.show(f);
+    chips(t.root)[0].click();
+    await flush();
+    expect(text(t.root.querySelector(".term__out"))).toContain("the most commands a session allows");
+    body = "too many requests";
+    chips(t.root)[1].click();
+    await flush();
+    expect(text(t.root.querySelector(".term__out"))).toContain("too many requests from your address");
+  });
+
+  it("a start that timed out explains the read-only run that may follow", async () => {
+    const t = await harness({ start: false, hangAttack: true, timeoutMs: 20 });
+    (t.root.querySelector(".term-start__btn") as HTMLButtonElement).click();
+    await new Promise((r) => setTimeout(r, 60));
+    expect(text(t.root.querySelector(".term-start__blocked"))).toContain("The start request timed out");
+    t.show(new Feed().open());
+    expect(text(t.root.querySelector(".term__status"))).toContain("the start timed out");
+    expect(text(t.root.querySelector(".term__out .term__line--sys"))).toContain("may be the run you just started");
   });
 });
