@@ -180,7 +180,8 @@ func TestTerminalDetailsAndList(t *testing.T) {
 	}
 	resp, _ = http.Get(e.public.URL + "/api/scenarios/terminal/details")
 	d := decode[map[string]any](t, resp.Body)
-	if d["interactive"] != true || d["idle_seconds"].(float64) != 10 {
+	// Both bounds the page shows, as the catalogue sets them (Timeout() and Idle(), not a default).
+	if d["interactive"] != true || d["idle_seconds"] != float64(10) || d["timeout_seconds"] != float64(20) {
 		t.Fatalf("details: %v", d)
 	}
 	cmds, ok := d["commands"].([]any)

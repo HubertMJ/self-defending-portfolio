@@ -22,7 +22,7 @@ import (
 )
 
 func terminalScenario() scenarios.Scenario {
-	sc := scenarios.Scenario{ID: "terminal", Title: "Terminal", Interactive: true, TimeoutSeconds: 120, IdleSeconds: 30}
+	sc := scenarios.Scenario{ID: "terminal", Title: "Terminal", Interactive: true, TimeoutSeconds: 300, IdleSeconds: 90}
 	sc.Objectives = []scenarios.Objective{{ID: "recon", Title: "Look"}, {ID: "credentials", Title: "Creds"}}
 	sc.Commands = []scenarios.Command{
 		{ID: "whoami", Input: "id", Objective: "recon", Command: []string{"id"}, Outcome: "allowed", Layer: "runtime", Control: "none", Explain: "ok"},
@@ -201,7 +201,7 @@ func TestTerminalDeleteDuringCommand(t *testing.T) {
 	r := terminalRunner(c, &fakeExec{streamBlock: true}, rec)
 	release, done := released()
 	sc := terminalScenario()
-	sc.TimeoutSeconds = 120
+	sc.TimeoutSeconds = 300
 	id, token := r.StartTerminal(sc, release)
 	rec.waitFor(t, StatePodReady)
 	seq := sendCommand(t, r, id, token, "shell") // TTY command that never returns on its own

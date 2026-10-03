@@ -8,7 +8,7 @@
 //	finished   the pod is gone and the slot is free
 //
 // or one of two terminal failures: `timeout` (nothing responded within the scenario's
-// timeout_seconds, at most 120 s) and `failed` (the pod could not be created or never became
+// timeout_seconds, at most 300 s) and `failed` (the pod could not be created or never became
 // Ready). Every terminal state, success or not, ends with the pod deleted and the slot released;
 // activeDeadlineSeconds on the pod is the backstop should the API die mid-run, and orphans from such
 // a crash are deleted at the next start-up (CleanupOrphans).

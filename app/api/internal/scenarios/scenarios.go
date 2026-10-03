@@ -34,8 +34,11 @@ const (
 	// ImagePrefix is the only registry path a scenario image may come from; the same prefix
 	// restrict-image-registries enforces in `sandbox`.
 	ImagePrefix = "ghcr.io/hubertmj/self-defending-portfolio/"
-	// MaxTimeout is the contract's ceiling for a scenario pod's lifetime.
-	MaxTimeout = 120 * time.Second
+	// MaxTimeout is the contract's ceiling for a scenario pod's lifetime: the same bound the
+	// cluster enforces on every sandbox pod's activeDeadlineSeconds (require-sandbox-deadline). It
+	// was 120 s until the terminal's session went to 300 s so a visitor has time to read between
+	// commands (ADR 0017 amendment of 2026-10-03). A catalogue entry over it is refused, not capped.
+	MaxTimeout = 300 * time.Second
 	// DefaultTimeout applies when a scenario sets no timeout_seconds.
 	DefaultTimeout = 60 * time.Second
 	// DefaultIdle ends an interactive run that goes this long without a command (ADR 0029). The
@@ -302,8 +305,27 @@ func (s *Scenario) validate() error {
 	if s.TimeoutSeconds < 0 {
 		return errors.New("timeout_seconds is negative")
 	}
+	// Refused rather than silently capped by Timeout(): the cluster refuses such a pod anyway
+	// (require-sandbox-deadline), and a clear log line here beats an admission error mid-run.
+	// Compared in seconds, so an absurd value cannot overflow time.Duration into a small one.
+	if s.TimeoutSeconds > int(MaxTimeout/time.Second) {
+		return fmt.Errorf("timeout_seconds %d is over the %d s bound", s.TimeoutSeconds, int(MaxTimeout/time.Second))
+	}
 	if s.IdleSeconds < 0 {
 		return errors.New("idle_seconds is negative")
+	}
+	// An idle timeout at or past the deadline never fires: the run would always end as `deadline`
+	// and the visitor would never be told they went quiet. Compared on the defaulted values, so an
+	// entry that sets neither (60 s and 30 s) passes and one that sets only a short timeout does not;
+	// in seconds, as above.
+	if s.Interactive {
+		idle, timeout := int(DefaultIdle/time.Second), int(s.Timeout()/time.Second)
+		if s.IdleSeconds > 0 {
+			idle = s.IdleSeconds
+		}
+		if idle >= timeout {
+			return fmt.Errorf("idle_seconds %d must be below timeout_seconds %d", idle, timeout)
+		}
 	}
 	if len(s.Pod) == 0 || string(s.Pod) == "null" {
 		return errors.New("pod is missing")

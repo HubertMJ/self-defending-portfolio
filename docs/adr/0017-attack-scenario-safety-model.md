@@ -45,8 +45,9 @@ relaxations exist, both inside `restricted`, each documented on the scenario:
 
 `make validate` renders each PodSpec as the Pod the API will create and runs the Kyverno gate over it
 (`scripts/lib/scenario_pods.py`, wired into `scripts/validate-cluster.sh`), and checks every entry
-against the contract (fields, fixed ids, response values, timeout <= 120 s, digest-pinned scenario
-image, exec shape). A scenario that the cluster would refuse fails in CI, not on a visitor's click.
+against the contract (fields, fixed ids, response values, timeout <= 120 s - 300 s since the 2026-10-03
+amendment - digest-pinned scenario image, exec shape). A scenario that the cluster would refuse fails in CI,
+not on a visitor's click.
 
 **No attack tooling, no payloads, no targets.** The scenario image (`app/scenario/Dockerfile`) is Alpine
 3.24.2 by digest with the package manager, TLS libraries and build tools removed: busybox and musl. The
@@ -70,7 +71,8 @@ No scenario names an external host or a cluster service.
 the whole namespace; `limitrange.yaml` fills defaults and caps a container at 200m / 128 MiB / 16 MiB.
 Scenario pods ask for 10m / 16 MiB and are capped at 100m / 32 MiB. On top of that, enforced by the API
 per the contract: one run at a time, 3 runs per 10 minutes per client IP and 30 per hour in total,
-`activeDeadlineSeconds` = `timeout_seconds` <= 120 s, and the pod deleted at the end of every run.
+`activeDeadlineSeconds` = `timeout_seconds` <= 120 s (300 s since the 2026-10-03 amendment), and the pod
+deleted at the end of every run.
 Whatever the API does, the quota is what the cluster will actually grant.
 
 **Detection is tested, not assumed.** `tests/scenarios/offline.sh` checks without a cluster that Falco
@@ -82,7 +84,8 @@ the alert, the Talon action and the end state.
 
 ## Consequences
 - A visitor can make the cluster run, at most, one hardened busybox pod at a time for at most two
-  minutes, inside 500m CPU and 512 MiB, with no network beyond its own loopback and DNS.
+  minutes (five since the 2026-10-03 amendment), inside 500m CPU and 512 MiB, with no network beyond its own
+  loopback and DNS.
 - The scenarios are not "real" attacks in the tooling sense; they are the behaviours real attacks
   exhibit. That is a deliberate trade: the demo shows detection and response, not offensive tooling.
 - The two relaxations are visible in the ConfigMap and in this ADR; both stay within PSS `restricted`
@@ -110,11 +113,36 @@ against a hardened pod instead of pressing one button. It does not widen the att
 - the two relaxations it uses are the ones this ADR already documents - `supplementalGroups: [42]` (as
   `sensitive-file-read`) and a writable volume for a dropped binary - plus a per-run flag the API injects and
   the pod never serves. No new capability, no token, no weakened policy;
-- the pod lives at most `timeout_seconds` (120) and ends on idle, on the visitor leaving, on a kill, or at the
-  deadline; the single-run slot and the sandbox quota bound it exactly as before.
+- the pod lives at most `timeout_seconds` (120; 300 since the 2026-10-03 amendment) and ends on idle, on the
+  visitor leaving, on a kill, or at the deadline; the single-run slot and the sandbox quota bound it exactly as
+  before.
 Every command's claimed outcome is proven offline under the pod's own security context (`tests/scenarios/offline.sh`).
 
 **The unguarded twin (ADR 0031).** `sandbox-unguarded` is a second sandbox with every preventive layer of this
 ADR intact - `restricted`, signed images only, the quota and LimitRange, default-deny networking - and only the
 automatic response absent (no Talon Role, no Talon rule matches it). It does not relax the safety model; it
 removes the response so the response's worth is visible by contrast, while the pod stays just as contained.
+
+## Amendment 2026-10-03: a scenario lives at most 300 s; the terminal 300 s, idle 90 s
+
+The contract's ceiling on `timeout_seconds` - and with it `activeDeadlineSeconds` - is now **300 s** (was 120).
+Visitors' terminal sessions, the owner's own included, ended "session over" while they were still reading:
+the explanation shown after each command takes longer to read than the 30 s idle allowed, and two minutes
+were not enough to try more than a few moves. The terminal now runs up to 300 s and ends after 90 s without a
+command. The four one-click scenarios keep their 90 s; nothing about them changes.
+
+The bound moved everywhere it is stated, together: the API's `scenarios.MaxTimeout`, `make validate`'s
+`scripts/lib/scenario_pods.py`, and the cluster's own `require-sandbox-deadline` (ADR 0031 amendment). Two
+checks were added while at it. The API's catalogue validation now **refuses** an entry over the bound (it used
+to cap it silently, leaving the cluster to refuse the pod mid-run) and an interactive entry whose idle time
+is not below its timeout (an idle timer that can never fire); `make validate` applies the same two rules. And
+because the victim server exits on its own after 120 s by default (ADR 0022), the terminal's pod passes it a
+lifetime as long as its timeout, which `make validate` now checks for every victim scenario - otherwise the
+shop would die at two minutes in a five-minute session.
+
+What it costs, accepted by the owner: the API runs **one run at a time** for everyone, so while one visitor
+has a terminal open, another may wait up to five minutes before they can start anything, watching that
+session read-only meanwhile. The rest of the envelope is unchanged - one hardened busybox pod at a time, the
+same quota, no network beyond its loopback and DNS - so the Consequences above hold with "two minutes" read as
+"five". The rate limits (3 per 10 minutes per visitor, 30 per hour) are unchanged: a slot held for five minutes
+serves at most 12 terminal sessions an hour, fewer than the global budget allows.

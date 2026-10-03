@@ -92,8 +92,71 @@ func indent(s string) string {
 }
 
 func TestTimeoutCapped(t *testing.T) {
+	if MaxTimeout != 300*time.Second {
+		t.Fatalf("MaxTimeout = %s, want 300 s (require-sandbox-deadline's bound)", MaxTimeout)
+	}
+	// A Scenario built by hand (Parse refuses this one) still never asks for more than the bound.
 	if (Scenario{TimeoutSeconds: 600}).Timeout() != MaxTimeout {
-		t.Fatal("timeout not capped at 120 s")
+		t.Fatal("timeout not capped at 300 s")
+	}
+}
+
+// The session bounds (ADR 0017 amendment, 2026-10-03): a timeout up to 300 s is accepted and one
+// second more is refused, for a one-click scenario and the terminal alike, and an interactive
+// scenario's idle time must stay below its timeout, defaults included.
+func TestTimeoutAndIdleBounds(t *testing.T) {
+	const terminalBounds = "  timeout_seconds: 300\n  idle_seconds: 90\n"
+	if !strings.Contains(terminalSample, terminalBounds) {
+		t.Fatal("terminalSample no longer carries the bounds this test rewrites")
+	}
+	// terminal("timeout_seconds: 60", "idle_seconds: 90"): the sample with those top-level fields
+	// in place of its own bounds (none: neither field set).
+	terminal := func(fields ...string) string {
+		var b strings.Builder
+		for _, f := range fields {
+			b.WriteString("  " + f + "\n")
+		}
+		return strings.Replace(terminalSample, terminalBounds, b.String(), 1)
+	}
+	oneClick := func(timeout string) string {
+		return strings.Replace(sample, "timeout_seconds: 90\n", "timeout_seconds: "+timeout+"\n", 1)
+	}
+	cases := []struct {
+		name, yaml string
+		ok         bool
+	}{
+		{"terminal: 300 s, idle 90 s (the real catalogue)", terminal("timeout_seconds: 300", "idle_seconds: 90"), true},
+		{"terminal: idle one second below the timeout", terminal("timeout_seconds: 300", "idle_seconds: 299"), true},
+		{"terminal: neither set (60 s, idle 30 s)", terminal(), true},
+		{"terminal: timeout 301 s", terminal("timeout_seconds: 301", "idle_seconds: 90"), false},
+		{"terminal: idle equal to the timeout", terminal("timeout_seconds: 300", "idle_seconds: 300"), false},
+		{"terminal: idle over the timeout", terminal("timeout_seconds: 60", "idle_seconds: 90"), false},
+		{"terminal: idle 90 s against the default 60 s timeout", terminal("idle_seconds: 90"), false},
+		{"terminal: default idle 30 s against a 20 s timeout", terminal("timeout_seconds: 20"), false},
+		{"terminal: a timeout that would overflow a Duration", terminal("timeout_seconds: 10000000000", "idle_seconds: 90"), false},
+		{"terminal: an idle that would overflow a Duration", terminal("timeout_seconds: 300", "idle_seconds: 10000000000"), false},
+		{"one-click: 300 s", oneClick("300"), true},
+		{"one-click: 301 s", oneClick("301"), false},
+	}
+	for _, c := range cases {
+		list, errs := Parse([]byte(c.yaml))
+		if c.ok && len(errs) != 0 {
+			t.Errorf("%s: refused: %v", c.name, errs)
+		}
+		if !c.ok && len(errs) != 1 {
+			t.Errorf("%s: want exactly one refusal, got %v", c.name, errs)
+		}
+		// The one-click sample carries a second, valid entry; only the edited one may go.
+		want := 0
+		if c.ok {
+			want = 1
+		}
+		if strings.HasPrefix(c.name, "one-click") {
+			want++
+		}
+		if len(list) != want {
+			t.Errorf("%s: %d scenarios loaded, want %d", c.name, len(list), want)
+		}
 	}
 }
 
@@ -163,8 +226,8 @@ const terminalSample = `
   title: Attacker's terminal
   summary: Type commands into a hardened pod.
   interactive: true
-  timeout_seconds: 120
-  idle_seconds: 30
+  timeout_seconds: 300
+  idle_seconds: 90
   victim: true
   objectives:
     - {id: recon, title: "Look around"}
@@ -217,7 +280,7 @@ func TestParseTerminal(t *testing.T) {
 		t.Fatalf("list=%d errs=%v", len(list), errs)
 	}
 	sc := list[0]
-	if !sc.Interactive || sc.Idle() != 30*time.Second || sc.Timeout() != 120*time.Second {
+	if !sc.Interactive || sc.Idle() != 90*time.Second || sc.Timeout() != 300*time.Second {
 		t.Fatalf("flags: interactive=%v idle=%v timeout=%v", sc.Interactive, sc.Idle(), sc.Timeout())
 	}
 	if !sc.Public().Interactive {
@@ -341,8 +404,8 @@ const realisticTerminal = `
   title: Attacker's terminal
   summary: Type commands into a hardened pod.
   interactive: true
-  timeout_seconds: 120
-  idle_seconds: 30
+  timeout_seconds: 300
+  idle_seconds: 90
   victim: true
   objectives:
     - {id: recon, title: "Look around"}
