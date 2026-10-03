@@ -62,6 +62,12 @@ export default defineConfig({
       url: "http://127.0.0.1:4174/",
       reuseExistingServer: !process.env.CI,
     },
+    // The same site in front of the interactive API, mid-way through a visitor's session (serve.mjs --terminal-api).
+    {
+      command: "node scripts/serve.mjs --port 4176 --terminal-api",
+      url: "http://127.0.0.1:4176/",
+      reuseExistingServer: !process.env.CI,
+    },
     // The same site in front of a stub of the API deployed today (serve.mjs --live-api).
     {
       command: "node scripts/serve.mjs --port 4175 --live-api",

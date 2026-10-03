@@ -500,3 +500,20 @@ describe("joining a terminal run mid-session (review 2, item 6)", () => {
     expect(lines(t.root, 2)).toEqual(["uid=10001"]);
   });
 });
+
+describe("untrusted output in .term__out (review 2, item 11)", () => {
+  it("markup and control characters arrive as text, never as elements or escapes", async () => {
+    const t = await harness();
+    const f = new Feed().open();
+    f.cmd(1, "ls-shop", "started", 3000);
+    f.out(1, "ls-shop", 3010, '<img src=x onerror="alert(1)"><script>alert(2)</script>&amp;\n');
+    f.out(1, "ls-shop", 3011, "\u001b[31mred\u001b[0m\r‮evil‬​zero\u0007bell\ttab\n", "stderr");
+    t.show(f);
+    const out = t.root.querySelector(".term__out") as HTMLElement;
+    expect(out.querySelector("img, script")).toBeNull();
+    const [markup, controls] = lines(t.root, 1);
+    expect(markup).toBe('<img src=x onerror="alert(1)"><script>alert(2)</script>&amp;');
+    expect(controls).toBe("[31mred[0mevilzerobell\ttab");
+    expect(controls).not.toMatch(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f​‪-‮]/);
+  });
+});

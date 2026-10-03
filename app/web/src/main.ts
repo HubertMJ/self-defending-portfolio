@@ -75,6 +75,9 @@ function main(): void {
     const banner = byId("mock-banner");
     banner.hidden = false;
     document.documentElement.dataset.mock = "true";
+    // The mock answers in-page, so the network never sees a request: its own call log is what the
+    // end-to-end tests read to check what the page sent.
+    (window as unknown as { sdpMock: MockBackend }).sdpMock = mock;
   }
 
   mountPosture(byId("posture-panel"), api);

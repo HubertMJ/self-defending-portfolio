@@ -17,6 +17,11 @@ function guardConsole(page: Page): string[] {
   return problems;
 }
 
+/** Every request the page made to the in-page mock (`?mock=1` never reaches the network). */
+async function mockCalls(page: Page): Promise<string[]> {
+  return page.evaluate(() => (window as unknown as { sdpMock: { calls: string[] } }).sdpMock.calls.slice());
+}
+
 async function noHorizontalScroll(page: Page) {
   const [scroll, client] = await page.evaluate(() => [document.documentElement.scrollWidth, document.documentElement.clientWidth]);
   expect(scroll, "page must not scroll horizontally").toBeLessThanOrEqual(client);
@@ -285,10 +290,6 @@ test.describe("attacker's terminal (mock, ADR 0033)", () => {
 
   test("an unknown line is answered locally and never sent to the API", async ({ page }) => {
     const problems = guardConsole(page);
-    const posts: string[] = [];
-    page.on("request", (r) => {
-      if (/\/api\/runs\/.+\/commands/.test(r.url())) posts.push(r.url());
-    });
     await page.goto("/?mock=1&mock-speed=0.3");
     const term = page.locator("#terminal");
     await term.getByRole("button", { name: /Open the terminal/ }).click();
@@ -296,7 +297,10 @@ test.describe("attacker's terminal (mock, ADR 0033)", () => {
     await term.locator("#term-input").fill("sudo rm -rf /");
     await term.locator(".term__send").click();
     await expect(term.locator(".term__out")).toContainText("not in this sandbox's catalogue");
-    expect(posts).toEqual([]); // nothing was sent
+    // Nothing was sent: the mock answers in-page, so its own call log is the record of what was.
+    const calls = await mockCalls(page);
+    expect(calls).toContain("POST /api/attack/terminal"); // the log does record what is sent
+    expect(calls.filter((c) => c.includes("/commands"))).toEqual([]);
     expect(problems).toEqual([]);
   });
 
@@ -312,17 +316,13 @@ test.describe("attacker's terminal (mock, ADR 0033)", () => {
 
   test("another visitor's terminal is read-only: no form, no chips, no POST", async ({ page }) => {
     const problems = guardConsole(page);
-    const posts: string[] = [];
-    page.on("request", (r) => {
-      if (r.method() === "POST" && /\/api\/(runs|attack)/.test(r.url())) posts.push(r.url());
-    });
     await page.goto("/?mock=1&mock-speed=0.4&mock-term-visitor=300");
     const term = page.locator("#terminal");
     await expect(term.locator(".term__status")).toContainText("read-only", { timeout: 10_000 });
     await expect(term.locator(".term__out")).toContainText("uid=10001", { timeout: 10_000 });
     await expect(term.locator("#term-input")).toBeHidden();
     await expect(term.locator(".term__chips")).toBeHidden();
-    expect(posts).toEqual([]);
+    expect((await mockCalls(page)).filter((c) => !c.startsWith("GET "))).toEqual([]);
     expect(problems).toEqual([]);
   });
 
@@ -445,6 +445,41 @@ test.describe("against the API deployed today (serve.mjs --live-api: JSON 404 on
     expect(requests.filter((r) => r === "GET /api/stats").length).toBeLessThanOrEqual(1);
     expect(requests.filter((r) => r === "GET /api/scenarios/terminal/details").length).toBeLessThanOrEqual(1);
     expect(requests.filter((r) => r.startsWith("GET /api/runs/")).length).toBeLessThanOrEqual(1);
+    await noHorizontalScroll(page);
+    expect(problems).toEqual([]);
+  });
+});
+
+test.describe("a terminal session replayed as the API publishes it (serve.mjs --terminal-api)", () => {
+  test("joined mid-session: backfilled in order, watched read-only, summarised from the API's own events", async ({ page }) => {
+    const problems = guardConsole(page);
+    const backfills: string[] = [];
+    const posts: string[] = [];
+    page.on("request", (r) => {
+      if (/\/api\/runs\/[0-9a-f]{16}$/.test(r.url())) backfills.push(r.url());
+      if (r.method() !== "GET") posts.push(`${r.method()} ${r.url()}`);
+    });
+    await page.goto("http://127.0.0.1:4176/");
+    const term = page.locator("#terminal");
+    // The replay held only the run's later events; the page still knows it is a live terminal run.
+    await expect(term.locator(".term__status")).toContainText("read-only");
+    // The backfill fills in what came before, in the order the API published it.
+    await expect(term.locator(".term__cmd[data-seq]")).toHaveCount(3, { timeout: 10_000 });
+    expect(await term.locator(".term__cmd[data-seq]").evaluateAll((els) => els.map((e) => e.getAttribute("data-seq")))).toEqual(["1", "2", "3"]);
+    await expect(term.locator('.term__cmd[data-seq="1"] .term__cmdout')).toContainText("Connection refused");
+    // Then the session ends live: the summary is read from the run's own responses.
+    const summary = term.locator(".term__summary");
+    await expect(summary).toBeVisible({ timeout: 10_000 });
+    await expect(summary.locator(".term__sumlead")).toContainText("Quarantined after wget");
+    await expect(summary.locator(".term__sumlead")).toContainText("under them after cat /etc/shadow");
+    const stat = (label: string) => summary.locator(".term__sumstats div", { has: page.locator("dt", { hasText: label }) }).locator("dd");
+    await expect(stat("Quarantined after their Enter")).toHaveText("220 ms");
+    await expect(stat("Killed after their Enter")).toHaveText("150 ms");
+    await expect(stat("Falco to response")).toHaveText("110 ms");
+    const ended = summary.locator(".deflayer__entry", { has: page.locator(".deflayer__ended") }).locator("code");
+    await expect(ended).toHaveText(["cat /etc/shadow"]);
+    expect(backfills).toHaveLength(1);
+    expect(posts).toEqual([]); // a watcher sends nothing
     await noHorizontalScroll(page);
     expect(problems).toEqual([]);
   });
