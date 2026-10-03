@@ -94,28 +94,23 @@ export interface StatsHandle {
   setObjectives(objectives: Objective[]): void;
 }
 
-/** `onData`: every fresh snapshot (the evidence card reads its last_run_at). */
-export function mountStats(root: HTMLElement, api: ApiClient, onData?: (s: Stats) => void): StatsHandle {
+/**
+ * `onData`: every fresh snapshot (the evidence card reads its last_run_at). `label`: replaces "Live,
+ * across every visitor" (the mock's, from lib/mock-hook.ts: mock data must not claim to be live).
+ */
+export function mountStats(root: HTMLElement, api: ApiClient, onData?: (s: Stats) => void, label?: string): StatsHandle {
   let timer: ReturnType<typeof setTimeout> | undefined;
   let objectives: Objective[] = [];
   let snapshot: Stats | undefined;
   let last: LastRun | undefined;
-  // In the mock the stats label must not claim "live"; the header banner already says it is a mock.
-  const isMock = (() => {
-    try {
-      return document.documentElement.dataset.mock === "true";
-    } catch {
-      return false;
-    }
-  })();
 
   const draw = () => {
     if (!snapshot) return;
     root.hidden = false;
     const el = renderStats(snapshot, objectives, last);
-    if (isMock) {
-      const label = el.querySelector(".herostats__label");
-      if (label) label.textContent = "Mock data — across every visitor";
+    if (label) {
+      const heading = el.querySelector(".herostats__label");
+      if (heading) heading.textContent = label;
     }
     replace(root, el);
   };

@@ -8,6 +8,7 @@ CSP rationale: [ADR 0019](../../docs/adr/0019-frontend-stack-and-csp.md).
 ```
 src/index.html         the page (static portfolio content; works without JavaScript)
 src/styles.css         all styles, system fonts, dark + light tokens
+src/mock.css           the mock banner's styles: copied into the mock build only, linked by mock-hook.ts
 src/main.ts            wires the live panels
 src/theme.ts           tiny blocking script: applies a stored theme before first paint
 src/lib/contract.ts    API types and runtime guards (phase 5/6/8 contract: runs, terminal, twin, stats)
@@ -48,8 +49,8 @@ npm run dev                       # rebuild the mock build on change (index.html
 
 The mock is dev/test only (ADR 0035). `npm run build` (dist/, what the image ships) does not contain
 it: the build resolves `src/lib/mock-hook.ts` to a stub that returns null and cuts the mock banner
-from index.html, and `test/unit/bundle.test.ts` fails if any of the mock's markers reach the
-production bundle. `npm run build:mock` writes the same page with the mock into dist-mock/, where
+from index.html, the banner's styles live in `src/mock.css` (mock build only), and
+`test/unit/bundle.test.ts` fails if any trace of the mock reaches any file of dist/. `npm run build:mock` writes the same page with the mock into dist-mock/, where
 `?mock=1` turns it on, announced by a banner; it never calls the API. Extra knobs: `&mock-speed=0.2` (faster runs), `&mock-limit=1` (hit the 429 sooner),
 `&mock-stream-refuse=3&mock-stream-retry-after=2` (the event stream is refused with 429 first),
 `&mock-stream-stall=1` (the first accepted stream delivers nothing and dies), `&mock-visitor=500`

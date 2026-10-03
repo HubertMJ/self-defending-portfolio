@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -18,15 +18,32 @@ const build = (dir: string, ...flags: string[]) => {
   return { js: readFileSync(join(dir, "assets", main), "utf8"), html: readFileSync(join(dir, "index.html"), "utf8") };
 };
 
+/** Every file of a build, as text: JS, CSS, HTML and the copied static files. */
+const tree = (dir: string): { file: string; text: string }[] =>
+  readdirSync(dir).flatMap((f) => {
+    const p = join(dir, f);
+    return statSync(p).isDirectory() ? tree(p) : [{ file: p.slice(dir.length), text: readFileSync(p, "utf8") }];
+  });
+
+// Nothing of the mock anywhere in dist/: the banner (markup, styles, the script that moves it), the
+// two data markers, and the words the page uses only for the mock.
+// (esbuild writes the "·" of the header's "mock ·" as \xB7.)
+const TREE_MARKERS: (string | RegExp)[] = ["mock-banner", MOCK_MARKER, FIXTURE_MARKER, /mock (·|\\xB7)/, "Mock data"];
+const has = (text: string, m: string | RegExp) => (typeof m === "string" ? text.includes(m) : m.test(text));
+
 describe("the production bundle has no mock (ADR 0035)", () => {
   let tmp: string;
   let prod: { js: string; html: string };
+  let prodDir: string;
+  let mockDir: string;
   let mock: { js: string; html: string };
 
   beforeAll(() => {
     tmp = mkdtempSync(join(tmpdir(), "sdp-bundle-"));
-    prod = build(join(tmp, "dist"));
-    mock = build(join(tmp, "dist-mock"), "--mock");
+    prodDir = join(tmp, "dist");
+    mockDir = join(tmp, "dist-mock");
+    prod = build(prodDir);
+    mock = build(mockDir, "--mock");
   }, 60_000);
 
   afterAll(() => rmSync(tmp, { recursive: true, force: true }));
@@ -37,6 +54,18 @@ describe("the production bundle has no mock (ADR 0035)", () => {
 
   it("the production index.html has no mock banner", () => {
     expect(prod.html).not.toContain("mock-banner");
+  });
+
+  it("no file of the production build (JS, CSS, HTML, static) carries any trace of the mock", () => {
+    const files = tree(prodDir);
+    expect(files.some((f) => f.file.endsWith(".css"))).toBe(true);
+    for (const { file, text } of files) for (const m of TREE_MARKERS) expect(has(text, m), `${file}: ${m}`).toBe(false);
+  });
+
+  it("the --mock build carries them, the banner's own stylesheet included", () => {
+    const all = tree(mockDir).map((f) => f.text).join("\n");
+    for (const m of TREE_MARKERS) expect(has(all, m), String(m)).toBe(true);
+    expect(readFileSync(join(mockDir, "assets", "mock.css"), "utf8")).toContain(".mock-banner");
   });
 
   it("the --mock build contains every marker and the banner, so the grep above would catch them", () => {

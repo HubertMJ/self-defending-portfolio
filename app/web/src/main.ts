@@ -117,9 +117,14 @@ function main(): void {
   void loadProvenance();
   void api.buildInfo().then((r) => verify.set({ build: r.ok ? r.value : null }));
 
-  const stats = mountStats(byId("hero-stats"), api, (s) => {
-    if (s.last_run_at) evidence.setLastRunAt(s.last_run_at);
-  });
+  const stats = mountStats(
+    byId("hero-stats"),
+    api,
+    (s) => {
+      if (s.last_run_at) evidence.setLastRunAt(s.last_run_at);
+    },
+    mock?.statsLabel,
+  );
   mountDefenceMap(byId("defence-map"), api);
 
   const limits = mountLimits(byId("limits-panel"), api);
@@ -179,7 +184,7 @@ function main(): void {
   const setHeaderConn = (state: ConnectionState) => {
     headerConn.dataset.state = state;
     // In mock mode the header says so, so "cluster live" is never mistaken for the real cluster (item 26).
-    replace(headerConn, h("span", { class: "conn__dot", "aria-hidden": "true" }), mock ? `mock · ${CONNECTION_WORD[state]}` : `cluster ${CONNECTION_WORD[state]}`);
+    replace(headerConn, h("span", { class: "conn__dot", "aria-hidden": "true" }), `${mock ? mock.headerWord : "cluster"} ${CONNECTION_WORD[state]}`);
   };
 
   // Assigned right below; the retry callback can only fire after the stream exists.

@@ -65,6 +65,8 @@ const htmlPlugin = {
       const html = mock ? page : stripMockBanner(page);
       await writeFile(join(out, "index.html"), html);
       await cp(join(root, "static"), out, { recursive: true });
+      // The mock banner's styles, linked by lib/mock-hook.ts; only the mock build has them.
+      if (mock) await cp(join(root, "src/mock.css"), join(out, "assets", "mock.css"));
       console.log(`built: ${Object.values(names).join(", ")}`);
     });
   },

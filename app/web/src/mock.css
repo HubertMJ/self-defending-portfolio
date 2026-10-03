@@ -1,0 +1,29 @@
+/* The mock banner (ADR 0035): dev/test builds only. `npm run build:mock` copies this file to
+   assets/mock.css and lib/mock-hook.ts links it when ?mock=1 turns the mock on; the production
+   build has neither the file nor the banner. */
+
+/* In mock mode main.ts moves the banner into the sticky header, so no scroll — a link to #attack
+   included — can take it off screen. */
+.site-header .mock-banner {
+  padding-block: 0.35rem;
+  border-top: 1px solid color-mix(in srgb, var(--warning) 45%, transparent);
+  border-bottom: 0;
+  font-size: 0.82rem;
+}
+
+/* On a phone the sticky banner keeps to one line: what it is and the way out. */
+@media (max-width: 640px) {
+  .site-header .mock-banner__more {
+    display: none;
+  }
+}
+
+.mock-banner {
+  margin: 0;
+  padding: 0.6rem var(--gutter);
+  background: var(--warning-bg);
+  border-bottom: 1px solid color-mix(in srgb, var(--warning) 45%, transparent);
+  color: var(--text);
+  font-size: 0.9rem;
+  text-align: center;
+}
