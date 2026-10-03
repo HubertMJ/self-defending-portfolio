@@ -23,8 +23,14 @@ so it records exactly what was published and needs no extra API reads or RBAC. I
 `run` and `command` events - the run states already encode every detection and response, so the raw
 `falco`/`talon` events are not consumed: total `runs` and `by_scenario{runs, detected, responded}`;
 `response_ms` (detection-to-response latency: `last`, `p50` over a bounded recent sample, all-time
-`min`/`max`); `unanswered` (runs detected but not responded to **before the scenario timeout** - a run the
-visitor left, let go idle, or that was killed is not an escape, so only a `timeout` ending counts); per
+`min`/`max`), where a response is measured only against the detection of the same command (`command_seq`;
+a scripted run has one of each) - a terminal run may detect several commands, and an unanswered detection at
+2 s followed by a 400 ms response to another command at 102 s is a 400 ms response, not a 100 s one; a
+response that cannot be paired with a detection records no latency; `unanswered` (runs detected but not
+responded to **before the scenario's time ran out** - a run the visitor left, let go idle, or that was killed
+is not an escape: for a scripted run that is a `timeout` ending; a terminal run never ends `timeout`, so it is
+unanswered when it ends `finished` with detail `deadline` while a command it detected has had no response -
+counted once per run, and a response tied to no command is taken to answer any); per
 terminal command `{attempts, allowed, prevented, detected}`; per objective `{attempts, achieved}` counted once
 per run ("tried / reached by X of N runs", not per keystroke); and
 `terminal{runs, best_objectives, median_survival_s}`. A command's outcome and objective are read from the
@@ -34,14 +40,25 @@ it; a scenario's interactive flag, command outcomes and objectives are looked up
 event.
 
 **Persistence is one ConfigMap, `portfolio-stats` in `portfolio-api`.** It is committed empty in git with Argo
-CD ignoring its `data` (so Argo never fights the API's writes), read once at start, and written by a
-background loop at most once a minute - only when the counters changed - and once more on shutdown. The blob
+CD ignoring its `data` (so Argo never fights the API's writes), read at start, and written by a
+background loop at most once a minute - only when the counters changed - and once more on shutdown.
+**It is written only after it has been read.** A read that fails (the API server briefly unreachable at
+start-up) is not "there are no counters": writing what was counted since would overwrite the persisted
+totals. So until a read succeeds nothing is written, and the loop retries the read on each tick; when it
+succeeds, the persisted totals and the runs counted in the meantime are added together. A missing object or
+an unparseable or invalid blob is a successful read with nothing to keep. The final write on shutdown is
+serialised with the loop, so a tick whose write fails as the process stops cannot re-queue the counters after
+the final write has looked. The blob
 is the serialised aggregate (totals and the bounded latency/survival sample rings, so `p50` and the median
 survive a restart); it holds no per-run or per-visitor record. The RBAC is a Role in `portfolio-api` with
 exactly `get` and `update` on that one object (owned by the cluster manifests, ADR 0032's sibling work): the
 API updates the object the manifest ships, and never creates it, so it needs no `create` and a lost write
 path can touch nothing else. A missing or unparseable ConfigMap, or no RBAC at all, starts the counters from
-zero and logs it; the counters are never load-bearing for the service, and a nil client makes load and save
+zero and logs it. A loaded blob is validated before it is used: every counter, latency and sample must be
+between 0 and 2^40 (a counter at the integer limit would overflow on its next increment), `since` must not
+be in the future, `best_objectives` must be reachable (at most the catalogue's command ceiling, and 0 with no
+terminal runs), and min must not exceed max; a blob written before the response count existed has it derived
+from its samples, so its min survives. An invalid blob counts as unparseable; the counters are never load-bearing for the service, and a nil client makes load and save
 no-ops so the API runs the same without them.
 
 ## Consequences
@@ -57,6 +74,6 @@ no-ops so the API runs the same without them.
   the only "did the defence miss" number, and it counts a detected run that ended without a response, which
   is what the page claims and no more.
 - Like the 24 h counters and the run history, the stats are the API's own state; a restart keeps them only
-  because of this ConfigMap, and a corrupted blob falls back to zero rather than failing start-up. The
+  because of this ConfigMap, and a corrupted blob falls back to zero rather than failing start-up; an unreadable one is not overwritten. The
   earlier "in memory only" open item (ADR 0015) is narrowed: the cross-visitor counters now persist; the
   rate-limit windows and the per-run history still do not.
