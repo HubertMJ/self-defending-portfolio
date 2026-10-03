@@ -38,11 +38,12 @@ it differs - besides the missing response - is that it is tighter:
   egress policy** - nothing in a twin pod can reach anything, in either direction. A compromised twin pod that
   is never answered therefore still cannot even resolve a name, let alone tunnel over DNS.
 - **A time bound the cluster enforces (`require-sandbox-deadline`, a new Kyverno ClusterPolicy).** A Pod in
-  `sandbox` or `sandbox-unguarded` is refused unless it sets a positive `activeDeadlineSeconds` of at most 120.
-  The API already sets it (from `timeout_seconds`), but that was the API bounding itself; now the kube-apiserver
-  bounds it, which matters most in the twin, where nothing kills a pod and the quota was otherwise the only
-  ceiling. `tests/runtime/victim-pod.yaml` sets it to comply; `tests/scenarios` and the API's buildPod already
-  do; `make validate` judges the rendered scenario pods (both namespaces) against it.
+  `sandbox` or `sandbox-unguarded` is refused unless it sets a positive `activeDeadlineSeconds` of at most 120
+  (300 since the 2026-10-03 amendment below). The API already sets it (from `timeout_seconds`), but that was
+  the API bounding itself; now the kube-apiserver bounds it, which matters most in the twin, where nothing
+  kills a pod and the quota was otherwise the only ceiling. `tests/runtime/victim-pod.yaml` sets it to comply;
+  `tests/scenarios` and the API's buildPod already do; `make validate` judges the rendered scenario pods (both
+  namespaces) against it.
 - **The API has the same reach.** A `portfolio-api-runner` Role in `sandbox-unguarded`
   (`cluster/infra/portfolio-api/rbac.yaml`), identical verbs to the one in `sandbox`: the API creates, execs
   and deletes the twin pod exactly as the guarded one, and polls its shop on :8080 (the egress half of its CNP

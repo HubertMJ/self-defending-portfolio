@@ -10,9 +10,10 @@ victim that visibly changes when attacked and then visibly dies (terminate) or g
 with no change to what Falco detects or what Talon does, and without weakening any policy.
 
 Constraints: the scenario pod stays PSS `restricted` (non-root, read-only root filesystem, no
-capabilities), passes the four Kyverno policies, lives at most 120 s, fits the sandbox LimitRange
-(100m CPU, 32 MiB), and the sandbox network stays default-deny. The portfolio API is the only reader;
-nothing about the victim may be reachable from the internet.
+capabilities), passes the four Kyverno policies, lives at most 120 s (300 s for the terminal since the
+2026-10-03 amendment below), fits the sandbox LimitRange (100m CPU, 32 MiB), and the sandbox network
+stays default-deny. The portfolio API is the only reader; nothing about the victim may be reachable
+from the internet.
 
 Options for the server:
 - **busybox `httpd`** - not in Alpine's busybox; it ships in `busybox-extras` together with telnet,
