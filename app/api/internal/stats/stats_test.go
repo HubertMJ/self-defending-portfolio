@@ -278,3 +278,39 @@ func TestLoadDerivesRespCount(t *testing.T) {
 func queuedRun(c *Collector, id string) {
 	c.Record(ev("run", map[string]any{"run_id": id, "scenario": "shell-in-container", "state": "queued"}))
 }
+
+// A terminal run is unanswered when a detected command got no response before the run ended at its
+// deadline - once per run however many such commands. Answered detections, or an end other than the
+// deadline (left, idle, killed), are not.
+func TestTerminalUnanswered(t *testing.T) {
+	type step struct {
+		state string
+		seq   int
+	}
+	for _, tc := range []struct {
+		name   string
+		steps  []step
+		detail string
+		want   int
+	}{
+		{"detected, no response, deadline", []step{{"detected", 2}}, "deadline", 1},
+		{"two unanswered commands count once", []step{{"detected", 2}, {"detected", 5}}, "deadline", 1},
+		{"one answered, a later one not", []step{{"detected", 2}, {"responded", 2}, {"detected", 5}}, "deadline", 1},
+		{"all answered", []step{{"detected", 2}, {"responded", 2}}, "deadline", 0},
+		{"answered by an uncorrelated response", []step{{"detected", 2}, {"responded", 0}}, "deadline", 0},
+		{"unanswered, but the visitor left", []step{{"detected", 2}}, "left", 0},
+		{"unanswered, but idle", []step{{"detected", 2}}, "idle", 0},
+		{"nothing detected", nil, "deadline", 0},
+	} {
+		c := New(newStore(t), nil)
+		at := time.Unix(1000, 0).UTC()
+		c.Record(ev("run", map[string]any{"run_id": "t", "scenario": "terminal", "state": "queued", "at": at}))
+		for _, s := range tc.steps {
+			c.Record(ev("run", map[string]any{"run_id": "t", "scenario": "terminal", "state": s.state, "at": at, "command_seq": s.seq}))
+		}
+		c.Record(ev("run", map[string]any{"run_id": "t", "scenario": "terminal", "state": "finished", "detail": tc.detail, "at": at}))
+		if got := c.Snapshot().Unanswered; got != tc.want {
+			t.Fatalf("%s: unanswered = %d, want %d", tc.name, got, tc.want)
+		}
+	}
+}

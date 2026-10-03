@@ -129,9 +129,9 @@ type runState struct {
 	interactive bool
 	start       time.Time
 	// detectedAt is when each command of the run was first detected, keyed by command_seq (0: a
-	// scripted run, or a terminal detection tied to no command); a response is measured only against
-	// the detection of the same key. answered marks the keys whose response was measured. Both are
-	// bounded by the commands a run accepts.
+	// scripted run, or a terminal detection or response tied to no command); a response is measured
+	// only against the detection of the same key. answered marks the keys a response was seen for.
+	// Both are bounded by the commands a run accepts.
 	detectedAt   map[int]time.Time
 	answered     map[int]bool
 	detected     bool
@@ -166,6 +166,7 @@ func (c *Collector) recordRun(data []byte) {
 		RunID      string    `json:"run_id"`
 		Scenario   string    `json:"scenario"`
 		State      string    `json:"state"`
+		Detail     string    `json:"detail"`
 		At         time.Time `json:"at"`
 		CommandSeq int       `json:"command_seq"`
 	}
@@ -215,22 +216,34 @@ func (c *Collector) recordRun(data []byte) {
 		// terminal run may detect several commands, and an unanswered one at 2 s followed by a
 		// response to another at 102 s is not a 100 s response). No detection with that key - the
 		// response could not be tied to one - and nothing is recorded.
-		if at, ok := rs.detectedAt[e.CommandSeq]; ok && !rs.answered[e.CommandSeq] && !e.At.Before(at) {
+		if !rs.answered[e.CommandSeq] {
 			rs.answered[e.CommandSeq] = true
-			c.addResponse(e.At.Sub(at).Milliseconds())
-			c.dirty = true
+			if at, ok := rs.detectedAt[e.CommandSeq]; ok && !e.At.Before(at) {
+				c.addResponse(e.At.Sub(at).Milliseconds())
+				c.dirty = true
+			}
 		}
 	case "finished", "failed", "timeout":
-		c.finishLocked(e.RunID, rs, e.State, e.At)
+		c.finishLocked(e.RunID, rs, e.State, e.Detail, e.At)
 	}
 }
 
-func (c *Collector) finishLocked(runID string, rs *runState, state string, at time.Time) {
+func (c *Collector) finishLocked(runID string, rs *runState, state, detail string, at time.Time) {
 	// Unanswered is the honest "the defence missed it": detected, and no response before the
-	// scenario timeout. A run that ended because the visitor left, went idle, was killed, or the
-	// API shut down is not an escape, so only `timeout` counts (ADR 0030).
-	if state == "timeout" && rs.detected && !rs.responded {
+	// scenario's time ran out. A run that ended because the visitor left, went idle, was killed, or
+	// the API shut down is not an escape (ADR 0030). A scripted run that ran out ends `timeout`; a
+	// terminal run never does - it ends `finished` with detail `deadline` - and is unanswered when one
+	// of its detected commands got no response by then (a response tied to no command answers any).
+	switch {
+	case state == "timeout" && rs.detected && !rs.responded:
 		c.a.Unanswered++
+	case rs.interactive && state == "finished" && detail == "deadline" && !rs.answered[0]:
+		for seq := range rs.detectedAt {
+			if !rs.answered[seq] {
+				c.a.Unanswered++
+				break
+			}
+		}
 	}
 	if rs.interactive {
 		if n := len(rs.objAchieved); n > c.a.BestObjectives {
