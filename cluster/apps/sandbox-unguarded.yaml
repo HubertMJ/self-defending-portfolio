@@ -1,7 +1,8 @@
-# Wave 5, alongside sandbox: the unguarded twin namespace (ADR 0031) - restricted, default-deny with
-# DNS only, the victim flow from the API, the quota and LimitRange - everything `sandbox` has except
-# Falco Talon's reach. The portfolio API's `compare` runs (ADR 0031) put one pod here and one in
-# `sandbox` from the same scenario; Falco detects in both, Talon answers only in `sandbox`.
+# Wave 5, alongside sandbox: the unguarded twin namespace (ADR 0031) - restricted, default-deny with no
+# egress at all (stricter than `sandbox`, which allows DNS), the victim flow from the API, the quota and
+# LimitRange - every preventive layer `sandbox` has, without Falco Talon's reach. The portfolio API's
+# `compare` runs (ADR 0031) put one pod here and one in `sandbox` from the same scenario; Falco detects
+# in both, Talon answers only in `sandbox`.
 #
 # Its own Application, next to sandbox.yaml, for the same reason sandbox has one: what may run here and
 # what may act on it are reviewed together, and removing the namespace removes the twin with it. Talon's

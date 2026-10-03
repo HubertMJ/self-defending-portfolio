@@ -13,9 +13,13 @@
 #   response         what Falco Talon does: terminate (pod deleted) | quarantine (pod labelled, cut off);
 #                    "" for the interactive terminal
 #   timeout_seconds  <= 120; the API sets activeDeadlineSeconds from it and gives up after it
-#   pod              a PodSpec. The API adds metadata (generateName, namespace `sandbox`, labels
-#                    sdp.hubertjablon.ski/run-id and sdp.hubertjablon.ski/quarantine: "false") and
-#                    activeDeadlineSeconds, and changes nothing else
+#   pod              a PodSpec. The API adds metadata (name <id>-<run id prefix>; namespace `sandbox`, or
+#                    for a `compare` run also the no-egress twin `sandbox-unguarded`, ADR 0031; labels
+#                    sdp.hubertjablon.ski/run-id, sdp.hubertjablon.ski/scenario,
+#                    sdp.hubertjablon.ski/quarantine: "false" and app.kubernetes.io/managed-by:
+#                    portfolio-api) and activeDeadlineSeconds, forces restartPolicy Never, no
+#                    ServiceAccount token and no service links (which every spec here already sets),
+#                    and changes nothing else
 #   exec             {command, tty} run in container `target` once the pod is Ready, or null
 #   pre_exec         optional {command}, run to completion in the same container *before* exec, never
 #                    with a TTY (the API refuses tty: true); for an attack whose detected step fires
@@ -301,9 +305,10 @@
 #    *upper* layer (proc.is_exe_upper_layer), i.e. one that was written after the container started
 #    rather than shipped in the image. Talon rule "Kill drifted binary in sandbox" deletes the pod.
 #
-#    The "dropped binary" is a copy of the image's own busybox: no download (the sandbox has no egress,
-#    and the image has no package manager), no foreign code. Named `busybox` so it actually runs (busybox
-#    picks its applet from argv[0]) and sleeps, so the kill is what ends it.
+#    The "dropped binary" is a copy of the image's own busybox: no download (the sandbox allows DNS
+#    and nothing else, the twin not even that, and the image has no package manager), no foreign code.
+#    Named `busybox` so it actually runs (busybox picks its applet from argv[0]) and sleeps, so the kill
+#    is what ends it.
 #
 #    The one deliberate relaxation in this file: readOnlyRootFilesystem is false here. The rule only
 #    sees files in the overlay upper layer; an emptyDir at /tmp is a separate mount, not overlayfs, and
