@@ -336,6 +336,40 @@ func TestCacheAndStaleOnError(t *testing.T) {
 	}
 }
 
+// liveCounter is a webhook counter that changes between calls.
+type liveCounter struct{ n atomic.Int64 }
+
+func (c *liveCounter) Count() int { return int(c.n.Load()) }
+
+// The webhook counts are not part of the cached refresh: an alert that arrives between two calls
+// within the TTL shows on the second one, as it does on /api/stats (ADR 0035).
+func TestCountsReadOnEveryCall(t *testing.T) {
+	var lists atomic.Int32
+	dyn := newDyn()
+	dyn.PrependReactor("list", "*", func(k8stesting.Action) (bool, runtime.Object, error) {
+		lists.Add(1)
+		return false, nil, nil
+	})
+	alerts, actions := &liveCounter{}, &liveCounter{}
+	since := time.Date(2026, 10, 3, 19, 5, 0, 0, time.UTC)
+	a := New(Config{Dynamic: dyn, Kube: fake.NewClientset(), FalcoAlerts: alerts, TalonActions: actions,
+		CountedSince: func() time.Time { return since }})
+	first := a.Get(context.Background())
+	if first.Falco.Alerts24h != 0 || first.Falco.CountedSince == nil || !first.Falco.CountedSince.Equal(since) {
+		t.Fatalf("first: %+v", first.Falco)
+	}
+	n := lists.Load()
+	alerts.n.Add(3)
+	actions.n.Add(2)
+	second := a.Get(context.Background())
+	if lists.Load() != n {
+		t.Fatal("the second call within the TTL refreshed the reports")
+	}
+	if second.Falco.Alerts24h != 3 || second.Talon.Actions24h != 2 {
+		t.Fatalf("on a cache hit: alerts %d actions %d, want 3 and 2", second.Falco.Alerts24h, second.Talon.Actions24h)
+	}
+}
+
 func TestNewestSucceededBenchPodIsPicked(t *testing.T) {
 	old := benchPod("kube-bench-1", corev1.PodSucceeded, time.Date(2026, 9, 29, 3, 18, 0, 0, time.UTC))
 	failed := benchPod("kube-bench-3", corev1.PodFailed, time.Date(2026, 10, 1, 3, 18, 0, 0, time.UTC))

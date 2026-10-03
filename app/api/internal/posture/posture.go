@@ -9,7 +9,8 @@
 //	           and a per-image breakdown
 //	kube_bench the newest successful kube-bench Job's log, which is the benchmark's JSON (ADR 0014)
 //	falco      alerts Falcosidekick delivered in the last 24 h  } counted by this API as the webhooks
-//	talon      actions Talon reported in the last 24 h         } arrive (internal/webhook.Window)
+//	talon      actions Talon reported in the last 24 h         } arrive, in the persisted hourly
+//	                                                             window of internal/stats (ADR 0035)
 //
 // The result is cached for 60 s (contract): the page may be opened by many visitors at once, and
 // every refresh lists every report in the cluster. One refresh runs at a time; callers during a
@@ -123,24 +124,29 @@ type KubeBench struct {
 	Info    int        `json:"info"`
 }
 
+// Falco's Alerts24h keeps its name, but counts the hourly window (ADR 0035): between 23 and 24 h,
+// starting at CountedSince, the same buckets and start as /api/stats last_24h.
 type Falco struct {
-	Alerts24h int `json:"alerts_24h"`
+	Alerts24h    int        `json:"alerts_24h"`
+	CountedSince *time.Time `json:"counted_since,omitempty"`
 }
 
 type Talon struct {
 	Actions24h int `json:"actions_24h"`
 }
 
-// Counter is a 24 h event count (internal/webhook.Window).
+// Counter is a webhook delivery count over the hourly window (stats.WindowCounter, ADR 0035).
 type Counter interface{ Count() int }
 
 // Config wires the aggregator.
 type Config struct {
-	Dynamic        dynamic.Interface
-	Kube           kubernetes.Interface
-	KubeBenchNS    string
-	FalcoAlerts    Counter
-	TalonActions   Counter
+	Dynamic      dynamic.Interface
+	Kube         kubernetes.Interface
+	KubeBenchNS  string
+	FalcoAlerts  Counter
+	TalonActions Counter
+	// CountedSince is where the counters' window starts (stats.Collector.Since24h); nil omits it.
+	CountedSince   func() time.Time
 	TTL            time.Duration
 	RefreshTimeout time.Duration
 	Log            *slog.Logger
@@ -180,14 +186,31 @@ func New(cfg Config) *Aggregator {
 	}}
 }
 
-// Get returns the cached snapshot, refreshing it first when it is older than the TTL.
+// Get returns the cached snapshot, refreshing it first when it is older than the TTL. The webhook
+// counts are read on every call, cache hit or not (ADR 0035): reading them is a sum over 25 buckets,
+// and /api/stats reads the same buckets live, so the two are never a TTL apart.
 func (a *Aggregator) Get(ctx context.Context) Snapshot {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	now := a.cfg.Now()
-	if a.valid && now.Sub(a.at) < a.cfg.TTL {
-		return a.cached
+	if !a.valid || now.Sub(a.at) >= a.cfg.TTL {
+		a.refreshLocked(ctx, now)
 	}
+	out := a.cached
+	if a.cfg.FalcoAlerts != nil {
+		out.Falco.Alerts24h = a.cfg.FalcoAlerts.Count()
+	}
+	if a.cfg.TalonActions != nil {
+		out.Talon.Actions24h = a.cfg.TalonActions.Count()
+	}
+	if a.cfg.CountedSince != nil {
+		since := a.cfg.CountedSince().UTC()
+		out.Falco.CountedSince = &since
+	}
+	return out
+}
+
+func (a *Aggregator) refreshLocked(ctx context.Context, now time.Time) {
 	// Detached from the request: a visitor closing the tab must not abort a refresh that every
 	// other waiting caller is about to use.
 	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), a.cfg.RefreshTimeout)
@@ -209,15 +232,8 @@ func (a *Aggregator) Get(ctx context.Context) Snapshot {
 	} else if kb != nil {
 		next.KubeBench = *kb
 	}
-	if a.cfg.FalcoAlerts != nil {
-		next.Falco.Alerts24h = a.cfg.FalcoAlerts.Count()
-	}
-	if a.cfg.TalonActions != nil {
-		next.Talon.Actions24h = a.cfg.TalonActions.Count()
-	}
 	next.GeneratedAt = now.UTC()
 	a.cached, a.at, a.valid = next, now, true
-	return next
 }
 
 // list pages through a resource across all namespaces.

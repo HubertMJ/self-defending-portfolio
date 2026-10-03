@@ -33,7 +33,6 @@ import (
 	"github.com/hubertmj/self-defending-portfolio/app/api/internal/scenarios"
 	"github.com/hubertmj/self-defending-portfolio/app/api/internal/server"
 	"github.com/hubertmj/self-defending-portfolio/app/api/internal/stats"
-	"github.com/hubertmj/self-defending-portfolio/app/api/internal/webhook"
 )
 
 func main() {
@@ -117,8 +116,10 @@ func run(log *slog.Logger) error {
 	lcancel()
 	go statsStore.Run(ctx, statsCollector, time.Minute)
 
-	falcoAlerts := webhook.NewDayWindow(nil)
-	talonActions := webhook.NewDayWindow(nil)
+	// The webhooks count into the stats collector's hourly window, which the ConfigMap persists, so
+	// posture's alerts_24h and actions_24h survive a restart with the hero's numbers (ADR 0035).
+	falcoAlerts := statsCollector.AlertCounter()
+	talonActions := statsCollector.ActionCounter()
 	run := runner.New(kube, &runner.KubeExecer{Config: restCfg, Client: kube}, hub, log,
 		runner.Config{Namespace: sandbox, UnguardedNamespace: unguarded,
 			CompareHold: time.Duration(compareHoldS) * time.Second})
@@ -135,7 +136,7 @@ func run(log *slog.Logger) error {
 		Hub:       hub,
 		Posture: posture.New(posture.Config{
 			Dynamic: dyn, Kube: kube, KubeBenchNS: env("KUBE_BENCH_NAMESPACE", "kube-bench"),
-			FalcoAlerts: falcoAlerts, TalonActions: talonActions, Log: log,
+			FalcoAlerts: falcoAlerts, TalonActions: talonActions, CountedSince: statsCollector.Since24h, Log: log,
 		}),
 		Attacks:            limits.NewAttacks(attackCfg, nil),
 		Requests:           limits.NewRequests(120, time.Minute, 50000, nil),

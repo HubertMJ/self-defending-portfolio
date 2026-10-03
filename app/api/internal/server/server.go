@@ -59,7 +59,8 @@ type StatsReader interface {
 	Snapshot() stats.Snapshot
 }
 
-// Counter is a 24 h counter the webhooks feed.
+// Counter is what the webhooks count into: the stats collector's persisted hourly window
+// (stats.WindowCounter, ADR 0035), which posture's alerts_24h and actions_24h read.
 type Counter interface{ Add() }
 
 // Config wires the server. Zero durations take the defaults.
