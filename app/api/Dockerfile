@@ -34,6 +34,11 @@ COPY --from=build /out/portfolio-api /portfolio-api
 # cache of the stages above. A local build without the argument publishes no commit.
 ARG GIT_SHA=""
 ENV GIT_SHA=${GIT_SHA}
+# The Actions run that built this image (build-images.yml passes github.run_id), served in
+# /api/provenance so the page links the public run beside the commit (ADR 0035). Same reasoning as
+# GIT_SHA: last stage only, and a local build without the argument publishes no run.
+ARG CI_RUN_ID=""
+ENV CI_RUN_ID=${CI_RUN_ID}
 USER 65532:65532
 # 8080: the public API behind the Gateway. 8081: the Falcosidekick and Talon webhooks only.
 EXPOSE 8080 8081

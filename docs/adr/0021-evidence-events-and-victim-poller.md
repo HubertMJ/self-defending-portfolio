@@ -118,3 +118,28 @@ for what the quarantine already shows through the victim poller; left for a late
 - The run store, like the counters, is in memory: a restart forgets the run history (ADR 0015).
 - The rule index must be regenerated when a rule or policy file changes above a recorded line; the
   unit test fails until it is.
+
+## Amendment 2026-10-03: the fields published for provenance, posture detail and the run list (ADR 0035)
+
+**Context.** ADR 0035 makes the page verifiable: what runs and from which commit, what fails in the posture
+by name, a list of recent runs, and a server clock on the event stream. Each of those publishes something
+new, and this ADR is where the line of what may be published is drawn.
+
+**Decision.** The new fields are exactly those ADR 0035 lists: `/api/provenance` (the api's commit and CI run
+id, validated; its start time; the sorted digests of the api and web images that Running pods run, and when
+the pods were last listed), `/build.json` (the web image's commit and run id), `GET /api/runs` (per run: id,
+scenario, state, start, end (either may be null), detected, responded, event count, truncated - no pod, no
+command, no output), `kyverno.violations` (policy, rule, kind, namespace, count, `running`, the policy's file
+in this repository), `kube_bench.failing` (check id, title, remediation), `trivy.last_scan`,
+`falco.counted_since`, `/api/stats` `last_run_at` and `last_24h`, and the SSE `tick` (`at`, `started_at`).
+They follow this ADR's rules: built field by field from an allow-list, free text (the kube-bench title and
+remediation) through the scrubber and capped (200 and 300), at most 50 failing checks and 50 violation groups.
+Added to what is never published: the names of the objects a violation is about (nothing but the sandbox pod
+is ever named), Kyverno's messages, kube-bench's `audit`, `actual_value`, `expected_result`, `AuditEnv`,
+`AuditConfig` and `reason`, and the api and web pods' names, and their namespaces as part of provenance; a
+violation group may name any namespace, these included, since all are declared in the repository. kube-bench's
+remediation text may carry k3s's default host paths (`/var/lib/rancher/k3s/...`): they describe k3s, not this
+host, and are allowed.
+
+**Consequences.** The posture names which policies and CIS checks fail; that is public in the repository
+and in k3s's defaults already. The run history is still in memory (above); listing it adds no state.

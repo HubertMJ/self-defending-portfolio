@@ -20,12 +20,12 @@ decision are appended as dated amendments in the same file.
 | [0012](0012-pod-security-and-resource-policy.md) | Pod Security `restricted` and pod resources as Kyverno policies, Audit before Enforce | 4 | accepted, amended 2026-10-01 (both policies Enforce) |
 | [0013](0013-runtime-detection-and-response.md) | Runtime detection and response: Falco modern eBPF least-privileged, Falcosidekick, Falco Talon scoped to `sandbox` | 4 | accepted, amended 2026-10-01 (read-only host mounts via a kustomize post-render; corrections: Argo CD's own kustomize, `perf_event_paranoid=2`, no Talon Events, Talon JSON log), 2026-10-02 (isolation under 3 s, ADR 0032) |
 | [0014](0014-posture-scanning.md) | Posture scanning: Trivy Operator client/server with offline scan Jobs, kube-bench CronJob with a k3s config override, Policy Reporter internal only | 4 | accepted |
-| [0015](0015-portfolio-api.md) | The portfolio API: one Go process runs visitor-triggered attacks in `sandbox`, streams detection and response over SSE, and rations itself | 5 | accepted, amended 2026-10-02 (Trivy counts only images a pod runs; cluster-wide pods list) |
-| [0016](0016-one-image-workflow.md) | One matrix workflow builds and signs every image; the admission identity stays one file on main | 5 | accepted |
+| [0015](0015-portfolio-api.md) | The portfolio API: one Go process runs visitor-triggered attacks in `sandbox`, streams detection and response over SSE, and rations itself | 5 | accepted, amended 2026-10-02 (Trivy counts only images a pod runs; cluster-wide pods list), 2026-10-03 (the 24 h counters persist, ADR 0035) |
+| [0016](0016-one-image-workflow.md) | One matrix workflow builds and signs every image; the admission identity stays one file on main | 5 | accepted, amended 2026-10-03 (commit and run id to the web image too; run-id label on every image, ADR 0035) |
 | [0017](0017-attack-scenario-safety-model.md) | Attack scenarios: a safety model for letting anonymous visitors attack the cluster | 5 | accepted, amended 2026-10-02 (interactive terminal, unguarded twin), 2026-10-03 (`dns-exfil` resolves a name inside the cluster only, ADR 0034) |
 | [0018](0018-scenario-detection-and-response-mapping.md) | Attack scenarios: which Falco rule detects each one, and what Talon does about it | 5 | accepted, amended 2026-10-01 (execs mark the victim first), 2026-10-02 (terminal detections; execution-from-shop-volume rule) |
 | [0019](0019-frontend-stack-and-csp.md) | Frontend stack and Content Security Policy: vanilla TypeScript + esbuild, no third-party origins, Trusted Types | 6 | accepted, amended 2026-10-01 (errors never cacheable; rollout skew accepted) |
-| [0021](0021-evidence-events-and-victim-poller.md) | Evidence events (pod, enriched falco/talon, victim) and a hardened reader for the attacked pod's victim app | 7 | accepted |
+| [0021](0021-evidence-events-and-victim-poller.md) | Evidence events (pod, enriched falco/talon, victim) and a hardened reader for the attacked pod's victim app | 7 | accepted, amended 2026-10-03 (provenance, posture detail and run-list fields, ADR 0035) |
 | [0023](0023-third-party-vulnerabilities.md) | Third-party vulnerabilities go down only by removing or replacing images (Dex removed, newest releases, Talon built here), never by hiding them; posture shows own vs third-party | 7 | accepted |
 | [0024](0024-argocd-trim-and-ksops-build.md) | Argo CD runs only the controllers it uses (no ApplicationSet, no notifications controller); KSOPS built here from the pinned release with fixed dependencies | 7 | accepted |
 | [0025](0025-own-builds-of-small-components.md) | Falcosidekick, metrics-server, the Trivy Operator and kube-bench built here from their pinned releases with fixed dependencies; metrics-server moves from k3s to Argo CD | 7 | accepted |
@@ -33,18 +33,20 @@ decision are appended as dated amendments in the same file.
 | [0027](0027-argocd-build.md) | Argo CD built here from the pinned release commit, with the helm, kustomize and git-lfs releases it ships, all with fixed dependencies; `argocd` stays outside admission verification | 7 | accepted |
 | [0028](0028-cilium-images-build.md) | Cilium's four images (agent, operator, Hubble Relay, Envoy) are upstream's 1.19.8 release with the Go binaries rebuilt against fixed dependencies and the base OS's OpenSSL updated, on upstream's own layers; rolled out operator/relay, then Envoy, then the agent | 7 | accepted |
 | [0029](0029-terminal-runs-and-command-output.md) | The attacker's terminal: interactive runs where the visitor types command ids and reads the real, scrubbed, capped output; quarantine lingers until the cut is visible (FIX 1) | 5 | accepted |
-| [0030](0030-stats-and-persistence.md) | Cross-visitor stats from a hub tap, persisted in one `portfolio-stats` ConfigMap (get/update only) that survives a rollout | 5 | accepted |
+| [0030](0030-stats-and-persistence.md) | Cross-visitor stats from a hub tap, persisted in one `portfolio-stats` ConfigMap (get/update only) that survives a rollout | 5 | accepted, amended 2026-10-03 (hourly buckets for the 24 h window, last run time, ADR 0035) |
 | [0031](0031-unguarded-twin-namespace.md) | The unguarded twin namespace (`sandbox-unguarded`): every preventive layer of `sandbox`, no automatic response, so the response's worth is visible by contrast | 5 | accepted, amended 2026-10-03 (`dns-exfil` resolves a name; dropped in the twin) |
 | [0032](0032-terminal-scenario-and-quarantine-latency.md) | The attacker's terminal (a fifth, interactive scenario run by command id) and bringing quarantine isolation under 3 s (per-run labels out of the Cilium identity, 500 ms grace period) | 5 | accepted, amended 2026-10-03 (fifteenth command `dns-exfil`, ADR 0034) |
-| [0033](0033-interactive-terminal-defence-map-twin.md) | The front end becomes interactive: an attacker's terminal, a defence map, an unguarded twin and live stats; real-time-first playback, probe-based quarantine proof, placeholder copy stripped from production | 8 | accepted |
+| [0033](0033-interactive-terminal-defence-map-twin.md) | The front end becomes interactive: an attacker's terminal, a defence map, an unguarded twin and live stats; real-time-first playback, probe-based quarantine proof, placeholder copy stripped from production | 8 | accepted, amended 2026-10-03 (the mock is not shipped, ADR 0035) |
 | [0034](0034-siem-opensearch-security-analytics.md) | A ready-made SIEM: OpenSearch 3.9 with Security Analytics on its own VM `siem01`, Sigma rules and Alerting monitors synced from git, write-only, certificate-authenticated ingest into daily data streams whose rolled indices are write-blocked, host identities HMAC-pseudonymised, order/periodicity/intervals in the API; a DNS-exfiltration scenario Falco cannot see and correlation catches | 9 | accepted |
+| [0035](0035-credibility-provenance-evidence-persisted-window.md) | Credibility: provenance on the page (commit, CI run, digests, one checked cosign identity), evidence by default, the 24 h Falco/Talon counters in the persisted stats as hourly buckets, no MockBackend in production, stale Talon/Falcosidekick ReplicaSets pruned | 8 | accepted |
 
 Phases 5 and 6 were built on parallel branches and merged together; the numbers they had reserved
 are all in use except 0020 (phase 6 documentation needed no decision of its own), which is released.
 0020 stays unused. 0025-0033 are in use: the interactive demo was built on three parallel branches (0029 terminal
 runs and command output, 0030 stats and persistence - API; 0031 unguarded twin, 0032 terminal catalogue and
-quarantine latency - cluster; 0033 terminal, defence map, twin view - web). 0034 is the SIEM decision (phase 9).
-The next free ADR is 0035.
+quarantine latency - cluster; 0033 terminal, defence map, twin view - web). 0034 is the SIEM decision (phase 9);
+0035 makes the existing page verifiable (provenance, evidence, the persisted 24 h window, no mock in production).
+The next free ADR is 0036.
 
 ## Open items carried by accepted ADRs
 
@@ -63,7 +65,7 @@ Decisions are accepted with their known costs written down. The ones still open:
 | `ClusterPolicy` is deprecated in Kyverno 1.19; migration to ImageValidatingPolicy / CEL policies deferred | [0011](0011-supply-chain.md), [0012](0012-pod-security-and-resource-policy.md) |
 | The signer identity still accepts the phase 3 `build-web.yml` (transition); dropped once hello runs a `build-images.yml` digest | [0016](0016-one-image-workflow.md) |
 | Digest bumps are manual commits (`scripts/bump-image-digest.sh`) until Renovate is enabled | [0008](0008-pinned-versions.md), [0011](0011-supply-chain.md), [0016](0016-one-image-workflow.md) |
-| The API's 24 h counters and run history are in memory only; one replica by design | [0015](0015-portfolio-api.md) |
+| The API's rate-limit windows and per-run history are in memory only; one replica by design (the 24 h counters persist since ADR 0035) | [0015](0015-portfolio-api.md), [0035](0035-credibility-provenance-evidence-persisted-window.md) |
 | No Hubble flow events: a Relay client is too heavy for the API today | [0021](0021-evidence-events-and-victim-poller.md) |
 
 The full list of gaps and residual risks, including ones no ADR records yet, is in the

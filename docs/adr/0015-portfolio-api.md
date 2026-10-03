@@ -181,3 +181,23 @@ none, until the ReplicaSet was deleted by hand. The word "running" on the page w
 - Unit tests: a scaled-to-0 ReplicaSet's report is excluded; init containers, a completed Job pod, a
   pod still pulling its image (matched by tag) and an unmatched report are kept; a failing pod list
   fails the section instead of reporting zero images.
+
+## Amendment 2026-10-03: the 24 h counters persist (ADR 0035)
+
+**Context.** The 24 h Falco and Talon counters were `webhook.Window`, in memory, so every rollout set the
+posture's "alerts, 24 h" to zero next to the persisted hero numbers of ADR 0030: the page showed 19 runs
+detected and answered beside "0 alerts". The known gap above ("the 24 h counters are not persistent") had
+become a visible contradiction.
+
+**Decision.** `webhook.Window` is removed. The webhook handlers count into hourly buckets kept by the stats
+collector and persisted in `portfolio-stats` with everything else (ADR 0030, as amended); the posture reads
+`falco.alerts_24h` and `talon.actions_24h` from those buckets on every request, outside the 60 s cache, and
+adds `falco.counted_since`. The window is the current hour and the 23 before it, labelled with its start,
+never as a bare "24 h". Alerts from every namespace still count. The posture also names what fails
+(`kyverno.violations`, `kube_bench.failing`, `trivy.last_scan`), and the one pod list per refresh is shared
+by Trivy, the violations' `running` flag and `/api/provenance`; the details, and what may and may not be
+published, are in ADR 0035. No RBAC changes.
+
+**Consequences.** A rollout no longer resets the 24 h numbers; a crash loses at most the last minute. What
+stays in memory is the rate-limit windows and the per-run history (`/api/runs/{id}`, now also listed by
+`GET /api/runs`), so a restart still forgets those, and the open item in the ADR index is narrowed to them.
