@@ -664,3 +664,28 @@ var leakPatterns = []*regexp.Regexp{
 }
 
 func ptrInt(v int64) *int64 { return &v }
+
+// A flag match is made once, when the finding is first read: a later re-read of the same finding
+// (a window widened by an outage) does not turn it false after the registration expired.
+func TestFlagMatchIsKept(t *testing.T) {
+	f := newFake()
+	terminalRun(f, "sdp-"+flagHex)
+	clk := &clock{t: t0}
+	tr := newTracker(t, f, clk)
+	registerTerminalFlag(tr, flagHex)
+	tr.EndFlag(termRun, t0.Add(30*time.Second))
+	clk.Set(t0.Add(time.Minute))
+	tr.Poll(context.Background())
+	f.fail = errDown
+	clk.Set(t0.Add(10 * time.Minute))
+	tr.Poll(context.Background())
+	f.fail = nil
+	clk.Set(t0.Add(30 * time.Minute))
+	tr.Poll(context.Background())
+	if c := f.callsOf("findings sdp_hubble"); !c[len(c)-1].from.Equal(t0.Add(-time.Minute)) {
+		t.Fatalf("the window after the outage starts at %v", c[len(c)-1].from)
+	}
+	if m := one(t, tr.View(), KindDNSExfil).FlagMatch; m == nil || !*m {
+		t.Fatalf("flag match after a re-read: %v", ptr(m))
+	}
+}
