@@ -211,10 +211,14 @@ func (r *Recorder) writeRun(e runEvent) {
 		}
 	}
 	info.scenario = e.Scenario
-	// The pod is named from `started` on; before that the run has no pod to refer to.
+	// The guarded pod is named from `started` on; before that the run has no pod to refer to. The
+	// twin's name is in Pods from `queued` on and kept whenever present, so a compare run that fails
+	// before its guarded pod shows still ties the twin, which may exist, to the run.
 	if e.Pod != "" {
 		info.pod = e.Pod
-		info.twin = e.Pods["unguarded"]
+	}
+	if twin := e.Pods["unguarded"]; twin != "" {
+		info.twin = twin
 	}
 	if finalStates[e.State] {
 		delete(r.runs, e.RunID)

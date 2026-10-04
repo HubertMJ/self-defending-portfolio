@@ -10,7 +10,9 @@ log_type: sdp_api
 input: >-
   CRI lines of /var/log/pods/portfolio-api_portfolio-api-*/api/*.log on k3s01, the slog JSON body; only lines with
   msg siem.run (every run state; a compare run's states with arm guarded, plus started and its final state again
-  with arm unguarded and the twin's ref) or siem.command (started, exited, killed; output events are never
+  with arm unguarded and the twin's ref - the unguarded started line means "created together with the guarded pod",
+  not that the twin's own create was acknowledged; its detected/responded are never written for the twin, which
+  nothing answers) or siem.command (started, exited, killed; output events are never
   written). The slog keys time and level are dropped; a key is null (not indexed) where noted.
 fixture: tests/siem/fixtures/api.log
 fields:
@@ -21,7 +23,7 @@ fields:
   api.run_id: {type: keyword, from: run_id, note: 16 hex; the visitor's only identity (ADR 0017)}
   api.scenario: {type: keyword, from: scenario, note: "siem.run only: scenario id (terminal, shell-in-container, ...)"}
   api.state: {type: keyword, from: state, note: "siem.run: queued | started | pod_ready | detected | responded | finished | failed | timeout; siem.command: started | exited | killed"}
-  api.arm: {type: keyword, from: arm, note: "siem.run only: guarded | unguarded on a compare run (ADR 0031), empty otherwise"}
+  api.arm: {type: keyword, from: arm, note: "siem.run only: guarded | unguarded on a compare run (ADR 0031), empty otherwise; unguarded only with started (created together with the guarded pod) and the final state"}
   api.command_seq: {type: integer, from: command_seq, note: "siem.run only: the command a terminal run's detected/responded is about; null otherwise"}
   api.seq: {type: integer, from: seq, note: "siem.command only: the command's sequence number in its run (1-30)"}
   api.command_id: {type: keyword, from: command_id, note: "siem.command only: catalogue command id (whoami, read-flag, ...)"}

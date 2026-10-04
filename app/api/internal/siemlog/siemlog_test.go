@@ -325,6 +325,26 @@ func TestTwinArmUsesTheTwinNamespace(t *testing.T) {
 	}
 }
 
+// A compare run that fails before its guarded pod is visible still names the twin in its final
+// line: the twin's name comes from Pods, not from the guarded pod's visibility.
+func TestTwinNamedWithoutAVisibleGuardedPod(t *testing.T) {
+	h := newHarness(t, Config{})
+	pods := map[string]string{"guarded": "shell-in-container-c1b2c3d4e5", "unguarded": "shell-in-container-c1b2c3d4e5-u"}
+	h.publish(t, "run", runner.RunEvent{RunID: "c1b2c3d4e5f60718", Scenario: "shell-in-container", State: runner.StateQueued, At: at(0), Pods: pods})
+	h.publish(t, "run", runner.RunEvent{RunID: "c1b2c3d4e5f60718", Scenario: "shell-in-container", State: runner.StateFailed, At: at(1), Pods: pods})
+	runs := siemLines(h.lines(t), MsgRun)
+	if len(runs) != 3 {
+		t.Fatalf("runs %v", runs)
+	}
+	final := runs[2]
+	if final["arm"] != "unguarded" || final["state"] != runner.StateFailed || final["pod_ref"] != "sandbox-unguarded_shell-in-container-c1b2c3d4e5-u" {
+		t.Fatalf("twin final line %v", final)
+	}
+	if runs[1]["arm"] != "guarded" || runs[1]["pod_ref"] != nil {
+		t.Fatalf("guarded final line %v", runs[1])
+	}
+}
+
 // Record runs under the hub lock: a full queue must drop and count, never wait.
 func TestFullQueueDropsAndCountsInsteadOfBlocking(t *testing.T) {
 	buf := &bytes.Buffer{}
