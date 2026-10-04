@@ -39,12 +39,14 @@ The constraints are the project's:
   the URL (siem01's node certificate carries the IP SAN). Every request has a 5 s timeout; a response
   over 16 MiB or with a status other than 200 is an error.
 - **Method/path allow-list in code**, checked before any byte leaves the process:
-  `GET /_plugins/_security_analytics/findings/_search`, `GET /_plugins/_security_analytics/alerts`,
-  `GET /_plugins/_security_analytics/correlations`, `GET /_plugins/_alerting/monitors/alerts`, and
+  `GET /_plugins/_security_analytics/findings/_search`, `GET /_plugins/_security_analytics/correlations`,
+  `GET /_plugins/_alerting/monitors/alerts`, and
   `POST /<index>[,<index>...]/_search` where every index is one of the seven named above. Anything else -
   another method, `_bulk`, `_doc`, a pattern, `sdp-siem01` - is refused as a programming error, and the
   unit test proves no such request reaches the server. Search bodies are built in code from a typed query:
-  `size` 0-500, a mandatory time range of at most 31 days, an explicit `_source` list.
+  `size` 0-500, a mandatory time range of at most 31 days, an explicit `_source` list. Security
+  Analytics' own alerts (`GET .../alerts`, allowed by the siem contract) are not read: the incidents
+  need findings, correlations and Alerting alerts only, so the path is not on the list.
 
 ### 2. Polling, independent of visitors
 - One goroutine, single-flight, polls every **15 s** whether anyone is looking. On start (and after a
@@ -57,6 +59,9 @@ The constraints are the project's:
   (`sdp-api` run/command lines; `sdp-k8s-audit` pod patches/deletes by Talon and pod creates/deletes in
   the twin namespace; `sdp-hubble` drops); the newest `siem-sync` records; one count of
   `event.overwrite: true` documents ingested in the last 24 h over the six streams.
+- A detector log type that answers 404 (no detector of that type yet) is "no findings", not an outage;
+  any other failure of the reads above fails the poll. The `siem-sync` and `event.overwrite` reads are
+  optional: their failure keeps the previous value and does not hide the section.
 - The evidence is kept in memory for 24 h (at most 2 000 records per source); incidents are rebuilt from
   it after every poll by one pure function, so the same evidence always gives the same incidents and ids.
 
@@ -159,40 +164,92 @@ untouched. An unconfigured SIEM looks the same, with `checked_at` null.
 ### 9. Endpoints
 GET only, under the public middleware and request budget, both in the 405 list.
 
-`GET /api/correlation` (incidents newest first by `first_at`; every array marshals `[]`):
+`GET /api/correlation` (incidents newest first by `first_at`; every array marshals `[]`). The example is
+the API's own output for the unit-test fixtures (a terminal run whose dns-exfil carried its flag, one
+compare run; three more incidents omitted); `rule_id` is empty there because the embedded rule index
+is not generated yet:
 
 ```json
 {
   "available": true,
-  "checked_at": "2026-10-04T10:05:00Z",
-  "rules": {"commit": "0123456789abcdef0123456789abcdef01234567", "applied_at": "2026-10-04T09:55:00Z", "status": "applied"},
-  "health": {"ingest": "ok", "evidence_rewritten": false, "disk": "ok"},
-  "metrics": {"since": "2026-10-03T10:05:00Z", "incidents": 1, "median_ttd_ms": null, "median_tti_ms": null,
-              "median_twin_dwell_ms": null, "host_findings": 2},
+  "checked_at": "2026-10-04T11:01:00Z",
+  "rules": {
+    "commit": "0123456789abcdef0123456789abcdef01234567",
+    "applied_at": "2026-10-04T09:55:00Z",
+    "status": "applied"
+  },
+  "health": {
+    "ingest": "ok",
+    "evidence_rewritten": false,
+    "disk": "ok"
+  },
+  "metrics": {
+    "since": "2026-10-03T11:01:00Z",
+    "incidents": 4,
+    "median_ttd_ms": 800,
+    "median_tti_ms": 400,
+    "median_twin_dwell_ms": 14000,
+    "host_findings": 2
+  },
   "incidents": [
     {
-      "id": "5f0c3d2a9b7e4c11",
+      "id": "ff3f6fb10a324849",
       "kind": "dns-exfil",
       "severity": "critical",
       "title": "Exfiltration over DNS: this run's secret left sandbox/terminal-3755e65530 in a DNS query; Falco: no event",
       "run_id": "3755e65530aa11bb",
       "arm": "",
       "first_at": "2026-10-04T10:00:09Z",
-      "last_at": "2026-10-04T10:00:20.101234567Z",
-      "attack": ["T1552.001", "T1048.003", "T1071.004"],
+      "last_at": "2026-10-04T10:00:20.101Z",
+      "attack": [
+        "T1552.001",
+        "T1048.003",
+        "T1071.004"
+      ],
       "falco_events": 0,
       "flag_match": true,
       "ttd_ms": null,
       "tti_ms": null,
       "steps": [
-        {"at": "2026-10-04T10:00:09Z", "source": "api", "rule": "", "rule_id": "", "command_seq": 2,
-         "detail": "command read-flag (T1552.001, credentials) started on sandbox/terminal-3755e65530"},
-        {"at": "2026-10-04T10:00:19Z", "source": "api", "rule": "Terminal exfiltration command", "rule_id": "3b2f6a0e-41c7-4d8b-9e15-7a2c0d9f6b31", "command_seq": 3,
-         "detail": "command dns-exfil (T1048.003, exfiltration) started on sandbox/terminal-3755e65530"},
-        {"at": "2026-10-04T10:00:20.101234567Z", "source": "hubble", "rule": "DNS query carries an exfil label", "rule_id": "9c41d2e7-8b3a-4f60-a1c5-0e7d6b2f9a48", "command_seq": 3,
-         "detail": "DNS query under the exfil zone from sandbox/terminal-3755e65530, FORWARDED egress udp/53"}
+        {
+          "at": "2026-10-04T10:00:09Z",
+          "source": "api",
+          "rule": "",
+          "rule_id": "",
+          "command_seq": 2,
+          "detail": "command read-flag (T1552.001, credentials) started on sandbox/terminal-3755e65530"
+        },
+        {
+          "at": "2026-10-04T10:00:19Z",
+          "source": "api",
+          "rule": "Terminal exfiltration command",
+          "rule_id": "",
+          "command_seq": 3,
+          "detail": "command dns-exfil (T1048.003, exfiltration) started on sandbox/terminal-3755e65530"
+        },
+        {
+          "at": "2026-10-04T10:00:20.101Z",
+          "source": "hubble",
+          "rule": "DNS query carries an exfil label",
+          "rule_id": "",
+          "command_seq": 3,
+          "detail": "DNS query under the exfil zone from sandbox/terminal-3755e65530, FORWARDED egress udp/53"
+        }
       ],
-      "evidence": [{"type": "finding", "id": "8f0e6c1e-0d6b-4f7e-9a51-2b7f3c4d5e6f"}]
+      "evidence": [
+        {
+          "type": "document",
+          "id": "c2"
+        },
+        {
+          "type": "finding",
+          "id": "8f0e6c1e-0d6b-4f7e-9a51-2b7f3c4d5e6f"
+        },
+        {
+          "type": "finding",
+          "id": "3f7b9c2e-5a14-4e8d-b6f0-91c2d7a4e358"
+        }
+      ]
     }
   ]
 }
@@ -214,8 +271,9 @@ GET only, under the public middleware and request budget, both in the 405 list.
   must cite what it is built from (ADR 0034 "Who detects what").
 
 `GET /api/correlation/rules` serves the embedded `internal/siemindex/index.json`, generated from `siem/`
-by `scripts/gen-siem-index.sh` (the pattern of gen-rule-index.sh; `--check` in validate), served whether or
-not the SIEM is reachable:
+by `scripts/gen-siem-index.sh` (the pattern of gen-rule-index.sh; `--check` in validate; written when
+P3's `siem/` tree and this area are integrated - until then the committed index is empty), served whether
+or not the SIEM is reachable:
 
 ```json
 {"rules": [{"id": "<sigma uuid>", "title": "...", "level": "high", "status": "stable", "source": "hubble",
