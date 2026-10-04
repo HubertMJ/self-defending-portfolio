@@ -10,6 +10,13 @@
 #     changes and SubjectAccessReviews keep their levels.
 # The live apply is `cluster.yml --tags k3s` in a maintenance window (k3s restarts once).
 #
+# Retiring / rebasing (review code L5): BASE is the commit before P2. After P2 is merged and live,
+# a later, reviewed change to the policy either rebases this test - set BASE to the merge commit,
+# regenerate the golden with --write and replace the expected-diff block below with that change's
+# own - or retires it once tests/golden/render.sh renders the k3s role too (then delete this script,
+# its golden and its line in `make golden`). Never regenerate the golden alone: the diff against BASE
+# is what makes it a review, not a snapshot.
+#
 # Usage: tests/golden/audit-policy.sh            compare
 #        tests/golden/audit-policy.sh --write    regenerate the golden after a reviewed change
 #        BASE=<rev>                              the revision to diff against (default c4e5e91)
