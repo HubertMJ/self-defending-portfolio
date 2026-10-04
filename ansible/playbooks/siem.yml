@@ -62,8 +62,10 @@
 #   --tags client-cert -e siem_client_csr=<abs path> -e siem_client_name=<name> -e siem_client_generation=<N>
 #   --tags api-cert -e siem_api_csr=<abs path> -e siem_api_generation=<N>        (portfolio-api)
 # The CSR is read on the controller, signed on siem01 (where the CA key is) and the certificate is
-# written next to the CSR as <path without .csr>.crt. The expected name comes from these variables,
-# never from the CSR, and sign_client_csr.yml refuses everything but the remote identities.
+# written next to the CSR as <path without .csr>.crt, the CA certificate as <path without .csr>.ca.crt
+# (the client needs it to verify siem01; scripts/siem-api-cert.sh puts both into the API's Secret).
+# The expected name comes from these variables, never from the CSR, and sign_client_csr.yml refuses
+# everything but the remote identities.
 - name: Sign a client CSR made elsewhere
   hosts: siem_nodes
   become: true
@@ -100,6 +102,19 @@
       ansible.builtin.copy:
         content: "{{ opensearch_csr_certificate }}"
         dest: "{{ siem_csr_path | regex_replace('\\.csr$', '.crt') }}"
+        mode: "0644"
+      delegate_to: localhost
+      become: false
+
+    - name: Read the CA certificate
+      ansible.builtin.slurp:
+        src: "{{ opensearch_pki_dir | default('/etc/sdp-siem/pki') }}/ca.crt"
+      register: siem_csr_ca
+
+    - name: Write the CA certificate next to the CSR on the controller
+      ansible.builtin.copy:
+        content: "{{ siem_csr_ca.content | b64decode }}"
+        dest: "{{ siem_csr_path | regex_replace('\\.csr$', '.ca.crt') }}"
         mode: "0644"
       delegate_to: localhost
       become: false
