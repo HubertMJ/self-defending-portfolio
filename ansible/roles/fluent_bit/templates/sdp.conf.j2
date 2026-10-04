@@ -27,7 +27,21 @@ PrivateTmp=yes
 # beyond the pseudo devices, and the device cgroup closed.
 PrivateDevices=yes
 DevicePolicy=closed
-InaccessiblePaths={{ fluent_bit_inaccessible_paths | join(' ') }}
+InaccessiblePaths={{ (fluent_bit_inaccessible_paths + fluent_bit_profiles[fluent_bit_profile].inaccessible_paths) | join(' ') }}
+# Nothing the shipper does needs namespaces, kernel or cgroup writes, other processes' /proc,
+# set-id files, the clock or the host name (each checked by tests/siem/ingest-it.sh with every input
+# still reading).
+RestrictNamespaces=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectProc=invisible
+ProcSubset=pid
+LockPersonality=yes
+RestrictSUIDSGID=yes
+ProtectClock=yes
+ProtectHostname=yes
 SystemCallFilter=@system-service
 SystemCallErrorNumber=EPERM
 RestrictAddressFamilies=AF_INET AF_UNIX

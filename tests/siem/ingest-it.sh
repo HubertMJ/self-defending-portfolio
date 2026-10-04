@@ -183,6 +183,10 @@ $DOCKER exec "$K3S" stat -c '%U:%G %a %n' /etc/fluent-bit/keys/hmac.key /etc/flu
 [ "$(grep -c '^root:root 400 ' "$work/keys")" = 2 ] || fail "key files are not root 0400"
 subject=$($DOCKER exec "$K3S" openssl x509 -in /etc/fluent-bit/tls/client.crt -noout -subject -nameopt RFC2253)
 [ "$subject" = "subject=CN=shipper-k3s01-g1,OU=siem,O=sdp" ] || fail "client certificate: $subject"
+props=$($DOCKER exec "$K3S" systemctl show fluent-bit -p ProtectProc -p ProcSubset -p RestrictNamespaces \
+  -p ProtectKernelLogs -p ProtectControlGroups -p ProtectClock -p ProtectHostname -p LockPersonality -p RestrictSUIDSGID | sort | paste -sd' ')
+[ "$props" = "LockPersonality=yes ProcSubset=pid ProtectClock=yes ProtectControlGroups=yes ProtectHostname=yes ProtectKernelLogs=yes ProtectProc=invisible RestrictNamespaces=yes RestrictSUIDSGID=yes" ] \
+  || fail "sandbox properties: $props"
 # H1: inside the unit's namespace there is no block device to open, though the container's /dev has them.
 outside=$($DOCKER exec "$K3S" sh -c 'find /dev -type b | wc -l')
 inside=$($DOCKER exec "$K3S" sh -c 'nsenter -t "$(systemctl show fluent-bit -p MainPID --value)" -m find /dev -type b | wc -l')
