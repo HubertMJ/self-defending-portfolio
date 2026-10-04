@@ -45,6 +45,9 @@ ProtectHostname=yes
 SystemCallFilter=@system-service
 SystemCallErrorNumber=EPERM
 RestrictAddressFamilies=AF_INET AF_UNIX
+# A compromised shipper reaches siem01 and nothing else (cgroup BPF filter on the unit).
+IPAddressDeny=any
+IPAddressAllow={{ fluent_bit_profiles[fluent_bit_profile].ip_allow | join(' ') }}
 MemoryMax={{ fluent_bit_memory_max }}
 LoadCredential=hmac.key:/etc/fluent-bit/keys/hmac.key
 LoadCredential=client.key:{{ fluent_bit_client_key_path }}

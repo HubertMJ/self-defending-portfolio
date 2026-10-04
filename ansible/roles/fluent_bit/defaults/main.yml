@@ -24,13 +24,70 @@ fluent_bit_profiles:
     # to start (MJ8). The kubeconfig is cluster-admin.
     sandbox_sentinels: [/etc/rancher/k3s/k3s.yaml]
     inaccessible_paths: []
+    # The only addresses the unit may talk to (IPAddressDeny=any): siem01 and its own loopback.
+    ip_allow: ["{{ hostvars[fluent_bit_signer].siem_node_ip }}/32", 127.0.0.0/8]
+    # The host's own stream, which also carries the shipper's loss reports.
+    own_stream: host
   siem01:
     sources: [siem01]
     identity: shipper-siem01
     opensearch_host: 127.0.0.1
     # The CA key and the admin key sit here; CAP_DAC_READ_SEARCH would read them otherwise.
     sandbox_sentinels: [/etc/sdp-siem/pki/admin.key]
-    # On top of fluent_bit_inaccessible_paths:
+    # On top of the common list below: siem01's CA and identity keys (no "-": they must exist here)
+    # and the snapshots, a full copy of the evidence.
+    inaccessible_paths: [/etc/sdp-siem/pki, -/var/lib/opensearch-snapshots]
+    ip_allow: [127.0.0.0/8]
+    own_stream: siem01
+
+# N5 fallback (siem contract M5): verify the node certificate against its DNS SAN `siem01` instead
+# of the IP SAN. Empty = verify against the address in opensearch_host.
+fluent_bit_tls_vhost: ""
+
+# Field allow-lists, read on the controller from the repository checkout (siem/fields/README.md).
+fluent_bit_fields_dir: "{{ playbook_dir }}/../../siem/fields"
+
+# Files read, per source. Tag sdp.<source>.<name>; format cri (Kubernetes pod log, JSON body),
+# json (one JSON object per line), raw (the line as is) or osaudit (OpenSearch's security audit log).
+fluent_bit_tail_inputs:
+  - {source: falco, name: log, path: "/var/log/pods/falco_falco-*/falco/*.log", format: cri}
+  - {source: talon, name: log, path: "/var/log/pods/falco-response_falco-talon-*/falco-talon/*.log", format: cri}
+  - {source: api, name: log, path: "/var/log/pods/portfolio-api_portfolio-api-*/api/*.log", format: cri}
+  - {source: k8s-audit, name: log, path: /var/lib/rancher/k3s/server/logs/audit.log, format: json}
+  - {source: hubble, name: log, path: /var/run/cilium/hubble/events.log, format: json}
+  - {source: host, name: auditd, path: /var/log/audit/audit.log, format: raw}
+  - {source: siem01, name: auditd, path: /var/log/audit/audit.log, format: raw}
+  - {source: siem01, name: osaudit, path: /var/log/opensearch/sdp-security-audit.log, format: osaudit}
+
+# Sources fed from journald (ssh as unit and as sshd-session, sudo, kernel lines; sdp.lua keeps the
+# nft-drop ones).
+fluent_bit_journal_sources: [host, siem01]
+
+# Records per second per stream, averaged over 5 minutes, before the throttle drops. Only the data
+# inputs are throttled (log, journal, auditd, osaudit): heartbeats, Falco's metrics snapshot and Falco
+# alerts of priority Warning and above never are. Drops are reported once a minute into the host's
+# own stream (fluentbit.throttle_dropped) and alarmed by the ops monitor "shipper dropping".
+fluent_bit_throttle_rate:
+  k8s-audit: 50
+fluent_bit_throttle_rate_default: 20
+
+# Buffering: chunks on disk, at most this much per stream (what bounds the disk, not the retries);
+# a chunk is retried until it is delivered, backing off up to 5 minutes (review M1): an outage of any
+# length loses nothing until a stream's buffer is full, then its oldest chunks are dropped - reported
+# as fluentbit.output_dropped and alarmed by "shipper dropping".
+fluent_bit_storage_limit: 1G
+fluent_bit_retry_limit: no_limits
+fluent_bit_mem_buf_limit: 16M
+
+# The kill limit of the unit (L13 expects RSS <= 128 MB in normal operation).
+fluent_bit_memory_max: 192M
+
+# Metrics (throttle drops, retries, buffer) on the loopback only.
+fluent_bit_metrics_port: 2020
+
+# Paths the unit never sees, on top of what ProtectSystem/ProtectHome hide. The "-" prefix tolerates
+# paths a host does not have (siem contract P2, B8).
+fluent_bit_inaccessible_paths:
   - -/etc/rancher
   - -/var/lib/rancher/k3s/server/tls
   - -/var/lib/rancher/k3s/server/cred

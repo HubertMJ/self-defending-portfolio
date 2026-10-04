@@ -38,7 +38,9 @@ argument_specs:
         description: The SIEM host that holds the CA and signs k3s01's CSR.
         type: str
       fluent_bit_profiles:
-        description: Per profile the sources, the client identity, the OpenSearch address and the start-check files.
+        description: >-
+          Per profile the sources, the client identity, the OpenSearch address, the start-check files, extra
+          InaccessiblePaths and the IPAddressAllow list.
         type: dict
       fluent_bit_tls_vhost:
         description: Host name the node certificate is verified against instead of the address (N5 fallback); empty = the address.
@@ -64,8 +66,8 @@ argument_specs:
         description: Disk buffer per stream (storage.total_limit_size).
         type: str
       fluent_bit_retry_limit:
-        description: Retries of one chunk before it is given up.
-        type: int
+        description: Retry_Limit of each output (no_limits, or a number of retries before a chunk is given up).
+        type: str
       fluent_bit_mem_buf_limit:
         description: Mem_Buf_Limit of each tail input.
         type: str
