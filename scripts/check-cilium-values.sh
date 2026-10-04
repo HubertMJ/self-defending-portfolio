@@ -10,6 +10,10 @@
 # DaemonSet, cilium-envoy and cilium-operator (that is what the Gateway API additions cost before
 # they were added to the role).
 #
+# It also asserts what the Hubble flow export may write (ADR 0034, siem contract P2): flows of
+# sandbox pods only, and a field mask without addresses, node names, labels or HTTP. Both sides are
+# equal by then, so this is the check that they are equal to the right thing.
+#
 # It also asserts that the three Cilium images built here (app/cilium, app/cilium-operator-generic,
 # app/hubble-relay; ADR 0028) carry byte-identical modules/go.mod and go.sum.
 #
@@ -119,6 +123,40 @@ for path in sorted(flat_argo):
         f"only in cluster/apps/cilium.yaml: {path} (add it to cilium_values in the Ansible role; "
         f"there is no allowance for one-sided values any more)"
     )
+
+# --- the Hubble flow export for the SIEM (ADR 0034, siem contract P2) ---------------------------------
+# The exported file is shipped off the node; what it may carry is fixed here. fieldMask entries must
+# come from this list (each a flow.proto path that holds no address, node name, label or HTTP data),
+# and the allowList may only select flows by a sandbox pod on either side.
+EXPORT_FIELDS = {
+    "time", "verdict", "drop_reason_desc", "traffic_direction", "is_reply", "event_type",
+    "source.namespace", "source.pod_name", "destination.namespace", "destination.pod_name",
+    "l4", "l7.type", "l7.dns.query", "l7.dns.rcode",
+}
+export = ansible_values.get("hubble", {}).get("export", {}).get("static", {})
+if export.get("enabled"):
+    mask = export.get("fieldMask") or []
+    if not mask:
+        problems.append("hubble.export.static: an empty fieldMask exports every field (addresses, node names, labels)")
+    for path in mask:
+        if path not in EXPORT_FIELDS:
+            problems.append(f"hubble.export.static.fieldMask: {path!r} is not an allowed export field")
+    allow = export.get("allowList") or []
+    if not allow:
+        problems.append("hubble.export.static: an empty allowList exports every flow of the node")
+    import json
+    for entry in allow:
+        try:
+            flt = json.loads(entry)
+        except ValueError:
+            problems.append(f"hubble.export.static.allowList: {entry!r} is not JSON")
+            continue
+        for key, values in flt.items():
+            if key not in ("source_pod", "destination_pod") or not all(
+                    isinstance(v, str) and v in ("sandbox/", "sandbox-unguarded/") for v in values):
+                problems.append(f"hubble.export.static.allowList: {entry!r} selects more than sandbox pods")
+    if export.get("denyList"):
+        problems.append("hubble.export.static.denyList is set; the allowList alone defines what is exported")
 
 # --- the Cilium images built here (ADR 0028) are one source tree -----------------------------------
 # app/cilium, app/cilium-operator-generic and app/hubble-relay compile the same Cilium commit, each
