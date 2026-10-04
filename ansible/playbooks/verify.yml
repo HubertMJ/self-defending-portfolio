@@ -145,14 +145,21 @@
           - verify_fluent_bit.status.ActiveState == 'active'
           - verify_fluent_bit.status.SubState == 'running'
           - verify_fluent_bit.status.User == 'fluent-bit'
-          - "'/etc/rancher' in verify_fluent_bit.status.InaccessiblePaths"
+          - verify_fluent_bit.status.PrivateDevices == 'yes'
+          - verify_fluent_bit.status.DevicePolicy == 'closed'
+          - "'/etc/rancher' in verify_fluent_bit_hidden"
           - verify_fluent_bit.status.CapabilityBoundingSet == 'cap_dac_read_search'
         fail_msg: >-
           fluent-bit is {{ verify_fluent_bit.status.ActiveState }}/{{ verify_fluent_bit.status.SubState }} as
           {{ verify_fluent_bit.status.User | default('root') }}, InaccessiblePaths
           {{ verify_fluent_bit.status.InaccessiblePaths | default('') }}, capabilities
-          {{ verify_fluent_bit.status.CapabilityBoundingSet | default('') }}.
-        success_msg: fluent-bit runs as fluent-bit with CAP_DAC_READ_SEARCH only and /etc/rancher inaccessible.
+          {{ verify_fluent_bit.status.CapabilityBoundingSet | default('') }}, PrivateDevices
+          {{ verify_fluent_bit.status.PrivateDevices | default('') }}.
+        success_msg: fluent-bit runs as fluent-bit with CAP_DAC_READ_SEARCH only, no devices, /etc/rancher inaccessible.
+      vars:
+        # Split, "-" prefixes dropped: a substring test would also pass on /etc/rancher-old.
+        verify_fluent_bit_hidden: >-
+          {{ verify_fluent_bit.status.InaccessiblePaths.split() | map('regex_replace', '^-', '') | list }}
 
     # M7 for k3s01's shipper identity: ingest.yml re-requests it at 45 days left.
     - name: Read the validity of the shipper's client certificate
@@ -481,11 +488,18 @@
           - verify_fluent_bit.status.ActiveState == 'active'
           - verify_fluent_bit.status.SubState == 'running'
           - verify_fluent_bit.status.User == 'fluent-bit'
-          - "'/etc/rancher' in verify_fluent_bit.status.InaccessiblePaths"
+          - verify_fluent_bit.status.PrivateDevices == 'yes'
+          - verify_fluent_bit.status.DevicePolicy == 'closed'
+          - "'/etc/rancher' in verify_fluent_bit_hidden"
           - verify_fluent_bit.status.CapabilityBoundingSet == 'cap_dac_read_search'
         fail_msg: >-
           fluent-bit is {{ verify_fluent_bit.status.ActiveState }}/{{ verify_fluent_bit.status.SubState }} as
           {{ verify_fluent_bit.status.User | default('root') }}, InaccessiblePaths
           {{ verify_fluent_bit.status.InaccessiblePaths | default('') }}, capabilities
-          {{ verify_fluent_bit.status.CapabilityBoundingSet | default('') }}.
-        success_msg: fluent-bit runs as fluent-bit with CAP_DAC_READ_SEARCH only and /etc/rancher inaccessible.
+          {{ verify_fluent_bit.status.CapabilityBoundingSet | default('') }}, PrivateDevices
+          {{ verify_fluent_bit.status.PrivateDevices | default('') }}.
+        success_msg: fluent-bit runs as fluent-bit with CAP_DAC_READ_SEARCH only, no devices, /etc/rancher inaccessible.
+      vars:
+        # Split, "-" prefixes dropped: a substring test would also pass on /etc/rancher-old.
+        verify_fluent_bit_hidden: >-
+          {{ verify_fluent_bit.status.InaccessiblePaths.split() | map('regex_replace', '^-', '') | list }}

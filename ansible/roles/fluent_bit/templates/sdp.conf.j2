@@ -22,6 +22,11 @@ ProtectSystem=strict
 ProtectHome=yes
 ReadWritePaths=/var/lib/fluent-bit
 PrivateTmp=yes
+# Raw block devices would read the whole disk past every InaccessiblePaths (the capability bypasses
+# file permissions, not device permissions, and /dev/sda is root:disk 0660): no device nodes at all
+# beyond the pseudo devices, and the device cgroup closed.
+PrivateDevices=yes
+DevicePolicy=closed
 InaccessiblePaths={{ fluent_bit_inaccessible_paths | join(' ') }}
 SystemCallFilter=@system-service
 SystemCallErrorNumber=EPERM
