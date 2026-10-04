@@ -228,3 +228,23 @@ general "not running" explanation of section 2, because the next stale object wi
 - B5 (a live cluster panel) and B6 (live architecture and About copy), out of this phase.
 - Drop `|build-web` from the admission policy, `scripts/verify-image.sh`, `docs/bootstrap.md` and
   `app/web/src/lib/provenance.ts` in one commit (ADR 0016).
+
+## Amendment 2026-10-04: the verify panel follows the posture; the hero keeps one link to it
+
+**Context.** Section 1 put a compact "Running now, signed in CI" strip in the hero, above the fold: each
+image's commit, short digest, a Copy cosign button and its Rekor search. The owner did not want the
+verify data at the top of the page.
+
+**Decision.** The owner moved the verify data out of the hero: the evidence card is the above-the-fold
+proof; the full verify panel follows the posture section; the hero keeps one link to it. The strip, its
+markup and its styles are gone. The hero's only trace of provenance is a small text link "Verify it
+yourself" next to "Read the source", pointing at `#verify`. The sections run hero, `#evidence`,
+`#posture`, `#verify`, then the rest as before. The panel itself is unchanged: commits and CI runs,
+every running digest, a cosign command per digest (only for a reference `isPinnedImageRef` accepts),
+Rekor links, a curl line per public endpoint and the latest run's raw JSON, polled every 60 s and keeping
+the last good answer on a failure.
+
+**Consequences.** Nothing about the running images is visible without scrolling or following the link;
+the evidence card, which the end-to-end suite requires above a 1280x720 fold with the installed fonts
+and with a wide one, is what a first glance proves. The hero has room again: its height is no longer
+bounded by a block of data that had to stay above the fold.

@@ -12,7 +12,7 @@ import { mountEvidence, renderEvidenceCard, renderEvidenceDetail, renderNoAttack
 import { admissionTone, renderPostureData } from "../../src/ui/posture";
 import { renderStats } from "../../src/ui/stats";
 import { renderRun } from "../../src/ui/timeline";
-import { mountVerify, pollProvenance, renderStrip, renderVerifyPanel } from "../../src/ui/verify";
+import { mountVerify, pollProvenance, renderVerifyPanel } from "../../src/ui/verify";
 
 // ADR 0035: absolute times in UTC, the single cosign identity, the parsers of the additions, the
 // posture naming its failures, finished runs saying why nothing was detected, and the evidence card.
@@ -68,24 +68,24 @@ describe("provenance.ts (B3)", () => {
   });
 
   it("shows what is known when provenance is missing, without throwing", () => {
-    const strip = renderStrip({ provenance: null, build: { commit: "a".repeat(40), ci_run_id: "7" } });
-    expect(strip.textContent).toContain("API provenance unavailable");
-    expect(strip.querySelector('[data-image="web"]')?.textContent).toContain("aaaaaaa");
-    expect(strip.querySelector('[data-image="api"]')).toBeNull();
+    const known = renderVerifyPanel({ provenance: null, build: { commit: "a".repeat(40), ci_run_id: "7" } });
+    expect(known.querySelector('[data-image="web"]')?.textContent).toContain("aaaaaaa");
+    expect(known.querySelector('[data-image="web"] a[href$="/actions/runs/7"]')?.textContent).toMatch(/^CI run 7\b/);
+    expect(known.querySelector('[data-image="api"]')?.textContent).toContain("API provenance unavailable");
     const panel = renderVerifyPanel({ provenance: null, build: null });
     expect(panel.textContent).toContain("API provenance unavailable");
     expect(panel.querySelectorAll(".vraw__row").length).toBeGreaterThanOrEqual(9);
   });
 
-  it("strip: short commit and digest, full digest in the title, cosign and Rekor per image", () => {
+  it("panel: short commit linked, the full image, its cosign command and Rekor per image", () => {
     const api = `ghcr.io/hubertmj/self-defending-portfolio/api@sha256:be0895f4${"0".repeat(56)}`;
-    const strip = renderStrip({ provenance: { api: { commit: "0448cff5a1", ci_run_id: "9", images: [api] }, web: { images: [] } }, build: null });
-    const row = strip.querySelector('[data-image="api"]') as HTMLElement;
-    expect(row.textContent).toContain("0448cff");
-    expect(row.querySelector(".vstrip__digest")?.textContent).toBe("sha256:be0895f4…");
-    expect(row.querySelector(".vstrip__digest")?.getAttribute("title")).toBe(`sha256:be0895f4${"0".repeat(56)}`);
-    expect(row.querySelector('a[href^="https://search.sigstore.dev/?hash=sha256:be0895f4"]')).not.toBeNull();
-    expect(row.textContent).toContain("Copy cosign");
+    const panel = renderVerifyPanel({ provenance: { api: { commit: "0448cff5a1", ci_run_id: "9", images: [api] }, web: { images: [] } }, build: null });
+    const card = panel.querySelector('[data-image="api"]') as HTMLElement;
+    expect(card.querySelector('a[href$="/commit/0448cff5a1"] code')?.textContent).toBe("0448cff");
+    expect(card.querySelector(".vimage__digest .small code")?.textContent).toBe(api);
+    expect(card.querySelector(".cmd code")?.textContent).toBe(cosignVerifyCommand(api));
+    expect(card.querySelectorAll(".cmd .copy")).toHaveLength(1);
+    expect(card.querySelector('a[href="https://search.sigstore.dev/?hash=sha256:be0895f4' + "0".repeat(56) + '"]')).not.toBeNull();
   });
 });
 
@@ -383,10 +383,12 @@ describe("a copied cosign command names only a strictly validated pinned image (
     expect(cmds(EVIL)).toHaveLength(0);
   });
 
-  it("the verify strip and panel: no Copy cosign for a forged image", () => {
+  it("the verify panel: no command and no copy button for a forged image", () => {
     const d = { provenance: { api: { commit: "", ci_run_id: "", images: [EVIL] }, web: { images: [] } }, build: null };
-    expect(renderStrip(d).textContent).not.toContain("Copy cosign");
-    expect(renderVerifyPanel(d).querySelector(".cmd")).toBeNull();
+    const panel = renderVerifyPanel(d);
+    expect(panel.querySelector(".cmd")).toBeNull();
+    expect(panel.querySelector('[data-image="api"] .copy')).toBeNull();
+    expect(panel.textContent).not.toContain("cosign verify");
   });
 });
 
@@ -473,15 +475,18 @@ describe("code review (REQUEST_CHANGES) fixes", () => {
     expect(root.textContent).toMatch(/seen (\d{4}-\d\d-\d\d )?\d\d:\d\d:\d\d\.\d{3} UTC/);
   });
 
-  it("the verify strip is not redrawn for a new generated_at, and has no label without rows", () => {
-    const strip = document.createElement("div");
-    const v = mountVerify(strip, document.createElement("div"));
-    const prov = (g: string) => ({ generated_at: g, api: { commit: "0448cff", ci_run_id: "1", images: [] }, web: { images: [] } });
+  it("the verify panel is not redrawn for a new generated_at, only when what it shows changes", () => {
+    const panel = document.createElement("div");
+    const v = mountVerify(panel);
+    const prov = (g: string, commit = "0448cff") => ({ generated_at: g, api: { commit, ci_run_id: "1", images: [] }, web: { images: [] } });
     v.set({ provenance: prov("2026-10-03T18:00:00Z") });
-    const first = strip.firstElementChild;
+    const first = panel.firstElementChild;
+    expect(first?.textContent).toContain("0448cff");
     v.set({ provenance: prov("2026-10-03T18:01:00Z") });
-    expect(strip.firstElementChild).toBe(first);
-    expect(renderStrip({ provenance: null, build: null }).querySelector(".vstrip__label")).toBeNull();
+    expect(panel.firstElementChild).toBe(first);
+    v.set({ provenance: prov("2026-10-03T18:02:00Z", "1234abc") });
+    expect(panel.firstElementChild).not.toBe(first);
+    expect(panel.textContent).toContain("1234abc");
   });
 
   it("provenance: a failure keeps the last good answer; a 404 is asked again after 10 minutes", async () => {

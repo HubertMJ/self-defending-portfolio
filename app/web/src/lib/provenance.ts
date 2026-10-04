@@ -50,5 +50,5 @@ export function digestOf(imageAtDigest: string): string {
   return DIGEST.test(d) ? d : "";
 }
 
-/** "sha256:be0895f4…" for the strip; the full value goes in a title and the copied text. */
+/** "sha256:be0895f4…" for the evidence card; the full value goes in a title and the copied text. */
 export const shortDigest = (digest: string): string => (digest ? `${digest.slice(0, 15)}…` : "");

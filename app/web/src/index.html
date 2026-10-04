@@ -68,8 +68,8 @@
         <p class="hero__actions">
           <a class="btn btn--primary" id="hero-cta" href="#attack">Open the terminal</a>
           <a class="btn btn--ghost" href="https://github.com/HubertMJ/self-defending-portfolio" rel="noopener noreferrer">Read the source</a>
+          <a class="hero__verify" href="#verify">Verify it yourself</a>
         </p>
-        <div class="verifystrip" id="verify-strip" hidden></div>
         <div class="herostats-wrap" id="hero-stats" hidden></div>
       </div>
       <div class="evcard-wrap" id="evidence-card">
@@ -101,19 +101,6 @@
     </div>
   </section>
 
-  <section class="section" id="verify" aria-labelledby="verify-title">
-    <div class="wrap">
-      <header class="section__head">
-        <p class="eyebrow">Verify</p>
-        <h2 id="verify-title">Verify it yourself</h2>
-        <p class="section__lead">Which commit each running image was built from, by which CI run, the cosign command to check its signature, and every public endpoint this page reads.</p>
-      </header>
-      <div class="panel" id="verify-panel">
-        <p class="small">Every image is built and signed in CI from <a href="https://github.com/HubertMJ/self-defending-portfolio" rel="noopener noreferrer">the public repository</a>; with JavaScript this panel names the exact commits and digests.</p>
-      </div>
-    </div>
-  </section>
-
   <section class="section" id="posture" aria-labelledby="posture-title">
     <div class="wrap">
       <header class="section__head">
@@ -124,6 +111,19 @@
       <div class="panel" id="posture-panel" aria-live="polite" aria-busy="true" data-state="loading">
         <p class="loading">Loading posture…</p>
         <noscript><p class="offline__body">The live panels need JavaScript. The rest of this page does not.</p></noscript>
+      </div>
+    </div>
+  </section>
+
+  <section class="section" id="verify" aria-labelledby="verify-title">
+    <div class="wrap">
+      <header class="section__head">
+        <p class="eyebrow">Verify</p>
+        <h2 id="verify-title">Verify it yourself</h2>
+        <p class="section__lead">Which commit each running image was built from, by which CI run, the cosign command to check its signature, and every public endpoint this page reads.</p>
+      </header>
+      <div class="panel" id="verify-panel">
+        <p class="small">Every image is built and signed in CI from <a href="https://github.com/HubertMJ/self-defending-portfolio" rel="noopener noreferrer">the public repository</a>; with JavaScript this panel names the exact commits and digests.</p>
       </div>
     </div>
   </section>
