@@ -1,0 +1,549 @@
+{
+ "_comment": "Fixture for ?mock=1 (lib/fixtures.ts) and scripts/serve.mjs --siem: GET /api/correlation and /api/correlation/rules in the shapes of ADR 0036 section 9 (details as app/api/internal/incidents builds them). Times are anchored at `anchor` and shifted to the moment they are served. Not data from the cluster.",
+ "anchor": "2026-10-04T12:00:00Z",
+ "correlation": {
+  "available": true,
+  "checked_at": "2026-10-04T11:59:40.000Z",
+  "rules": {
+   "commit": "a7cc041e5d2b9f30c1a4e6b8d0f2a3c5e7f9b1d3",
+   "applied_at": "2026-10-04T10:30:00.000Z",
+   "status": "applied"
+  },
+  "health": {
+   "ingest": "ok",
+   "evidence_rewritten": false,
+   "disk": "ok"
+  },
+  "metrics": {
+   "since": "2026-10-03T12:00:00.000Z",
+   "incidents": 8,
+   "median_ttd_ms": 840,
+   "median_tti_ms": 212,
+   "median_twin_dwell_ms": 61000,
+   "host_findings": 2
+  },
+  "incidents": [
+   {
+    "id": "d15e0f17a1b2c3d4",
+    "kind": "dns-exfil",
+    "severity": "critical",
+    "title": "Exfiltration over DNS: this run's secret left sandbox/terminal-7e57000001 in a DNS query; Falco: no event",
+    "run_id": "7e57000000000001",
+    "arm": "",
+    "first_at": "2026-10-04T11:52:49.000Z",
+    "last_at": "2026-10-04T11:53:01.100Z",
+    "attack": [
+     "T1552.001",
+     "T1048.003",
+     "T1071.004"
+    ],
+    "falco_events": 0,
+    "flag_match": true,
+    "ttd_ms": null,
+    "tti_ms": null,
+    "steps": [
+     {
+      "at": "2026-10-04T11:52:49.000Z",
+      "source": "api",
+      "rule": "",
+      "rule_id": "",
+      "command_seq": 4,
+      "detail": "command read-flag (T1552.001, credentials) started on sandbox/terminal-7e57000001"
+     },
+     {
+      "at": "2026-10-04T11:53:00.000Z",
+      "source": "api",
+      "rule": "Terminal exfiltration command",
+      "rule_id": "8e4f5061-7283-4d94-bea5-c6d7e8f90a12",
+      "command_seq": 5,
+      "detail": "command dns-exfil (T1048.003, exfiltration) started on sandbox/terminal-7e57000001"
+     },
+     {
+      "at": "2026-10-04T11:53:01.100Z",
+      "source": "hubble",
+      "rule": "DNS query carries an exfil label",
+      "rule_id": "7d3e4f50-6172-4c83-ad94-b5c6d7e8f901",
+      "command_seq": 5,
+      "detail": "DNS query under the exfil zone from sandbox/terminal-7e57000001, FORWARDED egress UDP/53"
+     }
+    ],
+    "evidence": [
+     {
+      "type": "finding",
+      "id": "8f0e6c1e-0d6b-4f7e-9a51-2b7f3c4d5e6f"
+     },
+     {
+      "type": "document",
+      "id": "Zx3kQ5gBf2mP0aL1rT9e"
+     }
+    ]
+   },
+   {
+    "id": "c0a1b2c3d4e5f607",
+    "kind": "contained-intrusion",
+    "severity": "high",
+    "title": "Contained: Falco saw a credential read in sandbox/terminal-7e57000001, Talon quarantined it 212 ms later",
+    "run_id": "7e57000000000001",
+    "arm": "",
+    "first_at": "2026-10-04T11:50:00.000Z",
+    "last_at": "2026-10-04T11:50:01.200Z",
+    "attack": [
+     "T1003.008"
+    ],
+    "falco_events": 1,
+    "flag_match": null,
+    "ttd_ms": 840,
+    "tti_ms": 212,
+    "steps": [
+     {
+      "at": "2026-10-04T11:50:00.000Z",
+      "source": "api",
+      "rule": "",
+      "rule_id": "",
+      "command_seq": 3,
+      "detail": "command read-shadow (T1003.008, credentials) started on sandbox/terminal-7e57000001"
+     },
+     {
+      "at": "2026-10-04T11:50:00.840Z",
+      "source": "falco",
+      "rule": "Credential file read in a sandbox pod",
+      "rule_id": "5b1c2d3e-4f50-4a61-8b72-93a4b5c6d7e8",
+      "command_seq": 3,
+      "detail": "Falco: Read sensitive file untrusted on sandbox/terminal-7e57000001, process cat"
+     },
+     {
+      "at": "2026-10-04T11:50:01.052Z",
+      "source": "k8s-audit",
+      "rule": "",
+      "rule_id": "",
+      "command_seq": 3,
+      "detail": "patch pods on sandbox/terminal-7e57000001 by Talon, response 200"
+     },
+     {
+      "at": "2026-10-04T11:50:01.200Z",
+      "source": "hubble",
+      "rule": "policy enforced +148 ms",
+      "rule_id": "",
+      "command_seq": 3,
+      "detail": "Hubble: DROPPED egress TCP/80 (POLICY_DENIED) on sandbox/terminal-7e57000001"
+     }
+    ],
+    "evidence": [
+     {
+      "type": "finding",
+      "id": "2c7d9e10-5a4b-4c3d-8e2f-1a0b9c8d7e6f"
+     },
+     {
+      "type": "document",
+      "id": "aB3dE5fG7hJ9kL1mN3pQ"
+     },
+     {
+      "type": "correlation",
+      "id": "contained-intrusion"
+     }
+    ]
+   },
+   {
+    "id": "5a7e0d0123456789",
+    "kind": "staged-attack",
+    "severity": "high",
+    "title": "Staged attack: recon, then credentials, then an exfiltration attempt in one run",
+    "run_id": "7e57000000000001",
+    "arm": "",
+    "first_at": "2026-10-04T11:47:00.000Z",
+    "last_at": "2026-10-04T11:53:00.000Z",
+    "attack": [
+     "T1082",
+     "T1003.008",
+     "T1048.003"
+    ],
+    "falco_events": 1,
+    "flag_match": null,
+    "ttd_ms": null,
+    "tti_ms": null,
+    "steps": [
+     {
+      "at": "2026-10-04T11:47:00.000Z",
+      "source": "api",
+      "rule": "Discovery commands from the terminal",
+      "rule_id": "9f506172-8394-4ea5-8fb6-d7e8f90a1b23",
+      "command_seq": 1,
+      "detail": "command whoami (T1082, recon) started on sandbox/terminal-7e57000001"
+     },
+     {
+      "at": "2026-10-04T11:50:00.000Z",
+      "source": "api",
+      "rule": "",
+      "rule_id": "",
+      "command_seq": 3,
+      "detail": "command read-shadow (T1003.008, credentials) started on sandbox/terminal-7e57000001"
+     },
+     {
+      "at": "2026-10-04T11:53:00.000Z",
+      "source": "api",
+      "rule": "Terminal exfiltration command",
+      "rule_id": "8e4f5061-7283-4d94-bea5-c6d7e8f90a12",
+      "command_seq": 5,
+      "detail": "command dns-exfil (T1048.003, exfiltration) started on sandbox/terminal-7e57000001"
+     }
+    ],
+    "evidence": [
+     {
+      "type": "document",
+      "id": "Q1w2E3r4T5y6U7i8O9p0"
+     },
+     {
+      "type": "document",
+      "id": "A1s2D3f4G5h6J7k8L9z0"
+     }
+    ]
+   },
+   {
+    "id": "7717d0e11a2b3c4d",
+    "kind": "twin-dwell",
+    "severity": "medium",
+    "title": "Twin dwell: the unguarded pod lived 61.0 s; the guarded one was isolated 96 ms after detection",
+    "run_id": "7e57aaaaaaaaaaaa",
+    "arm": "unguarded",
+    "first_at": "2026-10-04T11:00:00.000Z",
+    "last_at": "2026-10-04T11:01:01.000Z",
+    "attack": [
+     "T1105"
+    ],
+    "falco_events": 1,
+    "flag_match": null,
+    "ttd_ms": 650,
+    "tti_ms": 96,
+    "steps": [
+     {
+      "at": "2026-10-04T11:00:00.000Z",
+      "source": "k8s-audit",
+      "rule": "",
+      "rule_id": "",
+      "command_seq": null,
+      "detail": "create pods on sandbox-unguarded/scenario-network-tool-7e57aaaaaa-u not by the API, response 201"
+     },
+     {
+      "at": "2026-10-04T11:00:02.100Z",
+      "source": "falco",
+      "rule": "Network tool started in a sandbox pod",
+      "rule_id": "6c2d3e4f-5061-4b72-9c83-a4b5c6d7e8f9",
+      "command_seq": null,
+      "detail": "Falco: SDP network tool in sandbox on sandbox-unguarded/scenario-network-tool-7e57aaaaaa-u, process wget"
+     },
+     {
+      "at": "2026-10-04T11:01:01.000Z",
+      "source": "k8s-audit",
+      "rule": "",
+      "rule_id": "",
+      "command_seq": null,
+      "detail": "delete pods on sandbox-unguarded/scenario-network-tool-7e57aaaaaa-u by the API, response 200"
+     }
+    ],
+    "evidence": [
+     {
+      "type": "document",
+      "id": "c1V2b3N4m5Q6w7E8r9T0"
+     },
+     {
+      "type": "document",
+      "id": "y1U2i3O4p5A6s7D8f9G0"
+     }
+    ]
+   },
+   {
+    "id": "9001abcdef012345",
+    "kind": "policy-probing",
+    "severity": "medium",
+    "title": "Policy probing: repeated admission denials",
+    "run_id": "",
+    "arm": "",
+    "first_at": "2026-10-04T10:00:00.000Z",
+    "last_at": "2026-10-04T10:00:10.000Z",
+    "attack": [],
+    "falco_events": null,
+    "flag_match": null,
+    "ttd_ms": null,
+    "tti_ms": null,
+    "steps": [
+     {
+      "at": "2026-10-04T10:00:00.000Z",
+      "source": "k8s-audit",
+      "rule": "policy-probing",
+      "rule_id": "",
+      "command_seq": null,
+      "detail": ""
+     }
+    ],
+    "evidence": [
+     {
+      "type": "alert",
+      "id": "Hq2Lw8ZbTn6aU1oPq3Rs"
+     }
+    ]
+   },
+   {
+    "id": "0de7ec7105500001",
+    "kind": "detection-missing",
+    "severity": "medium",
+    "title": "Detection missing: a command that should be detected produced no Falco finding",
+    "run_id": "7e57000000000002",
+    "arm": "",
+    "first_at": "2026-10-04T08:00:00.000Z",
+    "last_at": "2026-10-04T08:00:00.000Z",
+    "attack": [],
+    "falco_events": 0,
+    "flag_match": null,
+    "ttd_ms": null,
+    "tti_ms": null,
+    "steps": [
+     {
+      "at": "2026-10-04T08:00:00.000Z",
+      "source": "api",
+      "rule": "detection-missing",
+      "rule_id": "",
+      "command_seq": null,
+      "detail": ""
+     }
+    ],
+    "evidence": [
+     {
+      "type": "alert",
+      "id": "Kp4Mn6Bv8Cx0Zl2Jh4Gf"
+     }
+    ]
+   },
+   {
+    "id": "c0a1b2c3d4e5f608",
+    "kind": "contained-intrusion",
+    "severity": "high",
+    "title": "Contained: Falco saw a shell in sandbox/scenario-shell-in-container-7e57000003, Talon deleted it 96 ms later",
+    "run_id": "7e57000000000003",
+    "arm": "",
+    "first_at": "2026-10-04T03:40:00.000Z",
+    "last_at": "2026-10-04T03:40:01.400Z",
+    "attack": [
+     "T1059.004"
+    ],
+    "falco_events": 1,
+    "flag_match": null,
+    "ttd_ms": 1210,
+    "tti_ms": 96,
+    "steps": [
+     {
+      "at": "2026-10-04T03:40:00.000Z",
+      "source": "api",
+      "rule": "",
+      "rule_id": "",
+      "command_seq": null,
+      "detail": "run pod_ready on sandbox/scenario-shell-in-container-7e57000003"
+     },
+     {
+      "at": "2026-10-04T03:40:01.210Z",
+      "source": "falco",
+      "rule": "Shell in a sandbox container",
+      "rule_id": "b1728394-a5b6-40c7-a1d8-f90a1b2c3d45",
+      "command_seq": null,
+      "detail": "Falco: Terminal shell in container on sandbox/scenario-shell-in-container-7e57000003, process sh"
+     },
+     {
+      "at": "2026-10-04T03:40:01.306Z",
+      "source": "k8s-audit",
+      "rule": "",
+      "rule_id": "",
+      "command_seq": null,
+      "detail": "delete pods on sandbox/scenario-shell-in-container-7e57000003 by Talon, response 200"
+     }
+    ],
+    "evidence": [
+     {
+      "type": "finding",
+      "id": "3e8f0a21-6b5c-4d4e-9f30-2b1c0d9e8f7a"
+     },
+     {
+      "type": "document",
+      "id": "m1N2b3V4c5X6z7L8k9J0"
+     }
+    ]
+   },
+   {
+    "id": "c0a1b2c3d4e5f609",
+    "kind": "contained-intrusion",
+    "severity": "high",
+    "title": "Contained: Falco saw a network tool in sandbox/scenario-network-tool-7e57000004, Talon quarantined it 1.8 s later",
+    "run_id": "7e57000000000004",
+    "arm": "",
+    "first_at": "2026-10-03T22:06:40.000Z",
+    "last_at": "2026-10-03T22:06:42.500Z",
+    "attack": [
+     "T1105"
+    ],
+    "falco_events": 1,
+    "flag_match": null,
+    "ttd_ms": 650,
+    "tti_ms": 1830,
+    "steps": [
+     {
+      "at": "2026-10-03T22:06:40.650Z",
+      "source": "falco",
+      "rule": "Network tool started in a sandbox pod",
+      "rule_id": "6c2d3e4f-5061-4b72-9c83-a4b5c6d7e8f9",
+      "command_seq": null,
+      "detail": "Falco: SDP network tool in sandbox on sandbox/scenario-network-tool-7e57000004, process wget"
+     },
+     {
+      "at": "2026-10-03T22:06:42.480Z",
+      "source": "k8s-audit",
+      "rule": "",
+      "rule_id": "",
+      "command_seq": null,
+      "detail": "patch pods on sandbox/scenario-network-tool-7e57000004 by Talon, response 200"
+     }
+    ],
+    "evidence": [
+     {
+      "type": "finding",
+      "id": "4f9a1b32-7c6d-4e5f-a041-3c2d1e0f9a8b"
+     }
+    ]
+   }
+  ]
+ },
+ "rules": {
+  "rules": [
+   {
+    "id": "5b1c2d3e-4f50-4a61-8b72-93a4b5c6d7e8",
+    "title": "Credential file read in a sandbox pod",
+    "level": "high",
+    "status": "stable",
+    "source": "falco",
+    "attack": [
+     "T1003.008"
+    ],
+    "file": "siem/rules/falco-credential-read.yml",
+    "line": 1,
+    "canary": "api:read-shadow"
+   },
+   {
+    "id": "6c2d3e4f-5061-4b72-9c83-a4b5c6d7e8f9",
+    "title": "Network tool started in a sandbox pod",
+    "level": "medium",
+    "status": "stable",
+    "source": "falco",
+    "attack": [
+     "T1105"
+    ],
+    "file": "siem/rules/falco-network-tool.yml",
+    "line": 1,
+    "canary": "api:beacon"
+   },
+   {
+    "id": "b1728394-a5b6-40c7-a1d8-f90a1b2c3d45",
+    "title": "Shell in a sandbox container",
+    "level": "high",
+    "status": "stable",
+    "source": "falco",
+    "attack": [
+     "T1059.004"
+    ],
+    "file": "siem/rules/falco-shell.yml",
+    "line": 1,
+    "canary": "api:shell-in-container"
+   },
+   {
+    "id": "c28394a5-b6c7-41d8-b2e9-0a1b2c3d4e56",
+    "title": "Talon response on a sandbox pod",
+    "level": "informational",
+    "status": "stable",
+    "source": "talon",
+    "attack": [],
+    "file": "siem/rules/talon-response.yml",
+    "line": 1,
+    "canary": "api:shell-in-container"
+   },
+   {
+    "id": "7d3e4f50-6172-4c83-ad94-b5c6d7e8f901",
+    "title": "DNS query carries an exfil label",
+    "level": "critical",
+    "status": "stable",
+    "source": "hubble",
+    "attack": [
+     "T1048.003",
+     "T1071.004"
+    ],
+    "file": "siem/rules/dns-exfil-label.yml",
+    "line": 1,
+    "canary": "api:dns-exfil"
+   },
+   {
+    "id": "8e4f5061-7283-4d94-bea5-c6d7e8f90a12",
+    "title": "Terminal exfiltration command",
+    "level": "high",
+    "status": "stable",
+    "source": "api",
+    "attack": [
+     "T1048.003"
+    ],
+    "file": "siem/rules/api-exfil-command.yml",
+    "line": 1,
+    "canary": "api:dns-exfil"
+   },
+   {
+    "id": "9f506172-8394-4ea5-8fb6-d7e8f90a1b23",
+    "title": "Discovery commands from the terminal",
+    "level": "low",
+    "status": "test",
+    "source": "api",
+    "attack": [
+     "T1046",
+     "T1082"
+    ],
+    "file": "siem/rules/api-recon.yml",
+    "line": 1,
+    "canary": ""
+   },
+   {
+    "id": "a0617283-94a5-4fb6-90c7-e8f90a1b2c34",
+    "title": "Exec into a sandbox pod not by the API",
+    "level": "high",
+    "status": "stable",
+    "source": "k8s-audit",
+    "attack": [
+     "T1609"
+    ],
+    "file": "siem/rules/audit-exec-outside-api.yml",
+    "line": 1,
+    "canary": "exec:tests/admission/run.sh"
+   }
+  ],
+  "monitors": [
+   {
+    "name": "sdp-git: ingest silent falco",
+    "file": "siem/monitors/ingest-silent-falco.json",
+    "canary": "stop fluent-bit"
+   },
+   {
+    "name": "sdp-git: policy-probing",
+    "file": "siem/monitors/policy-probing.json",
+    "canary": "exec:tests/admission/run.sh"
+   },
+   {
+    "name": "sdp-git: detection-missing",
+    "file": "siem/monitors/detection-missing.json",
+    "canary": ""
+   },
+   {
+    "name": "sdp-git: evidence rewritten",
+    "file": "siem/monitors/evidence-rewritten.json",
+    "canary": "overwrite on the write index"
+   }
+  ],
+  "correlations": [
+   {
+    "name": "contained-intrusion",
+    "file": "siem/correlations/contained-intrusion.yaml",
+    "canary": "api:shell-in-container"
+   }
+  ]
+ }
+}

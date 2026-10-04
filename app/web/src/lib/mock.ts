@@ -18,11 +18,13 @@ import type { FetchLike } from "./api";
 import type { EventSourceLike } from "./sse";
 import {
   BUILD_INFO,
+  RULE_INDEX,
   SCENARIOS,
   SCENARIO_IMAGE,
   TERMINAL_COMMANDS,
   TERMINAL_OUTPUT,
   FIXTURE_MARKER,
+  correlation,
   falcoFields,
   falcoOutput,
   postureAdditions,
@@ -59,6 +61,8 @@ export interface MockOptions {
    * 10 s bound and `exited` with no code, as the API reports a command it cut short.
    */
   noResponse?: boolean;
+  /** GET /api/correlation says `available: false`, as with the SIEM down: the section stays hidden. */
+  noSiem?: boolean;
 }
 
 const REPLAY = 100;
@@ -165,6 +169,7 @@ export class MockBackend {
   private streamStall: boolean;
   private readonly noDetails: boolean;
   private readonly noResponse: boolean;
+  private readonly noSiem: boolean;
 
   constructor(opts: MockOptions = {}) {
     this.speed = opts.speed ?? 1;
@@ -175,6 +180,7 @@ export class MockBackend {
     this.streamStall = opts.streamStall ?? false;
     this.noDetails = opts.noDetails ?? false;
     this.noResponse = opts.noResponse ?? false;
+    this.noSiem = opts.noSiem ?? false;
     if (opts.history ?? true) this.seedHistory();
     if (opts.visitorAfterMs !== undefined) {
       setTimeout(() => {
@@ -227,6 +233,8 @@ export class MockBackend {
     }
     if (method === "GET" && path === "/build.json") return json(200, BUILD_INFO);
     if (method === "GET" && path === "/api/runs") return json(200, { runs: this.runList(), kept: 50 });
+    if (method === "GET" && path === "/api/correlation") return json(200, correlation(Date.now(), !this.noSiem));
+    if (method === "GET" && path === "/api/correlation/rules") return json(200, RULE_INDEX);
 
     const details = /^\/api\/scenarios\/([^/]+)\/details$/.exec(path);
     if (method === "GET" && details) {
@@ -810,5 +818,6 @@ export function mockOptionsFromUrl(search: string): MockOptions | null {
     visitorAfterMs: num("mock-visitor"),
     termVisitorAfterMs: num("mock-term-visitor"),
     noResponse: q.get("mock-no-response") === "1",
+    noSiem: q.get("mock-siem") === "0",
   };
 }
