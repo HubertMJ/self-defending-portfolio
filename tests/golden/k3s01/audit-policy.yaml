@@ -1,4 +1,4 @@
-# {{ ansible_managed }}
+# Ansible managed
 ---
 apiVersion: audit.k8s.io/v1
 kind: Policy
@@ -39,19 +39,16 @@ rules:
       - group: ""
         resources: ["pods/exec", "pods/attach", "pods/portforward"]
 
-{% if k3s_audit_verbose_namespaces | length > 0 %}
   # Full bodies for workload changes in the namespaces under scrutiny.
   - level: RequestResponse
     namespaces:
-{% for namespace in k3s_audit_verbose_namespaces %}
-      - "{{ namespace }}"
-{% endfor %}
+      - "sandbox"
+      - "sandbox-unguarded"
     resources:
       - group: ""
         resources: ["pods"]
       - group: batch
         resources: ["jobs", "cronjobs"]
-{% endif %}
 
   # TokenReviews carry bearer tokens in their request and response bodies, so this group is
   # logged without them: who asked, for what, and the decision is enough (ADR 0034, siem contract F2).

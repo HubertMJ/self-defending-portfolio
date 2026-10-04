@@ -65,8 +65,9 @@ siem-verify:     ## read-only checks of siem01
 ingest:          ## k3s01's SIEM shipper: Fluent Bit, certificate signed on siem01 (ADR 0034; maintenance window; ARGS="--check --diff")
 	@$(ANSIBLE_IN_TOOLING) playbooks/ingest.yml $(ARGS)
 
-golden:          ## the shared host roles render byte-identically for k3s01 (goldens from b374c0e) and siem01-shaped for siem01
+golden:          ## the shared host roles render byte-identically for k3s01 (goldens from b374c0e) and siem01-shaped for siem01; k3s01's audit policy
 	@DOCKER="$(DOCKER)" tests/golden/render.sh
+	@DOCKER="$(DOCKER)" tests/golden/audit-policy.sh
 
 siem-csr-test:   ## the remote CSR entry point signs exactly the expected client identity and nothing more (in container)
 	@DOCKER="$(DOCKER)" tests/siem/csr-signer.sh
