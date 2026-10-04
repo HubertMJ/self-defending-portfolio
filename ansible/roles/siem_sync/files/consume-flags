@@ -1,0 +1,14 @@
+#!/bin/sh
+# Runs as root after a successful sync (the unit's ExecStartPost=+): removes the operator's one-shot
+# flags the sync marked as used. The sync's own user cannot write the flag directory, which is how a
+# flag stays the operator's decision (siem contract P3, M15).
+# Usage: consume-flags <state dir> <flag dir>
+set -eu
+state=$1
+flags=$2
+for f in accept-commit allow-mass-delete; do
+  if [ -e "$state/consumed/$f" ]; then
+    rm -f -- "$flags/$f" "$state/consumed/$f"
+    echo "consumed $flags/$f"
+  fi
+done

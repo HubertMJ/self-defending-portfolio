@@ -536,7 +536,7 @@ def index(tree):
         line = next((n for n, text in enumerate(tree.rule_text[rel].split("\n"), 1) if text.startswith("title:")), 1)
         rules.append({
             "id": d["id"], "title": d["title"], "level": d["level"], "status": d["status"],
-            "source": d["logsource"]["service"],
+            "source": d["logsource"]["service"], "log_type": tree.log_type_of(d["logsource"]["service"]),
             "attack": sorted(x[len("attack."):].upper() for x in d.get("tags") or [] if TECHNIQUE_RE.match(x)),
             "file": f"siem/{rel}", "line": line, "canary": (canaries.get("rules") or {}).get(d["id"]),
         })
