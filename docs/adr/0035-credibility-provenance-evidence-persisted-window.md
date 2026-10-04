@@ -248,3 +248,14 @@ the last good answer on a failure.
 the evidence card, which the end-to-end suite requires above a 1280x720 fold with the installed fonts
 and with a wide one, is what a first glance proves. The hero has room again: its height is no longer
 bounded by a block of data that had to stay above the fold.
+
+**Later the same day: the verify panel moves to the bottom, its link to the footer.** The owner then
+found that the panel, right after the posture, still drew attention away from what the visitor should
+see first (the evidence, the posture, the attack). The `#verify` section is now the last section of the
+page, just before the footer: hero, `#evidence`, `#posture`, `#attack`, `#how`, `#about`, `#skills`,
+`#projects`, `#verify` (in production `#about` is stripped while unwritten, so `#verify` follows
+`#projects`). The "Verify it yourself" link left the hero, which no longer links to `#verify` at all; the
+footer carries one plain link "Verify the running images", styled like the other footer links. The panel's
+content, its polling and the `isPinnedImageRef` rule are unchanged. The end-to-end suite asserts the
+section order, a hero with no provenance and no `#verify` link, and that the footer link brings
+`#verify-title` into view.

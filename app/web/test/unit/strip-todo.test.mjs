@@ -81,8 +81,11 @@ describe("stripTodoContent on src/index.html (review 2, item 9)", () => {
     expect(sectionIds(out)).not.toContain("about");
     expect(navLinks(out)).not.toContain("about");
     // Everything else stays: the sections, the skills list, the real project card, every other link.
-    // ADR 0035, amended 2026-10-04: the evidence comes right after the hero, the verify panel after the posture.
-    expect(sectionIds(out)).toEqual(["top", "evidence", "posture", "verify", "attack", "console", "how", "skills", "projects"]);
+    // ADR 0035, amended 2026-10-04: the evidence comes right after the hero, the verify panel is the last
+    // section of the page and the one link to it is in the footer, not the hero.
+    expect(sectionIds(out)).toEqual(["top", "evidence", "posture", "attack", "console", "how", "skills", "projects", "verify"]);
+    expect([...out.matchAll(/href="#verify"/g)]).toHaveLength(1);
+    expect(out.slice(out.indexOf("<footer"))).toContain('<a href="#verify">Verify the running images</a>');
     expect(navLinks(out)).toEqual(["posture", "attack", "how"]);
     expect(out).toContain("<li>Kubernetes (k3s)</li>");
     expect(out).toContain("self-defending-portfolio</a></h3>");

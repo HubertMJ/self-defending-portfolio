@@ -34,7 +34,8 @@ async function wideFonts(page: Page) {
 /**
  * The hero shows no provenance data (ADR 0035, amended 2026-10-04): its copy has no commit, digest,
  * cosign or Rekor, and nothing in it (the evidence card included, which shows the attacked pod's own
- * image) names the api or web image or the commit they were built from. One link leads to #verify.
+ * image) names the api or web image or the commit they were built from. Nor does it link to #verify:
+ * the owner moved that link to the footer, with the panel at the very bottom of the page.
  */
 async function hasNoProvenance(page: Page) {
   const hero = page.locator("#top");
@@ -44,7 +45,7 @@ async function hasNoProvenance(page: Page) {
   await expect(copy.locator('a[href*="/commit/"], a[href*="sigstore"], a[href*="/actions/runs/"], button.copy')).toHaveCount(0);
   // serve.mjs's provenance: commit 0448cff…, api sha256:bbbb…, web sha256:1111….
   await expect(hero).not.toContainText(/0448cff|sha256:b{8}|sha256:1{8}|self-defending-portfolio\/(api|web)@/);
-  await expect(hero.locator('a[href="#verify"]')).toHaveCount(1);
+  await expect(hero.locator('a[href="#verify"]')).toHaveCount(0);
 }
 
 async function noHorizontalScroll(page: Page) {
@@ -747,7 +748,7 @@ test.describe("accessibility basics", () => {
 test.describe("credibility on the production bundle (ADR 0035; serve.mjs --terminal-api, not ?mock)", () => {
   const CRED = "http://127.0.0.1:4176/";
 
-  test("above the fold: the evidence card, no provenance data in the hero, one link to #verify after the posture; on a phone the card follows the counters", async ({ page, isMobile }) => {
+  test("above the fold: the evidence card, no provenance data and no link to #verify in the hero, the panel last and linked from the footer; on a phone the card follows the counters", async ({ page, isMobile }) => {
     const problems = guardConsole(page);
     if (!isMobile) await page.setViewportSize({ width: 1280, height: 720 });
     await page.goto(CRED);
@@ -773,10 +774,14 @@ test.describe("credibility on the production bundle (ADR 0035; serve.mjs --termi
       expect(box.card).toBeGreaterThanOrEqual(box.stats);
       expect(box.card - box.stats).toBeLessThan(80);
     }
-    // The order the owner asked for (ADR 0035, amended 2026-10-04): the proof first, the verify panel after the posture.
-    expect(await page.evaluate(() => [...document.querySelectorAll("main > section")].map((el) => el.id).slice(0, 5))).toEqual(["top", "evidence", "posture", "verify", "attack"]);
-    const link = page.locator('#top a[href="#verify"]');
-    await expect(link).toHaveText("Verify it yourself");
+    // The order the owner asked for (ADR 0035, amended 2026-10-04): the proof first, the verify panel the
+    // last section of the page (About is stripped in production while unwritten).
+    expect(await page.evaluate(() => [...document.querySelectorAll("main > section")].map((el) => el.id))).toEqual(["top", "evidence", "posture", "attack", "how", "skills", "projects", "verify"]);
+    // The one way to it is a footer link.
+    await expect(page.locator('a[href="#verify"]')).toHaveCount(1);
+    const link = page.locator('footer.site-footer a[href="#verify"]');
+    await expect(link).toHaveText("Verify the running images");
+    await expect(page.locator("#verify-title")).not.toBeInViewport();
     await link.click();
     await expect(page.locator("#verify-title")).toBeInViewport();
     expect(problems).toEqual([]);
