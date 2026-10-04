@@ -10,9 +10,9 @@ const REFRESH_MS = 60_000;
 /** Rows of the per-image breakdown shown; the rest are summarised in the caption. */
 const TOP_OFFENDERS = 5;
 
-type Tone = "good" | "warning" | "critical" | "neutral";
+export type Tone = "good" | "warning" | "critical" | "neutral";
 
-function statusChip(tone: Tone, label: string): HTMLElement {
+export function statusChip(tone: Tone, label: string): HTMLElement {
   const glyph = tone === "good" ? "✓" : tone === "neutral" ? "•" : "!";
   return h("span", { class: `chip chip--${tone}` }, h("span", { "aria-hidden": "true" }, glyph), label);
 }

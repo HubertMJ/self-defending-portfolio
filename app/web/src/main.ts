@@ -10,6 +10,7 @@ import { type ConnectionState, type EventSourceFactory, EventStream } from "./li
 import type { TimelineView } from "./lib/timeline";
 import { CONNECTION_WORD } from "./ui/common";
 import { mountConsole } from "./ui/console";
+import { mountCorrelation } from "./ui/correlation";
 import { mountDefenceMap } from "./ui/defencemap";
 import { mountEvidence } from "./ui/evidence";
 import { mountPosture } from "./ui/posture";
@@ -99,10 +100,18 @@ function main(): void {
 
   const verify = mountVerify(byId("verify-panel"));
   const posture = mountPosture(byId("posture-panel"), api, (p) => evidence.setPosture(p));
+  // The SIEM's section (ADR 0036): shown only while GET /api/correlation says available.
+  const correlation = mountCorrelation(
+    byId("correlation"),
+    { health: byId("correlation-health"), metrics: byId("correlation-metrics"), board: byId("correlation-board"), rules: byId("correlation-rules") },
+    api,
+    (available) => verify.set({ correlation: available }),
+  );
   pollProvenance(() => api.provenance(), {
     data: (p) => {
       verify.set({ provenance: p });
       posture.setCommit(p.api.commit);
+      correlation.setCommit(p.api.commit);
       if (p.api.started_at) evidence.setApiStart(p.api.started_at);
     },
     unavailable: () => verify.set({ provenance: null }),

@@ -31,7 +31,12 @@ export interface VerifyData {
   provenance?: Provenance | null;
   build?: BuildInfo | null;
   latestRunId?: string;
+  /** GET /api/correlation answers `available: true` (ADR 0036): its two endpoints are listed too. */
+  correlation?: boolean;
 }
+
+/** Listed only while the correlation section is shown: an API without a SIEM answers them with nothing to see. */
+export const CORRELATION_PATHS = ["/api/correlation", "/api/correlation/rules"] as const;
 
 interface ImageRow {
   name: "api" | "web";
@@ -102,6 +107,7 @@ export function renderVerifyPanel(d: VerifyData, now: number = Date.now()): HTML
       "ul",
       { class: "vraw", role: "list" },
       RAW_PATHS.map((path) => curlLine(path)),
+      d.correlation ? CORRELATION_PATHS.map((path) => curlLine(path)) : null,
       d.latestRunId ? curlLine(`/api/runs/${encodeURIComponent(d.latestRunId)}`) : null,
       curlLine("/api/events", true),
     ),

@@ -3802,3 +3802,256 @@ html[data-terminal="off"] .needs-terminal {
 .tile__remedy p {
   margin: 0.2rem 0 0;
 }
+
+/* ---------- correlation (ADR 0036) ---------- */
+
+/* The section is hidden in the HTML and shown by ui/correlation.ts only while the SIEM answers; a
+   hidden section takes no part in the stylesheet's numbering, so "How it works" keeps its number. */
+.section--correlation {
+  background: linear-gradient(180deg, color-mix(in srgb, var(--detect) 3%, transparent), transparent 35%);
+}
+
+/* Five tiles fit one row on a desktop: none is left alone on a second one. */
+.corr-metrics {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 11rem), 1fr));
+}
+
+.corr-health-wrap,
+.corr-metrics-wrap,
+.corr-board-wrap {
+  margin-bottom: 2rem;
+}
+
+.corr-health__list {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.88rem;
+}
+
+.corr-health__list li {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.corr-health .chip {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.corr-health__checked {
+  margin: 0.6rem 0 0;
+}
+
+.corr-incidents {
+  display: grid;
+  gap: 1rem;
+}
+
+@media (min-width: 900px) {
+  .corr-incidents {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.incident {
+  min-width: 0;
+  padding: 1rem 1.1rem;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--neutral);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.incident[data-severity="critical"],
+.incident[data-severity="high"] {
+  border-left-color: var(--critical);
+}
+
+.incident[data-severity="medium"] {
+  border-left-color: var(--warning);
+}
+
+.incident__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+
+.incident .chip {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.incident__title {
+  margin: 0;
+  min-width: 0;
+  font-size: 1rem;
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+
+.incident__kind {
+  margin: 0.4rem 0 0;
+  font-size: 0.88rem;
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+.incident__when {
+  margin: 0.2rem 0 0.7rem;
+}
+
+.incident__when time,
+.corr-step__at {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+}
+
+.incident__facts div {
+  grid-template-columns: 7.5rem minmax(0, 1fr);
+}
+
+.corr-nofalco {
+  font-weight: 650;
+  color: var(--detect);
+}
+
+/* The evidence timeline: one line per step, a rule down the left like the run history's stages. */
+.corr-steps {
+  display: grid;
+  gap: 0.35rem;
+  margin: 0;
+  padding: 0 0 0 0.9rem;
+  list-style: none;
+  font-size: 0.84rem;
+  border-left: 2px solid var(--border-strong);
+}
+
+.corr-step {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.corr-step__delta {
+  color: var(--text-faint);
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+}
+
+.corr-step__detail {
+  color: var(--text-muted);
+}
+
+.incident__evidence code {
+  overflow-wrap: anywhere;
+}
+
+.corr-step__detail--withheld {
+  font-style: italic;
+}
+
+.tag--src {
+  color: var(--text-muted);
+}
+
+.tag--falco {
+  color: var(--detect);
+}
+
+.tag--talon {
+  color: var(--respond);
+}
+
+.tag--api {
+  color: var(--attack);
+}
+
+.incident__evidence {
+  margin: 0.7rem 0 0;
+}
+
+.corr-older {
+  margin-top: 1rem;
+}
+
+.corr-older summary,
+.corr-rulelist summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.corr-older__list,
+.corr-rulelist__list,
+.corr-named__list {
+  display: grid;
+  gap: 0.4rem;
+  margin: 0.6rem 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.86rem;
+}
+
+.corr-older__item,
+.corr-rule,
+.corr-named__list li {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.corr-older__item time {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+}
+
+.corr-matrix {
+  margin: 1rem 0;
+}
+
+.corr-matrix th,
+.corr-matrix td {
+  text-align: center;
+  white-space: nowrap;
+}
+
+.corr-cell {
+  color: var(--respond);
+  font-weight: 650;
+}
+
+.corr-cell--none {
+  color: var(--text-faint);
+  font-weight: 400;
+}
+
+.corr-cell--gap {
+  color: var(--critical);
+  font-weight: 650;
+}
+
+.corr-rulelist {
+  margin: 1rem 0;
+}
+
+.tag--level {
+  color: var(--text-muted);
+}
+
+.tag--level[data-level="critical"],
+.tag--level[data-level="high"] {
+  color: var(--critical);
+}
+
+.tag--level[data-level="medium"] {
+  color: var(--warning);
+}
+
+.corr-named h4 {
+  margin: 1rem 0 0;
+  font-size: 0.92rem;
+}

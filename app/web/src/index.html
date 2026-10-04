@@ -161,6 +161,20 @@
     </div>
   </section>
 
+  <section class="section section--correlation" id="correlation" aria-labelledby="correlation-title" hidden>
+    <div class="wrap">
+      <header class="section__head">
+        <p class="eyebrow">Correlation</p>
+        <h2 id="correlation-title">What the SIEM made of it</h2>
+        <p class="section__lead">Every Falco alert, Talon action, audited API call, network flow and terminal command is also shipped to a SIEM on its own VM, which the cluster can append to but not rewrite. Sigma rules from this repository run there, and the API joins their findings into incidents, one to three minutes after the event. Every time below is the SIEM's record, in UTC.</p>
+      </header>
+      <div class="corr-health-wrap" id="correlation-health"></div>
+      <div class="corr-metrics-wrap" id="correlation-metrics"></div>
+      <div class="corr-board-wrap" id="correlation-board"></div>
+      <div class="corr-rules-wrap" id="correlation-rules"></div>
+    </div>
+  </section>
+
   <section class="section" id="how" aria-labelledby="how-title">
     <div class="wrap">
       <header class="section__head">
