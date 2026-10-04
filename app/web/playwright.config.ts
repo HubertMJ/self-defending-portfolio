@@ -3,7 +3,7 @@ import { chromium, defineConfig, devices } from "@playwright/test";
 
 // Smoke tests against the built site. By default they start scripts/serve.mjs (same headers as the
 // image's nginx): port 4173 serves dist-mock/ (`npm run build:mock`, the `?mock` suite), the stub-API
-// ports 4174-4179 serve dist/, the production bundle without the mock (ADR 0035). Set BASE_URL to run them against something else instead, e.g. the
+// ports 4174-4181 serve dist/, the production bundle without the mock (ADR 0035). Set BASE_URL to run them against something else instead, e.g. the
 // real image: `docker run --rm --read-only --tmpfs /tmp -p 8080:8080 <image>` and
 // BASE_URL=http://127.0.0.1:8080.
 //
@@ -85,6 +85,17 @@ export default defineConfig({
     {
       command: "node scripts/serve.mjs --port 4178 --dir dist --terminal-api --no-cred",
       url: "http://127.0.0.1:4178/",
+      reuseExistingServer: !process.env.CI,
+    },
+    // The interactive API with the SIEM's correlation (ADR 0036, serve.mjs --siem), and with the SIEM down (--no-siem).
+    {
+      command: "node scripts/serve.mjs --port 4180 --dir dist --terminal-api --siem",
+      url: "http://127.0.0.1:4180/",
+      reuseExistingServer: !process.env.CI,
+    },
+    {
+      command: "node scripts/serve.mjs --port 4181 --dir dist --terminal-api --no-siem",
+      url: "http://127.0.0.1:4181/",
       reuseExistingServer: !process.env.CI,
     },
     // The same site in front of a stub of the API deployed today (serve.mjs --live-api).
