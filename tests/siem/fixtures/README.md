@@ -45,7 +45,7 @@ k8s-audit.jsonl, in order:
 | flag `SDP\{[0-9a-f]{16}\}` (and the bare 16-hex value anywhere) | `SDP{0000000000000000}` (bare: 16 zeros) | 2 (env value in requestObject and responseObject of record 1); bare: 0 |
 | client-cert fingerprints `X509SHA256=<64 hex>` (credential-id of system:admin and system:node:k3s01) | `X509SHA256=` + 64 zeros | 3 |
 | SSH public-key fingerprint `SHA256:<43 b64>` (operator's key) | `SHA256:` + 43 `A` | 1 |
-| admin/workstation IPs `10.1.1.x`, `10.2.1.x` (only 10.2.1.10 occurred), `192.168.x.x` | `10.1.1.250` | 3 (2 audit sourceIPs, 1 ssh MESSAGE) |
+| admin/workstation IPs `10.1.1.x`, `10.2.1.x` (only a LAB 1 workstation address occurred), `192.168.x.x` | `10.1.1.250` | 3 (2 audit sourceIPs, 1 ssh MESSAGE) |
 | operator user name `hubertmj` outside `ghcr.io/hubertmj/` | `operator` | 0 |
 
 Kept on purpose (not secrets, needed for shapes/rules): timestamps, auditIDs, UIDs, `JTI=` credential-ids (token IDs,
@@ -100,14 +100,14 @@ image path and label domain kept on purpose (see above). The real flag hex was a
 - The README itself contains the regex patterns (`eyJ`, `Bearer`, `BEGIN`) as text; run leak greps on the data files.
 
 ## Added by the orchestrator 2026-10-04
-- host-ssh-failed.json: a deliberate failed login (invalid user `sdp-fixture-probe`, publickey, from docker01) captured from `journalctl -u ssh -o json`; workstation IP 10.2.1.10 -> 10.1.1.250.
+- host-ssh-failed.json: a deliberate failed login (invalid user `sdp-fixture-probe`, publickey, from docker01) captured from `journalctl -u ssh -o json`; a LAB 1 workstation address -> 10.1.1.250.
 - Public names kept on purpose: ghcr.io/hubertmj/self-defending-portfolio/* image paths and the sdp./tests.hubertjablon.ski label domains are public in the repo.
 - auditd `identity` stays a stand-in (CONFIG_CHANGE); a real watch hit is produced on siem01 during P1.
 
 ## siem01 (P1, captured 2026-10-04 ~11:00 CEST after hardening, read-only except the triggers below)
 
 Captured on siem01 (10.4.2.10) with `journalctl ... -o json` and `grep` on /var/log/audit/audit.log,
-sanitised with the same rules as above (admin IP 10.2.1.10 -> 10.1.1.250, key fingerprint -> `A`s).
+sanitised with the same rules as above (a LAB 1 workstation address -> 10.1.1.250, key fingerprint -> `A`s).
 
 | file | lines | what each line is |
 |---|---|---|
