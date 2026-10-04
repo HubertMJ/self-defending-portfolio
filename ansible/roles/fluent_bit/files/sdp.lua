@@ -194,6 +194,18 @@ local TRANSFORMS = {
     if ctx.verbatim and ctx.verbatim[v] then return v end
     return pseudonym(v)
   end,
+  -- Falco (review L2): the container user of a sandbox pod is the scenario's, not a person; any
+  -- other user (another namespace, a host process) is pseudonymised.
+  hmac_unless_sandbox = function(v)
+    if type(v) ~= "table" or not nonempty(v[1]) then return nil end
+    if in_sandbox(v[2]) then return v[1] end
+    return pseudonym(v[1])
+  end,
+  -- Every dotted-quad address in a string (Falco's fd.name "a:p->b:p") becomes its pseudonym.
+  ip_pseudonyms = function(v)
+    if type(v) ~= "string" then return nil end
+    return (v:gsub("%d+%.%d+%.%d+%.%d+", pseudonym))
+  end,
   hmac_unless_system = function(v)
     if not nonempty(v) then return nil end
     if v:sub(1, 7) == "system:" then return v end
@@ -234,6 +246,7 @@ local TRANSFORMS = {
   nft_proto = derived, nft_dpt = derived,
   audit_type = derived, audit_key = derived, audit_syscall = derived, audit_success = derived,
   audit_exe = derived, audit_comm = derived,
+  fluentbit_counter = derived,
 }
 
 -- Allow-lists rendered from siem/fields by the role (same directory as this script).
@@ -370,18 +383,22 @@ local function audit_keep(rec)
 end
 
 -- Host logs (sdp-host on k3s01, sdp-siem01 on siem01): one parsed value per allow-listed field.
+-- The user name is attacker-chosen (an invalid user is whatever the client sent) and may itself
+-- contain " from <ip> port <n>". sshd writes the real address after it, so each pattern takes the
+-- user greedily and anchors the address to the end of the line (review L3).
 local function parse_ssh(msg, d)
-  local m, u, ip = msg:match("^Accepted (%S+) for (.-) from (%S+) port %d+")
+  local m, u, ip = msg:match("^Accepted (%S+) for (.+) from (%S+) port %d+ ssh2[^ ]*$")
+  if not m then m, u, ip = msg:match("^Accepted (%S+) for (.+) from (%S+) port %d+ ssh2: %S+ %S+$") end
   if m then d["ssh.event"], d["ssh.method"], d["user.name"], d["source.ip"] = "accepted", m, u, ip return true end
-  m, u, ip = msg:match("^Failed (%S+) for invalid user (.-) from (%S+) port %d+")
-  if not m then m, u, ip = msg:match("^Failed (%S+) for (.-) from (%S+) port %d+") end
+  m, u, ip = msg:match("^Failed (%S+) for invalid user (.+) from (%S+) port %d+ ssh2[^ ]*$")
+  if not m then m, u, ip = msg:match("^Failed (%S+) for (.+) from (%S+) port %d+ ssh2[^ ]*$") end
   if m then d["ssh.event"], d["ssh.method"], d["user.name"], d["source.ip"] = "failed", m, u, ip return true end
-  u, ip = msg:match("^Invalid user (.-) from (%S+) port %d+")
+  u, ip = msg:match("^Invalid user (.+) from (%S+) port %d+$")
   if u then d["ssh.event"], d["user.name"], d["source.ip"] = "invalid-user", u, ip return true end
-  u, ip = msg:match("^Connection closed by invalid user (.-) (%S+) port %d+ %[preauth%]")
-  if not u then u, ip = msg:match("^Connection closed by authenticating user (.-) (%S+) port %d+ %[preauth%]") end
+  u, ip = msg:match("^Connection closed by invalid user (.+) (%S+) port %d+ %[preauth%]$")
+  if not u then u, ip = msg:match("^Connection closed by authenticating user (.+) (%S+) port %d+ %[preauth%]$") end
   if u then d["ssh.event"], d["user.name"], d["source.ip"] = "closed-preauth", u, ip return true end
-  ip = msg:match("^Connection closed by (%S+) port %d+ %[preauth%]")
+  ip = msg:match("^Connection closed by (%S+) port %d+ %[preauth%]$")
   if ip then d["ssh.event"], d["source.ip"] = "closed-preauth", ip return true end
   return false
 end
@@ -498,16 +515,57 @@ SOURCES["hubble"] = function(rec)
   return type(rec.flow) == "table"
 end
 
+local dropped_errors = 0
+
+-- The shipper's own losses, once a minute from its metrics endpoint (input "fbmetrics", the JSON of
+-- /api/v1/metrics): records the throttles dropped, records the outputs gave up on, output errors and
+-- records this filter dropped after an error - each as the increase since the previous report, so
+-- a monitor can alarm on any value above 0 (review M4). Counters restart with Fluent Bit; the first
+-- report after a start counts from 0.
+local last_counters = {}
+local function counter_delta(name, value)
+  value = tonumber(value) or 0
+  local prev = last_counters[name] or 0
+  last_counters[name] = value
+  if value < prev then return value end
+  return value - prev
+end
+
+local function parse_fbmetrics(rec, ctx)
+  if type(rec.filter) ~= "table" or type(rec.output) ~= "table" then return false end
+  local throttled, given_up, errors = 0, 0, 0
+  for name, f in pairs(rec.filter) do
+    if type(name) == "string" and name:sub(1, 9) == "throttle_" and type(f) == "table" then
+      throttled = throttled + counter_delta("f:" .. name, f.drop_records)
+    end
+  end
+  for name, o in pairs(rec.output) do
+    if type(o) == "table" then
+      given_up = given_up + counter_delta("o:d:" .. name, o.dropped_records)
+        + counter_delta("o:r:" .. name, o.retries_failed)
+      errors = errors + counter_delta("o:e:" .. name, o.errors)
+    end
+  end
+  local d = ctx.derived
+  d["host.log"] = "fluent-bit"
+  d["fluentbit.throttle_dropped"] = throttled
+  d["fluentbit.output_dropped"] = given_up
+  d["fluentbit.output_errors"] = errors
+  d["fluentbit.filter_errors"] = counter_delta("lua", dropped_errors)
+  ctx.kind = "metric"
+  return true
+end
+
 local function host_source(rec, ctx, input)
   if input == "journal" then return parse_journal(rec, ctx) end
   if input == "auditd" then return parse_auditd(rec.log, ctx) end
   if input == "osaudit" then return parse_osaudit(rec, ctx) end
+  if input == "fbmetrics" then return parse_fbmetrics(rec, ctx) end
   return false
 end
 SOURCES["host"] = host_source
 SOURCES["siem01"] = host_source
 
-local dropped_errors = 0
 
 local function handle(tag, ts, record)
   local source, input = tag:match("^sdp%.([^.]+)%.([^.]+)$")

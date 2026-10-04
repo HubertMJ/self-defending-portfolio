@@ -4,9 +4,10 @@
 # pin, the package's SHA256 in the signed index must equal the pin before installing, apt preferences
 # pin the version at priority 1001, and dpkg holds it. unattended-upgrades follows the Debian archive
 # only, so nothing upgrades it unattended.
-- name: Install the tools the key check and the repository entry need
+# curl: the shipper reads its own metrics endpoint for the loss reports (fluent-bit.conf).
+- name: Install the tools the key check, the repository entry and the loss reports need
   ansible.builtin.apt:
-    name: [gnupg, python3-debian]
+    name: [gnupg, python3-debian, curl]
     state: present
 
 - name: Create the staging directory for downloaded trust material

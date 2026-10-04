@@ -18,7 +18,7 @@
     storage.max_chunks_up     64
     storage.backlog.mem_limit 16M
     storage.metrics           on
-    # Retries back off up to 5 minutes (fluent_bit_retry_limit times).
+    # Retries back off up to 5 minutes; storage.total_limit_size, not a retry count, bounds the disk.
     scheduler.cap             300
 
 {% for input in fluent_bit_tail_inputs if input.source in profile.sources %}
@@ -60,6 +60,17 @@
     storage.type        filesystem
 
 {% endfor %}
+# The shipper's own losses (throttle drops, records given up, output errors, filter errors), read
+# from its metrics endpoint once a minute and shipped into the host's own stream (review M4).
+[INPUT]
+    Name         exec
+    Tag          sdp.{{ profile.own_stream }}.fbmetrics
+    Command      curl -s --max-time 10 http://127.0.0.1:{{ fluent_bit_metrics_port }}/api/v1/metrics
+    Interval_Sec 60
+    Buf_Size     1mb
+    Parser       sdp_json
+    storage.type filesystem
+
 {% for source in profile.sources %}
 # Heartbeat: one record a minute per stream, so "ingest silent {{ source }}" can tell a stopped
 # shipper from a quiet source (F12). Not Flush_On_Startup: with it, Fluent Bit 5.1.3's backlog scan
@@ -95,6 +106,19 @@
     Reserve_Data Off
 
 {% endif %}
+{% if 'falco' in profile.sources %}
+# Falco alerts of priority Warning and above and Falco's metrics snapshot move to their own tags
+# before the throttle, which only sees sdp.falco.log: a flood of low-priority alerts cannot push a
+# critical one or the "falco metrics silent" heartbeat out (review M4).
+[FILTER]
+    Name                  rewrite_tag
+    Match                 sdp.falco.log
+    Rule                  $priority ^(Warning|Error|Critical|Alert|Emergency)$ sdp.falco.urgent false
+    Rule                  $source ^internal$ sdp.falco.metric false
+    Emitter_Name          falco_retag
+    Emitter_Storage.type  filesystem
+
+{% endif %}
 [FILTER]
     Name           lua
     Match          sdp.*
@@ -109,7 +133,7 @@
 [FILTER]
     Name         throttle
     Alias        throttle_{{ source }}
-    Match        sdp.{{ source }}.*
+    Match_Regex  ^sdp\.{{ source | regex_escape }}\.(log|journal|auditd|osaudit)$
     Rate         {{ fluent_bit_throttle_rate[source] | default(fluent_bit_throttle_rate_default) }}
     Window       300
     Interval     1s

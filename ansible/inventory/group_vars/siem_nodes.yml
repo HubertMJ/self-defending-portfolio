@@ -67,6 +67,7 @@ opensearch_config_ops_monitors_enabled:
   - ism stalled
   - evidence lag
   - ingest silent siem01
+  - shipper dropping
 
 # --- certificate generations (ADR 0034 amendment: rotation = next generation, map it, deploy it,
 # then remove the old generation from roles_mapping) ---
