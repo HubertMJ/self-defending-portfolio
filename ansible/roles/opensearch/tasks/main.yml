@@ -54,6 +54,30 @@
     mode: "0640"
   notify: Restart opensearch
 
+# The package's log4j2.properties has no appender for the security audit logger; one is added
+# as a managed block so the rest of the package file stays as shipped.
+- name: Route the security audit logger to its own file
+  ansible.builtin.blockinfile:
+    path: /etc/opensearch/log4j2.properties
+    marker: "# {mark} sdp: security audit log (Ansible, role opensearch)"
+    block: |
+      appender.sdp_audit.type = RollingFile
+      appender.sdp_audit.name = sdp_audit
+      appender.sdp_audit.fileName = {{ opensearch_audit_log }}
+      appender.sdp_audit.filePattern = {{ opensearch_audit_log }}.%i.gz
+      appender.sdp_audit.layout.type = PatternLayout
+      appender.sdp_audit.layout.pattern = [%d{ISO8601}] %m%n
+      appender.sdp_audit.policies.type = Policies
+      appender.sdp_audit.policies.size.type = SizeBasedTriggeringPolicy
+      appender.sdp_audit.policies.size.size = 50MB
+      appender.sdp_audit.strategy.type = DefaultRolloverStrategy
+      appender.sdp_audit.strategy.max = 5
+      logger.sdp_audit.name = audit
+      logger.sdp_audit.level = info
+      logger.sdp_audit.appenderRef.sdp_audit.ref = sdp_audit
+      logger.sdp_audit.additivity = false
+  notify: Restart opensearch
+
 - name: Size the heap
   ansible.builtin.copy:
     dest: /etc/opensearch/jvm.options.d/sdp-heap.options

@@ -43,5 +43,8 @@ opensearch_remote_identities: [shipper-k3s01, portfolio-api, shipper-test]
 opensearch_admin_dn: "CN=admin-g{{ opensearch_cert_generations['admin'] }},OU=siem,O=sdp"
 opensearch_nodes_dn: "CN={{ opensearch_node_name }},OU=node,O=sdp"
 
+# File the security plugin's audit events go to (opensearch.yml + log4j2.properties).
+opensearch_audit_log: /var/log/opensearch/sdp-security-audit.log
+
 # How long the role waits for the node to answer after a (re)start.
 opensearch_start_retries: 60

@@ -34,6 +34,13 @@ plugins.security.allow_default_init_securityindex: false
 # Nobody manages security over REST; the configuration comes from files via securityadmin.sh.
 plugins.security.restapi.roles_enabled: []
 
+# The security plugin's own audit log (review M2): refused logins, missing privileges, TLS and header
+# errors are written through the log4j logger "audit" to {{ opensearch_audit_log }} (appender in
+# log4j2.properties, categories in the security audit.yml). P2's Fluent Bit on siem01 ships it.
+plugins.security.audit.type: log4j
+plugins.security.audit.config.log4j.logger_name: audit
+plugins.security.audit.config.log4j.level: INFO
+
 # ISM checks its jobs every minute (default 5): the write block after a rollover lands within
 # about 3 minutes (S0-h, F18).
 plugins.index_state_management.job_interval: 1

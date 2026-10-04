@@ -1,6 +1,8 @@
 ---
-# Managed by Ansible (role: opensearch_config). The package defaults; no audit sink is configured in
-# opensearch.yml, so the security plugin's own audit log stays off.
+# Managed by Ansible (role: opensearch_config). The security plugin's audit log (review M2), written
+# through log4j (opensearch.yml) to a local file: FAILED_LOGIN, MISSING_PRIVILEGES, SSL_EXCEPTION,
+# BAD_HEADERS and the other refusal categories; successful authentications and granted privileges
+# are not logged (volume), and neither are request bodies (they would copy evidence and secrets).
 _meta:
   type: "audit"
   config_version: 2
@@ -18,7 +20,7 @@ config:
     ignore_users: []
     ignore_requests: []
     resolve_bulk_requests: false
-    log_request_body: true
+    log_request_body: false
     resolve_indices: true
     exclude_sensitive_headers: true
   compliance:

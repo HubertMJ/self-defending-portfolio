@@ -176,7 +176,15 @@ else bad "2 the same CAS through _bulk -> $got, item $item: $(head -c 300 "$T/bo
 # --- 3: the role refuses everything but create ---------------------------------------------------
 bulk_create shipper sdp-falco "$mark-3" || { bad "3 setup: create failed"; exit 1; }
 w=$CREATED_INDEX wid=$CREATED_ID
+AUDIT=/var/log/opensearch/sdp-security-audit.log
+audit_denied() { grep -F '"audit_category":"MISSING_PRIVILEGES"' "$AUDIT" | grep -F '"audit_request_effective_user":"shipper-test-g1"' \
+  | grep -cF '"audit_request_privilege":"indices:data/write/delete"'; }
+before=$(audit_denied)
 expect 403 "3 DELETE $w/_doc/<id>" shipper DELETE "/$w/_doc/$wid"
+sleep 2
+after=$(audit_denied)
+if [ "$after" -gt "$before" ]; then ok "3 the refused DELETE is in the security audit log (MISSING_PRIVILEGES, shipper-test-g1, indices:data/write/delete)"
+else bad "3 no MISSING_PRIVILEGES line for the refused DELETE in $AUDIT"; fi
 expect_item "3 _bulk delete" shipper /_bulk "$(printf '{"delete":{"_index":"%s","_id":"%s"}}\n' "$w" "$wid")"
 expect 403 "3 POST $w/_update/<id>" shipper POST "/$w/_update/$wid" '{"doc":{"falco":{"rule":"x"}}}'
 expect_item "3 _bulk update" shipper /_bulk "$(printf '{"update":{"_index":"%s","_id":"%s"}}\n{"doc":{"falco":{"rule":"x"}}}\n' "$w" "$wid")"
