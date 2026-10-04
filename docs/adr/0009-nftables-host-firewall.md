@@ -35,10 +35,13 @@ forward chain with policy drop, since a host without a cluster routes nothing. s
 common hardening keys, the k3s/Cilium keys and host extras (siem01: `vm.max_map_count`,
 `vm.swappiness`); auditd renders host-specific watches into `60-extra.rules` (siem01: OpenSearch's
 configuration and plugins, `/etc/sdp-siem`, the rules sync) and removes `50-k3s.rules` where the switch
-is off. `tests/golden/render.sh` renders all four roles with each host's real inventory: k3s01's files
-must equal, byte for byte, the files rendered the same way from the commit before the split
-(b374c0e); siem01's must have the siem01 shape.
+is off. `tests/golden/render.sh` evaluates the roles with each host's real inventory - the templates
+and, through a plan generated from each role's own task file, every file task's real loop and
+condition: k3s01's files and plans must equal, byte for byte, those rendered the same way from the
+commit before the split (b374c0e), except for removals of files k3s01 never had; siem01's must have
+the siem01 shape (and verify.yml checks the live host). siem01's 9200 rule carries a byte-rate cap
+(`rate_limit`), rendered ahead of the established/related accept so it binds whole connections.
 
-**Consequences.** The split cannot change k3s01 unnoticed: dropping the default of any switch fails
-the golden test, and `hardening.yml --check --diff --limit k3s01` stays the live gate. The gateway's
+**Consequences.** The split cannot change k3s01 unnoticed: dropping the default of any switch, or a
+condition or loop entry in the role tasks, fails the golden test, and `hardening.yml --check --diff --limit k3s01` stays the live gate. The gateway's
 zone policy and the host firewall still express the same allow-list for siem01, twice on purpose.

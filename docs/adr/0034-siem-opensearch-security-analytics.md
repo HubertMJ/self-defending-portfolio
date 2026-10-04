@@ -346,29 +346,50 @@ their own amendments.
   template rights). So no identity but the admin holds `securityanalytics/mapping/create|update`,
   and the host role asserts on every run that each `sdp-*` template keeps `index_patterns: [<stream>]`,
   `composed_of: []` and `index.final_pipeline: sdp-final` (and puts a drifted template back).
-- **The rewrite alarm does not rely on timestamps.** "`event.ingested` trails `@timestamp`" fires
-  only for honest timestamps; an overwrite picks its own. The `sdp-final` final pipeline sets
-  `event.ingested` from the server and `event.overwrite` to whether the client sent a document id,
-  both overriding anything the client sent; Fluent Bit sends no id, so every compare-and-set
-  overwrite and every id-carrying create is flagged, and the monitor "evidence rewritten" fires on
-  any such document (31 s after a CAS overwrite in the spike). The lag check stays as a secondary
-  monitor, "evidence lag" (6 hours, which covers the 04:30 patch reboot). The residual is unchanged:
-  the current write index can be rewritten, the rewrite is alarmed, and the hourly snapshot holds the
-  earlier copy (restored in the P1 acceptance test).
+- **A rewrite is prevented, not only detected - the current write index included.** "`event.ingested`
+  trails `@timestamp`" fires only for honest timestamps; an overwrite picks its own. So the
+  `sdp-final` final pipeline's first processor refuses every write that carries a client-supplied
+  `_id`: a compare-and-set overwrite (of the current write index or a rolled one), an id-carrying
+  create, through the stream or a backing index, singly or in `_bulk`, and for the admin as much as
+  for the shipper - a final pipeline is not a permission, and no request parameter skips it. Fluent
+  Bit never sends an id. The answer is HTTP 500 `fail_processor_exception` "sdp: client-supplied _id
+  refused (append-only)" (in `_bulk`: HTTP 200, item status 500); measured live in the P1 acceptance
+  test, which also checks that the document is unchanged (same `_source`, same `_seq_no`). The rest
+  stays as defence in depth: the pipeline still sets `event.ingested` from the server and
+  `event.overwrite` to whether a client id was present, the monitor "evidence rewritten" fires on any
+  such document ingested in the last 30 minutes (it can only fire if the refusal is bypassed or
+  removed), and "evidence lag" (6 hours, which covers the 04:30 patch reboot) stays secondary. The
+  residual the Decision section above describes ("it can rewrite only documents in the current day's
+  write index") no longer exists through OpenSearch's API; what remains is siem01 itself (whoever
+  holds it holds the admin key and the data) and the hourly snapshots as the copy of record.
 - **The write block lands within about 3 minutes, not "one job interval".** ISM policy `sdp-30d`:
   hot = `[rollover after 1 day, read_only]`, then delete at 30 days, with
   `plugins.index_state_management.job_interval: 1`. A just-rolled backing index stayed writable for
   81-162 s in the spike; the acceptance test allows 240 s. The policy must exist before the data
   streams: it attaches only to indices created after it.
-- **Refusal codes.** Through the stream an `op_type=index` write is a 400 (data streams accept
-  `create` only), a CAS on a rolled backing index a 403 `cluster_block_exception`, everything else a
-  403 from the role; a refused `_bulk` item is HTTP 200 with item status 403.
+- **Refusal codes.** Any write with a client id is a 500 from the pipeline (above), which runs before
+  the data stream's own check (400, create only) and the write block of a rolled index (403
+  `cluster_block_exception`, still set by ISM and asserted by its settings); everything else the
+  shipper may not do is a 403 from the role. A refused `_bulk` item is HTTP 200 with the item's status.
+- **The security plugin's audit log is on** (`plugins.security.audit.type: log4j`, logger `audit`, file
+  `/var/log/opensearch/sdp-security-audit.log`): FAILED_LOGIN, MISSING_PRIVILEGES, SSL_EXCEPTION,
+  BAD_HEADERS and the other refusals; successful authentications, granted privileges and request
+  bodies are not logged. A refused shipper DELETE appears as MISSING_PRIVILEGES with the certificate's
+  CN (acceptance test). P2's Fluent Bit on siem01 ships this file into `sdp-siem01`.
+- **Flooding is capped.** nftables drops 9200/tcp from k3s01 above 4 MB/s (ahead of the
+  established/related accept, so it binds the whole connection; Fluent Bit's budget is far below), and
+  ISM rolls a backing index over at 1 day or 2 GB of primary shard, whichever comes first, with 30
+  retries a minute apart. A hit cap shows as a shipping backlog and "ingest silent"; recovery is the
+  operator's (find the source on k3s01, then let the backlog drain).
 - **Roles exactly as proven in the spike** (108 of 108 calls as expected, each identity under its own
   certificate): every writer needs the cluster action `indices:data/write/bulk`; the rules sync
   enumerates the Security Analytics actions it needs (never the mapping writes) instead of "full
   access", and gets write on its own record index `siem-sync` only; Dashboards' analyst role reads
   `sdp-*`, Security Analytics and Alerting, and writes only its saved-objects indices, with
-  multitenancy off. Nobody is mapped to `security_analytics_full_access` or the static `kibana_server`
+  multitenancy off. One narrowing after review: the API's read role names the six k3s01 streams and
+  `siem-sync` instead of `sdp-*`, so `sdp-siem01` (siem01's own logins and audit records) and any
+  future stream are not readable through the one credential in the cluster; a search must name its
+  streams. Nobody is mapped to `security_analytics_full_access` or the static `kibana_server`
   role: both carry index-template rights, i.e. the power to drop the final pipeline. roles.yml holds
   only the sdp roles.
 - **Certificates.** Every client certificate is `CN=<name>-g<N>,OU=siem,O=sdp`, one year: rotation
@@ -399,8 +420,11 @@ their own amendments.
   24; "snapshot failing" raises two hours without a successful one. An off-host copy remains the
   owner's (Proxmox backup of VMID 121), an open item.
 - **Ops monitors belong to the host role, not to the rules sync**, and carry no `sdp-git: ` prefix,
-  so the sync never touches them: "evidence rewritten", "disk watermark" (data path above 80 %, before
-  the flood stage makes every index read-only) and "snapshot failing" are on from P1; "ingest silent
+  so the sync never touches them. Each run compares them with the live objects and restores one that
+  was disabled or edited by anyone else. "evidence rewritten", "disk watermark" (data path above 80 %,
+  before the flood stage makes every index read-only), "snapshot failing" and "ism stalled" (a
+  stream's write index holding documents is older than 26 hours: the daily rollover, and with it the
+  previous day's write block, did not happen) are on from P1; "ingest silent
   <source>" per stream (heartbeats by `event.ingested`), "falco metrics silent" (Falco's own metrics
   records - Fluent Bit's heartbeat keeps sdp-falco alive while Falco is down) and "evidence lag" are
   created disabled and switched on as each source goes live.
@@ -410,6 +434,14 @@ their own amendments.
   maps it back for publication. Log types carry no hyphen (`sdp_falco`, ...); stream names keep theirs.
   Rule values containing spaces never match and matching is case-sensitive, so the allow-lists carry
   space-free slug fields for multi-word values.
+
+**Stated deviation (accepted by the orchestrator, 2026-10-04).** The P1 gate "`hardening.yml
+--check --diff --limit k3s01` reports changed=0" reports changed=2. Both changes exist identically
+when the same command is run from b374c0e, before P1: the base role's apt cache refresh (check mode
+reports it whenever the cache is older than an hour) and its `/etc/hosts` line, which Proxmox's
+cloud-init (`manage_etc_hosts: true`) rewrites on every boot. Every task P1 adds or gates is ok or
+skipped on k3s01, and the golden render proves k3s01's files and file plans unchanged. The
+`/etc/hosts` conflict is backlog item C6, not fixed here.
 
 **Consequences.**
 - `make siem` builds siem01 from nothing in one run and the second run changes nothing; `make
