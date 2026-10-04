@@ -18,6 +18,10 @@ argument_specs:
         description: Sources; each gets the data stream sdp-<source>.
         type: list
         elements: str
+      opensearch_config_sources_pending:
+        description: Sources that may not have a fields file yet; every other source must.
+        type: list
+        elements: str
       opensearch_config_extra_generations:
         description: Previous certificate generations still mapped during a rotation, per identity.
         type: dict

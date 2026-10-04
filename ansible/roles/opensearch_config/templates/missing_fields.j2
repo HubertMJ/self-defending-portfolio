@@ -1,0 +1,12 @@
+{#- Dotted names of the template's fields that the stream's current write index does not map
+    (review L10: a field added while the template body was already recorded as written). -#}
+{%- macro leaves(props, prefix) -%}
+{%-   for name, spec in props.items() -%}
+{%-     if spec.properties is defined -%}{{ leaves(spec.properties, prefix ~ name ~ '.') }}{%- else -%}{{ prefix ~ name }},{%- endif -%}
+{%-   endfor -%}
+{%- endmacro -%}
+{%- set live = opensearch_config_stream_mapping.json -%}
+{%- set write_index = live.keys() | sort | last -%}
+{%- set have = leaves(live[write_index].mappings.properties | default({}), '').split(',') -%}
+{%- set want = leaves((lookup('ansible.builtin.template', 'index_template.json.j2') | from_json).template.mappings.properties, '').split(',') -%}
+{{ want | reject('equalto', '') | reject('in', have) | join(',') }}

@@ -9,6 +9,8 @@
 - name: Assert the allow-list belongs to the stream of {{ opensearch_config_source }}
   ansible.builtin.assert:
     that:
+      # Review M5: only the sources whose allow-lists P2 delivers may lack a file.
+      - opensearch_config_source_file != {} or opensearch_config_source in opensearch_config_sources_pending
       - opensearch_config_source_file == {} or opensearch_config_source_file.stream == 'sdp-' ~ opensearch_config_source
       - opensearch_config_source_file == {} or opensearch_config_source_file.fields is mapping
     fail_msg: siem/fields/{{ opensearch_config_source }}.yaml does not describe sdp-{{ opensearch_config_source }}.
@@ -67,8 +69,18 @@
   changed_when: true
   when: opensearch_config_stream_live.status == 404
 
+- name: Read the live mapping of sdp-{{ opensearch_config_source }}
+  ansible.builtin.uri:
+    url: "{{ opensearch_config_url }}/sdp-{{ opensearch_config_source }}/_mapping"
+    ca_path: "{{ opensearch_config_ca }}"
+    client_cert: "{{ opensearch_config_admin_cert }}"
+    client_key: "{{ opensearch_config_admin_key }}"
+  register: opensearch_config_stream_mapping
+
 # Additive field changes reach the current write index at once; the template carries them into
 # every later backing index (S0-a: a mapping put without the template stops at the next rollover).
+# Also when the template was already written but the write index still lacks a field (a run that
+# stopped between the two writes).
 - name: Add new fields to the live mapping of sdp-{{ opensearch_config_source }}
   ansible.builtin.uri:
     url: "{{ opensearch_config_url }}/sdp-{{ opensearch_config_source }}/_mapping"
@@ -79,6 +91,4 @@
     client_cert: "{{ opensearch_config_admin_cert }}"
     client_key: "{{ opensearch_config_admin_key }}"
   changed_when: true
-  when:
-    - opensearch_config_obj_written | bool
-    - opensearch_config_stream_live.status == 200
+  when: lookup('ansible.builtin.template', 'missing_fields.j2') | trim | length > 0

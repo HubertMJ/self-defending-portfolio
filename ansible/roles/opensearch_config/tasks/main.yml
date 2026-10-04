@@ -145,6 +145,15 @@
     - opensearch_config_obj_written | bool
     - opensearch_config_obj_current.status == 200
 
+- name: Assert the field allow-lists are where the role reads them
+  ansible.builtin.assert:
+    that:
+      - opensearch_config_fields_dir is directory
+    fail_msg: "{{ opensearch_config_fields_dir }} is not a directory on the controller; run from a checkout of the repository."
+    success_msg: Field allow-lists in {{ opensearch_config_fields_dir }}.
+  delegate_to: localhost
+  become: false
+
 - name: Write the template and create the data stream of each source
   ansible.builtin.include_tasks: stream.yml
   loop: "{{ opensearch_config_sources }}"

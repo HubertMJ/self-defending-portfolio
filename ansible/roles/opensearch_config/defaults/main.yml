@@ -10,6 +10,8 @@ opensearch_config_fields_dir: "{{ playbook_dir }}/../../siem/fields"
 # api arrive with P2) gets the common fields only; its fields are added by the next run after the
 # file lands (template + PUT <stream>/_mapping, additive only).
 opensearch_config_sources: [falco, talon, hubble, k8s-audit, api, host, siem01]
+# The only sources allowed to have no fields file yet (their allow-lists are P2's).
+opensearch_config_sources_pending: [hubble, api]
 
 # Previous generations still mapped during a certificate rotation, e.g. {portfolio-api: [1]} while
 # generation 2 is deployed. Empty outside a rotation.
