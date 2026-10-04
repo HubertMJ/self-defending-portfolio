@@ -8,12 +8,11 @@ sysctl_file: /etc/sysctl.d/90-hardening.conf
 # rp_filter is a per-interface knob; a device only inherits conf.default at
 # creation time, and systemd-sysctl re-applies matching globs to every interface
 # as udev creates it. Upstream systemd ships `net.ipv4.conf.*.rp_filter = 2` in
-# /usr/lib/sysctl.d/50-default.conf for exactly that reason. Debian 13 does not
-# install that file today (verified: the systemd, procps and cloud-init packages
-# on trixie ship no rp_filter setting at all), so this file is belt and braces
-# rather than a fix for a live default - but it is the only construct that keeps
-# every veth and cilium_* device at 0 no matter what drops a glob into
-# sysctl.d later, and a silent regression here breaks pod networking with no
+# /usr/lib/sysctl.d/50-default.conf for exactly that reason, and Debian 13
+# installs it too (package linux-sysctl-defaults: `net.ipv4.conf.*.rp_filter = 2`,
+# seen on k3s01 and siem01 on 2026-10-04; an earlier note here said otherwise).
+# This file is the only construct that keeps every veth and cilium_* device at 0
+# against that glob, and a silent regression here breaks pod networking with no
 # error message anywhere.
 sysctl_rp_filter_file: /etc/sysctl.d/99-cilium-rp-filter.conf
 
