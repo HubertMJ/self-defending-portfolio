@@ -2,7 +2,7 @@
 # The k3s API server audit policy as k3s01 gets it (siem contract P2, F2; ADR 0034). The k3s role's
 # template is rendered by Ansible in the tooling container with k3s01's real variables (k3s role
 # defaults + group_vars/k3s_nodes.yml), from the working tree and from BASE (the commit before P2):
-#   - the new render must equal tests/golden/k3s01/audit-policy.yaml byte for byte;
+#   - the new render must equal tests/golden/audit-policy/k3s01.yaml byte for byte;
 #   - against BASE the ONLY change is the authentication.k8s.io group moving from the
 #     RequestResponse rule into its own Metadata rule placed right before it;
 #   - evaluated first-match the way the API server does, a TokenReview is now logged at Metadata
@@ -19,7 +19,7 @@ cd "$(dirname "$0")/../.."
 DOCKER=${DOCKER:-docker}
 BASE=${BASE:-c4e5e91}
 ROOT=${AUDIT_TEST_ROOT:-$PWD}
-GOLDEN=tests/golden/k3s01/audit-policy.yaml
+GOLDEN=tests/golden/audit-policy/k3s01.yaml
 
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
