@@ -55,8 +55,8 @@
       tags: [opensearch_config]
 
 # The remote entry point for client CSRs (siem contract C1), run only when asked for by tag:
-#   --tags client-cert -e siem_client_csr=<path> -e siem_client_name=<name> -e siem_client_generation=<N>
-#   --tags api-cert -e siem_api_csr=<path> -e siem_api_generation=<N>        (portfolio-api)
+#   --tags client-cert -e siem_client_csr=<abs path> -e siem_client_name=<name> -e siem_client_generation=<N>
+#   --tags api-cert -e siem_api_csr=<abs path> -e siem_api_generation=<N>        (portfolio-api)
 # The CSR is read on the controller, signed on siem01 (where the CA key is) and the certificate is
 # written next to the CSR as <path without .csr>.crt. The expected name comes from these variables,
 # never from the CSR, and sign_client_csr.yml refuses everything but the remote identities.
@@ -74,9 +74,13 @@
       ansible.builtin.assert:
         that:
           - siem_csr_path is defined and siem_csr_path is match('.*\.csr$')
+          # A relative path would be resolved against the playbook directory inside the container.
+          - siem_csr_path is abs
           - siem_csr_name is defined
           - siem_csr_generation is defined
-        fail_msg: Pass -e siem_client_csr=<path.csr> -e siem_client_name=<name> -e siem_client_generation=<N> (or the siem_api_* pair).
+        fail_msg: >-
+          Pass -e siem_client_csr=<absolute path.csr> -e siem_client_name=<name> -e siem_client_generation=<N>
+          (or the siem_api_* pair); with make siem the checkout is /work.
         success_msg: Signing {{ siem_csr_name }}-g{{ siem_csr_generation }} from {{ siem_csr_path }}.
 
     - name: Sign the CSR through the remote entry point

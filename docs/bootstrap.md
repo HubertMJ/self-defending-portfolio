@@ -1469,8 +1469,10 @@ forwarding to exactly `127.0.0.1:5601` (`PermitOpen`) and nothing else.
 All keys are made on siem01 and stay there: the CA (`/etc/sdp-siem/pki/ca.key`, 10 years), the node
 key (`/etc/opensearch/certs/node.key`) and the local client identities `admin`, `rules-sync`,
 `shipper-siem01` (`/etc/sdp-siem/pki/`) and `dashboards` (`/etc/opensearch-dashboards/certs/`). Client
-certificates are `CN=<name>-g<N>,OU=siem,O=sdp`, valid one year; the role re-issues any certificate
-with fewer than 45 days left, and `make siem-verify` fails at 30.
+certificates are `CN=<name>-g<N>,OU=siem,O=sdp`. Client and node certificates are valid one year: the
+role re-issues the node certificate and the local client certificates with fewer than 45 days left,
+and `make siem-verify` fails at 30. Remote client certificates (shipper-k3s01, portfolio-api) are
+renewed by signing a new CSR (9.5).
 
 Generations (`opensearch_cert_generations` in `group_vars/siem_nodes.yml`):
 - Rotation of a local identity: raise its generation and run `make siem`; the new certificate is
@@ -1490,11 +1492,12 @@ The expected identity comes from the command line, never from the CSR, and only 
 CA:FALSE, keyUsage digitalSignature, EKU clientAuth, no SAN, 365 days, and no extension of the CSR.
 
 ```sh
-# the CSR must be inside the checkout (the container sees it as /work); .ansible/ is gitignored
-make siem ARGS="--tags client-cert -e siem_client_csr=../.ansible/shipper-k3s01-g1.csr \
+# the CSR must be inside the checkout, given as the absolute path the container sees (/work is the
+# checkout; .ansible/ is gitignored); a relative path is refused
+make siem ARGS="--tags client-cert -e siem_client_csr=/work/.ansible/shipper-k3s01-g1.csr \
   -e siem_client_name=shipper-k3s01 -e siem_client_generation=1"
-# -> ../.ansible/shipper-k3s01-g1.crt next to it
-make siem ARGS="--tags api-cert -e siem_api_csr=../.ansible/portfolio-api-g1.csr -e siem_api_generation=1"
+# -> .ansible/shipper-k3s01-g1.crt next to it
+make siem ARGS="--tags api-cert -e siem_api_csr=/work/.ansible/portfolio-api-g1.csr -e siem_api_generation=1"
 ```
 
 `make siem-csr-test` runs the same task file against generated CSRs in the container
