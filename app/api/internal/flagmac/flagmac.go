@@ -28,6 +28,6 @@ func New() *Key {
 // Sum is HMAC-SHA256(key, label).
 func (k *Key) Sum(label string) []byte {
 	m := hmac.New(sha256.New, k.k)
-	m.Write([]byte(label))
+	_, _ = m.Write([]byte(label))
 	return m.Sum(nil)
 }
