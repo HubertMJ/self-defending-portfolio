@@ -9,7 +9,6 @@
 #   - a few documents in sdp-falco marked event.kind=acceptance, one forced rollover of sdp-falco,
 #     one snapshot and one restored copy of a backing index (both deleted again).
 # Expected codes are the S0 matrix (S0-d, S0-#8): a _bulk refusal is HTTP 200 with item status 403.
-# The run raises the "evidence rewritten" alarm once, on purpose (item 4).
 #
 # Every remote step goes through ONE ssh connection (a control master): bursts of new SSH
 # connections from the operator network to the Siem zone have been observed to be dropped for a
@@ -107,6 +106,8 @@ expect_item() { # <description> <identity> <path> <ndjson>: HTTP 200 with items[
   if [ "$got" = 200 ] && [ "$item" = 403 ]; then ok "$desc -> 200, item 403"
   else bad "$desc -> $got, item $item: $(head -c 300 "$T/body")"; fi
 }
+refused() { [ "$1" -ge 400 ] 2>/dev/null; }
+refusal_reason() { grep -oE 'client-supplied _id refused|cluster_block_exception|security_exception' "$T/body" | head -n 1; }
 now=$(date +%s)
 mark="p1-acceptance-$now"
 doc() { printf '{"@timestamp":"%s","event":{"kind":"acceptance","dataset":"falco"},"falco":{"rule":"%s"}}' "$(date -u +%FT%TZ)" "$1"; }
@@ -163,10 +164,14 @@ done
 if [ "$blocked" = true ]; then ok "2 ISM write-blocked $rolled $(( $(date +%s) - t0 )) s after the rollover (bound 240 s)"
 else bad "2 $rolled not write-blocked within 240 s (B7)"; fi
 got=$(req shipper PUT "/$rolled/_doc/$rolled_id?if_seq_no=$seq&if_primary_term=$term" "$(doc "$mark-2-rewrite")")
-if [ "$got" = 403 ] && grep -q cluster_block_exception "$T/body"; then ok "2 CAS on the rolled $rolled -> 403 cluster_block_exception"
+# Two controls refuse this write now: the ISM write block (proven by the settings read above) and
+# sdp-final's refusal of any client-supplied _id, which runs first on the ingest path.
+if refused "$got"; then ok "2 CAS on the rolled $rolled -> $got ($(refusal_reason))"
 else bad "2 CAS on the rolled index -> $got: $(head -c 300 "$T/body")"; fi
-expect_item "2 the same CAS through _bulk" shipper /_bulk \
-  "$(printf '{"index":{"_index":"%s","_id":"%s","if_seq_no":%s,"if_primary_term":%s}}\n%s\n' "$rolled" "$rolled_id" "$seq" "$term" "$(doc "$mark-2-bulk")")"
+got=$(req shipper POST /_bulk "$(printf '{"index":{"_index":"%s","_id":"%s","if_seq_no":%s,"if_primary_term":%s}}\n%s\n' "$rolled" "$rolled_id" "$seq" "$term" "$(doc "$mark-2-bulk")")")
+item=$(j "d['items'][0]['index']['status']")
+if [ "$got" = 200 ] && [ -n "$item" ] && [ "$item" -ge 400 ]; then ok "2 the same CAS through _bulk -> 200, item $item ($(refusal_reason))"
+else bad "2 the same CAS through _bulk -> $got, item $item: $(head -c 300 "$T/body")"; fi
 
 # --- 3: the role refuses everything but create ---------------------------------------------------
 bulk_create shipper sdp-falco "$mark-3" || { bad "3 setup: create failed"; exit 1; }
@@ -187,7 +192,7 @@ expect 403 "3 ISM change_policy on the write index" shipper POST "/_plugins/_ism
 expect 403 "3 write to sdp-siem01" shipper POST /sdp-siem01/_doc "$(doc "$mark-3-siem01")"
 expect_item "3 _bulk create into sdp-siem01" shipper /_bulk "$(printf '{"create":{"_index":"sdp-siem01"}}\n%s\n' "$(doc "$mark-3b")")"
 
-# --- 8 (setup) + 4: snapshot holds the original; CAS on the write index succeeds and is alarmed ---
+# --- 8 (setup) + 4: snapshot holds the original; no rewrite of the current write index either -------
 bulk_create shipper sdp-falco "$mark-4-original" || { bad "4 setup: create failed"; exit 1; }
 w=$CREATED_INDEX wid=$CREATED_ID
 if [ "$WAIT_HOURLY" = 1 ]; then
@@ -208,23 +213,28 @@ fi
 if [ -n "$snap" ]; then ok "8 setup: snapshot $snap holds $w"; else bad "8 no snapshot to restore from"; fi
 req admin GET "/$w/_doc/$wid" >/dev/null
 seq=$(j "d['_seq_no']") term=$(j "d['_primary_term']")
-req admin POST "/_plugins/_alerting/monitors/_search" '{"query":{"term":{"monitor.name.keyword":"evidence rewritten"}}}' >/dev/null
-mon=$(j "d['hits']['hits'][0]['_id']")
-t_rw=$(date +%s)
-expect 200 "4 CAS overwrite on the current write index $w (the accepted residual)" shipper PUT \
-  "/$w/_doc/$wid?if_seq_no=$seq&if_primary_term=$term" "$(doc "$mark-4-rewritten")"
-req admin GET "/$w/_doc/$wid" >/dev/null
-if [ "$(j "d['_source']['event']['overwrite']")" = True ]; then ok "4 sdp-final stamped event.overwrite=true on the rewrite"
-else bad "4 event.overwrite on the rewritten document: $(j "d['_source'].get('event')")"; fi
-active=""
-while [ $(( $(date +%s) - t_rw )) -lt 150 ]; do
-  req admin GET "/_plugins/_alerting/monitors/alerts?monitorId=$mon&alertState=ACTIVE" >/dev/null
-  active=$(j "any(a['start_time'] >= $t_rw * 1000 - 60000 for a in d.get('alerts', []))")
-  [ "$active" = True ] && break
-  sleep 5
+# sdp-final refuses every write that carries a client-supplied _id (F1, prevented): a CAS overwrite
+# of the current write index, an id-carrying create, and the same through _bulk - for the shipper and
+# for the admin alike, since the final pipeline is not a permission.
+for who in shipper admin; do
+  got=$(req "$who" PUT "/$w/_doc/$wid?if_seq_no=$seq&if_primary_term=$term" "$(doc "$mark-4-rewritten")")
+  if refused "$got" && [ "$(refusal_reason)" = "client-supplied _id refused" ]; then ok "4 $who: CAS overwrite on the current write index $w -> $got (client-supplied _id refused)"
+  else bad "4 $who: CAS overwrite on the current write index -> $got: $(head -c 300 "$T/body")"; fi
 done
-if [ "$active" = True ]; then ok "4 \"evidence rewritten\" active $(( $(date +%s) - t_rw )) s after the rewrite (2 intervals = 120 s)"
-else bad "4 \"evidence rewritten\" not active within 150 s"; fi
+got=$(req shipper POST /_bulk "$(printf '{"index":{"_index":"%s","_id":"%s","if_seq_no":%s,"if_primary_term":%s}}\n%s\n' "$w" "$wid" "$seq" "$term" "$(doc "$mark-4-bulk")")")
+item=$(j "d['items'][0]['index']['status']")
+if [ "$got" = 200 ] && [ -n "$item" ] && [ "$item" -ge 400 ] && [ "$(refusal_reason)" = "client-supplied _id refused" ]; then
+  ok "4 the same CAS through _bulk -> 200, item $item (client-supplied _id refused)"
+else bad "4 CAS through _bulk -> $got, item $item: $(head -c 300 "$T/body")"; fi
+got=$(req shipper PUT "/sdp-falco/_create/$mark-4-own-id" "$(doc "$mark-4-own-id")")
+if refused "$got" && [ "$(refusal_reason)" = "client-supplied _id refused" ]; then ok "4 create with a client id (sdp-falco/_create/<id>) -> $got (client-supplied _id refused)"
+else bad "4 create with a client id -> $got: $(head -c 300 "$T/body")"; fi
+req admin GET "/$w/_doc/$wid" >/dev/null
+if [ "$(j "(d['_source']['falco']['rule'], d['_seq_no'])")" = "('$mark-4-original', $seq)" ]; then ok "4 the document is unchanged (same _source, same seq_no)"
+else bad "4 the document changed: $(head -c 300 "$T/body")"; fi
+req admin POST "/_plugins/_alerting/monitors/_search" '{"query":{"term":{"monitor.name.keyword":"evidence rewritten"}}}' >/dev/null
+[ "$(j "d['hits']['hits'][0]['_source']['monitor']['enabled']")" = True ] && ok "4 \"evidence rewritten\" stays enabled as defence in depth" \
+  || bad "4 \"evidence rewritten\" is not enabled"
 
 # --- 8: restore the backing index from the snapshot under a new name: the original is there -----
 restored="p1-restore-$now"

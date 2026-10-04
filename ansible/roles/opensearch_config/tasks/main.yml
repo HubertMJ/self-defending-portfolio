@@ -82,9 +82,12 @@
   loop_control:
     label: "{{ item.index }}"
 
-# F1: every write gets event.ingested from the server and event.overwrite = (client sent an id),
-# whatever the client put there. The templates name it index.final_pipeline, which no request
-# parameter can skip (S0-c).
+# F1, prevented: a write that carries a client-supplied _id - a create with an id or a
+# compare-and-set overwrite of an existing document - is refused by the pipeline's first processor,
+# so not even the current write index can be rewritten through the stream or a backing index.
+# Fluent Bit never sends an id. The rest stays as defence in depth: every write gets event.ingested
+# from the server and event.overwrite = (client sent an id), whatever the client put there. The
+# templates name it index.final_pipeline, which no request parameter can skip (S0-c).
 - name: Write the sdp-final ingest pipeline
   ansible.builtin.include_tasks: rest_object.yml
   vars:

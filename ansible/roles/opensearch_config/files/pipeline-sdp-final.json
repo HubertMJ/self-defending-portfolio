@@ -1,6 +1,12 @@
 {
-  "description": "F1: event.overwrite = client supplied _id; event.ingested = ingest time; client values overridden",
+  "description": "F1, prevented: a write that carries a client-supplied _id (create with id, compare-and-set overwrite) is refused; event.overwrite stays as the defence-in-depth flag; event.ingested = ingest time; client values overridden",
   "processors": [
+    {
+      "fail": {
+        "if": "ctx._id != null",
+        "message": "sdp: client-supplied _id refused (append-only)"
+      }
+    },
     {
       "script": {
         "lang": "painless",
