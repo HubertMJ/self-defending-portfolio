@@ -30,9 +30,9 @@ openssl req -x509 -newkey rsa:2048 -nodes -keyout "$w/pki/ca.key" -out "$w/pki/c
   -addext "keyUsage=critical,keyCertSign,cRLSign" 2>/dev/null
 
 n=0 fail=0
-csr() { # <file> <subject> [openssl req args...]
+csr() { # <file> <subject> [openssl req args...]; KEY=rsa:2048 by default
   local f=$1 subj=$2; shift 2
-  openssl req -new -newkey rsa:2048 -nodes -keyout "$w/$f.key" -out "$w/$f.csr" -subj "$subj" "$@" 2>/dev/null
+  openssl req -new -newkey "${KEY:-rsa:2048}" -nodes -keyout "$w/$f.key" -out "$w/$f.csr" -subj "$subj" "$@" 2>/dev/null
 }
 sign() { # <csr file> <name> <generation> -> exit code of the playbook; certificate in $w/<csr>.crt
   rm -f "$w/$1.crt"
@@ -80,6 +80,11 @@ b64 = base64.b64encode(bytes(der)).decode()
 open(p, "w").write(lines[0] + "\n" + "\n".join(b64[i:i + 64] for i in range(0, len(b64), 64)) + "\n" + lines[-2] + "\n")
 PY
 refused "CSR with a broken self-signature" broken shipper-k3s01 1
+KEY=rsa:1024 csr weak "/O=sdp/OU=siem/CN=shipper-k3s01-g1"
+refused "CSR with a 1024-bit RSA key" weak shipper-k3s01 1
+csr twoblocks "/O=sdp/OU=siem/CN=shipper-k3s01-g1"
+cat "$w/twoblocks.key" >>"$w/twoblocks.csr"
+refused "input with a second PEM block (a key) after the request" twoblocks shipper-k3s01 1
 
 # Accepted: the CSR asks for server use, certificate signing and a policy on top of the right DN;
 # none of it may reach the certificate.
@@ -116,6 +121,11 @@ csr api "/O=sdp/OU=siem/CN=portfolio-api-g2"
 n=$((n + 1))
 if sign api portfolio-api 2 && [ -s "$w/api.crt" ]; then echo "ok   accepted: portfolio-api generation 2"
 else echo "FAIL accepted: portfolio-api generation 2 was refused"; fail=1; fi
+openssl req -new -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -keyout "$w/ec.key" -out "$w/ec.csr" \
+  -subj "/O=sdp/OU=siem/CN=shipper-k3s01-g3" 2>/dev/null
+n=$((n + 1))
+if sign ec shipper-k3s01 3 && [ -s "$w/ec.crt" ]; then echo "ok   accepted: shipper-k3s01 generation 3 with an EC P-256 key"
+else echo "FAIL accepted: the EC P-256 CSR was refused"; tail -n 15 "$w/ec.log"; fail=1; fi
 
 rm -rf "$w"
 if [ "$fail" != 0 ]; then echo "csr-signer: FAIL"; exit 1; fi

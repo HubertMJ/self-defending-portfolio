@@ -31,6 +31,16 @@
   vars:
     opensearch_csr_expected_dn: "CN={{ opensearch_csr_name }}-g{{ opensearch_csr_generation }},OU=siem,O=sdp"
 
+# Exactly one PEM certificate request and nothing around it: a file with a second block (a key, a
+# second request) is not "a CSR" and is refused before anything parses it.
+- name: Assert the input is exactly one PEM certificate request
+  ansible.builtin.assert:
+    that:
+      - opensearch_csr_pem is string
+      - opensearch_csr_pem is match('^-----BEGIN CERTIFICATE REQUEST-----\n[A-Za-z0-9+/=\n]+\n-----END CERTIFICATE REQUEST-----\n?$')
+    fail_msg: "Refused: the input is not exactly one PEM certificate request."
+    success_msg: The input is one PEM certificate request.
+
 - name: Sign in a private scratch directory
   block:
     - name: Create the scratch directory
@@ -81,10 +91,18 @@
           - opensearch_csr_subject.stdout == 'subject=CN=' ~ opensearch_csr_name ~ '-g' ~ opensearch_csr_generation ~ ',OU=siem,O=sdp'
           - not ((opensearch_csr_info.basic_constraints or []) | select('match', '(?i)^CA:TRUE') | list)
           - (opensearch_csr_info.subject_alt_name or []) | length == 0
+          # Review L7: no weak keys - RSA of at least 2048 bits or a NIST P-256/384/521 curve.
+          - >-
+            (opensearch_csr_info.public_key_type == 'RSA' and opensearch_csr_info.public_key_data.size | int >= 2048)
+            or (opensearch_csr_info.public_key_type == 'ECC'
+                and opensearch_csr_info.public_key_data.curve | default('') in ['secp256r1', 'secp384r1', 'secp521r1'])
         fail_msg: >-
           Refused: the CSR's {{ opensearch_csr_subject.stdout }} (basicConstraints {{ opensearch_csr_info.basic_constraints }},
-          SAN {{ opensearch_csr_info.subject_alt_name }}) is not exactly
-          CN={{ opensearch_csr_name }}-g{{ opensearch_csr_generation }},OU=siem,O=sdp without CA:TRUE or a SAN.
+          SAN {{ opensearch_csr_info.subject_alt_name }}, key {{ opensearch_csr_info.public_key_type }}
+          {{ opensearch_csr_info.public_key_data.size | default('') }}{{ opensearch_csr_info.public_key_data.curve | default('') }})
+          is not exactly
+          CN={{ opensearch_csr_name }}-g{{ opensearch_csr_generation }},OU=siem,O=sdp without CA:TRUE or a SAN, with an RSA >= 2048
+          or P-256+ key.
         success_msg: The CSR asks for CN={{ opensearch_csr_name }}-g{{ opensearch_csr_generation }},OU=siem,O=sdp only.
 
     # -subj sets the subject from the expected name and -copy_extensions none keeps every extension
@@ -101,8 +119,9 @@
           - "{{ opensearch_pki_dir }}/ca.crt"
           - -CAkey
           - "{{ opensearch_pki_dir }}/ca.key"
+          # Fixed, not a variable: a remote client certificate lives one year (C1 (4)).
           - -days
-          - "{{ opensearch_cert_days }}"
+          - "365"
           - -sha256
           - -subj
           - "/O=sdp/OU=siem/CN={{ opensearch_csr_name }}-g{{ opensearch_csr_generation }}"
@@ -112,6 +131,13 @@
           - none
       register: opensearch_csr_issued
       changed_when: true
+
+    - name: Assert openssl produced exactly one PEM certificate
+      ansible.builtin.assert:
+        that:
+          - opensearch_csr_issued.stdout is match('^-----BEGIN CERTIFICATE-----\n[A-Za-z0-9+/=\n]+\n-----END CERTIFICATE-----$')
+        fail_msg: openssl did not return exactly one PEM certificate; nothing is handed back.
+        success_msg: One PEM certificate issued.
 
     - name: Hand the certificate back
       ansible.builtin.set_fact:
