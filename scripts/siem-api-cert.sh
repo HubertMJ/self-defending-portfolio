@@ -62,8 +62,11 @@ secret = {
 print("# The portfolio API's SIEM client certificate (ADR 0034), made by scripts/siem-api-cert.sh.")
 print(yaml.safe_dump(secret, sort_keys=False), end="")
 PY
-# --filename-override only selects the .sops.yaml rule; the input is the scratch file.
-# shellcheck disable=SC2094
-sops --encrypt --filename-override "$out" "$tmp/secret.yaml" > "$out"
-grep -q '^sops:' "$out" || { rm -f "$out"; echo "siem-api-cert: sops did not encrypt" >&2; exit 1; }
+# --filename-override only selects the .sops.yaml creation rule for the target path.
+# Encrypted into the scratch directory and moved into the tree only after the check (review code L8):
+# an existing file is never truncated or half-written.
+sops --encrypt --filename-override "$out" "$tmp/secret.yaml" > "$tmp/secret.sops.yaml"
+grep -q '^sops:' "$tmp/secret.sops.yaml" || { echo "siem-api-cert: sops did not encrypt; $out unchanged" >&2; exit 1; }
+! grep -q 'BEGIN .*PRIVATE KEY' "$tmp/secret.sops.yaml" || { echo "siem-api-cert: plaintext key in the output; $out unchanged" >&2; exit 1; }
+mv "$tmp/secret.sops.yaml" "$out"
 echo "siem-api-cert: wrote $out ($cn, $(openssl x509 -in "$crt" -noout -enddate)); commit it"
