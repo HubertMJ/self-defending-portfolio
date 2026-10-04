@@ -7,5 +7,8 @@ collections:
     version: ">=1.5.0"
   - name: community.general
     version: ">=9.0.0"
+  # community.crypto makes siem01's PKI (keys, CSRs, certificates; ADR 0034).
+  - name: community.crypto
+    version: ">=2.20.0"
   - name: kubernetes.core
     version: ">=5.0.0"

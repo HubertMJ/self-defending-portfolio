@@ -1,0 +1,24 @@
+{
+  "description": "F1, prevented: a write that carries a client-supplied _id (create with id, compare-and-set overwrite) is refused; event.overwrite stays as the defence-in-depth flag; event.ingested = ingest time; client values overridden",
+  "processors": [
+    {
+      "fail": {
+        "if": "ctx._id != null",
+        "message": "sdp: client-supplied _id refused (append-only)"
+      }
+    },
+    {
+      "script": {
+        "lang": "painless",
+        "source": "def e = ctx.event; if (!(e instanceof Map)) { e = new HashMap(); ctx.event = e; } e.overwrite = ctx._id != null; ctx.remove(\"event.overwrite\"); ctx.remove(\"event.ingested\");"
+      }
+    },
+    {
+      "set": {
+        "field": "event.ingested",
+        "value": "{{_ingest.timestamp}}",
+        "override": true
+      }
+    }
+  ]
+}

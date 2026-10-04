@@ -37,3 +37,7 @@ argument_specs:
         elements: str
         default: []
         description: Upstream DNS servers written to a systemd-resolved drop-in; empty leaves the resolver untouched.
+      base_time_sync:
+        type: bool
+        default: true
+        description: Install systemd-timesyncd and keep it enabled and running (outside containers).

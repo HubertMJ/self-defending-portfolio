@@ -1,0 +1,5 @@
+---
+# Managed by Ansible (role: opensearch_config).
+_meta:
+  type: "actiongroups"
+  config_version: 2

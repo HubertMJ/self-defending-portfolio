@@ -1,0 +1,56 @@
+---
+# One OpenSearch object kept equal to its body in the repository. The body is passed as JSON text
+# (lookup results stay unsafe, so Ansible never templates the mustache placeholders some bodies
+# carry). It is written when the object is missing or its body changed since the last write.
+# Inputs: opensearch_config_obj_key (state file name), opensearch_config_obj_path,
+# opensearch_config_obj_body (JSON text), opensearch_config_obj_create_method (default PUT),
+# opensearch_config_obj_cas (updates need if_seq_no/if_primary_term, default false),
+# opensearch_config_obj_force (write regardless, default false).
+# Sets opensearch_config_obj_written.
+- name: Read {{ opensearch_config_obj_key }}
+  ansible.builtin.uri:
+    url: "{{ opensearch_config_url }}{{ opensearch_config_obj_path }}"
+    ca_path: "{{ opensearch_config_ca }}"
+    client_cert: "{{ opensearch_config_admin_cert }}"
+    client_key: "{{ opensearch_config_admin_key }}"
+    status_code: [200, 404]
+  register: opensearch_config_obj_current
+
+- name: Read the hash of the last written body of {{ opensearch_config_obj_key }}
+  ansible.builtin.slurp:
+    src: "{{ opensearch_config_state_dir }}/{{ opensearch_config_obj_key }}.sha256"
+  register: opensearch_config_obj_applied
+  failed_when: false
+
+- name: Write {{ opensearch_config_obj_key }}
+  ansible.builtin.uri:
+    url: >-
+      {{ opensearch_config_url }}{{ opensearch_config_obj_path }}{% if opensearch_config_obj_current.status == 200
+      and opensearch_config_obj_cas | default(false) %}?if_seq_no={{ opensearch_config_obj_current.json._seq_no
+      }}&if_primary_term={{ opensearch_config_obj_current.json._primary_term }}{% endif %}
+    method: "{{ (opensearch_config_obj_current.status == 404) | ternary(opensearch_config_obj_create_method | default('PUT'), 'PUT') }}"
+    body: "{{ opensearch_config_obj_body }}"
+    body_format: json
+    ca_path: "{{ opensearch_config_ca }}"
+    client_cert: "{{ opensearch_config_admin_cert }}"
+    client_key: "{{ opensearch_config_admin_key }}"
+    status_code: [200, 201]
+  register: opensearch_config_obj_write
+  changed_when: true
+  when: >-
+    opensearch_config_obj_current.status == 404
+    or opensearch_config_obj_force | default(false) | bool
+    or (opensearch_config_obj_applied.content | default('') | b64decode | trim)
+       != (opensearch_config_obj_body | string | hash('sha256'))
+
+- name: Record the written body of {{ opensearch_config_obj_key }}
+  ansible.builtin.copy:
+    dest: "{{ opensearch_config_state_dir }}/{{ opensearch_config_obj_key }}.sha256"
+    content: "{{ opensearch_config_obj_body | string | hash('sha256') }}\n"
+    owner: root
+    group: root
+    mode: "0600"
+
+- name: Remember whether it was written, {{ opensearch_config_obj_key }}
+  ansible.builtin.set_fact:
+    opensearch_config_obj_written: "{{ opensearch_config_obj_write is changed }}"

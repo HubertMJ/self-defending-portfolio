@@ -28,7 +28,31 @@
     mode: "0700"
   loop: "{{ [auditd_k3s_config_dir, auditd_k3s_state_dir]
             + auditd_k3s_state_watch_subpaths | map('regex_replace', '^', auditd_k3s_state_dir ~ '/') | list }}"
-  when: item | basename != 'token'
+  when:
+    - auditd_k3s_enabled | bool
+    - item | basename != 'token'
+
+# Same reason for the extra watches: a watch whose parent directory is missing makes augenrules
+# abort the whole load. Missing parents (e.g. /usr/share/opensearch before its package is
+# installed) are created; existing ones are left exactly as they are.
+- name: Look for the parent directory of each extra watch
+  ansible.builtin.stat:
+    path: "{{ item.path | dirname }}"
+  loop: "{{ auditd_extra_watches }}"
+  loop_control:
+    label: "{{ item.path | dirname }}"
+  register: auditd_extra_parents
+
+- name: Create the missing parents of the extra watches
+  ansible.builtin.file:
+    path: "{{ item.item.path | dirname }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop: "{{ auditd_extra_parents.results | rejectattr('stat.exists') | list }}"
+  loop_control:
+    label: "{{ item.item.path | dirname }}"
 
 - name: Install audit rule files
   ansible.builtin.template:
@@ -37,13 +61,60 @@
     owner: root
     group: root
     mode: "0600"
-  loop:
-    - 10-base.rules
-    - 30-identity.rules
-    - 40-privileged.rules
-    - 50-k3s.rules
-    - 99-finalize.rules
+  loop: "{{ ['10-base.rules', '30-identity.rules', '40-privileged.rules']
+            + (['50-k3s.rules'] if auditd_k3s_enabled | bool else [])
+            + (['60-extra.rules'] if auditd_extra_watches | length > 0 else [])
+            + ['99-finalize.rules'] }}"
   notify: Load audit rules
+
+# augenrules compiles every file in rules.d, so a rule set that no longer
+# applies to this host has to be deleted, not merely left unrendered.
+- name: Remove rule files this host does not use
+  ansible.builtin.file:
+    path: "/etc/audit/rules.d/{{ item }}"
+    state: absent
+  loop: "{{ ([] if auditd_k3s_enabled | bool else ['50-k3s.rules'])
+            + ([] if auditd_extra_watches | length > 0 else ['60-extra.rules']) }}"
+  notify: Load audit rules
+
+# A run that failed before its handlers left rule files on disk that were never compiled or loaded,
+# and the next run sees no file change. augenrules --check compares rules.d with the compiled
+# /etc/audit/audit.rules (read-only), so such a gap is closed by the next run.
+- name: Check whether the compiled rules match rules.d
+  ansible.builtin.command:
+    cmd: /usr/sbin/augenrules --check
+  register: auditd_augenrules_check
+  check_mode: false
+  changed_when: "'should be updated' in auditd_augenrules_check.stdout"
+  notify: Load audit rules
+
+# And the kernel: every watch in the compiled rules must be loaded. auditctl -l prints watches in
+# the same "-w <path> -p <perm> -k <key>" form augenrules compiles, so a missing one means a load
+# failed or never ran; the handler loads the rules again.
+- name: Read the loaded audit rules
+  ansible.builtin.command:
+    cmd: /usr/sbin/auditctl -l
+  register: auditd_loaded
+  check_mode: false
+  changed_when: false
+  failed_when: false
+
+- name: Read the compiled audit rules
+  ansible.builtin.slurp:
+    src: /etc/audit/audit.rules
+  register: auditd_compiled
+  failed_when: false
+
+- name: Load the rules when a compiled watch is not loaded
+  ansible.builtin.debug:
+    msg: "Watches compiled but not loaded: {{ auditd_unloaded }}"
+  changed_when: auditd_unloaded | length > 0
+  when: auditd_unloaded | length > 0
+  notify: Load audit rules
+  vars:
+    auditd_unloaded: >-
+      {{ (auditd_compiled.content | default('') | b64decode).splitlines() | select('match', '^-w ') | map('trim')
+         | reject('in', auditd_loaded.stdout_lines | default([]) | map('trim') | list) | list }}
 
 - name: Ensure auditd is enabled and running
   ansible.builtin.service:

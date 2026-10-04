@@ -1,7 +1,7 @@
 ---
 argument_specs:
   main:
-    short_description: Kernel parameter hardening for a Cilium-backed k3s node
+    short_description: Kernel parameter hardening, with the Cilium/k3s values on k3s nodes only
     description:
       - Writes every parameter to one sysctl.d drop-in and applies it live.
     options:
@@ -14,5 +14,17 @@ argument_specs:
         type: str
         default: /etc/sysctl.d/99-cilium-rp-filter.conf
       sysctl_settings:
-        description: Mapping of sysctl keys to values. Replaces the default map entirely when overridden.
+        description: Effective mapping of sysctl keys to values, built from the three parts below; null values are dropped.
+        type: dict
+      sysctl_common_settings:
+        description: Hardening keys for every host. Null values only hold a key's position for sysctl_k3s_settings.
+        type: dict
+      sysctl_k3s_settings:
+        description: Keys a k3s node with Cilium needs (rp_filter off, forwarding on, kubelet protect-kernel-defaults values).
+        type: dict
+      sysctl_k3s_enabled:
+        description: Apply sysctl_k3s_settings and the rp_filter drop-in. Defaults to membership of the k3s_nodes group.
+        type: bool
+      sysctl_extra_settings:
+        description: Host-specific keys appended after the other parts.
         type: dict

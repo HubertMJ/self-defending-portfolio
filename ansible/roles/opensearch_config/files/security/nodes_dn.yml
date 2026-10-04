@@ -1,0 +1,5 @@
+---
+# Managed by Ansible (role: opensearch_config). The node DN is static (plugins.security.nodes_dn).
+_meta:
+  type: "nodesdn"
+  config_version: 2

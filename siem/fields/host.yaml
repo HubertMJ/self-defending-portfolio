@@ -1,0 +1,33 @@
+# Allow-list of the sdp-host data stream: k3s01's own logs (siem/fields/README.md). Derived from
+# tests/siem/fixtures/host-*.json and host-auditd.log (F0, 2026-10-04). Host-derived findings are
+# published as counts only (ADR 0034).
+owner: host
+source: host
+stream: sdp-host
+log_type: sdp_host
+input: >-
+  journald on k3s01: ssh (_SYSTEMD_UNIT=ssh.service and SYSLOG_IDENTIFIER=sshd-session - on Debian 13 the
+  per-connection process logs as sshd-session), SYSLOG_IDENTIFIER=sudo, kernel lines with the prefix "nft-drop: ";
+  and /var/log/audit/audit.log (enriched format, optionally prefixed "node=<host> ", the prefix is dropped).
+  Every user name and every address is pseudonymised; key fingerprints, commands, MACs and the host's own
+  addresses are dropped.
+fixture: tests/siem/fixtures/host-ssh.json
+fields:
+  "@timestamp": {type: date, from: __REALTIME_TIMESTAMP, transform: epoch_us, note: audit lines use msg=audit(<epoch>.<ms>:<serial>)}
+  event.kind: {type: keyword, value: event, note: "event | heartbeat"}
+  event.dataset: {type: keyword, value: host}
+  host.log: {type: keyword, note: "ssh | sudo | nft | auditd, from the input"}
+  ssh.event: {type: keyword, from: MESSAGE, transform: ssh_event, note: "accepted | failed | invalid-user | closed-preauth"}
+  ssh.method: {type: keyword, from: MESSAGE, transform: ssh_method, note: "publickey | password | keyboard-interactive"}
+  sudo.result: {type: keyword, from: MESSAGE, transform: sudo_result, note: "command | incorrect-password | not-allowed"}
+  nft.protocol: {type: keyword, from: MESSAGE, transform: nft_proto, note: PROTO=<x>, lower-cased}
+  nft.destination_port: {type: integer, from: MESSAGE, transform: nft_dpt, note: DPT=<n>}
+  audit.type: {type: keyword, transform: audit_type, note: "type=<X> (SYSCALL, CONFIG_CHANGE, ...)"}
+  audit.key: {type: keyword, transform: audit_key, note: key="<k>" (identity, privileged, root_cmds, k3s_config, ...)}
+  audit.syscall: {type: keyword, transform: audit_syscall, note: SYSCALL=<name> of the enriched record}
+  audit.success: {type: keyword, transform: audit_success, note: success=<yes|no>}
+  process.exe: {type: keyword, transform: audit_exe, note: exe="<path>"}
+  process.name: {type: keyword, transform: audit_comm, note: comm="<name>"}
+  user.name: {type: keyword, transform: hmac, note: "ssh/sudo: the login user; auditd: AUID=\"<name>\" (unset kept as unset)"}
+  user.effective: {type: keyword, transform: hmac, note: "auditd: EUID=\"<name>\"; sudo: USER=<target>"}
+  source.ip: {type: keyword, transform: hmac, note: "ssh: from <ip>; nft: SRC=<ip>"}

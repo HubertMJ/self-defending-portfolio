@@ -1,0 +1,94 @@
+---
+# Template and data stream of one source (ADR 0034). Input: opensearch_config_source.
+- name: Load the field allow-list of {{ opensearch_config_source }}
+  ansible.builtin.set_fact:
+    opensearch_config_source_file: >-
+      {{ lookup('ansible.builtin.file', opensearch_config_fields_dir ~ '/' ~ opensearch_config_source ~ '.yaml',
+         errors='ignore') | default('', true) | from_yaml | default({}, true) }}
+
+- name: Assert the allow-list belongs to the stream of {{ opensearch_config_source }}
+  ansible.builtin.assert:
+    that:
+      # Review M5: only the sources whose allow-lists P2 delivers may lack a file.
+      - opensearch_config_source_file != {} or opensearch_config_source in opensearch_config_sources_pending
+      - opensearch_config_source_file == {} or opensearch_config_source_file.stream == 'sdp-' ~ opensearch_config_source
+      - opensearch_config_source_file == {} or opensearch_config_source_file.fields is mapping
+    fail_msg: siem/fields/{{ opensearch_config_source }}.yaml does not describe sdp-{{ opensearch_config_source }}.
+    success_msg: >-
+      sdp-{{ opensearch_config_source }}: {{ (opensearch_config_source_file.fields | default({})) | length }} fields
+      from siem/fields{{ '' if opensearch_config_source_file else ' (no file yet: common fields only)' }}.
+
+- name: Keep the field definitions of {{ opensearch_config_source }}
+  ansible.builtin.set_fact:
+    opensearch_config_source_fields: "{{ opensearch_config_source_file.fields | default({}) }}"
+
+- name: Read the template of sdp-{{ opensearch_config_source }}
+  ansible.builtin.uri:
+    url: "{{ opensearch_config_url }}/_index_template/sdp-{{ opensearch_config_source }}"
+    ca_path: "{{ opensearch_config_ca }}"
+    client_cert: "{{ opensearch_config_admin_cert }}"
+    client_key: "{{ opensearch_config_admin_key }}"
+    status_code: [200, 404]
+  register: opensearch_config_template_live
+
+# F11 / L5: the template must keep exactly its own pattern, no composed component (SA's alias
+# mappings would add "<stream>*" and a component) and the final pipeline. If anything rewrote it,
+# the role puts it back even though the body in the repository did not change.
+- name: Write the template of sdp-{{ opensearch_config_source }}
+  ansible.builtin.include_tasks: rest_object.yml
+  vars:
+    opensearch_config_obj_key: template-sdp-{{ opensearch_config_source }}
+    opensearch_config_obj_path: /_index_template/sdp-{{ opensearch_config_source }}
+    opensearch_config_obj_body: "{{ lookup('ansible.builtin.template', 'index_template.json.j2') }}"
+    opensearch_config_obj_force: >-
+      {{ opensearch_config_template_live.status == 200 and not (
+           opensearch_config_template_live.json.index_templates[0].index_template.index_patterns == ['sdp-' ~ opensearch_config_source]
+           and opensearch_config_template_live.json.index_templates[0].index_template.composed_of | default([]) == []
+           and opensearch_config_template_live.json.index_templates[0].index_template.data_stream is defined
+           and opensearch_config_template_live.json.index_templates[0].index_template.template.settings.index.final_pipeline
+               | default('') == 'sdp-final') }}
+
+- name: Read the data stream sdp-{{ opensearch_config_source }}
+  ansible.builtin.uri:
+    url: "{{ opensearch_config_url }}/_data_stream/sdp-{{ opensearch_config_source }}"
+    ca_path: "{{ opensearch_config_ca }}"
+    client_cert: "{{ opensearch_config_admin_cert }}"
+    client_key: "{{ opensearch_config_admin_key }}"
+    status_code: [200, 404]
+  register: opensearch_config_stream_live
+
+# The ISM policy already exists at this point (main.yml order, S0-#6): it attaches only to backing
+# indices created after it.
+- name: Create the data stream sdp-{{ opensearch_config_source }}
+  ansible.builtin.uri:
+    url: "{{ opensearch_config_url }}/_data_stream/sdp-{{ opensearch_config_source }}"
+    method: PUT
+    ca_path: "{{ opensearch_config_ca }}"
+    client_cert: "{{ opensearch_config_admin_cert }}"
+    client_key: "{{ opensearch_config_admin_key }}"
+  changed_when: true
+  when: opensearch_config_stream_live.status == 404
+
+- name: Read the live mapping of sdp-{{ opensearch_config_source }}
+  ansible.builtin.uri:
+    url: "{{ opensearch_config_url }}/sdp-{{ opensearch_config_source }}/_mapping"
+    ca_path: "{{ opensearch_config_ca }}"
+    client_cert: "{{ opensearch_config_admin_cert }}"
+    client_key: "{{ opensearch_config_admin_key }}"
+  register: opensearch_config_stream_mapping
+
+# Additive field changes reach the current write index at once; the template carries them into
+# every later backing index (S0-a: a mapping put without the template stops at the next rollover).
+# Also when the template was already written but the write index still lacks a field (a run that
+# stopped between the two writes).
+- name: Add new fields to the live mapping of sdp-{{ opensearch_config_source }}
+  ansible.builtin.uri:
+    url: "{{ opensearch_config_url }}/sdp-{{ opensearch_config_source }}/_mapping"
+    method: PUT
+    body: "{{ (lookup('ansible.builtin.template', 'index_template.json.j2') | from_json).template.mappings | to_json }}"
+    body_format: json
+    ca_path: "{{ opensearch_config_ca }}"
+    client_cert: "{{ opensearch_config_admin_cert }}"
+    client_key: "{{ opensearch_config_admin_key }}"
+  changed_when: true
+  when: lookup('ansible.builtin.template', 'missing_fields.j2') | trim | length > 0

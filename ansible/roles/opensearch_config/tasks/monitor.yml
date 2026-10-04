@@ -1,0 +1,83 @@
+---
+# One ops monitor, found by its unique name. Inputs: opensearch_config_monitor_name,
+# opensearch_config_monitor_body (JSON text). It is written when it is missing, when its body in the
+# repository changed, or when the LIVE monitor drifted: enabled differs from the body, or its
+# last_update_time is not the one this role recorded when it last wrote it (anyone else's update -
+# a disabled trigger, an edited query - moves it).
+- name: Find the monitor "{{ opensearch_config_monitor_name }}"
+  ansible.builtin.uri:
+    url: "{{ opensearch_config_url }}/_plugins/_alerting/monitors/_search"
+    method: POST
+    body:
+      size: 10
+      query: {term: {monitor.name.keyword: "{{ opensearch_config_monitor_name }}"}}
+    body_format: json
+    ca_path: "{{ opensearch_config_ca }}"
+    client_cert: "{{ opensearch_config_admin_cert }}"
+    client_key: "{{ opensearch_config_admin_key }}"
+    # 404: the alerting config index does not exist before the first monitor.
+    status_code: [200, 404]
+  register: opensearch_config_monitor_found
+
+- name: Note the live state of "{{ opensearch_config_monitor_name }}"
+  ansible.builtin.set_fact:
+    opensearch_config_monitor_hits: "{{ opensearch_config_monitor_found.json.hits.hits | default([]) }}"
+    opensearch_config_monitor_key: "monitor-{{ opensearch_config_monitor_name | regex_replace('[^a-z0-9]+', '-') }}"
+
+- name: Assert at most one monitor is named "{{ opensearch_config_monitor_name }}"
+  ansible.builtin.assert:
+    that:
+      - opensearch_config_monitor_hits | length <= 1
+    fail_msg: >-
+      {{ opensearch_config_monitor_hits | length }} monitors are named {{ opensearch_config_monitor_name }};
+      remove the extra ones.
+    success_msg: Monitor "{{ opensearch_config_monitor_name }}" is unique.
+
+- name: Read what this role last wrote to "{{ opensearch_config_monitor_name }}"
+  ansible.builtin.slurp:
+    src: "{{ opensearch_config_state_dir }}/{{ opensearch_config_monitor_key }}.sha256"
+  register: opensearch_config_monitor_applied
+  failed_when: false
+
+- name: Decide whether it must be written, monitor "{{ opensearch_config_monitor_name }}"
+  ansible.builtin.set_fact:
+    opensearch_config_monitor_id: "{{ (opensearch_config_monitor_hits | first | default({}))._id | default('') }}"
+    opensearch_config_monitor_write: >-
+      {{ opensearch_config_monitor_hits | length == 0
+         or opensearch_config_monitor_recorded[0] | default('') != (opensearch_config_monitor_body | string | hash('sha256'))
+         or opensearch_config_monitor_recorded[1] | default('') != opensearch_config_monitor_live.last_update_time | default('') | string
+         or opensearch_config_monitor_live.enabled | default(none) != opensearch_config_monitor_desired.enabled }}
+  vars:
+    opensearch_config_monitor_desired: >-
+      {{ opensearch_config_monitor_body if opensearch_config_monitor_body is mapping
+         else opensearch_config_monitor_body | from_json }}
+    opensearch_config_monitor_recorded: "{{ (opensearch_config_monitor_applied.content | default('') | b64decode).split() }}"
+    # The search returns the monitor itself as _source.
+    opensearch_config_monitor_live: "{{ (opensearch_config_monitor_hits | first | default({}))._source | default({}) }}"
+
+- name: Create or restore "{{ opensearch_config_monitor_name }}"
+  ansible.builtin.uri:
+    url: >-
+      {{ opensearch_config_url }}/_plugins/_alerting/monitors{{ ('/' ~ opensearch_config_monitor_id)
+      if opensearch_config_monitor_id else '' }}
+    method: "{{ 'PUT' if opensearch_config_monitor_id else 'POST' }}"
+    body: "{{ opensearch_config_monitor_body }}"
+    body_format: json
+    ca_path: "{{ opensearch_config_ca }}"
+    client_cert: "{{ opensearch_config_admin_cert }}"
+    client_key: "{{ opensearch_config_admin_key }}"
+    status_code: [200, 201]
+  register: opensearch_config_monitor_written
+  changed_when: true
+  when: opensearch_config_monitor_write | bool
+
+- name: Record the body hash and the last_update_time of "{{ opensearch_config_monitor_name }}"
+  ansible.builtin.copy:
+    dest: "{{ opensearch_config_state_dir }}/{{ opensearch_config_monitor_key }}.sha256"
+    content: >
+      {{ opensearch_config_monitor_body | string | hash('sha256') }}
+      {{ opensearch_config_monitor_written.json.monitor.last_update_time }}
+    owner: root
+    group: root
+    mode: "0600"
+  when: opensearch_config_monitor_write | bool

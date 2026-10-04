@@ -23,6 +23,15 @@ ssh_hardening_allow_users:
 # the kube-apiserver or Hubble UI over SSH instead of using kubectl port-forward.
 ssh_hardening_allow_tcp_forwarding: "no"
 
+# PermitOpen destinations for local forwarding, rendered only when non-empty.
+# siem01 sets forwarding to "local" and permits exactly 127.0.0.1:5601, the
+# Dashboards tunnel (ADR 0034); nothing else can be reached through sshd.
+ssh_hardening_permit_open: []
+
+# AllowStreamLocalForwarding (Unix-socket forwarding), rendered only when set. siem01 sets "no":
+# its only tunnel is TCP to Dashboards, and a forwarded socket would bypass PermitOpen.
+ssh_hardening_allow_stream_local_forwarding: ""
+
 # Authentication limits.
 ssh_hardening_max_auth_tries: 3
 ssh_hardening_login_grace_time: 30

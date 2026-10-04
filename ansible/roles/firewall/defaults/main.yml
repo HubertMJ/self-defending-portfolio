@@ -14,6 +14,19 @@ firewall_admin_cidrs:
 # plus the kube-apiserver are opened for those sources as well.
 firewall_admin_cidrs6: []
 
+# The k3s-shaped rules (kube-apiserver, pod/service CIDR to host ports, the
+# Cilium interfaces and proxy marks, the accepting forward chain) exist only on
+# k3s nodes. The switch defaults to the inventory group so k3s01's rendered
+# ruleset stays byte-identical (tests/golden/render.sh) and every other host,
+# such as siem01, gets none of them (ADR 0009 amendment 2026-10-04).
+firewall_k3s_enabled: "{{ 'k3s_nodes' in group_names }}"
+
+# Per-service allow-list, one accept rule per entry, for hosts that serve
+# something other than SSH: [{name, port, proto, sources, rate_limit}]. siem01
+# opens OpenSearch's 9200/tcp to k3s01 only, capped at a byte rate (ADR 0034);
+# empty on k3s nodes. rate_limit is an nftables rate, e.g. "4 mbytes/second".
+firewall_services: []
+
 # CIDRs allowed to reach the kube-apiserver on 6443.
 firewall_k3s_api_cidrs:
   - "{{ lan_cidr | default(firewall_default_lan_cidr) }}"
@@ -49,7 +62,7 @@ firewall_service_cidr: "{{ k3s_service_cidr | default('10.43.0.0/16') }}"
 firewall_pod_to_host_tcp_ports: [53, 4240, 4244, 6443, 10250]
 firewall_pod_to_host_udp_ports: [53]
 
-# Extra ports to open, e.g. Cilium health checks (4240/tcp) or VXLAN
+# Extra ports to open on k3s nodes (rendered only with firewall_k3s_enabled), e.g. Cilium health checks (4240/tcp) or VXLAN
 # (8472/udp) once a second node joins. Empty on a single node with native
 # routing because no node-to-node tunnel or health probe exists.
 firewall_extra_tcp_ports: []

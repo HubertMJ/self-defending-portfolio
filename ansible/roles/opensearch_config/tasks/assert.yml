@@ -1,0 +1,96 @@
+---
+# Read-only checks of what this role is for; each fails the run instead of leaving a quiet gap.
+- name: Read the effective cluster settings
+  ansible.builtin.uri:
+    url: "{{ opensearch_config_url }}/_cluster/settings?include_defaults=true&flat_settings=true"
+    ca_path: "{{ opensearch_config_ca }}"
+    client_cert: "{{ opensearch_config_admin_cert }}"
+    client_key: "{{ opensearch_config_admin_key }}"
+  register: opensearch_config_effective
+
+# ADR 0034: automatic correlation by shared ATT&CK tags stays off; only git-defined rules correlate.
+- name: Assert Security Analytics' automatic correlation is off
+  ansible.builtin.assert:
+    that:
+      - opensearch_config_auto_correlation == 'false'
+    fail_msg: plugins.security_analytics.auto_correlations_enabled is {{ opensearch_config_auto_correlation }}.
+    success_msg: Automatic correlation is off.
+  vars:
+    opensearch_config_auto_correlation: >-
+      {{ (opensearch_config_effective.json.defaults | combine(opensearch_config_effective.json.persistent,
+          opensearch_config_effective.json.transient))['plugins.security_analytics.auto_correlations_enabled'] | default('unset') }}
+
+- name: Read every sdp template
+  ansible.builtin.uri:
+    url: "{{ opensearch_config_url }}/_index_template/sdp-*"
+    ca_path: "{{ opensearch_config_ca }}"
+    client_cert: "{{ opensearch_config_admin_cert }}"
+    client_key: "{{ opensearch_config_admin_key }}"
+  register: opensearch_config_templates_live
+
+# F11 (S0-a, S0-#11): Security Analytics rewrites a stream's template only through its mappings API
+# (adding "<stream>*" and its alias component). No role but the admin can call it; this proves it
+# was not called.
+- name: Assert each template keeps its own pattern, no component and the final pipeline
+  ansible.builtin.assert:
+    that:
+      - opensearch_config_templates_live.json.index_templates | length == opensearch_config_sources | length
+      - item.index_template.index_patterns == [item.name]
+      - item.index_template.composed_of | default([]) == []
+      - item.index_template.data_stream is defined
+      - item.index_template.template.settings.index.final_pipeline == 'sdp-final'
+    fail_msg: "{{ item.name }} drifted: {{ item.index_template | to_json }}"
+    success_msg: "{{ item.name }}: [{{ item.name }}], no component, final_pipeline sdp-final."
+  loop: "{{ opensearch_config_templates_live.json.index_templates }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Look for Security Analytics alias components
+  ansible.builtin.uri:
+    url: "{{ opensearch_config_url }}/_component_template/.opensearch-sap-alias-mappings-component-*"
+    ca_path: "{{ opensearch_config_ca }}"
+    client_cert: "{{ opensearch_config_admin_cert }}"
+    client_key: "{{ opensearch_config_admin_key }}"
+    status_code: [200, 404]
+  register: opensearch_config_sap_components
+
+- name: Assert no alias component exists
+  ansible.builtin.assert:
+    that:
+      - >-
+        opensearch_config_sap_components.status == 404
+        or opensearch_config_sap_components.json.component_templates | default([]) | length == 0
+    fail_msg: "Security Analytics alias components exist: {{ opensearch_config_sap_components.json | default({}) | to_json }}"
+    success_msg: No Security Analytics alias component exists.
+
+# L9: every backing index of every stream is under sdp-30d and ISM has not given up on it.
+- name: Read the ISM state of every sdp backing index
+  ansible.builtin.uri:
+    url: "{{ opensearch_config_url }}/_plugins/_ism/explain/.ds-sdp-*"
+    ca_path: "{{ opensearch_config_ca }}"
+    client_cert: "{{ opensearch_config_admin_cert }}"
+    client_key: "{{ opensearch_config_admin_key }}"
+  register: opensearch_config_ism_explain
+
+- name: Assert every sdp backing index is managed by sdp-30d and not failed
+  ansible.builtin.assert:
+    that:
+      - opensearch_config_ism_indices | length >= opensearch_config_sources | length
+      - opensearch_config_ism_indices | rejectattr('value.policy_id', 'defined') | list | length == 0
+      - opensearch_config_ism_indices | map(attribute='value.policy_id') | unique | list == ['sdp-30d']
+      - opensearch_config_ism_indices | selectattr('value.retry_info.failed', 'defined')
+        | selectattr('value.retry_info.failed') | list | length == 0
+    fail_msg: "ISM: {{ opensearch_config_ism_indices | items2dict | to_json }}"
+    success_msg: "{{ opensearch_config_ism_indices | length }} backing indices, all under sdp-30d, none failed."
+  vars:
+    opensearch_config_ism_indices: >-
+      {{ opensearch_config_ism_explain.json | dict2items | selectattr('key', 'match', '^\.ds-sdp-') | list }}
+
+- name: Wait for green health
+  ansible.builtin.uri:
+    url: "{{ opensearch_config_url }}/_cluster/health?wait_for_status=green&timeout=50s"
+    ca_path: "{{ opensearch_config_ca }}"
+    client_cert: "{{ opensearch_config_admin_cert }}"
+    client_key: "{{ opensearch_config_admin_key }}"
+  register: opensearch_config_green
+  failed_when: opensearch_config_green.json.status | default('') != 'green'

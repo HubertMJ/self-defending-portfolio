@@ -1,0 +1,50 @@
+---
+# OpenSearch on siem01 (ADR 0034 and its amendment of 2026-10-04; siem contract P1).
+# The version pins (opensearch_version, opensearch_deb_sha256, opensearch_apt_key_fingerprint)
+# live in group_vars/siem_nodes.yml next to the other pins (ADR 0008).
+
+# Repository signing key and the two apt repositories (suite `stable main`).
+opensearch_apt_key_url: https://artifacts.opensearch.org/publickeys/opensearch-release.pgp
+opensearch_apt_keyring: /etc/apt/keyrings/opensearch.asc
+opensearch_apt_repo_url: https://artifacts.opensearch.org/releases/bundle/opensearch/3.x/apt
+opensearch_dashboards_apt_repo_url: https://artifacts.opensearch.org/releases/bundle/opensearch-dashboards/3.x/apt
+
+# Node identity and listeners. HTTP binds the loopback (Dashboards, the sync, Ansible) and the
+# VLAN address (k3s01's Fluent Bit and the API); transport never leaves the host (single node).
+opensearch_cluster_name: sdp-siem
+opensearch_node_name: "{{ inventory_hostname_short }}"
+opensearch_node_ip: "{{ siem_node_ip }}"
+opensearch_heap: 3g
+
+# Hourly snapshots go to the data disk siem_disk mounts here (path.repo).
+opensearch_snapshot_path: /var/lib/opensearch-snapshots
+
+# PKI (ADR 0034 amendment "Certificates"). The CA key and the keys of the local identities stay in
+# opensearch_pki_dir (root only, never fetched); the node key sits with OpenSearch's config, where
+# the service can read it.
+opensearch_pki_dir: /etc/sdp-siem/pki
+opensearch_certs_dir: /etc/opensearch/certs
+opensearch_ca_days: 3650
+opensearch_cert_days: 365
+# Certificates closer than this to their end are re-issued by the next run (verify fails at 30 days).
+opensearch_cert_renew_before: +45d
+
+# Client identities carry a generation (opensearch_cert_generations in group_vars/siem_nodes.yml):
+# CN=<name>-g<N>,OU=siem,O=sdp.
+
+# Identities made on siem01 by this role (dashboards by opensearch_dashboards); they never pass
+# through the remote entry point.
+opensearch_local_identities: [admin, rules-sync, shipper-siem01]
+opensearch_local_identity_names: [admin, rules-sync, dashboards, shipper-siem01]
+# The ONLY names tasks/sign_client_csr.yml signs for a CSR made elsewhere (C1).
+opensearch_remote_identities: [shipper-k3s01, portfolio-api, shipper-test]
+
+# DNs the security plugin treats as super admin and as cluster nodes.
+opensearch_admin_dn: "CN=admin-g{{ opensearch_cert_generations['admin'] }},OU=siem,O=sdp"
+opensearch_nodes_dn: "CN={{ opensearch_node_name }},OU=node,O=sdp"
+
+# File the security plugin's audit events go to (opensearch.yml + log4j2.properties).
+opensearch_audit_log: /var/log/opensearch/sdp-security-audit.log
+
+# How long the role waits for the node to answer after a (re)start.
+opensearch_start_retries: 60

@@ -1,0 +1,5 @@
+---
+# Managed by Ansible (role: opensearch_config). Multitenancy is off (config.yml).
+_meta:
+  type: "tenants"
+  config_version: 2

@@ -1,0 +1,33 @@
+# Allow-list of the sdp-falco data stream (siem/fields/README.md). Derived from
+# tests/siem/fixtures/falco.log (F0, 2026-10-04).
+owner: host
+source: falco
+stream: sdp-falco
+log_type: sdp_falco
+input: >-
+  CRI lines of /var/log/pods/falco_falco-*/falco/*.log on k3s01; the JSON body carries rule, priority, source, tags,
+  time and output_fields. Falco's metrics records (event.kind metric, F12) and Fluent Bit's heartbeat
+  (event.kind heartbeat) share the stream. The node name (hostname) and the free-text output are dropped.
+fixture: tests/siem/fixtures/falco.log
+fields:
+  "@timestamp": {type: date, from: time}
+  event.kind: {type: keyword, value: alert, note: "alert | metric | heartbeat"}
+  event.dataset: {type: keyword, value: falco}
+  falco.rule: {type: keyword, from: rule}
+  falco.rule_slug: {type: keyword, from: rule, transform: slug, note: "Read sensitive file untrusted -> read-sensitive-file-untrusted"}
+  falco.priority: {type: keyword, from: priority}
+  falco.priority_slug: {type: keyword, from: priority, transform: slug}
+  falco.source: {type: keyword, from: source}
+  falco.tags: {type: keyword, from: tags, note: array of keywords}
+  k8s.ns.name: {type: keyword, from: [output_fields, k8s.ns.name]}
+  k8s.pod.name: {type: keyword, from: [output_fields, k8s.pod.name]}
+  k8s.pod.ref: {type: keyword, from: [[output_fields, k8s.ns.name], [output_fields, k8s.pod.name]], transform: pod_ref}
+  container.name: {type: keyword, from: [output_fields, container.name]}
+  container.image.repository: {type: keyword, from: [output_fields, container.image.repository]}
+  evt.type: {type: keyword, from: [output_fields, evt.type]}
+  proc.name: {type: keyword, from: [output_fields, proc.name]}
+  proc.exepath: {type: keyword, from: [output_fields, proc.exepath]}
+  proc.pname: {type: keyword, from: [output_fields, proc.pname]}
+  proc.cmdline: {type: keyword, from: [output_fields, proc.cmdline], note: fixed argv of a sandbox command}
+  fd.name: {type: keyword, from: [output_fields, fd.name]}
+  user.name: {type: keyword, from: [output_fields, user.name], note: the container user (scenario), not a person}

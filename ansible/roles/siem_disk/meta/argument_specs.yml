@@ -1,0 +1,28 @@
+---
+argument_specs:
+  main:
+    short_description: Snapshot disk of the SIEM host
+    description:
+      - Selects the only disk with the given serial (never the root disk), creates an ext4 filesystem with the label only
+        when the disk is empty and mounts it by label.
+    options:
+      siem_disk_serial:
+        description: lsblk SERIAL of the data disk.
+        type: str
+        default: siem01-data
+      siem_disk_label:
+        description: Filesystem label, also the mount source.
+        type: str
+        default: siem-snap
+      siem_disk_fstype:
+        description: Filesystem type.
+        type: str
+        default: ext4
+      siem_disk_mount:
+        description: Mount point (OpenSearch path.repo).
+        type: path
+        default: /var/lib/opensearch-snapshots
+      siem_disk_mount_opts:
+        description: Mount options.
+        type: str
+        default: defaults,nofail,nodev,nosuid,noexec

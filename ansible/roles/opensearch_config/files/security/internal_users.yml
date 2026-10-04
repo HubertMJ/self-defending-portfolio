@@ -1,0 +1,6 @@
+---
+# Managed by Ansible (role: opensearch_config). No internal users: every identity is a client
+# certificate (ADR 0034).
+_meta:
+  type: "internalusers"
+  config_version: 2

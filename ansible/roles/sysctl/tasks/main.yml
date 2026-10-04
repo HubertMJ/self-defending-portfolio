@@ -32,4 +32,12 @@
     owner: root
     group: root
     mode: "0644"
+  when: sysctl_k3s_enabled | bool
+  notify: Restart systemd-sysctl
+
+- name: Remove the rp_filter drop-in from hosts without Cilium
+  ansible.builtin.file:
+    path: "{{ sysctl_rp_filter_file }}"
+    state: absent
+  when: not sysctl_k3s_enabled | bool
   notify: Restart systemd-sysctl

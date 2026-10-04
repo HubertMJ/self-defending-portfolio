@@ -1,0 +1,101 @@
+---
+# siem01: the SIEM host (ADR 0034). Same hardening roles as k3s01, switched by group (firewall,
+# sysctl and auditd carry no k3s rules here), then the snapshot disk, OpenSearch, Dashboards and
+# everything inside OpenSearch. Fluent Bit (P2) and the rules sync (P3) join this play with their roles.
+- name: Build the SIEM host
+  hosts: siem_nodes
+  become: true
+  # On a first apply a later role failing used to drop the handlers earlier roles had notified
+  # (auditd's reload, the sshd reload), and the next run saw no change to notify them again.
+  force_handlers: true
+  pre_tasks:
+    - name: Assert the target runs Debian 13
+      ansible.builtin.assert:
+        that:
+          - ansible_distribution == 'Debian'
+          - ansible_distribution_major_version is version('13', '==')
+        fail_msg: >-
+          These roles target Debian 13 (trixie); this host reports
+          {{ ansible_distribution }} {{ ansible_distribution_major_version }}.
+        success_msg: Target is Debian 13.
+
+    # As in hardening.yml: cloud-init holds the dpkg lock on first boot.
+    - name: Locate cloud-init
+      ansible.builtin.stat:
+        path: /usr/bin/cloud-init
+      register: siem_cloud_init
+
+    - name: Wait for cloud-init to finish so the dpkg lock is free
+      ansible.builtin.command:
+        cmd: /usr/bin/cloud-init status --wait
+      register: siem_cloud_init_status
+      changed_when: false
+      failed_when: siem_cloud_init_status.rc not in [0, 2]
+      when: siem_cloud_init.stat.exists
+  roles:
+    - role: base
+      tags: [base]
+    - role: ssh_hardening
+      tags: [ssh]
+    - role: firewall
+      tags: [firewall]
+    - role: sysctl
+      tags: [sysctl]
+    - role: auditd
+      tags: [auditd]
+    - role: unattended_upgrades
+      tags: [patching]
+    - role: siem_disk
+      tags: [siem_disk]
+    - role: opensearch
+      tags: [opensearch]
+    - role: opensearch_dashboards
+      tags: [opensearch_dashboards]
+    - role: opensearch_config
+      tags: [opensearch_config]
+
+# The remote entry point for client CSRs (siem contract C1), run only when asked for by tag:
+#   --tags client-cert -e siem_client_csr=<abs path> -e siem_client_name=<name> -e siem_client_generation=<N>
+#   --tags api-cert -e siem_api_csr=<abs path> -e siem_api_generation=<N>        (portfolio-api)
+# The CSR is read on the controller, signed on siem01 (where the CA key is) and the certificate is
+# written next to the CSR as <path without .csr>.crt. The expected name comes from these variables,
+# never from the CSR, and sign_client_csr.yml refuses everything but the remote identities.
+- name: Sign a client CSR made elsewhere
+  hosts: siem_nodes
+  become: true
+  gather_facts: false
+  tags: [client-cert, api-cert, never]
+  vars:
+    siem_csr_path: "{{ siem_api_csr if siem_api_csr is defined else siem_client_csr }}"
+    siem_csr_name: "{{ 'portfolio-api' if siem_api_csr is defined else siem_client_name }}"
+    siem_csr_generation: "{{ siem_api_generation if siem_api_csr is defined else siem_client_generation }}"
+  tasks:
+    - name: Assert a CSR, a name and a generation were given
+      ansible.builtin.assert:
+        that:
+          - siem_csr_path is defined and siem_csr_path is match('.*\.csr$')
+          # A relative path would be resolved against the playbook directory inside the container.
+          - siem_csr_path is abs
+          - siem_csr_name is defined
+          - siem_csr_generation is defined
+        fail_msg: >-
+          Pass -e siem_client_csr=<absolute path.csr> -e siem_client_name=<name> -e siem_client_generation=<N>
+          (or the siem_api_* pair); with make siem the checkout is /work.
+        success_msg: Signing {{ siem_csr_name }}-g{{ siem_csr_generation }} from {{ siem_csr_path }}.
+
+    - name: Sign the CSR through the remote entry point
+      ansible.builtin.include_role:
+        name: opensearch
+        tasks_from: sign_client_csr
+      vars:
+        opensearch_csr_pem: "{{ lookup('ansible.builtin.file', siem_csr_path) }}\n"
+        opensearch_csr_name: "{{ siem_csr_name }}"
+        opensearch_csr_generation: "{{ siem_csr_generation }}"
+
+    - name: Write the certificate next to the CSR on the controller
+      ansible.builtin.copy:
+        content: "{{ opensearch_csr_certificate }}"
+        dest: "{{ siem_csr_path | regex_replace('\\.csr$', '.crt') }}"
+        mode: "0644"
+      delegate_to: localhost
+      become: false

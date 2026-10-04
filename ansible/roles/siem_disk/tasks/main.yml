@@ -1,0 +1,64 @@
+---
+- name: List whole disks with their serials
+  ansible.builtin.command:
+    cmd: lsblk --nodeps --noheadings --raw --output NAME,SERIAL
+  register: siem_disk_list
+  changed_when: false
+
+- name: Find the disk that holds the root filesystem
+  ansible.builtin.shell:
+    cmd: set -o pipefail; lsblk --noheadings --raw --output PKNAME "$(findmnt --noheadings --output SOURCE /)" | head -n 1
+    executable: /bin/bash
+  register: siem_disk_root
+  changed_when: false
+
+- name: Select the disk by serial
+  ansible.builtin.set_fact:
+    siem_disk_matches: >-
+      {{ siem_disk_list.stdout_lines | map('split', ' ') | selectattr('1', 'defined')
+         | selectattr('1', 'equalto', siem_disk_serial) | map('first') | list }}
+
+- name: Assert exactly one disk carries the serial and it is not the root disk
+  ansible.builtin.assert:
+    that:
+      - siem_disk_matches | length == 1
+      - siem_disk_root.stdout | trim | length > 0
+      - siem_disk_matches[0] != siem_disk_root.stdout | trim
+    fail_msg: >-
+      Disks with serial {{ siem_disk_serial }}: {{ siem_disk_matches }} (root filesystem on
+      {{ siem_disk_root.stdout | trim }}). Expected exactly one, not the root disk; nothing was touched.
+    success_msg: "/dev/{{ siem_disk_matches[0] }} carries serial {{ siem_disk_serial }}."
+
+- name: Read the selected disk's partitions and filesystem
+  ansible.builtin.command:
+    cmd: lsblk --noheadings --raw --output NAME,FSTYPE,LABEL /dev/{{ siem_disk_matches[0] }}
+  register: siem_disk_layout
+  changed_when: false
+
+# A disk that is partitioned or carries another filesystem is not ours to format.
+- name: Assert the disk is unpartitioned and empty or already ours
+  ansible.builtin.assert:
+    that:
+      - siem_disk_layout.stdout_lines | length == 1
+      - (siem_disk_fields | length == 1) or (siem_disk_fields[1:] == [siem_disk_fstype, siem_disk_label])
+    fail_msg: >-
+      /dev/{{ siem_disk_matches[0] }} is partitioned or holds a foreign filesystem ({{ siem_disk_layout.stdout_lines }});
+      it is left alone.
+    success_msg: /dev/{{ siem_disk_matches[0] }} is empty or carries the {{ siem_disk_label }} filesystem.
+  vars:
+    siem_disk_fields: "{{ siem_disk_layout.stdout_lines[0] | split(' ') | reject('equalto', '') | list }}"
+
+- name: Create the snapshot filesystem on an empty disk
+  community.general.filesystem:
+    dev: /dev/{{ siem_disk_matches[0] }}
+    fstype: "{{ siem_disk_fstype }}"
+    opts: -L {{ siem_disk_label }}
+  when: siem_disk_layout.stdout_lines[0] | split(' ') | reject('equalto', '') | list | length == 1
+
+- name: Mount the snapshot filesystem by label
+  ansible.posix.mount:
+    path: "{{ siem_disk_mount }}"
+    src: LABEL={{ siem_disk_label }}
+    fstype: "{{ siem_disk_fstype }}"
+    opts: "{{ siem_disk_mount_opts }}"
+    state: mounted

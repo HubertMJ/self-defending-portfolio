@@ -41,3 +41,10 @@ base_journald_max_use: 500M
 # cloud-init/netplan alone. On the DMZ node this is set to public resolvers so the node never asks
 # the home gateway, whose resolver forwards to the internal DNS and would leak LAN hostnames.
 base_dns_servers: []
+
+# Keep the clock synchronised with systemd-timesyncd (the Debian 13 image's own
+# client; k3s01 already runs it). Correlation across k3s01 and siem01 compares
+# timestamps written on both hosts, so both must keep time (ADR 0034).
+# Containers share the host's clock and the unit refuses to start in one
+# (ConditionVirtualization=!container), so there the package is only installed.
+base_time_sync: true

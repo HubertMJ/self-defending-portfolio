@@ -1,0 +1,25 @@
+# Drives the remote CSR entry point (ansible/roles/opensearch/tasks/sign_client_csr.yml) exactly as
+# siem.yml's client-cert play does, against a throwaway CA. Run by tests/siem/csr-signer.sh.
+- name: Sign one CSR through the remote entry point
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    opensearch_pki_dir: "{{ csr_test_pki }}"
+    opensearch_cert_generations: {admin: 1, rules-sync: 1, dashboards: 1, shipper-siem01: 1, shipper-k3s01: 1, portfolio-api: 1}
+    siem_node_ip: 10.4.2.10
+  tasks:
+    - name: Sign the CSR
+      ansible.builtin.include_role:
+        name: opensearch
+        tasks_from: sign_client_csr
+      vars:
+        opensearch_csr_pem: "{{ lookup('ansible.builtin.file', csr_test_csr) }}\n"
+        opensearch_csr_name: "{{ csr_test_name }}"
+        opensearch_csr_generation: "{{ csr_test_generation }}"
+
+    - name: Write the certificate
+      ansible.builtin.copy:
+        content: "{{ opensearch_csr_certificate }}"
+        dest: "{{ csr_test_out }}"
+        mode: "0644"

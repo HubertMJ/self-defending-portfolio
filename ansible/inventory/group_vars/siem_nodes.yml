@@ -1,0 +1,67 @@
+# --- host identity ---
+base_hostname: siem01
+base_timezone: Europe/Warsaw
+# Public resolvers only, as on k3s01: the Siem zone may not reach the gateway (ADR 0034).
+base_dns_servers: [1.1.1.1, 1.0.0.1, 9.9.9.9]
+
+# --- network facts ---
+# VLAN 42, 10.4.2.0/24, its own firewall zone `Siem` (ADR 0034). k3s01 is the only
+# client of OpenSearch; administration comes from the same networks as for k3s01.
+siem_node_ip: 10.4.2.10
+admin_cidrs:
+  - 10.2.1.0/24   # LAB 1 (VLAN 21)
+  - 10.1.1.0/24   # Trusted (VLAN 11)
+
+# --- who may reach the host ---
+# The gateway already allows exactly these flows; the host firewall repeats them.
+ssh_hardening_allow_users: [ansible]
+firewall_admin_cidrs: "{{ admin_cidrs }}"
+firewall_services:
+  # The cap keeps a node attacker from filling the disk at line rate; Fluent Bit ships far less
+  # (L13 budget: <= 300 MB a day), and recovery from a hit cap is the operator's (bootstrap 9.6).
+  - {name: opensearch, port: 9200, proto: tcp, sources: [10.4.1.20/32], rate_limit: 4 mbytes/second}
+# Dashboards listens on 127.0.0.1 and is reached only through an SSH tunnel
+# (ssh -N -L 5601:127.0.0.1:5601 ansible@10.4.2.10); sshd permits that one destination.
+ssh_hardening_allow_tcp_forwarding: local
+ssh_hardening_permit_open: ["127.0.0.1:5601"]
+ssh_hardening_allow_stream_local_forwarding: "no"
+
+# --- kernel and audit ---
+sysctl_extra_settings:
+  # Strict reverse-path filtering: a host with one interface and no routing has no legitimate
+  # asymmetric traffic (the k3s value 0 exists only for Cilium). The kernel uses the larger of
+  # conf.all and the interface's own value, and Debian's 50-default.conf sets every interface to 2
+  # (loose) by glob, so the interface is named as well; this file sorts after 50-default.
+  net.ipv4.conf.all.rp_filter: "1"
+  net.ipv4.conf.default.rp_filter: "1"
+  net.ipv4.conf.eth0.rp_filter: "1"
+  # OpenSearch mmaps its index files; its bootstrap check wants at least 262144.
+  vm.max_map_count: "262144"
+  # A swapped-out JVM heap stalls the node; the VM has no swap today, this keeps it so in effect.
+  vm.swappiness: "1"
+auditd_extra_watches:
+  - {path: /etc/opensearch, key: siem_config}
+  - {path: /etc/opensearch-dashboards, key: siem_config}
+  - {path: /etc/sdp-siem, key: siem_config}
+  - {path: /usr/share/opensearch/plugins, key: siem_plugins}
+  - {path: /usr/local/lib/sdp-siem-sync, key: siem_sync}
+
+# --- pinned versions (bump deliberately, see docs/adr/0008 and the ADR 0034 amendment) ---
+opensearch_version: "3.9.0"
+opensearch_deb_sha256: 726432315589e60537de94034605db2091849afeec4175d76c7cbec20bcf7b1a
+opensearch_dashboards_version: "3.9.0"
+opensearch_dashboards_deb_sha256: af7324cbfc46ff99760ce1138d1fb242087487e62eef023706bff9126a4c6d1b
+# Primary key of https://artifacts.opensearch.org/publickeys/opensearch-release.pgp. Its signing
+# subkey 530B46D4B4C3E62A4CD6E7A04E9275EE6BA2427F expires 2027-03-06: refresh the key before then.
+# The install docs still print the old 2021 fingerprint (C5B7...D3FC); it is not this key.
+opensearch_apt_key_fingerprint: A8B2D9E04CD51FEF6AA2DB53BA81D99981191457
+
+# --- certificate generations (ADR 0034 amendment: rotation = next generation, map it, deploy it,
+# then remove the old generation from roles_mapping) ---
+opensearch_cert_generations:
+  admin: 1
+  rules-sync: 1
+  dashboards: 1
+  shipper-siem01: 1
+  shipper-k3s01: 1
+  portfolio-api: 1

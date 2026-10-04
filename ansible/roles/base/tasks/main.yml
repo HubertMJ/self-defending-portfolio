@@ -20,6 +20,21 @@
     state: started
   when: ansible_virtualization_type == 'kvm'
 
+- name: Install systemd-timesyncd
+  ansible.builtin.apt:
+    name: systemd-timesyncd
+    state: present
+  when: base_time_sync | bool
+
+- name: Ensure systemd-timesyncd is enabled and running
+  ansible.builtin.systemd_service:
+    name: systemd-timesyncd
+    state: started
+    enabled: true
+  when:
+    - base_time_sync | bool
+    - ansible_virtualization_type not in ['docker', 'podman', 'container', 'lxc', 'containerd']
+
 - name: Set timezone
   community.general.timezone:
     name: "{{ base_timezone }}"

@@ -20,6 +20,12 @@ ClientAliveCountMax {{ ssh_hardening_client_alive_count_max }}
 X11Forwarding no
 AllowAgentForwarding no
 AllowTcpForwarding {{ ssh_hardening_allow_tcp_forwarding }}
+{% if ssh_hardening_allow_stream_local_forwarding | length > 0 %}
+AllowStreamLocalForwarding {{ ssh_hardening_allow_stream_local_forwarding }}
+{% endif %}
+{% if ssh_hardening_permit_open | length > 0 %}
+PermitOpen {{ ssh_hardening_permit_open | join(' ') }}
+{% endif %}
 PermitTunnel no
 
 AllowUsers {{ ssh_hardening_allow_users | join(' ') }}

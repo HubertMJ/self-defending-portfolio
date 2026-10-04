@@ -1,0 +1,13 @@
+# {{ ansible_managed }}
+# Loopback only: the SSH tunnel (ssh -N -L 5601:127.0.0.1:5601 ansible@siem01) is the way in (ADR 0034).
+server.host: {{ opensearch_dashboards_host }}
+server.port: {{ opensearch_dashboards_port }}
+opensearch.hosts: ["https://127.0.0.1:9200"]
+
+# The node is verified against siem01's CA (its certificate carries IP:127.0.0.1); Dashboards proves
+# itself with its own client certificate on every request, mapped to the read-only analyst role.
+opensearch.ssl.verificationMode: full
+opensearch.ssl.certificateAuthorities: ["{{ opensearch_dashboards_certs_dir }}/ca.crt"]
+opensearch.ssl.certificate: {{ opensearch_dashboards_certs_dir }}/dashboards.crt
+opensearch.ssl.key: {{ opensearch_dashboards_certs_dir }}/dashboards.key
+opensearch.ssl.alwaysPresentCertificate: true

@@ -1,0 +1,152 @@
+---
+# S0-j: the security plugin's bc-fips JNI probe is unpacked into the JVM tmpdir, which the unit's
+# PrivateTmp puts on /tmp; with /tmp mounted noexec OpenSearch does not start.
+- name: Read the mount options of /tmp
+  ansible.builtin.command:
+    cmd: findmnt --noheadings --output OPTIONS --target /tmp
+  register: opensearch_tmp_options
+  changed_when: false
+
+- name: Assert /tmp allows executables
+  ansible.builtin.assert:
+    that:
+      - "'noexec' not in opensearch_tmp_options.stdout | trim | split(',')"
+    fail_msg: /tmp is mounted noexec ({{ opensearch_tmp_options.stdout | trim }}); OpenSearch would fail to start (S0-j).
+    success_msg: /tmp allows executables.
+
+- name: Install the tools the PKI and the key check need
+  ansible.builtin.apt:
+    name: [gnupg, openssl, python3-cryptography]
+    state: present
+
+- name: Trust the OpenSearch repository key after checking its fingerprint
+  ansible.builtin.include_tasks: apt_key.yml
+
+# The deb writes demo certificates and demo users unless this is set at install time.
+- name: Install OpenSearch
+  ansible.builtin.include_tasks: apt_package.yml
+  vars:
+    opensearch_pkg_name: opensearch
+    opensearch_pkg_version: "{{ opensearch_version }}"
+    opensearch_pkg_sha256: "{{ opensearch_deb_sha256 }}"
+    opensearch_pkg_repo_url: "{{ opensearch_apt_repo_url }}"
+    opensearch_pkg_environment:
+      DISABLE_INSTALL_DEMO_CONFIG: "true"
+
+# siem_disk mounts the data disk here; the mounted filesystem's root gets OpenSearch's ownership.
+- name: Hand the snapshot repository to OpenSearch
+  ansible.builtin.file:
+    path: "{{ opensearch_snapshot_path }}"
+    state: directory
+    owner: opensearch
+    group: opensearch
+    mode: "0750"
+
+- name: Make the PKI
+  ansible.builtin.include_tasks: pki.yml
+
+- name: Render opensearch.yml
+  ansible.builtin.template:
+    src: opensearch.yml.j2
+    dest: /etc/opensearch/opensearch.yml
+    owner: root
+    group: opensearch
+    mode: "0640"
+  notify: Restart opensearch
+
+# The package's log4j2.properties has no appender for the security audit logger; one is added
+# as a managed block so the rest of the package file stays as shipped.
+- name: Route the security audit logger to its own file
+  ansible.builtin.blockinfile:
+    path: /etc/opensearch/log4j2.properties
+    marker: "# {mark} sdp: security audit log (Ansible, role opensearch)"
+    block: |
+      appender.sdp_audit.type = RollingFile
+      appender.sdp_audit.name = sdp_audit
+      appender.sdp_audit.fileName = {{ opensearch_audit_log }}
+      appender.sdp_audit.filePattern = {{ opensearch_audit_log }}.%i.gz
+      appender.sdp_audit.layout.type = PatternLayout
+      appender.sdp_audit.layout.pattern = [%d{ISO8601}] %m%n
+      appender.sdp_audit.policies.type = Policies
+      appender.sdp_audit.policies.size.type = SizeBasedTriggeringPolicy
+      appender.sdp_audit.policies.size.size = 50MB
+      appender.sdp_audit.strategy.type = DefaultRolloverStrategy
+      appender.sdp_audit.strategy.max = 5
+      logger.sdp_audit.name = audit
+      logger.sdp_audit.level = info
+      logger.sdp_audit.appenderRef.sdp_audit.ref = sdp_audit
+      logger.sdp_audit.additivity = false
+  notify: Restart opensearch
+
+- name: Size the heap
+  ansible.builtin.copy:
+    dest: /etc/opensearch/jvm.options.d/sdp-heap.options
+    content: |
+      # Managed by Ansible (role: opensearch). ADR 0034: 3 GB of the VM's 8 GB.
+      -Xms{{ opensearch_heap }}
+      -Xmx{{ opensearch_heap }}
+    owner: root
+    group: opensearch
+    mode: "0640"
+  notify: Restart opensearch
+
+# ADR 0034: Performance Analyzer is off. Its agent unit ships disabled and stays masked; the plugin
+# itself is switched off over REST below (its files stay, so the watched plugins directory remains
+# exactly what the package installed).
+- name: Mask the Performance Analyzer agent
+  ansible.builtin.systemd_service:
+    name: opensearch-performance-analyzer.service
+    enabled: false
+    masked: true
+
+- name: Enable and start OpenSearch
+  ansible.builtin.systemd_service:
+    name: opensearch
+    enabled: true
+    state: started
+
+- name: Apply configuration changes before talking to the node
+  ansible.builtin.meta: flush_handlers
+
+# The admin certificate (authcz.admin_dn) is the only identity that works before the security
+# index exists; 503 means "up, security not initialised yet", which opensearch_config fixes.
+- name: Wait for the node to answer the admin certificate
+  ansible.builtin.uri:
+    url: https://127.0.0.1:9200/
+    ca_path: "{{ opensearch_certs_dir }}/ca.crt"
+    client_cert: "{{ opensearch_pki_dir }}/admin.crt"
+    client_key: "{{ opensearch_pki_dir }}/admin.key"
+    status_code: [200, 503]
+  register: opensearch_up
+  until: opensearch_up.status in [200, 503]
+  retries: "{{ opensearch_start_retries }}"
+  delay: 5
+
+# S0-#9: the plugin is active by default and writes to /dev/shm without its agent. Both switches are
+# persisted by the plugin under /var/lib/opensearch and survive restarts; the admin certificate works
+# before the security index exists.
+- name: Read the Performance Analyzer state
+  ansible.builtin.uri:
+    url: https://127.0.0.1:9200/_plugins/_performanceanalyzer/config
+    ca_path: "{{ opensearch_certs_dir }}/ca.crt"
+    client_cert: "{{ opensearch_pki_dir }}/admin.crt"
+    client_key: "{{ opensearch_pki_dir }}/admin.key"
+  register: opensearch_pa_state
+
+- name: Switch Performance Analyzer and its RCA off
+  ansible.builtin.uri:
+    url: https://127.0.0.1:9200/_plugins/_performanceanalyzer/{{ item.path }}
+    method: POST
+    body:
+      enabled: false
+    body_format: json
+    ca_path: "{{ opensearch_certs_dir }}/ca.crt"
+    client_cert: "{{ opensearch_pki_dir }}/admin.crt"
+    client_key: "{{ opensearch_pki_dir }}/admin.key"
+  changed_when: true
+  when: opensearch_pa_state.json[item.state] | bool
+  loop:
+    - {path: rca/cluster/config, state: rcaEnabled}
+    - {path: cluster/config, state: performanceAnalyzerEnabled}
+  loop_control:
+    label: "{{ item.path }}"

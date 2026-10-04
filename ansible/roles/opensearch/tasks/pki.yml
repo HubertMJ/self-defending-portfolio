@@ -1,0 +1,66 @@
+---
+# The SIEM's own PKI (ADR 0034 amendment "Certificates"). Everything here is made on siem01 and no
+# key ever leaves it: the CA (10 years, pathlen 0), the node certificate and the local client
+# identities. CSRs made elsewhere go through sign_client_csr.yml only.
+- name: Create the PKI directory (root only)
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: root
+    group: "{{ item.group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: /etc/sdp-siem, group: root, mode: "0755"}
+    - {path: "{{ opensearch_pki_dir }}", group: root, mode: "0700"}
+    - {path: "{{ opensearch_certs_dir }}", group: opensearch, mode: "0750"}
+  loop_control:
+    label: "{{ item.path }}"
+
+- name: Make the CA
+  ansible.builtin.include_tasks: local_cert.yml
+  vars:
+    opensearch_cert_name: ca
+    opensearch_cert_dir: "{{ opensearch_pki_dir }}"
+    opensearch_cert_kind: ca
+    opensearch_cert_subject: [{O: sdp}, {OU: siem}, {CN: sdp-siem-ca}]
+
+- name: Publish the CA certificate to OpenSearch's config directory
+  ansible.builtin.copy:
+    src: "{{ opensearch_pki_dir }}/ca.crt"
+    dest: "{{ opensearch_certs_dir }}/ca.crt"
+    remote_src: true
+    owner: root
+    group: opensearch
+    mode: "0644"
+  notify: Restart opensearch
+
+- name: Make the node certificate
+  ansible.builtin.include_tasks: local_cert.yml
+  vars:
+    opensearch_cert_name: node
+    opensearch_cert_dir: "{{ opensearch_certs_dir }}"
+    opensearch_cert_kind: node
+    opensearch_cert_subject: [{O: sdp}, {OU: node}, {CN: "{{ opensearch_node_name }}"}]
+    opensearch_cert_key_group: opensearch
+    opensearch_cert_key_mode: "0440"
+
+- name: Restart OpenSearch for a new node certificate
+  ansible.builtin.debug:
+    msg: The node certificate was issued or renewed.
+  changed_when: opensearch_cert_changed | bool
+  when: opensearch_cert_changed | bool
+  notify: Restart opensearch
+
+- name: Make the local client identities
+  ansible.builtin.include_tasks: local_cert.yml
+  vars:
+    opensearch_cert_name: "{{ opensearch_identity }}"
+    opensearch_cert_dir: "{{ opensearch_pki_dir }}"
+    opensearch_cert_kind: client
+    opensearch_cert_subject:
+      - {O: sdp}
+      - {OU: siem}
+      - {CN: "{{ opensearch_identity }}-g{{ opensearch_cert_generations[opensearch_identity] }}"}
+  loop: "{{ opensearch_local_identities }}"
+  loop_control:
+    loop_var: opensearch_identity

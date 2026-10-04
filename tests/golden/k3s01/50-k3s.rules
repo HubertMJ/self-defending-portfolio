@@ -1,0 +1,9 @@
+## Ansible managed
+## Cluster configuration, the sensitive parts of the server state and the binary.
+## Only tls/, cred/ and token are watched, not the whole server directory: the
+## kine SQLite datastore lives there and its write churn would flood the log.
+-w /etc/rancher/k3s -p wa -k k3s_config
+-w /var/lib/rancher/k3s/server/tls -p wa -k k3s_state
+-w /var/lib/rancher/k3s/server/cred -p wa -k k3s_state
+-w /var/lib/rancher/k3s/server/token -p wa -k k3s_state
+-w /usr/local/bin/k3s -p x -k k3s_bin

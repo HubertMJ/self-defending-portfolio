@@ -1,0 +1,110 @@
+---
+# Security configuration from files, applied with securityadmin.sh and the admin certificate
+# (restapi.roles_enabled is empty, so nobody changes it over REST). It is re-applied when a file
+# changed since the last successful apply, or when the live role mapping differs from the files -
+# the mapping is who may do what, so drift there is never left standing.
+- name: Compute the role mapping
+  ansible.builtin.set_fact:
+    opensearch_config_role_mapping: >-
+      {%- set mapping = {} -%}
+      {%- for role, identities in opensearch_config_role_identities.items() -%}
+      {%-   set users = [] -%}
+      {%-   for identity in identities -%}
+      {%-     for generation in [opensearch_cert_generations[identity]] + opensearch_config_extra_generations.get(identity, []) -%}
+      {%-       set _ = users.append(identity ~ '-g' ~ generation) -%}
+      {%-     endfor -%}
+      {%-   endfor -%}
+      {%-   if role == opensearch_config_test_identity_role and opensearch_config_test_identity | bool -%}
+      {%-     set _ = users.append('shipper-test-g1') -%}
+      {%-   endif -%}
+      {%-   set _ = mapping.update({role: users | sort}) -%}
+      {%- endfor -%}
+      {{ mapping }}
+
+- name: Install the static security configuration files
+  ansible.builtin.copy:
+    src: "security/{{ item }}"
+    dest: "/etc/opensearch/opensearch-security/{{ item }}"
+    owner: root
+    group: opensearch
+    mode: "0640"
+  loop: [config.yml, internal_users.yml, roles.yml, action_groups.yml, nodes_dn.yml, tenants.yml, allowlist.yml, audit.yml]
+
+- name: Render the role mapping
+  ansible.builtin.template:
+    src: roles_mapping.yml.j2
+    dest: /etc/opensearch/opensearch-security/roles_mapping.yml
+    owner: root
+    group: opensearch
+    mode: "0640"
+
+- name: Hash the security configuration files
+  ansible.builtin.stat:
+    path: "/etc/opensearch/opensearch-security/{{ item }}"
+    checksum_algorithm: sha256
+  loop: [config.yml, internal_users.yml, roles.yml, roles_mapping.yml, action_groups.yml, nodes_dn.yml, tenants.yml, allowlist.yml,
+         audit.yml]
+  register: opensearch_config_security_files
+
+- name: Read the hash of the last applied security configuration
+  ansible.builtin.slurp:
+    src: "{{ opensearch_config_state_dir }}/security.sha256"
+  register: opensearch_config_security_applied
+  failed_when: false
+
+# Before the first securityadmin run the security index does not exist and the API answers 500
+# "Security index not initialized" (503 while the node is still starting).
+- name: Read the live role mapping
+  ansible.builtin.uri:
+    url: "{{ opensearch_config_url }}/_plugins/_security/api/rolesmapping"
+    ca_path: "{{ opensearch_config_ca }}"
+    client_cert: "{{ opensearch_config_admin_cert }}"
+    client_key: "{{ opensearch_config_admin_key }}"
+    status_code: [200, 500, 503]
+  register: opensearch_config_live_mapping
+
+- name: Decide whether the security configuration must be applied
+  ansible.builtin.set_fact:
+    opensearch_config_security_hash: >-
+      {{ opensearch_config_security_files.results | map(attribute='stat.checksum') | join(' ') | hash('sha256') }}
+    opensearch_config_security_live: >-
+      {%- set live = {} -%}
+      {%- if opensearch_config_live_mapping.status == 200 -%}
+      {%-   for role, entry in opensearch_config_live_mapping.json.items() if not entry.hidden | default(false) -%}
+      {%-     set _ = live.update({role: entry.users | sort}) -%}
+      {%-   endfor -%}
+      {%- endif -%}
+      {{ live }}
+
+- name: Apply the security configuration with securityadmin.sh
+  ansible.builtin.command:
+    argv:
+      - /usr/share/opensearch/plugins/opensearch-security/tools/securityadmin.sh
+      - -cd
+      - /etc/opensearch/opensearch-security
+      - -icl
+      - -h
+      - 127.0.0.1
+      - -p
+      - "9200"
+      - -cacert
+      - "{{ opensearch_config_ca }}"
+      - -cert
+      - "{{ opensearch_config_admin_cert }}"
+      - -key
+      - "{{ opensearch_config_admin_key }}"
+  environment:
+    OPENSEARCH_JAVA_HOME: /usr/share/opensearch/jdk
+  register: opensearch_config_securityadmin
+  changed_when: true
+  when: >-
+    (opensearch_config_security_applied.content | default('') | b64decode | trim) != opensearch_config_security_hash
+    or opensearch_config_security_live != opensearch_config_role_mapping
+
+- name: Record the applied security configuration
+  ansible.builtin.copy:
+    dest: "{{ opensearch_config_state_dir }}/security.sha256"
+    content: "{{ opensearch_config_security_hash }}\n"
+    owner: root
+    group: root
+    mode: "0600"

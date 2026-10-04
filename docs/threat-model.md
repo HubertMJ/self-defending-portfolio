@@ -45,6 +45,7 @@ and Kyverno background scans produce the posture numbers the API serves. Diagram
 | A9 | Honesty of the posture data shown to visitors | Reports that can be forged or are silently stale undermine the project's claim | PolicyReports, Trivy reports, kube-bench Job logs |
 | A10 | Availability of the demo | The attack button is the product | single node, 8 GB RAM; one API replica |
 | A11 | Visitor data | Client IPs reach the API via `CF-Connecting-IP` | `portfolio-api` memory only, as rate-limit keys (IPv6 by /64); the API does not log them |
+| A12 | Integrity of the SIEM's evidence | A node attacker who can rewrite history convicts nobody; the correlation section is only as honest as this record | OpenSearch data streams on `siem01` (VLAN 42), hourly snapshots on its data disk ([ADR 0034](adr/0034-siem-opensearch-security-analytics.md)) |
 
 ## 3. Attackers and their goals
 
@@ -71,6 +72,7 @@ against Cloudflare.
 | TB5 | Git repository → Argo CD → cluster | manifests, chart versions, encrypted secrets |
 | TB6 | Workloads → node / host / LAN | syscalls, host mounts, node network, Proxmox |
 | TB7 | Inside the cluster: detection → response | Falco → Falcosidekick → Talon → API server, and Falcosidekick/Talon → portfolio API webhooks (unauthenticated HTTP hops) |
+| TB8 | k3s01 and the operator → `siem01` | Fluent Bit's appends on 9200 (client certificate), the operator's SSH (Ansible, the Dashboards tunnel), CSRs signed on `siem01` |
 
 ## 5. STRIDE per boundary
 
@@ -179,6 +181,19 @@ amendment).
 | I | — | Alerts contain command lines; Falco output stays in-cluster except on the live feed | The SSE stream shows Falco output, truncated to 300 characters, to every visitor (§6, AB7) |
 | D | Blind the sensor (kill Falco, flood events, evade rules) | DaemonSet + Argo CD self-heal; Falco runs with requests/limits; `make scenario-offline` fails if a rule a scenario or Talon depends on is renamed, disabled or below the forwarded priority ([`tests/scenarios/offline.sh`](../tests/scenarios/offline.sh)) | Rule evasion (renamed binaries, non-TTY shells, interpreters) is possible; detection coverage is the stock ruleset plus one custom rule |
 | E | Talon abused as a cluster-wide killer | Talon RBAC: pods get/patch/delete in `sandbox` only ([`sandbox/talon-rbac.yaml`](../cluster/infra/sandbox/talon-rbac.yaml)), its own Lease in `falco-response` ([`falco-response/talon-rbac.yaml`](../cluster/infra/falco-response/talon-rbac.yaml)); no events, no Namespace reads, nothing cluster-scoped; proven by `kubectl auth can-i` in [`tests/runtime/run.sh`](../tests/runtime/run.sh) | — |
+
+### TB8 · k3s01 and the operator → siem01
+
+| STRIDE | Threat | Control | Residual |
+|--------|--------|---------|----------|
+| S | Talk to OpenSearch as another identity, or with a password | TLS client certificates only (`clientauth_mode: REQUIRE`, basic auth off, no internal users; [`opensearch.yml.j2`](../ansible/roles/opensearch/templates/opensearch.yml.j2), [`config.yml`](../ansible/roles/opensearch_config/files/security/config.yml)); every identity mapped to its own role by CN and generation | A stolen key works until its generation is unmapped |
+| S | CSR impersonation: get a certificate for admin, a node, a CA or another client | One entry point, [`sign_client_csr.yml`](../ansible/roles/opensearch/tasks/sign_client_csr.yml): expected name from the playbook, remote allow-list of three names, exact subject compare, CA:TRUE and SANs refused, role-fixed extensions, nothing copied from the CSR; [`tests/siem/csr-signer.sh`](../tests/siem/csr-signer.sh) with mutations | The operator chooses which file to sign |
+| T | Rewrite or delete evidence from the node | Shipper role is create/bulk on its streams only (delete, update, by-query, mapping, settings, rollover, snapshot, ISM: 403); `sdp-final` refuses every write with a client-supplied `_id` - CAS overwrites of the current or a rolled index and id-carrying creates, for every identity (500); rolled backing indices also write-blocked by ISM (≤ 3 min after rollover); "evidence rewritten" as defence in depth; refusals in the security audit log; hourly snapshots; [`tests/siem/p1-acceptance.sh`](../tests/siem/p1-acceptance.sh) attacks exactly this (ADR 0034 amendment) | The node can add documents (including false ones) and stop shipping; no indexed document is rewritable through the API. Removing the pipeline takes the admin key, i.e. siem01 itself |
+| T | Drop the final pipeline by rewriting a template (Security Analytics' mappings API, `kibana_server`) | Only the admin holds template rights or the SA mapping writes; templates asserted on every run (`index_patterns`, `composed_of`, `final_pipeline`) | — |
+| R | Stop shipping to hide activity; deny a refused attempt | "ingest silent" per stream on heartbeats, "falco metrics silent" (enabled as each source goes live); the security audit log records every refused request with the certificate's CN (shipped from siem01 in P2) | A stopped shipper is alarmed, not prevented |
+| I | Read the SIEM | Only `portfolio-api` outside `siem01`, its read role naming the six k3s01 streams and `siem-sync` (not `sdp-siem01`); Dashboards on 127.0.0.1 behind the SSH tunnel (`PermitOpen 127.0.0.1:5601` only); host user names and IPs pseudonymised before shipping | Whoever holds `siem01` reads everything (out of scope of the rewrite claim) |
+| D | Fill the disk, flood the cluster into read-only | nftables caps 9200 from k3s01 at 4 MB/s (whole connection, ahead of the established accept); ISM rolls over at 1 day or 2 GB; "disk watermark" at 80 %, "ism stalled" for a write index older than 26 h; per-source throttles (P2) | A capped flood still delays honest shipping until the operator stops its source on k3s01 and the backlog drains; single node, no replica |
+| E | From the node into `siem01` | Separate VLAN and zone; gateway and host firewall allow k3s01 → 9200 only; the SIEM holds no credential into the cluster | — |
 
 ## 6. Abuse cases for the attack button
 

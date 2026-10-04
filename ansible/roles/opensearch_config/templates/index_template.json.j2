@@ -1,0 +1,34 @@
+{#- Index template of one data stream (ADR 0034; base: the S0 spike's template-sdp-falco.json).
+    Mappings are explicit and dynamic:false, so a field outside siem/fields/<source>.yaml is stored
+    in _source but never indexed or matched; the five common fields exist in every stream. -#}
+{%- set fields = {
+      '@timestamp': {'type': 'date'},
+      'event.kind': {'type': 'keyword'},
+      'event.dataset': {'type': 'keyword'},
+      'event.ingested': {'type': 'date'},
+      'event.overwrite': {'type': 'boolean'},
+    } -%}
+{%- for name, field in opensearch_config_source_fields.items() -%}
+{%-   set _ = fields.update({name: {'type': field['type']}}) -%}
+{%- endfor -%}
+{%- set properties = {} -%}
+{%- for name, field in fields.items() -%}
+{%-   set parts = name.split('.') -%}
+{%-   set node = namespace(props=properties) -%}
+{%-   for part in parts[:-1] -%}
+{%-     set _ = node.props.setdefault(part, {'properties': {}}) -%}
+{%-     set node.props = node.props[part]['properties'] -%}
+{%-   endfor -%}
+{%-   set _ = node.props.update({parts[-1]: field}) -%}
+{%- endfor -%}
+{{ {
+  'index_patterns': ['sdp-' ~ opensearch_config_source],
+  'data_stream': {'timestamp_field': {'name': '@timestamp'}},
+  'priority': 100,
+  'composed_of': [],
+  'template': {
+    'settings': {'index': {'number_of_shards': 1, 'number_of_replicas': 0, 'final_pipeline': 'sdp-final'}},
+    'mappings': {'dynamic': false, 'properties': properties},
+  },
+  '_meta': {'managed_by': 'ansible role opensearch_config', 'fields': 'siem/fields/' ~ opensearch_config_source ~ '.yaml'},
+} | to_nice_json(indent=2, sort_keys=true) }}

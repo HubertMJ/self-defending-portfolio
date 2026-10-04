@@ -1,0 +1,66 @@
+---
+# Everything inside OpenSearch on siem01, applied with the admin certificate over the loopback
+# (ADR 0034 and its amendment of 2026-10-04; shapes proven in the S0 spike).
+opensearch_config_url: https://127.0.0.1:9200
+
+# Field allow-lists, read on the controller from the repository checkout (siem/fields/README.md).
+opensearch_config_fields_dir: "{{ playbook_dir }}/../../siem/fields"
+
+# The seven data streams, one per source (ADR 0034). A source without a fields file yet (hubble and
+# api arrive with P2) gets the common fields only; its fields are added by the next run after the
+# file lands (template + PUT <stream>/_mapping, additive only).
+opensearch_config_sources: [falco, talon, hubble, k8s-audit, api, host, siem01]
+# The only sources allowed to have no fields file yet (their allow-lists are P2's).
+opensearch_config_sources_pending: [hubble, api]
+
+# Previous generations still mapped during a certificate rotation, e.g. {portfolio-api: [1]} while
+# generation 2 is deployed. Empty outside a rotation.
+opensearch_config_extra_generations: {}
+
+# The temporary test identity of tests/siem/p1-acceptance.sh, mapped to the k3s01 shipper role only
+# while the test runs; the test fails if the mapping is still there afterwards.
+opensearch_config_test_identity: false
+# The role the test identity is mapped to (the acceptance test also checks the API's read role).
+opensearch_config_test_identity_role: sdp_shipper_k3s01
+
+# Retention of findings, alerts and correlations, equal to the ISM delete age of the documents they
+# point at (ADR 0034).
+opensearch_config_retention: 30d
+
+# Snapshot repository on the data disk and the snapshot management policy (ADR 0034 amendment).
+opensearch_config_snapshot_repo: sdp-snapshots
+opensearch_config_snapshot_path: /var/lib/opensearch-snapshots
+opensearch_config_sm_policy: sdp-hourly
+
+# Ops monitors owned by this role (not by the rules sync, so no "sdp-git: " prefix). Created disabled
+# and switched on per source as the source goes live (P2, M13); the three below work without any
+# shipper and are on from P1 (with "ism stalled").
+opensearch_config_ops_monitors_enabled: [evidence rewritten, disk watermark, snapshot failing, ism stalled]
+
+# State of what this role applied last (hashes of request bodies), so an unchanged object is not
+# re-sent on every run.
+opensearch_config_state_dir: /var/lib/sdp-siem/state
+
+# Admin client used by every request (made by the opensearch role).
+opensearch_config_ca: /etc/opensearch/certs/ca.crt
+opensearch_config_admin_cert: /etc/sdp-siem/pki/admin.crt
+opensearch_config_admin_key: /etc/sdp-siem/pki/admin.key
+
+# Which certificate identities hold which sdp role (roles.yml). Each identity is mapped with its
+# current generation plus any listed in opensearch_config_extra_generations.
+opensearch_config_role_identities:
+  sdp_shipper_k3s01: [shipper-k3s01]
+  sdp_shipper_siem01: [shipper-siem01]
+  sdp_api_read: [portfolio-api]
+  sdp_rules_sync: [rules-sync]
+  sdp_analyst: [dashboards]
+
+# Persistent cluster settings (values as strings, the way _cluster/settings returns them).
+opensearch_config_cluster_settings:
+  # S0-#7: one node, no replica can ever be placed; ISM's history index is created by the plugin.
+  cluster.default_number_of_replicas: "0"
+  plugins.index_state_management.history.number_of_replicas: "0"
+  plugins.security_analytics.alert_history_retention_period: "{{ opensearch_config_retention }}"
+  plugins.security_analytics.finding_history_retention_period: "{{ opensearch_config_retention }}"
+  plugins.security_analytics.correlation_history_retention_period: "{{ opensearch_config_retention }}"
+  plugins.alerting.alert_history_retention_period: "{{ opensearch_config_retention }}"

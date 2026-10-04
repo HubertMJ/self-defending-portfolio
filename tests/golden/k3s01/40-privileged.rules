@@ -1,0 +1,8 @@
+## Ansible managed
+## Explicit privilege escalation binaries.
+-w /usr/bin/sudo -p x -k privileged
+-w /usr/bin/su -p x -k privileged
+
+## Any command executed as root that originated from a real login session.
+-a always,exit -F arch=b64 -S execve -F euid=0 -F auid>=1000 -F auid!=unset -k root_cmds
+-a always,exit -F arch=b32 -S execve -F euid=0 -F auid>=1000 -F auid!=unset -k root_cmds

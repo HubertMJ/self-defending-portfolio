@@ -1,0 +1,83 @@
+---
+# One OpenSearch-project package from its own apt repository, pinned four ways (ADR 0008 amendment
+# 2026-10-04): the repository key's fingerprint was asserted before the key was trusted
+# (apt_key.yml), the package's SHA256 in the signed index must equal the pin before anything is
+# installed, apt preferences pin the version at priority 1001, and dpkg holds it.
+# unattended-upgrades follows the Debian archive only, so nothing upgrades it unattended.
+# Inputs: opensearch_pkg_name, opensearch_pkg_version, opensearch_pkg_sha256, opensearch_pkg_repo_url,
+# opensearch_pkg_environment (install-time environment).
+- name: Add the apt repository of {{ opensearch_pkg_name }}
+  ansible.builtin.deb822_repository:
+    name: "{{ opensearch_pkg_name }}"
+    types: deb
+    uris: "{{ opensearch_pkg_repo_url }}"
+    suites: stable
+    components: main
+    architectures: amd64
+    signed_by: "{{ opensearch_apt_keyring }}"
+  register: opensearch_pkg_repo
+
+- name: Pin the version of {{ opensearch_pkg_name }}
+  ansible.builtin.copy:
+    dest: "/etc/apt/preferences.d/{{ opensearch_pkg_name }}"
+    content: |
+      # Managed by Ansible (role: opensearch). Version pin, ADR 0008.
+      Package: {{ opensearch_pkg_name }}
+      Pin: version {{ opensearch_pkg_version }}
+      Pin-Priority: 1001
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Refresh the apt index after the repository changed
+  ansible.builtin.apt:
+    update_cache: true
+  when: opensearch_pkg_repo.changed  # noqa: no-handler - the index is needed by the next task, not at the end
+
+# A run that added the repository but stopped before the refresh leaves no index for it; the
+# record is then missing and the index is refreshed once before reading it again (review L6).
+- name: Read the record in the signed index of {{ opensearch_pkg_name }}
+  ansible.builtin.command:
+    cmd: "apt-cache show {{ opensearch_pkg_name }}={{ opensearch_pkg_version }}"
+  register: opensearch_pkg_record_first
+  changed_when: false
+  failed_when: false
+
+- name: Refresh the apt index when the record is missing, {{ opensearch_pkg_name }}
+  ansible.builtin.apt:
+    update_cache: true
+  when: opensearch_pkg_record_first.rc != 0
+
+- name: Read the record again after the refresh of {{ opensearch_pkg_name }}
+  ansible.builtin.command:
+    cmd: "apt-cache show {{ opensearch_pkg_name }}={{ opensearch_pkg_version }}"
+  register: opensearch_pkg_record_second
+  changed_when: false
+  when: opensearch_pkg_record_first.rc != 0
+
+- name: Keep the record of {{ opensearch_pkg_name }}
+  ansible.builtin.set_fact:
+    opensearch_pkg_record: "{{ opensearch_pkg_record_second if opensearch_pkg_record_first.rc != 0 else opensearch_pkg_record_first }}"
+
+- name: Assert the indexed SHA256 equals the pin of {{ opensearch_pkg_name }}
+  ansible.builtin.assert:
+    that:
+      - opensearch_pkg_indexed == [opensearch_pkg_sha256]
+    fail_msg: >-
+      {{ opensearch_pkg_name }} {{ opensearch_pkg_version }} is indexed with SHA256 {{ opensearch_pkg_indexed }},
+      the pin is {{ opensearch_pkg_sha256 }}. Nothing was installed.
+    success_msg: "{{ opensearch_pkg_name }} {{ opensearch_pkg_version }} matches the pinned SHA256."
+  vars:
+    opensearch_pkg_indexed: >-
+      {{ opensearch_pkg_record.stdout_lines | select('match', '^SHA256: ') | map('regex_replace', '^SHA256: ', '') | list }}
+
+- name: Install the pinned version of {{ opensearch_pkg_name }}
+  ansible.builtin.apt:
+    name: "{{ opensearch_pkg_name }}={{ opensearch_pkg_version }}"
+    state: present
+  environment: "{{ opensearch_pkg_environment | default({}) }}"
+
+- name: Hold {{ opensearch_pkg_name }}
+  ansible.builtin.dpkg_selections:
+    name: "{{ opensearch_pkg_name }}"
+    selection: hold

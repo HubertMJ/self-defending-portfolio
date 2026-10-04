@@ -1,0 +1,15 @@
+---
+galaxy_info:
+  role_name: siem_disk
+  author: self-defending-portfolio
+  description: Finds siem01's snapshot disk by serial, formats it once and mounts it by label.
+  license: MIT
+  min_ansible_version: "2.17"
+  platforms:
+    - name: Debian
+      versions:
+        - trixie
+  galaxy_tags:
+    - storage
+    - siem
+dependencies: []

@@ -21,6 +21,18 @@ auditd_max_log_file_action: ROTATE
 auditd_num_logs: 5
 auditd_space_left_action: SYSLOG
 
+# The k3s ruleset (50-k3s.rules) and the directories it watches exist only on
+# k3s nodes; elsewhere the file is removed. The switch defaults to the inventory
+# group so k3s01's rendered rules stay byte-identical (tests/golden/render.sh;
+# ADR 0009 amendment 2026-10-04).
+auditd_k3s_enabled: "{{ 'k3s_nodes' in group_names }}"
+
+# Host-specific write watches, rendered into 60-extra.rules (absent when the
+# list is empty): [{path, key}], each watched for writes and attribute changes.
+# siem01 watches its OpenSearch configuration, plugins and the rules sync
+# (siem contract M19).
+auditd_extra_watches: []
+
 # Paths watched by the k3s ruleset.
 auditd_k3s_config_dir: /etc/rancher/k3s
 auditd_k3s_state_dir: /var/lib/rancher/k3s/server

@@ -1,0 +1,28 @@
+---
+argument_specs:
+  main:
+    short_description: OpenSearch Dashboards for siem01
+    description:
+      - Installs the pinned Dashboards deb, removes the security plugin and connects to the local node with the Dashboards
+        client certificate made on the host.
+    options:
+      opensearch_dashboards_version:
+        description: Pinned Dashboards package version.
+        type: str
+        required: true
+      opensearch_dashboards_deb_sha256:
+        description: SHA256 of the pinned Dashboards deb.
+        type: str
+        required: true
+      opensearch_dashboards_host:
+        description: server.host.
+        type: str
+        default: 127.0.0.1
+      opensearch_dashboards_port:
+        description: server.port.
+        type: int
+        default: 5601
+      opensearch_dashboards_certs_dir:
+        description: Directory of the CA certificate and the Dashboards client key and certificate.
+        type: path
+        default: /etc/opensearch-dashboards/certs

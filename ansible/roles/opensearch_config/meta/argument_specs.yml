@@ -1,0 +1,79 @@
+---
+argument_specs:
+  main:
+    short_description: Everything inside OpenSearch on siem01
+    description:
+      - Applies the security configuration (certificate-only, the sdp roles, the role mapping by CN and generation), the
+        cluster settings, the sdp-final pipeline, the ISM policy, one template and data stream per source, the snapshot
+        repository and policy and the ops monitors, all with the admin certificate over the loopback.
+    options:
+      opensearch_config_url:
+        description: Node URL on the loopback.
+        type: str
+        default: https://127.0.0.1:9200
+      opensearch_config_fields_dir:
+        description: Directory of the per-source field allow-lists on the controller.
+        type: path
+      opensearch_config_sources:
+        description: Sources; each gets the data stream sdp-<source>.
+        type: list
+        elements: str
+      opensearch_config_sources_pending:
+        description: Sources that may not have a fields file yet; every other source must.
+        type: list
+        elements: str
+      opensearch_config_extra_generations:
+        description: Previous certificate generations still mapped during a rotation, per identity.
+        type: dict
+        default: {}
+      opensearch_config_test_identity:
+        description: Map shipper-test-g1 to the k3s01 shipper role (only while tests/siem/p1-acceptance.sh runs).
+        type: bool
+        default: false
+      opensearch_config_test_identity_role:
+        description: sdp role the test identity is mapped to.
+        type: str
+        default: sdp_shipper_k3s01
+      opensearch_config_retention:
+        description: Retention of findings, alerts and correlations.
+        type: str
+        default: 30d
+      opensearch_config_snapshot_repo:
+        description: Name of the fs snapshot repository.
+        type: str
+        default: sdp-snapshots
+      opensearch_config_snapshot_path:
+        description: Location of the snapshot repository (inside path.repo).
+        type: path
+        default: /var/lib/opensearch-snapshots
+      opensearch_config_sm_policy:
+        description: Name of the snapshot management policy.
+        type: str
+        default: sdp-hourly
+      opensearch_config_ops_monitors_enabled:
+        description: Ops monitors that are enabled; every other ops monitor is created disabled.
+        type: list
+        elements: str
+      opensearch_config_state_dir:
+        description: Directory of the hashes of the last written request bodies.
+        type: path
+        default: /var/lib/sdp-siem/state
+      opensearch_config_ca:
+        description: CA certificate that verifies the node.
+        type: path
+      opensearch_config_admin_cert:
+        description: Admin client certificate.
+        type: path
+      opensearch_config_admin_key:
+        description: Admin client key.
+        type: path
+      opensearch_config_role_identities:
+        description: Certificate identities per sdp role.
+        type: dict
+      opensearch_config_cluster_settings:
+        description: Persistent cluster settings, values as strings.
+        type: dict
+      opensearch_cert_generations:
+        description: Current generation per client identity.
+        type: dict
+        required: true
