@@ -1,0 +1,19 @@
+{#- "disk watermark": the data path above 80 % used, before the 85 % low watermark stops shard
+    allocation and long before the flood stage makes every index read-only (findings included). -#}
+{{ {
+  'type': 'monitor',
+  'monitor_type': 'cluster_metrics_monitor',
+  'name': 'disk watermark',
+  'enabled': opensearch_config_monitor_enabled | bool,
+  'schedule': {'period': {'interval': 5, 'unit': 'MINUTES'}},
+  'inputs': [{'uri': {'api_type': 'NODES_STATS', 'path': '_nodes/stats', 'path_params': '', 'url': 'http://localhost:9200/_nodes/stats'}}],
+  'triggers': [{'query_level_trigger': {
+    'name': 'data path above 80 percent',
+    'severity': '2',
+    'condition': {'script': {
+      'source': 'for (n in ctx.results[0].nodes.values()) { def t = n.fs.total; if (t.total_in_bytes > 0 && (t.total_in_bytes - t.available_in_bytes) * 100.0 / t.total_in_bytes > 80) { return true; } } return false;',
+      'lang': 'painless',
+    }},
+    'actions': [],
+  }}],
+} | to_nice_json(indent=2, sort_keys=true) }}

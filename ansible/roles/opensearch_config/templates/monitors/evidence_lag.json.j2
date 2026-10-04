@@ -1,0 +1,29 @@
+{#- "evidence lag" (F1, secondary): a document ingested more than 6 hours after its own @timestamp.
+    6 h covers the 04:30 unattended-upgrade reboot and a buffered outage of that length; a longer
+    buffered outage raises it, explained by the "ingest silent" alarm that fired first. Honest
+    timestamps only - an overwrite picks its own @timestamp, which is why "evidence rewritten" is the
+    primary control. -#}
+{{ {
+  'type': 'monitor',
+  'monitor_type': 'query_level_monitor',
+  'name': 'evidence lag',
+  'enabled': opensearch_config_monitor_enabled | bool,
+  'schedule': {'period': {'interval': 1, 'unit': 'MINUTES'}},
+  'inputs': [{'search': {
+    'indices': ['sdp-*'],
+    'query': {'size': 0, 'query': {'bool': {'filter': [
+      {'range': {'event.ingested': {'gte': '{{period_end}}||-2m', 'lte': '{{period_end}}', 'format': 'epoch_millis'}}},
+      {'script': {'script': {
+        'source': "doc['@timestamp'].size() > 0 && doc['event.ingested'].size() > 0 && doc['event.ingested'].value.toInstant().toEpochMilli() - doc['@timestamp'].value.toInstant().toEpochMilli() > params.lag_ms",
+        'params': {'lag_ms': 21600000},
+        'lang': 'painless',
+      }}},
+    ]}}},
+  }}],
+  'triggers': [{'query_level_trigger': {
+    'name': 'ingested more than 6 h after the event',
+    'severity': '3',
+    'condition': {'script': {'source': 'ctx.results[0].hits.total.value > 0', 'lang': 'painless'}},
+    'actions': [],
+  }}],
+} | to_nice_json(indent=2, sort_keys=true) }}

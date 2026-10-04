@@ -1,0 +1,76 @@
+---
+# One ops monitor, found by its unique name. Inputs: opensearch_config_monitor_name,
+# opensearch_config_monitor_body (JSON text).
+- name: Find the monitor "{{ opensearch_config_monitor_name }}"
+  ansible.builtin.uri:
+    url: "{{ opensearch_config_url }}/_plugins/_alerting/monitors/_search"
+    method: POST
+    body:
+      size: 10
+      query: {term: {monitor.name.keyword: "{{ opensearch_config_monitor_name }}"}}
+    body_format: json
+    ca_path: "{{ opensearch_config_ca }}"
+    client_cert: "{{ opensearch_config_admin_cert }}"
+    client_key: "{{ opensearch_config_admin_key }}"
+    # 404: the alerting config index does not exist before the first monitor.
+    status_code: [200, 404]
+  register: opensearch_config_monitor_found
+
+- name: Note the id of "{{ opensearch_config_monitor_name }}"
+  ansible.builtin.set_fact:
+    opensearch_config_monitor_ids: "{{ opensearch_config_monitor_found.json.hits.hits | default([]) | map(attribute='_id') | list }}"
+    opensearch_config_monitor_key: "monitor-{{ opensearch_config_monitor_name | regex_replace('[^a-z0-9]+', '-') }}"
+
+- name: Assert at most one monitor is named "{{ opensearch_config_monitor_name }}"
+  ansible.builtin.assert:
+    that:
+      - opensearch_config_monitor_ids | length <= 1
+    fail_msg: "{{ opensearch_config_monitor_ids | length }} monitors are named {{ opensearch_config_monitor_name }}; remove the extra ones."
+    success_msg: Monitor "{{ opensearch_config_monitor_name }}" is unique.
+
+- name: Keep the id of "{{ opensearch_config_monitor_name }}"
+  ansible.builtin.set_fact:
+    opensearch_config_monitor_id: "{{ opensearch_config_monitor_ids | first | default('') }}"
+
+- name: Read the hash of the last written body of "{{ opensearch_config_monitor_name }}"
+  ansible.builtin.slurp:
+    src: "{{ opensearch_config_state_dir }}/{{ opensearch_config_monitor_key }}.sha256"
+  register: opensearch_config_monitor_applied
+  failed_when: false
+
+- name: Create "{{ opensearch_config_monitor_name }}"
+  ansible.builtin.uri:
+    url: "{{ opensearch_config_url }}/_plugins/_alerting/monitors"
+    method: POST
+    body: "{{ opensearch_config_monitor_body }}"
+    body_format: json
+    ca_path: "{{ opensearch_config_ca }}"
+    client_cert: "{{ opensearch_config_admin_cert }}"
+    client_key: "{{ opensearch_config_admin_key }}"
+    status_code: [200, 201]
+  changed_when: true
+  when: opensearch_config_monitor_id == ''
+
+- name: Update "{{ opensearch_config_monitor_name }}"
+  ansible.builtin.uri:
+    url: "{{ opensearch_config_url }}/_plugins/_alerting/monitors/{{ opensearch_config_monitor_id }}"
+    method: PUT
+    body: "{{ opensearch_config_monitor_body }}"
+    body_format: json
+    ca_path: "{{ opensearch_config_ca }}"
+    client_cert: "{{ opensearch_config_admin_cert }}"
+    client_key: "{{ opensearch_config_admin_key }}"
+  changed_when: true
+  when:
+    - opensearch_config_monitor_id != ''
+    - >-
+      (opensearch_config_monitor_applied.content | default('') | b64decode | trim)
+      != (opensearch_config_monitor_body | string | hash('sha256'))
+
+- name: Record the written body of "{{ opensearch_config_monitor_name }}"
+  ansible.builtin.copy:
+    dest: "{{ opensearch_config_state_dir }}/{{ opensearch_config_monitor_key }}.sha256"
+    content: "{{ opensearch_config_monitor_body | string | hash('sha256') }}\n"
+    owner: root
+    group: root
+    mode: "0600"

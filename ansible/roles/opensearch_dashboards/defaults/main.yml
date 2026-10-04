@@ -1,0 +1,7 @@
+---
+# OpenSearch Dashboards on siem01 (ADR 0034): loopback only, reached through an SSH tunnel; its own
+# client certificate (dashboards-g<N>) mapped to the read-only analyst role. The version pins
+# (opensearch_dashboards_version, opensearch_dashboards_deb_sha256) live in group_vars/siem_nodes.yml.
+opensearch_dashboards_host: 127.0.0.1
+opensearch_dashboards_port: 5601
+opensearch_dashboards_certs_dir: /etc/opensearch-dashboards/certs

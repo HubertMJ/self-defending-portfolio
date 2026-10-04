@@ -55,6 +55,17 @@
             + ([] if auditd_extra_watches | length > 0 else ['60-extra.rules']) }}"
   notify: Load audit rules
 
+# A run that failed before its handlers left rule files on disk that were never compiled or loaded,
+# and the next run sees no file change. augenrules --check compares rules.d with the compiled
+# /etc/audit/audit.rules (read-only), so such a gap is closed by the next run.
+- name: Check whether the compiled rules match rules.d
+  ansible.builtin.command:
+    cmd: /usr/sbin/augenrules --check
+  register: auditd_augenrules_check
+  check_mode: false
+  changed_when: "'should be updated' in auditd_augenrules_check.stdout"
+  notify: Load audit rules
+
 - name: Ensure auditd is enabled and running
   ansible.builtin.service:
     name: auditd

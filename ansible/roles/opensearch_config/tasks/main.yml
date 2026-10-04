@@ -1,0 +1,196 @@
+---
+# Order matters (S0-#6): security first (every non-admin identity depends on it), then cluster
+# settings, the sdp-final pipeline and the ISM policy, then the templates and data streams - the ISM
+# policy attaches only to backing indices created after it exists.
+- name: Create the state directory
+  ansible.builtin.file:
+    path: "{{ opensearch_config_state_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+
+- name: Apply the security configuration
+  ansible.builtin.include_tasks: security.yml
+
+- name: Wait for the cluster to be usable after a security change
+  ansible.builtin.uri:
+    url: "{{ opensearch_config_url }}/_cluster/health?wait_for_status=yellow&timeout=60s"
+    ca_path: "{{ opensearch_config_ca }}"
+    client_cert: "{{ opensearch_config_admin_cert }}"
+    client_key: "{{ opensearch_config_admin_key }}"
+  register: opensearch_config_health
+  until: opensearch_config_health.status == 200
+  retries: 12
+  delay: 5
+
+# S0-#7: one node, no replica can be placed; retention equals the documents' 30 days (ADR 0034).
+- name: Read the persistent cluster settings
+  ansible.builtin.uri:
+    url: "{{ opensearch_config_url }}/_cluster/settings?flat_settings=true"
+    ca_path: "{{ opensearch_config_ca }}"
+    client_cert: "{{ opensearch_config_admin_cert }}"
+    client_key: "{{ opensearch_config_admin_key }}"
+  register: opensearch_config_settings_live
+
+- name: Compare the cluster settings with the wanted ones
+  ansible.builtin.set_fact:
+    opensearch_config_settings_drift: >-
+      {%- set drift = [] -%}
+      {%- for key, value in opensearch_config_cluster_settings.items() -%}
+      {%-   if opensearch_config_settings_live.json.persistent.get(key) != value | string -%}
+      {%-     set _ = drift.append(key) -%}
+      {%-   endif -%}
+      {%- endfor -%}
+      {{ drift }}
+
+- name: Set the cluster settings
+  ansible.builtin.uri:
+    url: "{{ opensearch_config_url }}/_cluster/settings"
+    method: PUT
+    body:
+      persistent: "{{ opensearch_config_cluster_settings }}"
+    body_format: json
+    ca_path: "{{ opensearch_config_ca }}"
+    client_cert: "{{ opensearch_config_admin_cert }}"
+    client_key: "{{ opensearch_config_admin_key }}"
+  changed_when: true
+  when: opensearch_config_settings_drift | length > 0
+
+# Indices that plugins created before the replica settings (alerting, ISM, the security index).
+- name: List indices that still want a replica
+  ansible.builtin.uri:
+    url: "{{ opensearch_config_url }}/_cat/indices?format=json&h=index,rep&expand_wildcards=all"
+    ca_path: "{{ opensearch_config_ca }}"
+    client_cert: "{{ opensearch_config_admin_cert }}"
+    client_key: "{{ opensearch_config_admin_key }}"
+  register: opensearch_config_indices
+
+- name: Drop the replica of those indices
+  ansible.builtin.uri:
+    url: "{{ opensearch_config_url }}/{{ item.index | urlencode }}/_settings"
+    method: PUT
+    body:
+      index:
+        number_of_replicas: 0
+    body_format: json
+    ca_path: "{{ opensearch_config_ca }}"
+    client_cert: "{{ opensearch_config_admin_cert }}"
+    client_key: "{{ opensearch_config_admin_key }}"
+  changed_when: true
+  loop: "{{ opensearch_config_indices.json | rejectattr('rep', 'equalto', '0') | list }}"
+  loop_control:
+    label: "{{ item.index }}"
+
+# F1: every write gets event.ingested from the server and event.overwrite = (client sent an id),
+# whatever the client put there. The templates name it index.final_pipeline, which no request
+# parameter can skip (S0-c).
+- name: Write the sdp-final ingest pipeline
+  ansible.builtin.include_tasks: rest_object.yml
+  vars:
+    opensearch_config_obj_key: pipeline-sdp-final
+    opensearch_config_obj_path: /_ingest/pipeline/sdp-final
+    opensearch_config_obj_body: "{{ lookup('ansible.builtin.file', 'pipeline-sdp-final.json') }}"
+
+- name: Read the live sdp-final pipeline
+  ansible.builtin.uri:
+    url: "{{ opensearch_config_url }}/_ingest/pipeline/sdp-final"
+    ca_path: "{{ opensearch_config_ca }}"
+    client_cert: "{{ opensearch_config_admin_cert }}"
+    client_key: "{{ opensearch_config_admin_key }}"
+  register: opensearch_config_pipeline_live
+
+# The pipeline is the rewrite alarm's foundation: if anything changed it, put it back now.
+- name: Restore the sdp-final pipeline if it drifted
+  ansible.builtin.include_tasks: rest_object.yml
+  vars:
+    opensearch_config_obj_key: pipeline-sdp-final
+    opensearch_config_obj_path: /_ingest/pipeline/sdp-final
+    opensearch_config_obj_body: "{{ lookup('ansible.builtin.file', 'pipeline-sdp-final.json') }}"
+    opensearch_config_obj_force: true
+  when: opensearch_config_pipeline_live.json['sdp-final'] != (lookup('ansible.builtin.file', 'pipeline-sdp-final.json') | from_json)
+
+# S0-h / F18: hot = [rollover after 1 day, read_only] - the rolled index is write-blocked within
+# about 3 minutes - then delete at 30 days. ism_template attaches it to every sdp-* backing index
+# created from now on.
+- name: Write the ISM policy sdp-30d
+  ansible.builtin.include_tasks: rest_object.yml
+  vars:
+    opensearch_config_obj_key: ism-sdp-30d
+    opensearch_config_obj_path: /_plugins/_ism/policies/sdp-30d
+    opensearch_config_obj_body: "{{ lookup('ansible.builtin.file', 'ism-sdp-30d.json') }}"
+    opensearch_config_obj_cas: true
+
+- name: Write the template and create the data stream of each source
+  ansible.builtin.include_tasks: stream.yml
+  loop: "{{ opensearch_config_sources }}"
+  loop_control:
+    loop_var: opensearch_config_source
+
+# Snapshots (ADR 0034 amendment): hourly to the data disk, kept 7 days and never fewer than 24.
+- name: Read the snapshot repository
+  ansible.builtin.uri:
+    url: "{{ opensearch_config_url }}/_snapshot/{{ opensearch_config_snapshot_repo }}"
+    ca_path: "{{ opensearch_config_ca }}"
+    client_cert: "{{ opensearch_config_admin_cert }}"
+    client_key: "{{ opensearch_config_admin_key }}"
+    status_code: [200, 404]
+  register: opensearch_config_repo_live
+
+- name: Register the snapshot repository
+  ansible.builtin.uri:
+    url: "{{ opensearch_config_url }}/_snapshot/{{ opensearch_config_snapshot_repo }}"
+    method: PUT
+    body:
+      type: fs
+      settings:
+        location: "{{ opensearch_config_snapshot_path }}"
+    body_format: json
+    ca_path: "{{ opensearch_config_ca }}"
+    client_cert: "{{ opensearch_config_admin_cert }}"
+    client_key: "{{ opensearch_config_admin_key }}"
+  changed_when: true
+  when: >-
+    opensearch_config_repo_live.status == 404
+    or opensearch_config_repo_live.json[opensearch_config_snapshot_repo].type != 'fs'
+    or opensearch_config_repo_live.json[opensearch_config_snapshot_repo].settings
+       != dict(location=opensearch_config_snapshot_path)
+
+- name: Write the snapshot management policy
+  ansible.builtin.include_tasks: rest_object.yml
+  vars:
+    opensearch_config_obj_key: sm-{{ opensearch_config_sm_policy }}
+    opensearch_config_obj_path: /_plugins/_sm/policies/{{ opensearch_config_sm_policy }}
+    opensearch_config_obj_create_method: POST
+    opensearch_config_obj_cas: true
+    opensearch_config_obj_body: "{{ lookup('ansible.builtin.template', 'sm_policy.json.j2') }}"
+
+- name: Write the ingest-silent monitor of each source
+  ansible.builtin.include_tasks: monitor.yml
+  vars:
+    opensearch_config_monitor_name: ingest silent {{ opensearch_config_monitor_source }}
+    opensearch_config_monitor_enabled: >-
+      {{ ('ingest silent ' ~ opensearch_config_monitor_source) in opensearch_config_ops_monitors_enabled }}
+    opensearch_config_monitor_body: "{{ lookup('ansible.builtin.template', 'monitors/ingest_silent.json.j2') }}"
+  loop: "{{ opensearch_config_sources }}"
+  loop_control:
+    loop_var: opensearch_config_monitor_source
+
+- name: Write the other ops monitors
+  ansible.builtin.include_tasks: monitor.yml
+  vars:
+    opensearch_config_monitor_name: "{{ opensearch_config_monitor.name }}"
+    opensearch_config_monitor_enabled: "{{ opensearch_config_monitor.name in opensearch_config_ops_monitors_enabled }}"
+    opensearch_config_monitor_body: "{{ lookup('ansible.builtin.template', 'monitors/' ~ opensearch_config_monitor.template) }}"
+  loop:
+    - {name: falco metrics silent, template: falco_metrics_silent.json.j2}
+    - {name: evidence rewritten, template: evidence_rewritten.json.j2}
+    - {name: evidence lag, template: evidence_lag.json.j2}
+    - {name: disk watermark, template: disk_watermark.json.j2}
+    - {name: snapshot failing, template: snapshot_failing.json.j2}
+  loop_control:
+    loop_var: opensearch_config_monitor
+    label: "{{ opensearch_config_monitor.name }}"
+
+- name: Check what the role guarantees
+  ansible.builtin.include_tasks: assert.yml

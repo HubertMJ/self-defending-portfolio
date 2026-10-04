@@ -1,7 +1,10 @@
 ---
-# Full bootstrap: harden the host first, then bring up the cluster on top of it.
+# Full bootstrap: harden the host first, then bring up the cluster on top of it, then the SIEM host.
 - name: Import host hardening
   ansible.builtin.import_playbook: hardening.yml
 
 - name: Import cluster bootstrap
   ansible.builtin.import_playbook: cluster.yml
+
+- name: Import the SIEM host
+  ansible.builtin.import_playbook: siem.yml

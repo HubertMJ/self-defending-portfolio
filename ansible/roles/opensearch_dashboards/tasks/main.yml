@@ -1,0 +1,77 @@
+---
+- name: Install OpenSearch Dashboards with the same apt discipline as OpenSearch
+  ansible.builtin.include_role:
+    name: opensearch
+    tasks_from: apt_package
+  vars:
+    opensearch_pkg_name: opensearch-dashboards
+    opensearch_pkg_version: "{{ opensearch_dashboards_version }}"
+    opensearch_pkg_sha256: "{{ opensearch_dashboards_deb_sha256 }}"
+    opensearch_pkg_repo_url: "{{ opensearch_dashboards_apt_repo_url }}"
+
+# ADR 0034: Dashboards runs without the security plugin (the deb ships it). Access control is the
+# SSH key that opens the tunnel; what Dashboards may do is the analyst role of its certificate.
+- name: List the installed Dashboards plugins
+  ansible.builtin.command:
+    cmd: /usr/share/opensearch-dashboards/bin/opensearch-dashboards-plugin list --allow-root
+  register: opensearch_dashboards_plugins
+  changed_when: false
+
+- name: Remove the security plugin
+  ansible.builtin.command:
+    cmd: /usr/share/opensearch-dashboards/bin/opensearch-dashboards-plugin remove securityDashboards --allow-root
+  when: opensearch_dashboards_plugins.stdout is search('securityDashboards')
+  changed_when: true
+  notify: Restart opensearch-dashboards
+
+- name: Create the Dashboards certificate directory
+  ansible.builtin.file:
+    path: "{{ opensearch_dashboards_certs_dir }}"
+    state: directory
+    owner: root
+    group: opensearch-dashboards
+    mode: "0750"
+
+- name: Publish the CA certificate to Dashboards
+  ansible.builtin.copy:
+    src: "{{ opensearch_pki_dir }}/ca.crt"
+    dest: "{{ opensearch_dashboards_certs_dir }}/ca.crt"
+    remote_src: true
+    owner: root
+    group: opensearch-dashboards
+    mode: "0644"
+  notify: Restart opensearch-dashboards
+
+- name: Make the Dashboards client certificate on this host
+  ansible.builtin.include_role:
+    name: opensearch
+    tasks_from: local_cert
+  vars:
+    opensearch_cert_name: dashboards
+    opensearch_cert_dir: "{{ opensearch_dashboards_certs_dir }}"
+    opensearch_cert_kind: client
+    opensearch_cert_subject: [{O: sdp}, {OU: siem}, {CN: "dashboards-g{{ opensearch_cert_generations['dashboards'] }}"}]
+    opensearch_cert_key_group: opensearch-dashboards
+    opensearch_cert_key_mode: "0440"
+
+- name: Restart Dashboards for a new client certificate
+  ansible.builtin.debug:
+    msg: The Dashboards certificate was issued or renewed.
+  changed_when: opensearch_cert_changed | bool
+  when: opensearch_cert_changed | bool
+  notify: Restart opensearch-dashboards
+
+- name: Render opensearch_dashboards.yml
+  ansible.builtin.template:
+    src: opensearch_dashboards.yml.j2
+    dest: /etc/opensearch-dashboards/opensearch_dashboards.yml
+    owner: root
+    group: opensearch-dashboards
+    mode: "0640"
+  notify: Restart opensearch-dashboards
+
+- name: Enable and start Dashboards
+  ansible.builtin.systemd_service:
+    name: opensearch-dashboards
+    enabled: true
+    state: started

@@ -1,0 +1,15 @@
+---
+galaxy_info:
+  role_name: opensearch_config
+  author: self-defending-portfolio
+  description: Security configuration, evidence pipeline, ISM, data streams, snapshots and ops monitors of the SIEM.
+  license: MIT
+  min_ansible_version: "2.17"
+  platforms:
+    - name: Debian
+      versions:
+        - trixie
+  galaxy_tags:
+    - opensearch
+    - siem
+dependencies: []

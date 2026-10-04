@@ -1,0 +1,11 @@
+---
+# The snapshot disk of siem01 (ADR 0034: hourly snapshots to a second 20 GB disk). The guest finds
+# it by the serial scripts/pve-create-vm.sh gives it, never by device name: /dev/sdX order is not
+# stable, and the disk holding / must never be touched.
+siem_disk_serial: siem01-data
+siem_disk_label: siem-snap
+siem_disk_fstype: ext4
+siem_disk_mount: /var/lib/opensearch-snapshots
+# nofail: a missing data disk must not stop the boot (OpenSearch and its alarms still come up and
+# the "snapshot failing" monitor reports it).
+siem_disk_mount_opts: defaults,nofail,nodev,nosuid,noexec

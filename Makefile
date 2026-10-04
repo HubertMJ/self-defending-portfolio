@@ -1,5 +1,16 @@
-.PHONY: lint gitleaks validate smoke runtime-test abuse-test scenario-offline scenario-test vm hardening cluster verify bootstrap
+.PHONY: lint gitleaks validate smoke runtime-test abuse-test scenario-offline scenario-test vm hardening cluster verify bootstrap \
+	siem siem-verify golden siem-csr-test siem-acceptance
 DOCKER ?= docker
+
+# Ansible in the tooling container (scripts/Dockerfile.tooling); Ansible is not installed on the
+# operator host. ~/.ssh is copied into the container rather than used in place, because ssh refuses
+# a config owned by another uid. Arguments after the playbook come from ARGS, e.g.
+# make siem ARGS="--check --diff".
+ANSIBLE_IN_TOOLING = $(DOCKER) run --rm -i -v "$(CURDIR)":/work -w /work/ansible -v "$(HOME)/.ssh":/ssh-src:ro \
+	-e ANSIBLE_COLLECTIONS_PATH=/work/.ansible/collections sdp-tooling sh -ec \
+	'cp -r /ssh-src /root/.ssh && chmod -R go-rwx /root/.ssh \
+	&& ansible-galaxy collection install -r requirements.yml -p /work/.ansible/collections >/dev/null \
+	&& ansible-playbook "$$@"' ansible-playbook
 
 lint:            ## run yamllint, ansible-lint, shellcheck, syntax-check (in container)
 	@DOCKER="$(DOCKER)" scripts/lint.sh
@@ -44,3 +55,18 @@ verify:          ## read-only checks
 
 bootstrap:       ## phase 2: install Argo CD once (needs KUBECONFIG and SOPS_AGE_KEY_FILE)
 	@cluster/bootstrap/bootstrap.sh
+
+siem:            ## SIEM host siem01: hardening, snapshot disk, OpenSearch, Dashboards (ADR 0034; ARGS="--check --diff")
+	@$(ANSIBLE_IN_TOOLING) playbooks/siem.yml $(ARGS)
+
+siem-verify:     ## read-only checks of siem01
+	@$(ANSIBLE_IN_TOOLING) playbooks/verify.yml --limit siem_nodes $(ARGS)
+
+golden:          ## the shared host roles render byte-identically for k3s01 (goldens from b374c0e) and siem01-shaped for siem01
+	@DOCKER="$(DOCKER)" tests/golden/render.sh
+
+siem-csr-test:   ## the remote CSR entry point signs exactly the expected client identity and nothing more (in container)
+	@DOCKER="$(DOCKER)" tests/siem/csr-signer.sh
+
+siem-acceptance: ## P1 live acceptance on siem01: shipper refusals, rewrite alarm, TLS, settings, restore (ADR 0034)
+	@DOCKER="$(DOCKER)" tests/siem/p1-acceptance.sh

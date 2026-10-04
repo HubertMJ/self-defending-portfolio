@@ -1,0 +1,189 @@
+---
+argument_specs:
+  main:
+    short_description: Pinned OpenSearch single node for siem01
+    description:
+      - Installs the pinned OpenSearch deb from its signature-checked repository, makes the host's PKI (CA, node and local
+        client certificates), renders opensearch.yml for client-certificate-only TLS and starts the node.
+    options:
+      opensearch_version:
+        description: Pinned OpenSearch package version.
+        type: str
+        required: true
+      opensearch_deb_sha256:
+        description: SHA256 of the pinned OpenSearch deb; asserted against the signed apt index before install.
+        type: str
+        required: true
+      opensearch_apt_key_fingerprint:
+        description: Primary fingerprint of the OpenSearch release key; asserted before the key is trusted.
+        type: str
+        required: true
+      opensearch_apt_key_url:
+        description: URL of the OpenSearch release key.
+        type: str
+      opensearch_apt_keyring:
+        description: Path of the trusted key, used as signed-by of the OpenSearch repositories.
+        type: str
+      opensearch_apt_repo_url:
+        description: OpenSearch apt repository.
+        type: str
+      opensearch_dashboards_apt_repo_url:
+        description: OpenSearch Dashboards apt repository.
+        type: str
+      opensearch_cluster_name:
+        description: cluster.name.
+        type: str
+        default: sdp-siem
+      opensearch_node_name:
+        description: node.name, the node certificate's CN and DNS SAN.
+        type: str
+      opensearch_node_ip:
+        description: VLAN address HTTP binds next to the loopback; the node certificate's IP SAN.
+        type: str
+      opensearch_heap:
+        description: JVM heap size (Xms and Xmx).
+        type: str
+        default: 3g
+      opensearch_snapshot_path:
+        description: path.repo, the snapshot repository on the data disk.
+        type: path
+        default: /var/lib/opensearch-snapshots
+      opensearch_pki_dir:
+        description: Directory of the CA and the local client identities (root only).
+        type: path
+        default: /etc/sdp-siem/pki
+      opensearch_certs_dir:
+        description: Directory of the node certificate and key and the CA certificate inside OpenSearch's config.
+        type: path
+        default: /etc/opensearch/certs
+      opensearch_ca_days:
+        description: CA validity in days.
+        type: int
+        default: 3650
+      opensearch_cert_days:
+        description: Node and client certificate validity in days.
+        type: int
+        default: 365
+      opensearch_cert_renew_before:
+        description: Relative time; certificates that end before it are re-issued.
+        type: str
+        default: +45d
+      opensearch_cert_generations:
+        description: Current generation per client identity; the certificate CN is <name>-g<N>.
+        type: dict
+        required: true
+      opensearch_local_identities:
+        description: Client identities this role makes on the host.
+        type: list
+        elements: str
+      opensearch_local_identity_names:
+        description: Every identity made on the host; never signed through the remote entry point.
+        type: list
+        elements: str
+      opensearch_remote_identities:
+        description: The only identities sign_client_csr.yml signs.
+        type: list
+        elements: str
+      opensearch_admin_dn:
+        description: plugins.security.authcz.admin_dn.
+        type: str
+      opensearch_nodes_dn:
+        description: plugins.security.nodes_dn.
+        type: str
+      opensearch_start_retries:
+        description: Polls (5 s apart) for the node to answer after a start.
+        type: int
+        default: 60
+  sign_client_csr:
+    short_description: Sign a client CSR made elsewhere, subject-enforced
+    description:
+      - The only entry point for a remote CSR. Verifies the CSR, requires its subject to be exactly the expected client DN,
+        refuses local, admin and node identities, CA:TRUE and SANs, and builds the certificate from role-fixed values only.
+    options:
+      opensearch_csr_pem:
+        description: The CSR, PEM text.
+        type: str
+        required: true
+      opensearch_csr_name:
+        description: Identity the playbook expects (never taken from the CSR); must be in opensearch_remote_identities.
+        type: str
+        required: true
+      opensearch_csr_generation:
+        description: Generation of the identity; the CN is <name>-g<generation>.
+        type: int
+        required: true
+      opensearch_pki_dir:
+        description: Directory holding ca.crt and ca.key.
+        type: path
+      opensearch_cert_days:
+        description: Certificate validity in days.
+        type: int
+      opensearch_remote_identities:
+        description: The only identities signed.
+        type: list
+        elements: str
+      opensearch_local_identity_names:
+        description: Identities never signed here.
+        type: list
+        elements: str
+      opensearch_admin_dn:
+        description: Super-admin DN, never signed here.
+        type: str
+      opensearch_nodes_dn:
+        description: Node DN, never signed here.
+        type: str
+  apt_package:
+    short_description: Install one pinned OpenSearch-project package
+    description:
+      - Adds the package's repository with the verified key, pins and holds the version and asserts the indexed SHA256.
+    options:
+      opensearch_pkg_name:
+        description: Package name.
+        type: str
+        required: true
+      opensearch_pkg_version:
+        description: Pinned version.
+        type: str
+        required: true
+      opensearch_pkg_sha256:
+        description: Pinned SHA256 of the deb.
+        type: str
+        required: true
+      opensearch_pkg_repo_url:
+        description: Repository URL (suite stable, component main).
+        type: str
+        required: true
+      opensearch_pkg_environment:
+        description: Environment of the install.
+        type: dict
+  local_cert:
+    short_description: Make one certificate on the host from role-fixed values
+    description:
+      - Key, CSR and certificate for the CA, the node or a local client identity; re-issued before it ends.
+    options:
+      opensearch_cert_name:
+        description: File basename of the key and certificate.
+        type: str
+        required: true
+      opensearch_cert_dir:
+        description: Directory of the key and certificate.
+        type: path
+        required: true
+      opensearch_cert_kind:
+        description: Certificate profile.
+        type: str
+        choices: [ca, node, client]
+        required: true
+      opensearch_cert_subject:
+        description: Ordered subject RDNs.
+        type: list
+        elements: dict
+        required: true
+      opensearch_cert_key_group:
+        description: Group of the key and certificate.
+        type: str
+        default: root
+      opensearch_cert_key_mode:
+        description: Mode of the key.
+        type: str
+        default: "0400"

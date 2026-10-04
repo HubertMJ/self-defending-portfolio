@@ -1,0 +1,15 @@
+---
+galaxy_info:
+  role_name: opensearch
+  author: self-defending-portfolio
+  description: Pinned OpenSearch single node with its own PKI and client-certificate-only access.
+  license: MIT
+  min_ansible_version: "2.17"
+  platforms:
+    - name: Debian
+      versions:
+        - trixie
+  galaxy_tags:
+    - opensearch
+    - siem
+dependencies: []

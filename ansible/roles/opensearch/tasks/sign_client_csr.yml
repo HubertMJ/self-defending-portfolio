@@ -1,0 +1,125 @@
+---
+# The ONLY entry point for a client CSR made elsewhere (siem contract C1): P2's shipper-k3s01,
+# scripts/siem-api-cert.sh's portfolio-api and P1's test identity shipper-test. Runs on siem01,
+# where the CA key is. Nothing about the certificate comes from the CSR except its public key:
+#   (1) the CSR's self-signature verifies;
+#   (2) its subject equals EXACTLY CN=<name>-g<N>,OU=siem,O=sdp for the name the PLAYBOOK expects
+#       (string compare of the parsed RDN sequence; an extra or multi-valued RDN fails it);
+#   (3) the expected name is on the remote allow-list, is none of the local identities with or
+#       without a generation suffix, and its DN is neither the super-admin nor a node DN;
+#   (4) the certificate is built from role-fixed values only: CA:FALSE (critical), keyUsage
+#       digitalSignature (critical), EKU clientAuth only, no SAN, 365 days, the subject set from
+#       the expected name, and no extension copied from the CSR. A CSR that asks for CA:TRUE or a
+#       SAN is refused outright, so a request for more than a client identity never gets a
+#       certificate at all.
+# Inputs: opensearch_csr_pem (PEM text), opensearch_csr_name, opensearch_csr_generation.
+# Output: opensearch_csr_certificate (PEM text).
+- name: Assert the expected identity may be signed through the remote entry point
+  ansible.builtin.assert:
+    that:
+      - opensearch_csr_name in opensearch_remote_identities
+      - opensearch_csr_name not in opensearch_local_identity_names
+      - opensearch_csr_name | regex_replace('-g[0-9]+$', '') not in opensearch_local_identity_names
+      - opensearch_csr_generation | string is match('^[1-9][0-9]{0,3}$')
+      - opensearch_csr_expected_dn != opensearch_admin_dn
+      - opensearch_csr_expected_dn != opensearch_nodes_dn
+      - opensearch_csr_expected_dn is not search(',OU=node,')
+    fail_msg: >-
+      Refused: {{ opensearch_csr_name }} (generation {{ opensearch_csr_generation }}) is not an identity this entry
+      point signs. Remote identities: {{ opensearch_remote_identities | join(', ') }}.
+    success_msg: "{{ opensearch_csr_expected_dn }} may be signed through the remote entry point."
+  vars:
+    opensearch_csr_expected_dn: "CN={{ opensearch_csr_name }}-g{{ opensearch_csr_generation }},OU=siem,O=sdp"
+
+- name: Sign in a private scratch directory
+  block:
+    - name: Create the scratch directory
+      ansible.builtin.tempfile:
+        state: directory
+        prefix: sdp-csr-
+      register: opensearch_csr_tmp
+      changed_when: false
+
+    - name: Write the CSR and the role-fixed extension profile
+      ansible.builtin.copy:
+        dest: "{{ opensearch_csr_tmp.path }}/{{ item.name }}"
+        content: "{{ item.content }}"
+        mode: "0600"
+      loop:
+        - name: request.csr
+          content: "{{ opensearch_csr_pem }}"
+        - name: client.ext
+          content: |
+            basicConstraints = critical,CA:FALSE
+            keyUsage = critical,digitalSignature
+            extendedKeyUsage = clientAuth
+            subjectKeyIdentifier = hash
+            authorityKeyIdentifier = keyid
+      loop_control:
+        label: "{{ item.name }}"
+      changed_when: false
+
+    - name: Verify the CSR's self-signature
+      ansible.builtin.command:
+        cmd: openssl req -in {{ opensearch_csr_tmp.path }}/request.csr -noout -verify
+      changed_when: false
+
+    - name: Read the CSR's subject as an RDN sequence
+      ansible.builtin.command:
+        cmd: openssl req -in {{ opensearch_csr_tmp.path }}/request.csr -noout -subject -nameopt RFC2253
+      register: opensearch_csr_subject
+      changed_when: false
+
+    - name: Read the CSR's requested extensions
+      community.crypto.openssl_csr_info:
+        path: "{{ opensearch_csr_tmp.path }}/request.csr"
+      register: opensearch_csr_info
+
+    - name: Assert the CSR asks for exactly the expected client identity
+      ansible.builtin.assert:
+        that:
+          - opensearch_csr_subject.stdout == 'subject=CN=' ~ opensearch_csr_name ~ '-g' ~ opensearch_csr_generation ~ ',OU=siem,O=sdp'
+          - not ((opensearch_csr_info.basic_constraints or []) | select('match', '(?i)^CA:TRUE') | list)
+          - (opensearch_csr_info.subject_alt_name or []) | length == 0
+        fail_msg: >-
+          Refused: the CSR's {{ opensearch_csr_subject.stdout }} (basicConstraints {{ opensearch_csr_info.basic_constraints }},
+          SAN {{ opensearch_csr_info.subject_alt_name }}) is not exactly
+          CN={{ opensearch_csr_name }}-g{{ opensearch_csr_generation }},OU=siem,O=sdp without CA:TRUE or a SAN.
+        success_msg: The CSR asks for CN={{ opensearch_csr_name }}-g{{ opensearch_csr_generation }},OU=siem,O=sdp only.
+
+    # -subj sets the subject from the expected name and -copy_extensions none keeps every extension
+    # of the CSR out; the profile above is all the certificate carries. The serial is random.
+    - name: Issue the client certificate from role-fixed values
+      ansible.builtin.command:
+        argv:
+          - openssl
+          - x509
+          - -req
+          - -in
+          - "{{ opensearch_csr_tmp.path }}/request.csr"
+          - -CA
+          - "{{ opensearch_pki_dir }}/ca.crt"
+          - -CAkey
+          - "{{ opensearch_pki_dir }}/ca.key"
+          - -days
+          - "{{ opensearch_cert_days }}"
+          - -sha256
+          - -subj
+          - "/O=sdp/OU=siem/CN={{ opensearch_csr_name }}-g{{ opensearch_csr_generation }}"
+          - -extfile
+          - "{{ opensearch_csr_tmp.path }}/client.ext"
+          - -copy_extensions
+          - none
+      register: opensearch_csr_issued
+      changed_when: true
+
+    - name: Hand the certificate back
+      ansible.builtin.set_fact:
+        opensearch_csr_certificate: "{{ opensearch_csr_issued.stdout }}\n"
+  always:
+    - name: Remove the scratch directory
+      ansible.builtin.file:
+        path: "{{ opensearch_csr_tmp.path }}"
+        state: absent
+      when: opensearch_csr_tmp.path is defined
+      changed_when: false

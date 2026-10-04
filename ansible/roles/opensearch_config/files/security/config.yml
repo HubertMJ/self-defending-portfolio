@@ -1,0 +1,42 @@
+---
+# Managed by Ansible (role: opensearch_config). ADR 0034: certificate authentication only.
+# The same settings as the S0 spike's config.yml (.omc/artifacts/siem-s0-final/config.yml) without
+# the package's disabled example domains: the client certificate's CN is the user name, HTTP basic
+# auth is off (a password header is ignored, S0), and no internal users exist.
+_meta:
+  type: "config"
+  config_version: 2
+
+config:
+  dynamic:
+    # S0-j: Dashboards runs without securityDashboards; with multitenancy on, the tenant interceptor
+    # refuses the analyst certificate indices:admin/get on the bare ".kibana" index.
+    kibana:
+      multitenancy_enabled: false
+    http:
+      anonymous_auth_enabled: false
+      xff:
+        enabled: false
+    authc:
+      clientcert_auth_domain:
+        description: "Authenticate via SSL client certificates"
+        http_enabled: true
+        transport_enabled: false
+        order: 2
+        http_authenticator:
+          type: clientcert
+          config:
+            username_attribute: cn
+          challenge: false
+        authentication_backend:
+          type: noop
+      basic_internal_auth_domain:
+        description: "Internal users; none exist, and HTTP never consults it"
+        http_enabled: false
+        transport_enabled: true
+        order: 4
+        http_authenticator:
+          type: basic
+          challenge: true
+        authentication_backend:
+          type: intern

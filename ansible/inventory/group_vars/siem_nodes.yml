@@ -48,7 +48,7 @@ opensearch_apt_key_fingerprint: A8B2D9E04CD51FEF6AA2DB53BA81D99981191457
 
 # --- certificate generations (ADR 0034 amendment: rotation = next generation, map it, deploy it,
 # then remove the old generation from roles_mapping) ---
-siem_cert_generations:
+opensearch_cert_generations:
   admin: 1
   rules-sync: 1
   dashboards: 1

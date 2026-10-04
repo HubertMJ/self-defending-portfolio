@@ -1,0 +1,11 @@
+---
+# {{ ansible_managed }}
+# Certificate CN (with its generation) -> sdp role (ADR 0034 amendment "Certificates"). Revoking an
+# identity = removing it here. shipper-test-g1 appears only while tests/siem/p1-acceptance.sh runs.
+_meta:
+  type: "rolesmapping"
+  config_version: 2
+{% for role, users in opensearch_config_role_mapping.items() %}
+{{ role }}:
+  users: {{ users | to_json }}
+{% endfor %}

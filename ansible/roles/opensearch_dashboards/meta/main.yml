@@ -1,0 +1,15 @@
+---
+galaxy_info:
+  role_name: opensearch_dashboards
+  author: self-defending-portfolio
+  description: Pinned OpenSearch Dashboards on the loopback, without the security plugin, with its own client certificate.
+  license: MIT
+  min_ansible_version: "2.17"
+  platforms:
+    - name: Debian
+      versions:
+        - trixie
+  galaxy_tags:
+    - opensearch
+    - siem
+dependencies: []

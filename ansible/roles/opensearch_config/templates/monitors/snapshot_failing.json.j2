@@ -1,0 +1,25 @@
+{#- "snapshot failing": no successful snapshot finished in the last 2 hours (the policy takes one
+    an hour). The hourly snapshots are what a rewrite of the current write index is recovered from
+    (ADR 0034). -#}
+{{ {
+  'type': 'monitor',
+  'monitor_type': 'cluster_metrics_monitor',
+  'name': 'snapshot failing',
+  'enabled': opensearch_config_monitor_enabled | bool,
+  'schedule': {'period': {'interval': 10, 'unit': 'MINUTES'}},
+  'inputs': [{'uri': {
+    'api_type': 'CAT_SNAPSHOTS',
+    'path': '_cat/snapshots',
+    'path_params': opensearch_config_snapshot_repo,
+    'url': 'http://localhost:9200/_cat/snapshots/' ~ opensearch_config_snapshot_repo,
+  }}],
+  'triggers': [{'query_level_trigger': {
+    'name': 'no successful snapshot for 2 hours',
+    'severity': '2',
+    'condition': {'script': {
+      'source': 'long cutoff = ctx.periodEnd.toEpochMilli() - 7200000L; for (s in ctx.results[0].snapshots) { if (s.state == "SUCCESS" && s.end_time_in_millis >= cutoff) { return false; } } return true;',
+      'lang': 'painless',
+    }},
+    'actions': [],
+  }}],
+} | to_nice_json(indent=2, sort_keys=true) }}

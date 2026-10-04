@@ -79,6 +79,20 @@
           = {{ verify_sysctl.stdout_lines | join('/') }}); Cilium networking will break.
         success_msg: Kernel networking matches Cilium's requirements.
 
+    # Correlation compares timestamps written on k3s01 and siem01 (ADR 0034, closes N10).
+    - name: Read the clock synchronisation state
+      ansible.builtin.command:
+        cmd: /usr/bin/timedatectl show --property=NTPSynchronized --value
+      register: verify_ntp
+      changed_when: false
+
+    - name: Assert the clock is synchronised
+      ansible.builtin.assert:
+        that:
+          - verify_ntp.stdout | trim == 'yes'
+        fail_msg: The clock is not NTP-synchronised (NTPSynchronized={{ verify_ntp.stdout | trim }}).
+        success_msg: The clock is NTP-synchronised.
+
     - name: Read node status
       ansible.builtin.command:
         cmd: /usr/local/bin/k3s kubectl get nodes --no-headers
@@ -116,3 +130,186 @@
       register: verify_kube_proxy
       changed_when: false
       failed_when: verify_kube_proxy.rc == 0
+
+- name: Verify the SIEM host
+  hosts: siem_nodes
+  become: true
+  gather_facts: true
+  vars:
+    verify_os_url: https://127.0.0.1:9200
+    verify_os_ca: /etc/opensearch/certs/ca.crt
+    verify_os_cert: /etc/sdp-siem/pki/admin.crt
+    verify_os_key: /etc/sdp-siem/pki/admin.key
+  tasks:
+    - name: Read the effective sshd configuration
+      ansible.builtin.command:
+        cmd: /usr/sbin/sshd -T
+      register: verify_sshd
+      changed_when: false
+
+    # The Dashboards tunnel is the only forwarding sshd allows (ADR 0034).
+    - name: Assert SSH refuses passwords and root and forwards only to Dashboards
+      ansible.builtin.assert:
+        that:
+          - "'passwordauthentication no' in verify_sshd.stdout_lines"
+          - "'kbdinteractiveauthentication no' in verify_sshd.stdout_lines"
+          - "'permitrootlogin no' in verify_sshd.stdout_lines"
+          - "'allowtcpforwarding local' in verify_sshd.stdout_lines"
+          - "'permitopen 127.0.0.1:5601' in verify_sshd.stdout_lines"
+          - "'permittunnel no' in verify_sshd.stdout_lines"
+        fail_msg: sshd accepts passwords or root, or forwards more than the Dashboards tunnel.
+        success_msg: sshd is key-only, no root, local forwarding to 127.0.0.1:5601 only.
+
+    - name: Read the input chain of table inet filter
+      ansible.builtin.command:
+        cmd: /usr/sbin/nft -j list chain inet filter input
+      register: verify_nft
+      changed_when: false
+
+    # Every accepting rule that matches a destination port, as port numbers.
+    - name: Assert the input chain drops by default and accepts only 22 and 9200
+      ansible.builtin.assert:
+        that:
+          - verify_nft_chain | map(attribute='policy') | list == ['drop']
+          - verify_nft_ports == [22, 9200]
+        fail_msg: "Input chain policy {{ verify_nft_chain | map(attribute='policy') | list }}, accepted ports {{ verify_nft_ports }}."
+        success_msg: The input chain drops by default and accepts only 22 and 9200.
+      vars:
+        verify_nft_items: "{{ (verify_nft.stdout | from_json).nftables }}"
+        verify_nft_chain: "{{ verify_nft_items | selectattr('chain', 'defined') | map(attribute='chain') | list }}"
+        verify_nft_ports: >-
+          {%- set ports = [] -%}
+          {%- for rule in verify_nft_items | selectattr('rule', 'defined') | map(attribute='rule') -%}
+          {%-   if rule.expr | selectattr('accept', 'defined') | list | length > 0 -%}
+          {%-     for expr in rule.expr | selectattr('match', 'defined') | map(attribute='match') -%}
+          {%-       if expr.left.payload.field | default('') == 'dport' -%}
+          {%-         set _ = ports.extend(expr.right.set if expr.right is mapping else [expr.right]) -%}
+          {%-       endif -%}
+          {%-     endfor -%}
+          {%-   endif -%}
+          {%- endfor -%}
+          {{ ports | map('int') | unique | sort }}
+
+    - name: Read the audit status and rules
+      ansible.builtin.command:
+        cmd: /usr/sbin/auditctl {{ item }}
+      loop: [-s, -l]
+      register: verify_audit
+      changed_when: false
+
+    - name: Assert auditing is enabled with the SIEM watches and without the k3s rules
+      ansible.builtin.assert:
+        that:
+          - verify_audit.results[0].stdout is search('enabled [12]')
+          - verify_audit.results[1].stdout is search('-w /etc/opensearch -p wa -k siem_config')
+          - verify_audit.results[1].stdout is search('-w /usr/share/opensearch/plugins -p wa -k siem_plugins')
+          - verify_audit.results[1].stdout is not search('k3s')
+        fail_msg: Auditing is off, a SIEM watch is missing or a k3s rule is loaded.
+        success_msg: Auditing is enabled with the SIEM watches and no k3s rules.
+
+    - name: Read the clock synchronisation state
+      ansible.builtin.command:
+        cmd: /usr/bin/timedatectl show --property=NTPSynchronized --value
+      register: verify_ntp
+      changed_when: false
+
+    - name: Assert the clock is synchronised
+      ansible.builtin.assert:
+        that:
+          - verify_ntp.stdout | trim == 'yes'
+        fail_msg: The clock is not NTP-synchronised (NTPSynchronized={{ verify_ntp.stdout | trim }}).
+        success_msg: The clock is NTP-synchronised.
+
+    - name: Read the mount options of /tmp and the snapshot disk
+      ansible.builtin.command:
+        cmd: findmnt --noheadings --output SOURCE,OPTIONS --target {{ item }}
+      loop: [/tmp, /var/lib/opensearch-snapshots]
+      register: verify_mounts
+      changed_when: false
+
+    - name: Assert /tmp allows executables and the snapshot disk is mounted
+      ansible.builtin.assert:
+        that:
+          - verify_mounts.results[0].stdout is not search('noexec')
+          - verify_mounts.results[1].stdout is search('^/dev/\S+ ')
+          - verify_mounts.results[1].stdout is not search('^/dev/sda1 ')
+        fail_msg: "/tmp is noexec or the snapshot path is not on its own disk: {{ verify_mounts.results | map(attribute='stdout') | list }}"
+        success_msg: /tmp allows executables; snapshots go to their own disk.
+
+    # 9300 (transport) and 5601 (Dashboards) never leave the loopback; 9200 is on the loopback and
+    # the VLAN address only.
+    - name: Read the listening TCP sockets
+      ansible.builtin.command:
+        cmd: /usr/bin/ss -Hltn
+      register: verify_ss
+      changed_when: false
+
+    - name: Assert where OpenSearch and Dashboards listen
+      ansible.builtin.assert:
+        that:
+          - verify_listen | selectattr('1', 'equalto', '9300') | map(attribute='0') | unique | list == ['127.0.0.1']
+          - verify_listen | selectattr('1', 'equalto', '5601') | map(attribute='0') | unique | list == ['127.0.0.1']
+          - verify_listen | selectattr('1', 'equalto', '9200') | map(attribute='0') | unique | sort | list
+            == ['10.4.2.10', '127.0.0.1'] | sort
+        fail_msg: "Listening sockets: {{ verify_listen }}"
+        success_msg: 9300 and 5601 on 127.0.0.1 only; 9200 on 127.0.0.1 and 10.4.2.10.
+      vars:
+        verify_listen: >-
+          {{ verify_ss.stdout_lines | map('split') | map(attribute='3') | map('regex_replace', '^\[?(?:::ffff:)?(.*?)\]?:(\d+)$', '\1 \2')
+             | map('split', ' ') | list }}
+
+    - name: Read the cluster health with the admin certificate
+      ansible.builtin.uri:
+        url: "{{ verify_os_url }}/_cluster/health"
+        ca_path: "{{ verify_os_ca }}"
+        client_cert: "{{ verify_os_cert }}"
+        client_key: "{{ verify_os_key }}"
+      register: verify_health
+
+    - name: Assert the cluster is green
+      ansible.builtin.assert:
+        that:
+          - verify_health.json.status == 'green'
+        fail_msg: "Cluster health is {{ verify_health.json.status }}."
+        success_msg: The cluster is green.
+
+    - name: Read the Performance Analyzer state
+      ansible.builtin.uri:
+        url: "{{ verify_os_url }}/_plugins/_performanceanalyzer/config"
+        ca_path: "{{ verify_os_ca }}"
+        client_cert: "{{ verify_os_cert }}"
+        client_key: "{{ verify_os_key }}"
+      register: verify_pa
+
+    - name: Assert Performance Analyzer is off
+      ansible.builtin.assert:
+        that:
+          - not verify_pa.json.performanceAnalyzerEnabled
+          - not verify_pa.json.rcaEnabled
+        fail_msg: "Performance Analyzer is on: {{ verify_pa.json }}"
+        success_msg: Performance Analyzer and RCA are off.
+
+    # M7: renewals happen at 45 days left; 30 days means renewal is not working.
+    - name: Read the validity of every node and client certificate
+      community.crypto.x509_certificate_info:
+        path: "{{ item }}"
+        valid_at:
+          month: +30d
+      loop:
+        - /etc/sdp-siem/pki/ca.crt
+        - /etc/opensearch/certs/node.crt
+        - /etc/sdp-siem/pki/admin.crt
+        - /etc/sdp-siem/pki/rules-sync.crt
+        - /etc/sdp-siem/pki/shipper-siem01.crt
+        - /etc/opensearch-dashboards/certs/dashboards.crt
+      register: verify_certs
+
+    - name: Assert every certificate is valid for more than 30 days
+      ansible.builtin.assert:
+        that:
+          - item.valid_at.month
+        fail_msg: "{{ item.item }} ends at {{ item.not_after }}, within 30 days."
+        success_msg: "{{ item.item }} is valid until {{ item.not_after }}."
+      loop: "{{ verify_certs.results }}"
+      loop_control:
+        label: "{{ item.item }}"

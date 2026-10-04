@@ -9,6 +9,7 @@ $DOCKER run --rm -v "$PWD":/work -w /work -e ANSIBLE_COLLECTIONS_PATH=/work/.ans
   ansible-galaxy collection install -r ansible/requirements.yml -p .ansible/collections >/dev/null
   yamllint -c .yamllint.yml .
   ansible-lint --offline ansible
-  shellcheck scripts/*.sh cluster/bootstrap/*.sh tests/*.sh tests/admission/*.sh tests/runtime/*.sh tests/abuse/*.sh tests/scenarios/*.sh app/*/test/*.sh
+  shellcheck scripts/*.sh cluster/bootstrap/*.sh tests/*.sh tests/admission/*.sh tests/runtime/*.sh tests/abuse/*.sh tests/scenarios/*.sh \
+    tests/siem/*.sh tests/golden/*.sh app/*/test/*.sh
   for p in ansible/playbooks/*.yml; do (cd ansible && ansible-playbook --syntax-check "playbooks/$(basename "$p")"); done
 '

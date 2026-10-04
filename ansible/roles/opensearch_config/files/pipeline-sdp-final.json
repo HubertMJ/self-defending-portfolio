@@ -1,0 +1,18 @@
+{
+  "description": "F1: event.overwrite = client supplied _id; event.ingested = ingest time; client values overridden",
+  "processors": [
+    {
+      "script": {
+        "lang": "painless",
+        "source": "def e = ctx.event; if (!(e instanceof Map)) { e = new HashMap(); ctx.event = e; } e.overwrite = ctx._id != null; ctx.remove(\"event.overwrite\"); ctx.remove(\"event.ingested\");"
+      }
+    },
+    {
+      "set": {
+        "field": "event.ingested",
+        "value": "{{_ingest.timestamp}}",
+        "override": true
+      }
+    }
+  ]
+}

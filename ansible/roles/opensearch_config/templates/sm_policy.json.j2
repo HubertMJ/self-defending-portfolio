@@ -1,0 +1,18 @@
+{#- Hourly snapshots of the evidence streams to the data disk (ADR 0034: the pre-rewrite copy of the
+    current write index), deleted after 7 days but never below 24 (one day). -#}
+{{ {
+  'description': 'sdp: hourly snapshots of the evidence streams, kept 7 days and at least 24',
+  'enabled': true,
+  'creation': {'schedule': {'cron': {'expression': '0 * * * *', 'timezone': 'UTC'}}},
+  'deletion': {
+    'schedule': {'cron': {'expression': '30 * * * *', 'timezone': 'UTC'}},
+    'condition': {'max_age': '7d', 'min_count': 24},
+  },
+  'snapshot_config': {
+    'repository': opensearch_config_snapshot_repo,
+    'indices': 'sdp-*',
+    'ignore_unavailable': true,
+    'include_global_state': false,
+    'partial': false,
+  },
+} | to_nice_json(indent=2, sort_keys=true) }}

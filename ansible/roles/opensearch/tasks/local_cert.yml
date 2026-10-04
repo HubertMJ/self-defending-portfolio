@@ -1,0 +1,95 @@
+---
+# One certificate made entirely on siem01 from role-fixed values (CA, node, local client
+# identities). Inputs: opensearch_cert_name (file basename), opensearch_cert_dir,
+# opensearch_cert_subject (ordered RDN list), opensearch_cert_kind (ca | node | client),
+# opensearch_cert_key_group, opensearch_cert_key_mode. Sets opensearch_cert_changed.
+- name: Create the private key of {{ opensearch_cert_name }}
+  community.crypto.openssl_privatekey:
+    path: "{{ opensearch_cert_dir }}/{{ opensearch_cert_name }}.key"
+    type: RSA
+    size: 4096
+    # OpenSearch's security plugin reads PKCS#8 only.
+    format: pkcs8
+    owner: root
+    group: "{{ opensearch_cert_key_group | default('root') }}"
+    mode: "{{ opensearch_cert_key_mode | default('0400') }}"
+
+# The CSR is computed on every run and never stored; x509_certificate below compares it with the
+# issued certificate and only re-issues on a difference.
+- name: Build from role-fixed values the request of {{ opensearch_cert_name }}
+  community.crypto.openssl_csr_pipe:
+    privatekey_path: "{{ opensearch_cert_dir }}/{{ opensearch_cert_name }}.key"
+    subject_ordered: "{{ opensearch_cert_subject }}"
+    use_common_name_for_san: false
+    subject_alt_name: "{{ opensearch_cert_profile[opensearch_cert_kind].san | default(omit) }}"
+    basic_constraints: "{{ opensearch_cert_profile[opensearch_cert_kind].basic_constraints }}"
+    basic_constraints_critical: true
+    key_usage: "{{ opensearch_cert_profile[opensearch_cert_kind].key_usage }}"
+    key_usage_critical: true
+    extended_key_usage: "{{ opensearch_cert_profile[opensearch_cert_kind].extended_key_usage | default(omit) }}"
+    create_subject_key_identifier: true
+  register: opensearch_cert_csr
+  changed_when: false
+  vars:
+    opensearch_cert_profile:
+      ca:
+        basic_constraints: ["CA:TRUE", "pathlen:0"]
+        key_usage: [keyCertSign, cRLSign]
+      node:
+        san: ["IP:{{ opensearch_node_ip }}", "IP:127.0.0.1", "DNS:{{ opensearch_node_name }}", "DNS:localhost"]
+        basic_constraints: ["CA:FALSE"]
+        key_usage: [digitalSignature, keyEncipherment]
+        extended_key_usage: [serverAuth, clientAuth]
+      client:
+        basic_constraints: ["CA:FALSE"]
+        key_usage: [digitalSignature]
+        extended_key_usage: [clientAuth]
+
+- name: Look for the current certificate of {{ opensearch_cert_name }}
+  ansible.builtin.stat:
+    path: "{{ opensearch_cert_dir }}/{{ opensearch_cert_name }}.crt"
+  register: opensearch_cert_stat
+
+- name: Read the validity of the current certificate of {{ opensearch_cert_name }}
+  community.crypto.x509_certificate_info:
+    path: "{{ opensearch_cert_dir }}/{{ opensearch_cert_name }}.crt"
+    valid_at:
+      renew: "{{ opensearch_cert_renew_before }}"
+  register: opensearch_cert_info
+  when: opensearch_cert_stat.stat.exists
+
+- name: Issue the self-signed CA certificate
+  community.crypto.x509_certificate:
+    path: "{{ opensearch_cert_dir }}/{{ opensearch_cert_name }}.crt"
+    csr_content: "{{ opensearch_cert_csr.csr }}"
+    privatekey_path: "{{ opensearch_cert_dir }}/{{ opensearch_cert_name }}.key"
+    provider: selfsigned
+    selfsigned_not_after: "+{{ opensearch_ca_days }}d"
+    selfsigned_digest: sha256
+    owner: root
+    group: root
+    mode: "0644"
+  register: opensearch_cert_ca_result
+  when: opensearch_cert_kind == 'ca'
+
+- name: Issue with the CA the certificate of {{ opensearch_cert_name }}
+  community.crypto.x509_certificate:
+    path: "{{ opensearch_cert_dir }}/{{ opensearch_cert_name }}.crt"
+    csr_content: "{{ opensearch_cert_csr.csr }}"
+    provider: ownca
+    ownca_path: "{{ opensearch_pki_dir }}/ca.crt"
+    ownca_privatekey_path: "{{ opensearch_pki_dir }}/ca.key"
+    ownca_not_after: "+{{ opensearch_cert_days }}d"
+    ownca_digest: sha256
+    ownca_create_authority_key_identifier: true
+    # Re-issued when fewer than opensearch_cert_renew_before days are left.
+    force: "{{ opensearch_cert_stat.stat.exists and not opensearch_cert_info.valid_at.renew }}"
+    owner: root
+    group: "{{ opensearch_cert_key_group | default('root') }}"
+    mode: "0644"
+  register: opensearch_cert_issued
+  when: opensearch_cert_kind != 'ca'
+
+- name: Record whether it changed, the certificate of {{ opensearch_cert_name }}
+  ansible.builtin.set_fact:
+    opensearch_cert_changed: "{{ (opensearch_cert_ca_result is changed) or (opensearch_cert_issued is changed) }}"

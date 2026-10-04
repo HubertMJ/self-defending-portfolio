@@ -1,0 +1,39 @@
+# {{ ansible_managed }}
+# siem01, single node (ADR 0034 and its amendment of 2026-10-04; shape proven in the S0 spike).
+cluster.name: {{ opensearch_cluster_name }}
+node.name: {{ opensearch_node_name }}
+discovery.type: single-node
+path.data: /var/lib/opensearch
+path.logs: /var/log/opensearch
+path.repo: [{{ opensearch_snapshot_path }}]
+
+# HTTP on the loopback and the VLAN address (the gateway and nftables let only k3s01 reach it);
+# transport never leaves the host.
+http.host: [127.0.0.1, {{ opensearch_node_ip }}]
+http.port: 9200
+transport.host: 127.0.0.1
+
+# One node, so no replica can ever be assigned: without this every plugin index is created with one
+# replica and the cluster stays yellow (S0-#7).
+cluster.default_number_of_replicas: 0
+
+# TLS everywhere with the node certificate of this host's own CA. Every HTTP client must present a
+# client certificate (REQUIRE): there is no password path (basic auth is off for HTTP in
+# config.yml, and no internal users exist).
+plugins.security.ssl.transport.pemcert_filepath: certs/node.crt
+plugins.security.ssl.transport.pemkey_filepath: certs/node.key
+plugins.security.ssl.transport.pemtrustedcas_filepath: certs/ca.crt
+plugins.security.ssl.http.enabled: true
+plugins.security.ssl.http.pemcert_filepath: certs/node.crt
+plugins.security.ssl.http.pemkey_filepath: certs/node.key
+plugins.security.ssl.http.pemtrustedcas_filepath: certs/ca.crt
+plugins.security.ssl.http.clientauth_mode: REQUIRE
+plugins.security.authcz.admin_dn: ["{{ opensearch_admin_dn }}"]
+plugins.security.nodes_dn: ["{{ opensearch_nodes_dn }}"]
+plugins.security.allow_default_init_securityindex: false
+# Nobody manages security over REST; the configuration comes from files via securityadmin.sh.
+plugins.security.restapi.roles_enabled: []
+
+# ISM checks its jobs every minute (default 5): the write block after a rollover lands within
+# about 3 minutes (S0-h, F18).
+plugins.index_state_management.job_interval: 1

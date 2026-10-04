@@ -1,0 +1,23 @@
+{#- "ingest silent <source>": Fluent Bit writes one heartbeat a minute per stream; ten minutes without
+    one ingested means the shipper stopped (F12; event.ingested is set by the server, so a shipper
+    clock cannot hide the gap). -#}
+{{ {
+  'type': 'monitor',
+  'monitor_type': 'query_level_monitor',
+  'name': 'ingest silent ' ~ opensearch_config_monitor_source,
+  'enabled': opensearch_config_monitor_enabled | bool,
+  'schedule': {'period': {'interval': 1, 'unit': 'MINUTES'}},
+  'inputs': [{'search': {
+    'indices': ['sdp-' ~ opensearch_config_monitor_source],
+    'query': {'size': 0, 'query': {'bool': {'filter': [
+      {'term': {'event.kind': 'heartbeat'}},
+      {'range': {'event.ingested': {'gte': '{{period_end}}||-10m', 'lte': '{{period_end}}', 'format': 'epoch_millis'}}},
+    ]}}},
+  }}],
+  'triggers': [{'query_level_trigger': {
+    'name': 'no heartbeat for 10 minutes',
+    'severity': '2',
+    'condition': {'script': {'source': 'ctx.results[0].hits.total.value == 0', 'lang': 'painless'}},
+    'actions': [],
+  }}],
+} | to_nice_json(indent=2, sort_keys=true) }}
