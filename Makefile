@@ -68,7 +68,7 @@ golden:          ## the shared host roles render byte-identically for k3s01 (gol
 siem-csr-test:   ## the remote CSR entry point signs exactly the expected client identity and nothing more (in container)
 	@DOCKER="$(DOCKER)" tests/siem/csr-signer.sh
 
-siem-acceptance: ## P1 live acceptance on siem01: shipper refusals, rewrite alarm, TLS, settings, restore (ADR 0034)
+siem-acceptance: ## P1 live acceptance on siem01: shipper refusals, rewrites refused, audit log, TLS, settings, restore (ADR 0034)
 	@DOCKER="$(DOCKER)" tests/siem/p1-acceptance.sh
 
 siem-mutations:  ## mutation proof of the P1 tests: each mutation on a scratch copy must make its test fail

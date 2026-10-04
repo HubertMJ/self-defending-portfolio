@@ -1429,7 +1429,7 @@ make siem ARGS="--check --diff"   # look first
 make siem                          # base, ssh, firewall, sysctl, auditd, patching, disk, OpenSearch, Dashboards, config
 make siem                          # second run must report changed=0
 make siem-verify                   # read-only: sshd, nft 22+9200 only, audit watches, NTP, listeners, green, PA off, certs
-make siem-acceptance               # live acceptance (P1): refusals, write block, rewrite alarm, TLS, restore, tunnel
+make siem-acceptance               # live acceptance (P1): refusals, write block, rewrites refused, audit log, TLS, restore, tunnel
 ```
 
 What the playbook guarantees, and where:
@@ -1441,7 +1441,9 @@ What the playbook guarantees, and where:
   not start otherwise. The role checks it before the first start.
 - Every client authenticates with a certificate of the host's own CA; there is no password path and
   no internal user. Performance Analyzer is off. Health is green (0 replicas everywhere).
-- Inside OpenSearch: the `sdp-final` pipeline, the ISM policy `sdp-30d` (created before the streams,
+- The security plugin's refusals (failed logins, missing privileges, TLS errors) go to
+  `/var/log/opensearch/sdp-security-audit.log`; 9200 from k3s01 is capped at 4 MB/s by nftables.
+- Inside OpenSearch: the `sdp-final` pipeline (which refuses any write with a client-supplied id), the ISM policy `sdp-30d` (created before the streams,
   because it only attaches to indices created after it), one template and data stream per source from
   `siem/fields/`, the snapshot repository on the data disk with an hourly policy, and the ops monitors.
   Request bodies the role last wrote are hashed under `/var/lib/sdp-siem/state`; an unchanged object is

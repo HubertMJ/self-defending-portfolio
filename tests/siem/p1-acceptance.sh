@@ -8,7 +8,9 @@
 #     is still there afterwards;
 #   - a few documents in sdp-falco marked event.kind=acceptance, one forced rollover of sdp-falco,
 #     one snapshot and one restored copy of a backing index (both deleted again).
-# Expected codes are the S0 matrix (S0-d, S0-#8): a _bulk refusal is HTTP 200 with item status 403.
+# Expected codes are the S0 matrix (S0-d, S0-#8) plus the review's prevention: any write with a
+# client-supplied _id is refused by sdp-final (500 fail_processor_exception) for every identity; a
+# _bulk refusal is HTTP 200 with the item's status. The refused DELETE must reach the audit log.
 #
 # Every remote step goes through ONE ssh connection (a control master): bursts of new SSH
 # connections from the operator network to the Siem zone have been observed to be dropped for a
