@@ -1,7 +1,9 @@
 {#- "evidence rewritten" (F1, B9; the S0 spike's monitor-evidence-rewritten.json, active 31 s after a
     CAS overwrite): the sdp-final pipeline sets event.overwrite=true for every write that carried a
     client id - a compare-and-set overwrite or an id-carrying create; Fluent Bit never sends one.
-    Any such document ingested in the last two minutes raises it. -#}
+    The pipeline now refuses such writes outright, so this is defence in depth: it fires only if the
+    refusal is ever bypassed or removed. Any such document ingested in the last 30 minutes raises it
+    (a wide window, so one missed run cannot hide it). -#}
 {{ {
   'type': 'monitor',
   'monitor_type': 'query_level_monitor',
@@ -12,7 +14,7 @@
     'indices': ['sdp-*'],
     'query': {'size': 0, 'query': {'bool': {'filter': [
       {'term': {'event.overwrite': true}},
-      {'range': {'event.ingested': {'gte': '{{period_end}}||-2m', 'lte': '{{period_end}}', 'format': 'epoch_millis'}}},
+      {'range': {'event.ingested': {'gte': '{{period_end}}||-30m', 'lte': '{{period_end}}', 'format': 'epoch_millis'}}},
     ]}}},
   }}],
   'triggers': [{'query_level_trigger': {

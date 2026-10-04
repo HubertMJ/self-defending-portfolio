@@ -212,6 +212,7 @@
     - {name: evidence lag, template: evidence_lag.json.j2}
     - {name: disk watermark, template: disk_watermark.json.j2}
     - {name: snapshot failing, template: snapshot_failing.json.j2}
+    - {name: ism stalled, template: ism_stalled.json.j2}
   loop_control:
     loop_var: opensearch_config_monitor
     label: "{{ opensearch_config_monitor.name }}"

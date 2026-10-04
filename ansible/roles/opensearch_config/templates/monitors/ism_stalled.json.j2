@@ -1,0 +1,21 @@
+{#- "ism stalled": the write index of a stream that holds documents is older than 26 hours, i.e.
+    the daily rollover (and with it the write block of the day before) did not happen - ISM failed or
+    stopped. Empty streams are skipped. ISM's own failed state is asserted by every run of the role
+    and by verify.yml. -#}
+{{ {
+  'type': 'monitor',
+  'monitor_type': 'cluster_metrics_monitor',
+  'name': 'ism stalled',
+  'enabled': opensearch_config_monitor_enabled | bool,
+  'schedule': {'period': {'interval': 30, 'unit': 'MINUTES'}},
+  'inputs': [{'uri': {'api_type': 'CAT_INDICES', 'path': '_cat/indices', 'path_params': '', 'url': 'http://localhost:9200/_cat/indices'}}],
+  'triggers': [{'query_level_trigger': {
+    'name': 'write index older than 26 hours',
+    'severity': '2',
+    'condition': {'script': {
+      'source': "long cutoff = ctx.periodEnd.toEpochMilli() - 93600000L; Map gen = new HashMap(); Map idx = new HashMap(); for (i in ctx.results[0].indices) { String n = i.index; if (!n.startsWith('.ds-sdp-')) { continue; } int d = n.lastIndexOf('-'); String s = n.substring(4, d); int g = Integer.parseInt(n.substring(d + 1)); if (!gen.containsKey(s) || g > (int) gen.get(s)) { gen.put(s, g); idx.put(s, i); } } for (i in idx.values()) { if (Long.parseLong(i['docs.count']) > 0 && Long.parseLong(i['creation.date']) < cutoff) { return true; } } return false;",
+      'lang': 'painless',
+    }},
+    'actions': [],
+  }}],
+} | to_nice_json(indent=2, sort_keys=true) }}

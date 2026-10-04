@@ -30,8 +30,8 @@ opensearch_config_sm_policy: sdp-hourly
 
 # Ops monitors owned by this role (not by the rules sync, so no "sdp-git: " prefix). Created disabled
 # and switched on per source as the source goes live (P2, M13); the three below work without any
-# shipper and are on from P1.
-opensearch_config_ops_monitors_enabled: [evidence rewritten, disk watermark, snapshot failing]
+# shipper and are on from P1 (with "ism stalled").
+opensearch_config_ops_monitors_enabled: [evidence rewritten, disk watermark, snapshot failing, ism stalled]
 
 # State of what this role applied last (hashes of request bodies), so an unchanged object is not
 # re-sent on every run.
