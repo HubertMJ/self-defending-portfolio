@@ -1,0 +1,500 @@
+// Package incidents assembles the SIEM's evidence into the incidents the page's Correlation section
+// shows (ADR 0036): it polls findings, correlations, Alerting alerts and a few bounded document
+// searches through the read-only client (internal/siem), keeps 24 h of evidence in memory, and
+// rebuilds every incident from it after each poll with one pure function. Joins are made here on the
+// pod ref (siem contract S0-#13); an SA correlation is cited when it exists, never required.
+//
+// Everything published is built field by field from allow-listed fields and cleaned (publish.go):
+// no user, address, pseudonym, node name, DNS query or flag ever reaches the View (ADR 0021).
+//
+// The tracker also holds the dns-exfil flag registrations: the runner hands it a terminal run's
+// HMAC(process key, flag label) and the run's end (never the flag); a DNS finding's first label is
+// HMAC'd and compared when the finding is first read, and only the result is kept.
+package incidents
+
+import (
+	"context"
+	"crypto/hmac"
+	"errors"
+	"log/slog"
+	"regexp"
+	"sort"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/hubertmj/self-defending-portfolio/app/api/internal/flagmac"
+	"github.com/hubertmj/self-defending-portfolio/app/api/internal/siem"
+	"github.com/hubertmj/self-defending-portfolio/app/api/internal/siemindex"
+)
+
+// Polling and retention (ADR 0036 section 2).
+const (
+	DefaultInterval = 15 * time.Second
+	// overlap: each poll re-reads this much before the last successful one, so evidence that became
+	// visible late (refresh, a slow detector run) is not missed; ids de-duplicate it.
+	overlap = 2 * time.Minute
+	// retention is how far back the evidence and the incidents go, and the start-up backfill.
+	retention = 24 * time.Hour
+	// pageSize: at most this many items per type and request (siem contract M16).
+	pageSize = siem.MaxSize
+	// maxPerSource bounds the evidence kept per source.
+	maxPerSource = 2000
+	// staleAfter: the section is available while the last fully successful poll is at most this old
+	// (three polls), so a stopped SIEM hides it within a minute (L11) and one slow poll does not.
+	staleAfter = 45 * time.Second
+	// flagKeep: a terminal run's flag registration outlives the run by this much (ADR 0034).
+	flagKeep = 15 * time.Minute
+	// maxFlags bounds the registrations (one run at a time; the cap only matters for a burst).
+	maxFlags = 64
+)
+
+// Source is the read side of the SIEM (*siem.Client).
+type Source interface {
+	Findings(ctx context.Context, logType string, from, to time.Time, size int) ([]siem.Finding, error)
+	Correlations(ctx context.Context, from, to time.Time) ([]siem.Correlation, error)
+	MonitorAlerts(ctx context.Context, size int) ([]siem.Alert, error)
+	Search(ctx context.Context, indices []string, q siem.Query) (siem.SearchResult, error)
+}
+
+// Config wires the tracker. A nil Source means the SIEM is off: View answers available:false.
+type Config struct {
+	Source             Source
+	MAC                *flagmac.Key
+	Rules              *siemindex.Index
+	Namespace          string
+	UnguardedNamespace string
+	Interval           time.Duration
+	Log                *slog.Logger
+	Now                func() time.Time
+}
+
+// Tracker is safe for concurrent use.
+type Tracker struct {
+	cfg   Config
+	start time.Time
+
+	mu      sync.Mutex
+	records map[string]*record
+	hosts   map[string]time.Time // host finding id -> time (counted only)
+	corr    map[string]siem.Correlation
+	alerts  []siem.Alert
+	rules   RulesView
+	rewrite bool
+	lastOK  time.Time
+	lastTry time.Time
+	failing bool
+	view    View
+
+	fmu   sync.Mutex
+	flags map[string]*flagEntry // by run id
+}
+
+type flagEntry struct {
+	ref     string
+	mac     []byte
+	ended   time.Time // zero while the run lasts
+	created time.Time
+}
+
+// New returns a tracker; nothing is read until Run.
+func New(cfg Config) *Tracker {
+	if cfg.Log == nil {
+		cfg.Log = slog.Default()
+	}
+	if cfg.Now == nil {
+		cfg.Now = time.Now
+	}
+	if cfg.Interval <= 0 {
+		cfg.Interval = DefaultInterval
+	}
+	if cfg.Namespace == "" {
+		cfg.Namespace = "sandbox"
+	}
+	if cfg.MAC == nil {
+		cfg.MAC = flagmac.New()
+	}
+	if cfg.Rules == nil {
+		cfg.Rules, _ = siemindex.Load()
+	}
+	return &Tracker{cfg: cfg, start: cfg.Now(), records: map[string]*record{}, hosts: map[string]time.Time{},
+		corr: map[string]siem.Correlation{}, rules: RulesView{Status: "unknown"}, flags: map[string]*flagEntry{}}
+}
+
+// Enabled reports whether a SIEM is configured.
+func (t *Tracker) Enabled() bool { return t.cfg.Source != nil }
+
+// Run polls until ctx ends: at once (the 24 h backfill), then every Interval. One goroutine, so polls
+// never overlap, and nothing a visitor does starts one.
+func (t *Tracker) Run(ctx context.Context) {
+	if t.cfg.Source == nil {
+		return
+	}
+	tick := time.NewTicker(t.cfg.Interval)
+	defer tick.Stop()
+	for {
+		t.Poll(ctx)
+		select {
+		case <-ctx.Done():
+			return
+		case <-tick.C:
+		}
+	}
+}
+
+// View is the current answer of GET /api/correlation.
+func (t *Tracker) View() View {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.cfg.Source == nil {
+		return unavailable(nil)
+	}
+	now := t.cfg.Now()
+	if t.lastOK.IsZero() || now.Sub(t.lastOK) > staleAfter {
+		var checked *time.Time
+		if !t.lastTry.IsZero() {
+			c := t.lastTry
+			checked = &c
+		}
+		return unavailable(checked)
+	}
+	return t.view
+}
+
+// Poll reads one window from the SIEM and rebuilds the incidents. Exported for tests; Run calls it.
+func (t *Tracker) Poll(ctx context.Context) {
+	now := t.cfg.Now().UTC()
+	t.mu.Lock()
+	from := now.Add(-retention)
+	if !t.lastOK.IsZero() && t.lastOK.Add(-overlap).After(from) {
+		from = t.lastOK.Add(-overlap)
+	}
+	t.lastTry = now
+	t.mu.Unlock()
+
+	src := t.cfg.Source
+	var errs []error
+	type found struct {
+		r   record
+		dns string
+	}
+	var news []found
+	hosts := map[string]time.Time{}
+	for _, lt := range logTypes {
+		fs, err := src.Findings(ctx, lt.logType, from, now, pageSize)
+		if err != nil {
+			// A log type without a detector yet answers 404: nothing to read, not an outage.
+			var se *siem.StatusError
+			if !errors.As(err, &se) || se.Code != 404 {
+				errs = append(errs, err)
+			}
+			continue
+		}
+		for _, f := range fs {
+			if lt.source == "host" {
+				// Host findings are counted, nothing else (ADR 0034 "counts only").
+				if idPat.MatchString(f.ID) {
+					hosts[f.ID] = time.UnixMilli(f.Timestamp).UTC()
+				}
+				continue
+			}
+			if r, q, ok := t.fromFinding(f, lt.source); ok {
+				news = append(news, found{r, q})
+			}
+		}
+	}
+	corr, err := src.Correlations(ctx, from, now)
+	if err != nil {
+		errs = append(errs, err)
+	}
+	alerts, alertsErr := src.MonitorAlerts(ctx, pageSize)
+	if alertsErr != nil {
+		errs = append(errs, alertsErr)
+	}
+	for _, s := range t.searches(from, now) {
+		res, err := src.Search(ctx, []string{s.index}, s.q)
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		for _, h := range res.Hits {
+			if r, ok := t.fromHit(h, s.source); ok {
+				news = append(news, found{r, ""})
+			}
+		}
+	}
+	// The health reads are optional: a missing sync record or one failed count does not hide the
+	// section; the previous value stands (rules: unknown until read once).
+	rules, rulesOK := t.readRules(ctx, now)
+	rewrite, rewriteOK := t.readRewrite(ctx, now)
+
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for _, n := range news {
+		if _, seen := t.records[n.r.key]; seen {
+			continue
+		}
+		r := n.r
+		if r.dns && r.findingID != "" {
+			r.flag = t.flagMatch(r.ref, n.dns, r.at, now)
+		}
+		t.records[r.key] = &r
+	}
+	for id, at := range hosts {
+		t.hosts[id] = at
+	}
+	for _, c := range corr {
+		t.corr[c.Finding1+"|"+c.Finding2] = c
+	}
+	if alertsErr == nil {
+		t.alerts = alerts
+	}
+	if rulesOK {
+		t.rules = rules
+	}
+	if rewriteOK {
+		t.rewrite = rewrite
+	}
+	t.prune(now)
+	if len(errs) > 0 {
+		if !t.failing {
+			t.cfg.Log.Warn("siem poll failed", "err", errors.Join(errs...))
+		}
+		t.failing = true
+		return
+	}
+	if t.failing {
+		t.cfg.Log.Info("siem poll recovered")
+	}
+	t.failing = false
+	t.lastOK = now
+	t.view = t.buildView(now)
+}
+
+type search struct {
+	index, source string
+	q             siem.Query
+}
+
+// searches are the bounded document reads of one poll, by event.ingested so a document that arrived
+// late is still read.
+func (t *Tracker) searches(from, now time.Time) []search {
+	q := func(filters []map[string]any, source ...string) siem.Query {
+		return siem.Query{TimeField: "event.ingested", Since: from, Until: now, Filters: filters, Size: pageSize,
+			SortField: "@timestamp", Source: append([]string{"@timestamp", "k8s.pod.ref"}, source...)}
+	}
+	term := func(f string, v any) map[string]any { return map[string]any{"term": map[string]any{f: v}} }
+	terms := func(f string, v ...string) map[string]any { return map[string]any{"terms": map[string]any{f: v}} }
+	noSub := map[string]any{"bool": map[string]any{"must_not": []any{map[string]any{"exists": map[string]any{"field": "audit.object.subresource"}}}}}
+	// Talon's responses on pods (TTI), and pod creates/deletes in the twin namespace (dwell).
+	audit := []map[string]any{term("audit.object.resource", "pods"), noSub, {"bool": map[string]any{
+		"minimum_should_match": 1,
+		"should": []any{
+			map[string]any{"bool": map[string]any{"filter": []any{term("user.name", talonUser), terms("audit.verb", "patch", "delete")}}},
+			map[string]any{"bool": map[string]any{"filter": []any{term("k8s.ns.name", t.twinNamespace()), terms("audit.verb", "create", "delete")}}},
+		},
+	}}}
+	return []search{
+		{"sdp-api", "api", q([]map[string]any{terms("event.action", "siem.run", "siem.command")},
+			"event.action", "api.run_id", "api.state", "api.arm", "api.seq", "api.command_seq", "api.command_id",
+			"api.technique", "api.objective", "api.outcome", "api.exit_code")},
+		{"sdp-k8s-audit", "k8s-audit", q(audit, "audit.verb", "audit.object.resource", "audit.object.subresource",
+			"audit.response.code", "user.name")},
+		{"sdp-hubble", "hubble", q([]map[string]any{term("hubble.verdict", "DROPPED")}, "hubble.verdict", "hubble.drop_reason",
+			"hubble.traffic_direction", "hubble.l4.protocol", "hubble.l4.destination_port")},
+	}
+}
+
+// twinNamespace never matches a real namespace when the twin is off.
+func (t *Tracker) twinNamespace() string {
+	if t.cfg.UnguardedNamespace == "" {
+		return "-"
+	}
+	return t.cfg.UnguardedNamespace
+}
+
+var commitPat = regexp.MustCompile(`^[0-9a-f]{40}$`)
+
+// readRules reads the newest sync records: the newest one's status, the newest applied one's commit
+// and time.
+func (t *Tracker) readRules(ctx context.Context, now time.Time) (RulesView, bool) {
+	res, err := t.cfg.Source.Search(ctx, []string{siem.SyncIndex}, siem.Query{TimeField: "applied_at",
+		Since: now.Add(-7 * 24 * time.Hour), Until: now, Size: 50, SortField: "applied_at",
+		Source: []string{"commit", "applied_at", "status"}})
+	if err != nil {
+		return RulesView{}, false
+	}
+	type rec struct {
+		at             time.Time
+		commit, status string
+	}
+	var recs []rec
+	for _, h := range res.Hits {
+		at := timeOf(h.Source, "applied_at")
+		if at.IsZero() {
+			continue
+		}
+		recs = append(recs, rec{at, str(h.Source, "commit"), str(h.Source, "status")})
+	}
+	sort.SliceStable(recs, func(i, j int) bool { return recs[i].at.After(recs[j].at) })
+	out := RulesView{Status: "unknown"}
+	if len(recs) > 0 {
+		switch recs[0].status {
+		case "applied", "refused", "failed":
+			out.Status = recs[0].status
+		}
+	}
+	for _, r := range recs {
+		if r.status == "applied" && commitPat.MatchString(r.commit) {
+			at := r.at
+			out.Commit, out.AppliedAt = r.commit, &at
+			break
+		}
+	}
+	return out, true
+}
+
+// readRewrite counts documents the sdp-final pipeline marked as written with a client id in the
+// last 24 h (F1).
+func (t *Tracker) readRewrite(ctx context.Context, now time.Time) (bool, bool) {
+	res, err := t.cfg.Source.Search(ctx, siem.Streams, siem.Query{TimeField: "event.ingested", Since: now.Add(-retention),
+		Until: now, Filters: []map[string]any{{"term": map[string]any{"event.overwrite": true}}}})
+	if err != nil {
+		return false, false
+	}
+	return res.Total > 0, true
+}
+
+// prune drops evidence older than the retention and keeps at most maxPerSource records per source.
+func (t *Tracker) prune(now time.Time) {
+	cut := now.Add(-retention)
+	per := map[string][]*record{}
+	for k, r := range t.records {
+		if r.at.Before(cut) {
+			delete(t.records, k)
+			continue
+		}
+		per[r.source] = append(per[r.source], r)
+	}
+	for _, list := range per {
+		if len(list) <= maxPerSource {
+			continue
+		}
+		sort.Slice(list, func(i, j int) bool { return list[i].at.After(list[j].at) })
+		for _, r := range list[maxPerSource:] {
+			delete(t.records, r.key)
+		}
+	}
+	for id, at := range t.hosts {
+		if at.Before(cut) {
+			delete(t.hosts, id)
+		}
+	}
+	if len(t.corr) > maxPerSource {
+		t.corr = map[string]siem.Correlation{}
+	}
+}
+
+// buildView assembles the answer from the evidence held. t.mu held.
+func (t *Tracker) buildView(now time.Time) View {
+	recs := make([]*record, 0, len(t.records))
+	for _, r := range t.records {
+		c := *r
+		recs = append(recs, &c)
+	}
+	corr := make([]siem.Correlation, 0, len(t.corr))
+	for _, c := range t.corr {
+		corr = append(corr, c)
+	}
+	incs, metrics := t.build(evidence{records: recs, correlations: corr, alerts: t.alerts, now: now})
+	metrics.HostFindings = len(t.hosts)
+	checked := now
+	return View{Available: true, CheckedAt: &checked, Rules: t.rules, Health: t.health(), Metrics: metrics, Incidents: incs}
+}
+
+// health: ingest silent / disk high from the ops monitors' active alerts, evidence_rewritten from the
+// count. t.mu held.
+func (t *Tracker) health() HealthView {
+	h := HealthView{Ingest: "ok", Disk: "ok", EvidenceRewritten: t.rewrite}
+	for _, a := range t.alerts {
+		if a.State != "ACTIVE" {
+			continue
+		}
+		switch {
+		case strings.HasPrefix(a.MonitorName, "ingest silent "):
+			h.Ingest = "silent"
+		case a.MonitorName == "disk watermark":
+			h.Disk = "high"
+		}
+	}
+	return h
+}
+
+var labelPat = regexp.MustCompile(`^sdp-[0-9a-f]{16}$`)
+
+// RegisterFlag records a terminal run's flag MAC with its pod ref (runner.FlagSink).
+func (t *Tracker) RegisterFlag(runID, podRef string, mac []byte) {
+	t.fmu.Lock()
+	defer t.fmu.Unlock()
+	now := t.cfg.Now()
+	t.expireFlags(now)
+	if len(t.flags) >= maxFlags {
+		var oldest string
+		for id, e := range t.flags {
+			if oldest == "" || e.created.Before(t.flags[oldest].created) {
+				oldest = id
+			}
+		}
+		delete(t.flags, oldest)
+	}
+	t.flags[runID] = &flagEntry{ref: podRef, mac: append([]byte(nil), mac...), created: now}
+}
+
+// EndFlag starts the run's 15 minutes after its end (runner.FlagSink).
+func (t *Tracker) EndFlag(runID string, at time.Time) {
+	t.fmu.Lock()
+	defer t.fmu.Unlock()
+	if e := t.flags[runID]; e != nil && e.ended.IsZero() {
+		e.ended = at
+	}
+}
+
+// FlagMAC is the key's MAC of a label: what the runner hands over (runner.Config.FlagMAC).
+func (t *Tracker) FlagMAC(label string) []byte { return t.cfg.MAC.Sum(label) }
+
+func (t *Tracker) expireFlags(now time.Time) {
+	for id, e := range t.flags {
+		if !e.ended.IsZero() && now.After(e.ended.Add(flagKeep)) {
+			delete(t.flags, id)
+		}
+	}
+}
+
+// flagMatch compares a DNS query's first label with the live registrations for the same ref: true
+// on a match, false when a registration for the ref exists and does not match or when the event
+// happened under this process with none live, null when the event predates this process (its key is
+// gone with the previous process).
+func (t *Tracker) flagMatch(ref, query string, at, now time.Time) *bool {
+	t.fmu.Lock()
+	defer t.fmu.Unlock()
+	t.expireFlags(now)
+	label, _, _ := strings.Cut(strings.ToLower(query), ".")
+	var sum []byte
+	if labelPat.MatchString(label) {
+		sum = t.cfg.MAC.Sum(label)
+	}
+	live, match := false, false
+	for _, e := range t.flags {
+		if e.ref != ref {
+			continue
+		}
+		live = true
+		if sum != nil && hmac.Equal(sum, e.mac) {
+			match = true
+		}
+	}
+	if !live && at.Before(t.start) {
+		return nil
+	}
+	return &match
+}
