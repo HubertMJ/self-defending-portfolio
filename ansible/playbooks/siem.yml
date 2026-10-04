@@ -5,6 +5,9 @@
 - name: Build the SIEM host
   hosts: siem_nodes
   become: true
+  # On a first apply a later role failing used to drop the handlers earlier roles had notified
+  # (auditd's reload, the sshd reload), and the next run saw no change to notify them again.
+  force_handlers: true
   pre_tasks:
     - name: Assert the target runs Debian 13
       ansible.builtin.assert:

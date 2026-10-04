@@ -103,3 +103,24 @@ image path and label domain kept on purpose (see above). The real flag hex was a
 - host-ssh-failed.json: a deliberate failed login (invalid user `sdp-fixture-probe`, publickey, from docker01) captured from `journalctl -u ssh -o json`; workstation IP 10.2.1.10 -> 10.1.1.250.
 - Public names kept on purpose: ghcr.io/hubertmj/self-defending-portfolio/* image paths and the sdp./tests.hubertjablon.ski label domains are public in the repo.
 - auditd `identity` stays a stand-in (CONFIG_CHANGE); a real watch hit is produced on siem01 during P1.
+
+## siem01 (P1, captured 2026-10-04 ~11:00 CEST after hardening, read-only except the triggers below)
+
+Captured on siem01 (10.4.2.10) with `journalctl ... -o json` and `grep` on /var/log/audit/audit.log,
+sanitised with the same rules as above (admin IP 10.2.1.10 -> 10.1.1.250, key fingerprint -> `A`s).
+
+| file | lines | what each line is |
+|---|---|---|
+| siem01-ssh.json | 1 | `Accepted publickey for ansible ...` (`SYSLOG_IDENTIFIER` sshd-session, `_SYSTEMD_UNIT` ssh.service) |
+| siem01-ssh-failed.json | 2 | a deliberate refused login from docker01: `Invalid user sdp-fixture-probe ...` and `Connection closed by invalid user ... [preauth]` |
+| siem01-sudo.json | 1 | `ansible : ... COMMAND=/usr/bin/chmod 0644 /etc/group` (the identity trigger below) |
+| siem01-nft.json | 1 | `nft-drop: IN=eth0 ... SRC=10.4.2.1 DST=255.255.255.255 ... PROTO=UDP ... DPT=10001` (gateway broadcast) |
+| siem01-auditd.log | 3 | enriched records with the `node=siem01 ` prefix: key `identity` - a REAL watch hit (SYSCALL fchmodat on /etc/group; it replaces the CONFIG_CHANGE stand-in of host-auditd.log), key `privileged` (execve of /usr/bin/sudo), key `siem_config` (the P1 watch on /etc/sdp-siem) |
+
+Triggers (harmless, on siem01 only): `chmod 0644 /etc/group` (mode unchanged) for the identity watch,
+`touch /etc/sdp-siem` for the siem_config watch, one `ssh sdp-fixture-probe@10.4.2.10` with every
+authentication method off for the refused login.
+
+Note: until auditd restarts after its configuration got `name_format = HOSTNAME`, records carry
+`node=(null) ` (a SIGHUP reload does not resolve the name); after the reboot they carry
+`node=siem01 `. The parser accepts any `node=<x> ` prefix and drops it.
