@@ -66,10 +66,15 @@ SCENARIO_TAG=sdp-scenario:offline-test
 SCENARIOS=$REPO_ROOT/cluster/infra/sandbox/scenarios/scenarios.yaml
 
 WORK_DIR=$(mktemp -d)
-CONTAINERS=()
+# Every container this script starts is named in this file, one per line. A file, not an array: the
+# helpers that start them run inside $(...), whose variable assignments never reach the trap. Networks
+# are created in the main shell and removed after the containers attached to them.
+CONTAINERS=$WORK_DIR/containers
+: >"$CONTAINERS"
 NETWORKS=()
 cleanup() {
-  for c in "${CONTAINERS[@]}"; do $DOCKER rm -f "$c" >/dev/null 2>&1 || true; done
+  local c n
+  while IFS= read -r c; do $DOCKER rm -f "$c" >/dev/null 2>&1 || true; done <"$CONTAINERS"
   for n in "${NETWORKS[@]}"; do $DOCKER network rm "$n" >/dev/null 2>&1 || true; done
   rm -rf "$WORK_DIR"
 }
@@ -245,7 +250,7 @@ start() {
   local name="sdp-offline-$1-$RANDOM"; shift
   local flags=$1 cmd=$2
   eval "$DOCKER run -d --name $name $flags $SCENARIO_TAG $cmd" >/dev/null
-  CONTAINERS+=("$name")
+  printf '%s\n' "$name" >>"$CONTAINERS"
   printf '%s' "$name"
 }
 
@@ -660,7 +665,7 @@ COREDNS_SC=(--user 65532:65532 --read-only --cap-drop ALL --cap-add NET_BIND_SER
 dns_start() { # name, docker args... ; prints the container name
   local name="sdp-offline-dns-$1-$RANDOM"; shift
   $DOCKER run -d --name "$name" --network "$DNS_NET" "$@" >/dev/null
-  CONTAINERS+=("$name")
+  printf '%s\n' "$name" >>"$CONTAINERS"
   printf '%s' "$name"
 }
 ip_of() { $DOCKER inspect -f "{{(index .NetworkSettings.Networks \"$DNS_NET\").IPAddress}}" "$1"; }
