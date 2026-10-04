@@ -124,3 +124,16 @@ authentication method off for the refused login.
 Note: until auditd restarts after its configuration got `name_format = HOSTNAME`, records carry
 `node=(null) ` (a SIGHUP reload does not resolve the name); after the reboot they carry
 `node=siem01 `. The parser accepts any `node=<x> ` prefix and drops it.
+
+## api (P2 `api-events`, 2026-10-04)
+
+| file | lines | what each line is |
+|---|---|---|
+| api.log | 24 | raw CRI lines of the API container's stdout as Fluent Bit tails them from /var/log/pods/portfolio-api_portfolio-api-*/api/*.log: 21 `siem.run`/`siem.command` lines (a terminal run - whoami, read-flag (achieved), touch-bin (refused, exit 1), read-shadow (detected, killed) - and a one-click compare run with its guarded and unguarded arm) and 3 other API lines (`listening`, `terminal command exec ended`, `siem events dropped`) that the shipper must drop |
+
+Not captured live: the lines did not exist before this phase. The JSON bodies of the 21 siem lines are
+app/api/internal/siemlog/testdata/lines.golden (written by the package's golden test from real runner
+event types through a real hub) with slog's `time` key put back in front; the CRI timestamps are local
+time (+02:00) 180 us after it, as on k3s01. The three other lines are shaped like the API's own log calls.
+The read-flag command's output (the flag) is in no line: output events are never written. Regenerate after
+a golden change: same bodies, same order. Field allow-list: siem/fields/api.yaml.
