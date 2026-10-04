@@ -1,0 +1,97 @@
+---
+argument_specs:
+  main:
+    short_description: Pinned Fluent Bit shipping allow-listed, pseudonymised logs to the SIEM
+    description:
+      - Installs the pinned Fluent Bit deb from its fingerprint-checked repository, makes the HMAC key and (on k3s01) a
+        client key whose CSR siem01 signs through the remote entry point, renders the per-source allow-lists from
+        siem/fields and the configuration for the host's profile, and starts the unit inside its systemd sandbox.
+    options:
+      fluent_bit_version:
+        description: Pinned Fluent Bit package version.
+        type: str
+        required: true
+      fluent_bit_deb_sha256:
+        description: SHA256 of the pinned deb; asserted against the signed apt index before install.
+        type: str
+        required: true
+      fluent_bit_apt_key_fingerprint:
+        description: Primary fingerprint of the Fluent Bit release key; asserted before the key is trusted.
+        type: str
+        required: true
+      fluent_bit_apt_key_url:
+        description: URL of the Fluent Bit release key.
+        type: str
+      fluent_bit_apt_keyring:
+        description: Path of the trusted key, signed-by of the Fluent Bit repository.
+        type: str
+      fluent_bit_apt_repo_url:
+        description: Fluent Bit apt repository.
+        type: str
+      fluent_bit_apt_suite:
+        description: Suite of the Fluent Bit apt repository.
+        type: str
+      fluent_bit_profile:
+        description: Which shape this host ships in (k3s01 or siem01, by default from the inventory group).
+        type: str
+      fluent_bit_signer:
+        description: The SIEM host that holds the CA and signs k3s01's CSR.
+        type: str
+      fluent_bit_profiles:
+        description: Per profile the sources, the client identity, the OpenSearch address and the start-check files.
+        type: dict
+      fluent_bit_tls_vhost:
+        description: Host name the node certificate is verified against instead of the address (N5 fallback); empty = the address.
+        type: str
+      fluent_bit_fields_dir:
+        description: Directory of siem/fields on the controller.
+        type: path
+      fluent_bit_tail_inputs:
+        description: Files read per source (source, name, path, format cri | json | raw | osaudit).
+        type: list
+        elements: dict
+      fluent_bit_journal_sources:
+        description: Sources fed from journald (ssh, sudo, kernel).
+        type: list
+        elements: str
+      fluent_bit_throttle_rate:
+        description: Records per second per source before the throttle drops.
+        type: dict
+      fluent_bit_throttle_rate_default:
+        description: Throttle rate of a source not in fluent_bit_throttle_rate.
+        type: int
+      fluent_bit_storage_limit:
+        description: Disk buffer per stream (storage.total_limit_size).
+        type: str
+      fluent_bit_retry_limit:
+        description: Retries of one chunk before it is given up.
+        type: int
+      fluent_bit_mem_buf_limit:
+        description: Mem_Buf_Limit of each tail input.
+        type: str
+      fluent_bit_memory_max:
+        description: MemoryMax of the unit (the kill limit).
+        type: str
+      fluent_bit_metrics_port:
+        description: Loopback port of the metrics endpoint.
+        type: int
+      fluent_bit_inaccessible_paths:
+        description: InaccessiblePaths of the unit ("-" prefix for paths a host may not have).
+        type: list
+        elements: str
+      fluent_bit_cert_renew_before:
+        description: The k3s01 client certificate is re-requested when it expires sooner than this.
+        type: str
+      fluent_bit_cert_generation:
+        description: Generation of the client identity (from the signer's opensearch_cert_generations).
+        type: str
+      fluent_bit_cert_cn:
+        description: CN of the client identity, <identity>-g<N>.
+        type: str
+      fluent_bit_cert_subject:
+        description: Ordered subject of the client certificate request.
+        type: list
+        elements: dict
+      fluent_bit_client_key_path:
+        description: Path systemd loads the client key credential from.
+        type: path

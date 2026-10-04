@@ -1,0 +1,148 @@
+# {{ ansible_managed }}
+# The SIEM shipper of {{ inventory_hostname }} (ADR 0034, siem contract P2; profile {{ fluent_bit_profile }}).
+# Files and journald in, one opensearch output per data stream out; nothing listens except the
+# metrics endpoint on the loopback. Every record passes sdp.lua (allow-list projection,
+# pseudonyms, F2 audit selection) before the throttle and the output.
+{% set profile = fluent_bit_profiles[fluent_bit_profile] %}
+[SERVICE]
+    Flush                     2
+    Daemon                    Off
+    Log_Level                 info
+    Parsers_File              /etc/fluent-bit/sdp/parsers.conf
+    HTTP_Server               On
+    HTTP_Listen               127.0.0.1
+    HTTP_Port                 {{ fluent_bit_metrics_port }}
+    storage.path              /var/lib/fluent-bit/buffer
+    storage.sync              normal
+    storage.checksum          off
+    storage.max_chunks_up     64
+    storage.backlog.mem_limit 16M
+    storage.metrics           on
+    # Retries back off up to 5 minutes (fluent_bit_retry_limit times).
+    scheduler.cap             300
+
+{% for input in fluent_bit_tail_inputs if input.source in profile.sources %}
+[INPUT]
+    Name              tail
+    Tag               sdp.{{ input.source }}.{{ input.name }}
+    Path              {{ input.path }}
+    DB                /var/lib/fluent-bit/tail-{{ input.source }}-{{ input.name }}.db
+    DB.locking        true
+    Refresh_Interval  10
+    Rotate_Wait       30
+    # Audit events with a pod spec run to tens of KB; a longer line is skipped, not half-shipped.
+    Buffer_Chunk_Size 64k
+    Buffer_Max_Size   2M
+    Skip_Long_Lines   On
+    Mem_Buf_Limit     {{ fluent_bit_mem_buf_limit }}
+    storage.type      filesystem
+{% if input.format == 'cri' %}
+    multiline.parser  cri
+{% elif input.format == 'json' %}
+    Parser            sdp_json
+{% elif input.format == 'osaudit' %}
+    Parser            sdp_osaudit
+{% endif %}
+
+{% endfor %}
+{% for source in fluent_bit_journal_sources if source in profile.sources %}
+[INPUT]
+    Name                systemd
+    Tag                 sdp.{{ source }}.journal
+    # ssh logs as its unit and, per connection on Debian 13, as sshd-session (F0).
+    Systemd_Filter      _SYSTEMD_UNIT=ssh.service
+    Systemd_Filter      SYSLOG_IDENTIFIER=sshd-session
+    Systemd_Filter      SYSLOG_IDENTIFIER=sudo
+    Systemd_Filter      _TRANSPORT=kernel
+    Systemd_Filter_Type Or
+    Read_From_Tail      On
+    DB                  /var/lib/fluent-bit/journal-{{ source }}.db
+    storage.type        filesystem
+
+{% endfor %}
+{% for source in profile.sources %}
+# Heartbeat: one record a minute per stream, so "ingest silent {{ source }}" can tell a stopped
+# shipper from a quiet source (F12). Not Flush_On_Startup: with it, Fluent Bit 5.1.3's backlog scan
+# picked up the fresh chunk of the running input as a leftover and crashed (SIGSEGV, found by
+# tests/siem/ingest-it.sh).
+[INPUT]
+    Name         dummy
+    Tag          sdp.{{ source }}.hb
+    Dummy        {"heartbeat":1}
+    Interval_Sec 60
+    storage.type filesystem
+
+{% endfor %}
+{% set cri_sources = fluent_bit_tail_inputs | selectattr('format', 'equalto', 'cri') | map(attribute='source')
+   | select('in', profile.sources) | list %}
+{% if cri_sources %}
+# The JSON body of a CRI line becomes the record; a body that is not JSON stays as it is and sdp.lua
+# drops it (no rule / msg / message to match).
+[FILTER]
+    Name         parser
+    Match_Regex  ^sdp\.({{ cri_sources | join('|') }})\.log$
+    Key_Name     log
+    Parser       sdp_json
+    Reserve_Data Off
+
+{% endif %}
+{% if fluent_bit_tail_inputs | selectattr('format', 'equalto', 'osaudit') | selectattr('source', 'in', profile.sources) | list %}
+[FILTER]
+    Name         parser
+    Match        sdp.*.osaudit
+    Key_Name     payload
+    Parser       sdp_json
+    Reserve_Data Off
+
+{% endif %}
+[FILTER]
+    Name           lua
+    Match          sdp.*
+    Script         /etc/fluent-bit/sdp/sdp.lua
+    Call           sdp_filter
+    Protected_Mode On
+
+{% for source in profile.sources %}
+# The rate is an average over 5 minutes: an Ansible run or an attack burst passes, a sustained flood
+# (a source spinning) is cut. On siem01 a 5-second window dropped 1 217 records of one siem.yml run
+# (auditd and the security audit log), measured 2026-10-04.
+[FILTER]
+    Name         throttle
+    Alias        throttle_{{ source }}
+    Match        sdp.{{ source }}.*
+    Rate         {{ fluent_bit_throttle_rate[source] | default(fluent_bit_throttle_rate_default) }}
+    Window       300
+    Interval     1s
+    Print_Status false
+
+{% endfor %}
+{% for source in profile.sources %}
+# Append-only (ADR 0034, F1): create, no id - the sdp-final pipeline refuses any write that carries
+# one. Certificate-only TLS against siem01's CA, host name verified.
+[OUTPUT]
+    Name                     opensearch
+    Alias                    out_{{ source }}
+    Match                    sdp.{{ source }}.*
+    Host                     {{ profile.opensearch_host }}
+    Port                     9200
+    Index                    sdp-{{ source }}
+    Write_Operation          create
+    Suppress_Type_Name       On
+    Logstash_Format          Off
+    Replace_Dots             Off
+    Compress                 gzip
+    Buffer_Size              512KB
+    Trace_Error              On
+    tls                      On
+    tls.verify               On
+    tls.verify_hostname      On
+{% if fluent_bit_tls_vhost %}
+    tls.vhost                {{ fluent_bit_tls_vhost }}
+{% endif %}
+    tls.ca_file              /etc/fluent-bit/tls/ca.crt
+    tls.crt_file             /etc/fluent-bit/tls/client.crt
+    tls.key_file             ${CREDENTIALS_DIRECTORY}/client.key
+    storage.total_limit_size {{ fluent_bit_storage_limit }}
+    Retry_Limit              {{ fluent_bit_retry_limit }}
+
+{% endfor %}

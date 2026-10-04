@@ -1,0 +1,13 @@
+# The pinned Fluent Bit on the pinned Debian 13, for the shipper tests (tests/siem/lua-hmac.sh,
+# tests/siem/ingest-it.sh). Same package, same SHA256 check as the fluent_bit role; the values come
+# from ansible/inventory/group_vars/all.yml through the build arguments.
+FROM debian:13@sha256:9cc080028c43b27d2074d63a5f9caf7166d731494965616c1a6d2827a004585c
+ARG FLUENT_BIT_VERSION
+ARG FLUENT_BIT_SHA256
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl \
+    && curl -fsSLo /tmp/fluent-bit.deb \
+       "https://packages.fluentbit.io/debian/trixie/pool/main/f/fluent-bit/fluent-bit_${FLUENT_BIT_VERSION}_amd64.deb" \
+    && echo "${FLUENT_BIT_SHA256}  /tmp/fluent-bit.deb" | sha256sum -c - \
+    && apt-get install -y --no-install-recommends /tmp/fluent-bit.deb \
+    && rm -rf /tmp/fluent-bit.deb /var/lib/apt/lists/*

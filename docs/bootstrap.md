@@ -1473,8 +1473,9 @@ key (`/etc/opensearch/certs/node.key`) and the local client identities `admin`, 
 `shipper-siem01` (`/etc/sdp-siem/pki/`) and `dashboards` (`/etc/opensearch-dashboards/certs/`). Client
 certificates are `CN=<name>-g<N>,OU=siem,O=sdp`. Client and node certificates are valid one year: the
 role re-issues the node certificate and the local client certificates with fewer than 45 days left,
-and `make siem-verify` fails at 30. Remote client certificates (shipper-k3s01, portfolio-api) are
-renewed by signing a new CSR (9.5).
+and `make siem-verify` fails at 30. Remote client certificates are renewed by signing a new CSR:
+`shipper-k3s01` by `make ingest` itself (9.7, it re-requests at 45 days left), `portfolio-api` by
+`scripts/siem-api-cert.sh` (9.8).
 
 Generations (`opensearch_cert_generations` in `group_vars/siem_nodes.yml`):
 - Rotation of a local identity: raise its generation and run `make siem`; the new certificate is
@@ -1514,11 +1515,42 @@ qm guest exec 121 -- /usr/bin/systemctl restart ssh
 qm guest exec 121 -- /usr/bin/journalctl -u opensearch -n 50
 ```
 
-Nothing depends on siem01 before ingest (P2). Rollback of P1 is restoring the vzdump backup taken
+Rollback of the shippers: `systemctl disable --now fluent-bit` on the host (k3s01 or siem01); nothing
+in the cluster depends on them. Rollback of P1 is restoring the vzdump backup taken
 before the first apply (`qmrestore <archive> 121 --force` on the Proxmox node). The OpenSearch
 repository key's signing subkey expires on 2027-03-06: before then delete
 `/var/lib/sdp-siem/opensearch-release.pgp` on siem01 and run `make siem`; the new key is trusted only
 if its primary fingerprint still equals the pin.
+
+### 9.7 Shipping: Fluent Bit on siem01 and k3s01
+
+siem01's own logs (journald ssh/sudo/kernel drops, auditd, OpenSearch's security audit log) go into
+`sdp-siem01` from Fluent Bit on siem01, part of `make siem` (role `fluent_bit`, its local
+`shipper-siem01` identity). k3s01's six streams come from Fluent Bit on k3s01, its own playbook:
+
+```sh
+make ingest ARGS="--check --diff"     # on a host without the package: reports what the first run does
+make ingest                           # key on k3s01, CSR signed on siem01 (delegated), unit started
+make ingest                           # second run: changed=0
+```
+
+The unit runs as `fluent-bit` with only `CAP_DAC_READ_SEARCH`, inside a systemd sandbox that hides
+the kubeconfig, k3s's TLS/credentials/token, kubelet, shadow, `/etc/ssh` and `/root`; its start check
+refuses to run when it can read the kubeconfig (siem01: the admin key). Keys: `/etc/fluent-bit/keys/`
+(root 0400, handed to the unit as systemd credentials); the HMAC key is rotated by deleting it and
+running the playbook again (pseudonyms change from then on). Metrics, including throttle drops:
+`curl -s 127.0.0.1:2020/api/v2/metrics/prometheus` on the host. Offline proof of the whole role:
+`make siem-ingest-test`; the filter alone: `make siem-lua-test`.
+
+### 9.8 The API's SIEM certificate
+
+```sh
+scripts/siem-api-cert.sh 1            # key here, CSR signed on siem01, Secret written sops-encrypted
+git add cluster/infra/portfolio-api/siem-client.sops.yaml
+```
+
+The key exists in plaintext only in `.siem-tmp/` (git-ignored, shredded on exit). For a rotation see
+9.4 (map the next generation first).
 
 ## Rebuild from zero
 

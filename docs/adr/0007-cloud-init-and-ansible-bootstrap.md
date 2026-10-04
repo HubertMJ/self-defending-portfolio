@@ -34,3 +34,14 @@ owned by another user id. The same play signs client CSRs made elsewhere, on req
 **Consequences.** One command per host, the same container as CI's linters; the smoke test applies
 siem.yml's base, ssh, firewall and patching roles to a container in `siem_nodes` twice, like
 hardening.yml.
+
+## Amendment 2026-10-04: the SIEM shipper has its own playbook (ADR 0034, P2)
+
+**Decision.** `playbooks/ingest.yml` (target `make ingest`) applies role `fluent_bit` to `k3s_nodes`;
+it is in neither hardening.yml nor cluster.yml, because it needs siem01 up (the client CSR is signed
+there, delegated from the same run) and goes live in a maintenance window of its own. `site.yml`
+imports it after siem.yml. siem01's own shipper is a role of siem.yml. A check run on a host without
+the package reports what the first run would do instead of failing halfway.
+
+**Consequences.** Re-running ingest.yml is safe (second run changes nothing); it re-requests the
+certificate only when it is close to its end, its generation was bumped or the key was replaced.

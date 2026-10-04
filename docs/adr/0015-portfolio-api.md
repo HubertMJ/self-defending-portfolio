@@ -201,3 +201,20 @@ published, are in ADR 0035. No RBAC changes.
 **Consequences.** A rollout no longer resets the 24 h numbers; a crash loses at most the last minute. What
 stays in memory is the rate-limit windows and the per-run history (`/api/runs/{id}`, now also listed by
 `GET /api/runs`), so a restart still forgets those, and the open item in the ADR index is narrowed to them.
+
+## Amendment 2026-10-04: one egress to the SIEM and one credential for it (ADR 0034)
+
+**Context.** The API becomes a read-only client of the SIEM on siem01 (ADR 0034; the endpoints come
+with ADR 0036). It needs a network path and a certificate; nothing else in the cluster needs either.
+
+**Decision.** The API's CiliumNetworkPolicy gains exactly one egress: 10.4.2.10/32 port 9200/TCP (its
+NetworkPolicy is a bare default-deny with no rules, so the CNP is the only allow list). A cluster-wide
+policy (`cluster/infra/siem-egress`, its own Application) denies that address to every pod outside
+the `portfolio-api` namespace, so a scenario pod cannot even reach the TLS handshake. The client
+certificate `portfolio-api-g<N>` is the KSOPS Secret `portfolio-api-siem` (the only SIEM credential
+in git, ADR 0006), its key made on the operator host and its CSR signed on siem01 for exactly that
+name (`scripts/siem-api-cert.sh`); it is mounted read-only with mode 0440 to the pod's `fsGroup`, and
+optional, so the API starts with the SIEM part off without it. `SIEM_URL=https://10.4.2.10:9200`.
+
+**Consequences.** No new RBAC; the CSP files are untouched (browsers never reach siem01). A rotated
+certificate is a new generation, mapped on siem01 before the Secret is replaced.

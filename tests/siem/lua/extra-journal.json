@@ -1,0 +1,3 @@
+{"__REALTIME_TIMESTAMP":"1791108240000000","SYSLOG_IDENTIFIER":"sshd-session","_SYSTEMD_UNIT":"ssh.service","_TRANSPORT":"syslog","_HOSTNAME":"k3s01","MESSAGE":"Accepted publickey for operator from 10.1.1.250 port 50022 ssh2: ED25519 SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}
+{"__REALTIME_TIMESTAMP":"1791108241000000","SYSLOG_IDENTIFIER":"sudo","_TRANSPORT":"syslog","_HOSTNAME":"k3s01","MESSAGE":"pam_unix(sudo:session): session opened for user root(uid=0) by operator(uid=1000)"}
+{"__REALTIME_TIMESTAMP":"1791108242000000","SYSLOG_IDENTIFIER":"kernel","_TRANSPORT":"kernel","_HOSTNAME":"k3s01","MESSAGE":"cilium: unrelated kernel line from 10.1.1.250"}
