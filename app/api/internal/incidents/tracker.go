@@ -250,6 +250,9 @@ func (t *Tracker) Poll(ctx context.Context) {
 		t.alerts = alerts
 	}
 	if rulesOK {
+		if rules.Commit == "" {
+			rules.Commit, rules.AppliedAt = t.rules.Commit, t.rules.AppliedAt
+		}
 		t.rules = rules
 	}
 	if rewriteOK {
@@ -316,10 +319,12 @@ func (t *Tracker) twinNamespace() string {
 var commitPat = regexp.MustCompile(`^[0-9a-f]{40}$`)
 
 // readRules reads the newest sync records: the newest one's status, the newest applied one's commit
-// and time.
+// and time. The sync writes a record only when it has something to do, so a quiet repository leaves
+// the last record weeks old: the search looks back as far as a search may (31 d), and finding no
+// record, or no applied one, keeps what was read before (ok false / the previous commit).
 func (t *Tracker) readRules(ctx context.Context, now time.Time) (RulesView, bool) {
 	res, err := t.cfg.Source.Search(ctx, []string{siem.SyncIndex}, siem.Query{TimeField: "applied_at",
-		Since: now.Add(-7 * 24 * time.Hour), Until: now, Size: 50, SortField: "applied_at",
+		Since: now.Add(-siem.MaxRange), Until: now, Size: 50, SortField: "applied_at",
 		Source: []string{"commit", "applied_at", "status"}})
 	if err != nil {
 		return RulesView{}, false
@@ -335,6 +340,9 @@ func (t *Tracker) readRules(ctx context.Context, now time.Time) (RulesView, bool
 			continue
 		}
 		recs = append(recs, rec{at, str(h.Source, "commit"), str(h.Source, "status")})
+	}
+	if len(recs) == 0 {
+		return RulesView{}, false
 	}
 	sort.SliceStable(recs, func(i, j int) bool { return recs[i].at.After(recs[j].at) })
 	out := RulesView{Status: "unknown"}

@@ -689,3 +689,29 @@ func TestFlagMatchIsKept(t *testing.T) {
 		t.Fatalf("flag match after a re-read: %v", ptr(m))
 	}
 }
+
+// The sync writes a record only when it has work: an applied record 8 days old is still the rules in
+// effect, and a poll that finds no record keeps what was read before.
+func TestRulesHealthSurvivesQuietWeeks(t *testing.T) {
+	f := newFake()
+	commit := strings.Repeat("c", 40)
+	f.sync = []siem.Hit{{ID: "s1", Source: map[string]any{"commit": commit, "applied_at": t0.Add(-8 * 24 * time.Hour).Format(time.RFC3339), "status": "applied"}}}
+	clk := &clock{t: t0}
+	tr := newTracker(t, f, clk)
+	tr.Poll(context.Background())
+	if r := tr.View().Rules; r.Status != "applied" || r.Commit != commit {
+		t.Fatalf("8-day-old record: %+v", r)
+	}
+	// 40 days later the record is past any search range: the last known state stands.
+	clk.Set(t0.Add(40 * 24 * time.Hour))
+	tr.Poll(context.Background())
+	if r := tr.View().Rules; r.Status != "applied" || r.Commit != commit {
+		t.Fatalf("no record in range: %+v", r)
+	}
+	// A newer refused record changes the status, the applied commit stays.
+	f.sync = append(f.sync, siem.Hit{ID: "s2", Source: map[string]any{"commit": strings.Repeat("d", 40), "applied_at": clk.Now().Add(-time.Minute).Format(time.RFC3339), "status": "refused"}})
+	tr.Poll(context.Background())
+	if r := tr.View().Rules; r.Status != "refused" || r.Commit != commit {
+		t.Fatalf("refused after applied: %+v", r)
+	}
+}

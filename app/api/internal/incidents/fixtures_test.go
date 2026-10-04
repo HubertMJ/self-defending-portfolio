@@ -107,7 +107,14 @@ func (f *fakeSource) Search(_ context.Context, indices []string, q siem.Query) (
 		return siem.SearchResult{}, f.fail
 	}
 	if len(indices) == 1 && indices[0] == siem.SyncIndex {
-		return siem.SearchResult{Total: len(f.sync), Hits: f.sync}, nil
+		var out []siem.Hit
+		for _, h := range f.sync {
+			at := timeOf(h.Source, q.TimeField)
+			if !at.Before(q.Since) && !at.After(q.Until) {
+				out = append(out, h)
+			}
+		}
+		return siem.SearchResult{Total: len(out), Hits: out}, nil
 	}
 	if q.Size == 0 {
 		return siem.SearchResult{Total: f.rewrite}, nil
