@@ -1,7 +1,8 @@
 ---
 # siem01: the SIEM host (ADR 0034). Same hardening roles as k3s01, switched by group (firewall,
-# sysctl and auditd carry no k3s rules here), then the snapshot disk, OpenSearch, Dashboards and
-# everything inside OpenSearch. Fluent Bit (P2) and the rules sync (P3) join this play with their roles.
+# sysctl and auditd carry no k3s rules here), then the snapshot disk, OpenSearch, Dashboards,
+# everything inside OpenSearch, and Fluent Bit shipping siem01's own logs into sdp-siem01 (P2, F4).
+# The rules sync (P3) joins this play with its role.
 - name: Build the SIEM host
   hosts: siem_nodes
   become: true
@@ -53,6 +54,9 @@
       tags: [opensearch_dashboards]
     - role: opensearch_config
       tags: [opensearch_config]
+    # After opensearch: it renews the shipper-siem01 certificate this role publishes to the unit.
+    - role: fluent_bit
+      tags: [fluent_bit]
 
 # The remote entry point for client CSRs (siem contract C1), run only when asked for by tag:
 #   --tags client-cert -e siem_client_csr=<abs path> -e siem_client_name=<name> -e siem_client_generation=<N>

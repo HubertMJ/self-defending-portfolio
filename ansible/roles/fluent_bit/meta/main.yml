@@ -1,0 +1,15 @@
+---
+galaxy_info:
+  role_name: fluent_bit
+  author: self-defending-portfolio
+  description: Pinned Fluent Bit in a systemd sandbox shipping allow-listed, pseudonymised logs to the SIEM.
+  license: MIT
+  min_ansible_version: "2.17"
+  platforms:
+    - name: Debian
+      versions:
+        - trixie
+  galaxy_tags:
+    - fluentbit
+    - siem
+dependencies: []

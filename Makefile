@@ -1,5 +1,5 @@
 .PHONY: lint gitleaks validate smoke runtime-test abuse-test scenario-offline scenario-test vm hardening cluster verify bootstrap \
-	siem siem-verify golden siem-csr-test siem-acceptance siem-mutations
+	siem siem-verify golden siem-csr-test siem-acceptance siem-mutations ingest
 DOCKER ?= docker
 
 # Ansible in the tooling container (scripts/Dockerfile.tooling); Ansible is not installed on the
@@ -62,6 +62,9 @@ siem:            ## SIEM host siem01: hardening, snapshot disk, OpenSearch, Dash
 siem-verify:     ## read-only checks of siem01
 	@$(ANSIBLE_IN_TOOLING) playbooks/verify.yml --limit siem_nodes $(ARGS)
 
+ingest:          ## k3s01's SIEM shipper: Fluent Bit, certificate signed on siem01 (ADR 0034; maintenance window; ARGS="--check --diff")
+	@$(ANSIBLE_IN_TOOLING) playbooks/ingest.yml $(ARGS)
+
 golden:          ## the shared host roles render byte-identically for k3s01 (goldens from b374c0e) and siem01-shaped for siem01
 	@DOCKER="$(DOCKER)" tests/golden/render.sh
 
@@ -73,3 +76,4 @@ siem-acceptance: ## P1 live acceptance on siem01: shipper refusals, rewrites ref
 
 siem-mutations:  ## mutation proof of the P1 tests: each mutation on a scratch copy must make its test fail
 	@DOCKER="$(DOCKER)" tests/siem/p1-mutations.sh
+

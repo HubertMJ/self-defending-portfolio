@@ -1,0 +1,145 @@
+---
+# The pinned Fluent Bit from its own apt repository, pinned four ways as OpenSearch is (ADR 0008
+# amendment 2026-10-04): the repository key is trusted only after its primary fingerprint equals the
+# pin, the package's SHA256 in the signed index must equal the pin before installing, apt preferences
+# pin the version at priority 1001, and dpkg holds it. unattended-upgrades follows the Debian archive
+# only, so nothing upgrades it unattended.
+- name: Install the tools the key check and the repository entry need
+  ansible.builtin.apt:
+    name: [gnupg, python3-debian]
+    state: present
+
+- name: Create the staging directory for downloaded trust material
+  ansible.builtin.file:
+    path: /var/lib/sdp-fluent-bit
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+
+- name: Download the Fluent Bit release key to the staging file
+  ansible.builtin.get_url:
+    url: "{{ fluent_bit_apt_key_url }}"
+    dest: /var/lib/sdp-fluent-bit/fluentbit.key
+    owner: root
+    group: root
+    mode: "0600"
+
+# --show-keys lists the file's packets without importing anything; gpg still wants a home.
+- name: Create a private gpg home for reading the key
+  ansible.builtin.file:
+    path: /var/lib/sdp-fluent-bit/gnupg
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+
+- name: Read the key's packets without importing it
+  ansible.builtin.command:
+    cmd: >-
+      gpg --homedir /var/lib/sdp-fluent-bit/gnupg --batch --no-autostart --show-keys --with-colons --fixed-list-mode
+      /var/lib/sdp-fluent-bit/fluentbit.key
+  register: fluent_bit_key_colons
+  changed_when: false
+  check_mode: false
+
+- name: Assert the file holds exactly the pinned primary key
+  ansible.builtin.assert:
+    that:
+      - fluent_bit_key_pub | length == 1
+      - fluent_bit_key_primary_fpr == fluent_bit_apt_key_fingerprint
+    fail_msg: >-
+      The downloaded Fluent Bit key is not the pinned one (primary keys: {{ fluent_bit_key_pub | length }},
+      first fingerprint {{ fluent_bit_key_primary_fpr }}, pin {{ fluent_bit_apt_key_fingerprint }}). Nothing was trusted.
+    success_msg: The Fluent Bit key is the pinned primary key.
+  vars:
+    fluent_bit_key_pub: "{{ fluent_bit_key_colons.stdout_lines | select('match', '^pub:') | list }}"
+    # With a single primary key the first fpr record is the primary's (sub keys follow it).
+    fluent_bit_key_primary_fpr: >-
+      {{ fluent_bit_key_colons.stdout_lines | select('match', '^fpr:') | first | default('')
+         | regex_replace('^fpr:{9}([0-9A-F]{40}):.*$', '\1') }}
+
+- name: Trust the verified key for the Fluent Bit repository only
+  ansible.builtin.copy:
+    src: /var/lib/sdp-fluent-bit/fluentbit.key
+    dest: "{{ fluent_bit_apt_keyring }}"
+    remote_src: true
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Add the Fluent Bit apt repository
+  ansible.builtin.deb822_repository:
+    name: fluent-bit
+    types: deb
+    uris: "{{ fluent_bit_apt_repo_url }}"
+    suites: "{{ fluent_bit_apt_suite }}"
+    components: main
+    architectures: amd64
+    signed_by: "{{ fluent_bit_apt_keyring }}"
+  register: fluent_bit_repo
+
+- name: Pin the Fluent Bit version
+  ansible.builtin.copy:
+    dest: /etc/apt/preferences.d/fluent-bit
+    content: |
+      # Managed by Ansible (role: fluent_bit). Version pin, ADR 0008.
+      Package: fluent-bit
+      Pin: version {{ fluent_bit_version }}
+      Pin-Priority: 1001
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Refresh the apt index after the repository changed
+  ansible.builtin.apt:
+    update_cache: true
+  when: fluent_bit_repo.changed  # noqa: no-handler - the index is needed by the next task, not at the end
+
+# A run that added the repository but stopped before the refresh leaves no index for it; the record
+# is then missing and the index is refreshed once before reading it again.
+- name: Read the Fluent Bit record in the signed index
+  ansible.builtin.command:
+    cmd: "apt-cache show fluent-bit={{ fluent_bit_version }}"
+  register: fluent_bit_record_first
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Refresh the apt index when the Fluent Bit record is missing
+  ansible.builtin.apt:
+    update_cache: true
+  when: fluent_bit_record_first.rc != 0
+
+- name: Read the Fluent Bit record again after the refresh
+  ansible.builtin.command:
+    cmd: "apt-cache show fluent-bit={{ fluent_bit_version }}"
+  register: fluent_bit_record_second
+  changed_when: false
+  check_mode: false
+  when: fluent_bit_record_first.rc != 0
+
+- name: Assert the indexed SHA256 of Fluent Bit equals the pin
+  ansible.builtin.assert:
+    that:
+      - fluent_bit_indexed == [fluent_bit_deb_sha256]
+    fail_msg: >-
+      fluent-bit {{ fluent_bit_version }} is indexed with SHA256 {{ fluent_bit_indexed }}, the pin is
+      {{ fluent_bit_deb_sha256 }}. Nothing was installed.
+    success_msg: fluent-bit {{ fluent_bit_version }} matches the pinned SHA256.
+  vars:
+    fluent_bit_record: "{{ fluent_bit_record_second if fluent_bit_record_first.rc != 0 else fluent_bit_record_first }}"
+    fluent_bit_indexed: >-
+      {{ fluent_bit_record.stdout_lines | select('match', '^SHA256: ') | map('regex_replace', '^SHA256: ', '') | list }}
+
+# The package ships its unit disabled; it is enabled only after the sandbox drop-in and the
+# configuration are in place (tasks/main.yml).
+- name: Install the pinned Fluent Bit
+  ansible.builtin.apt:
+    name: "fluent-bit={{ fluent_bit_version }}"
+    state: present
+
+- name: Hold Fluent Bit
+  ansible.builtin.dpkg_selections:
+    name: fluent-bit
+    selection: hold
