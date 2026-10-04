@@ -1,10 +1,38 @@
 ---
 argument_specs:
   main:
-    short_description: nftables host firewall for a k3s node
+    short_description: nftables host firewall
     description:
-      - Renders and loads a default-drop input ruleset sized for single-node k3s with Cilium.
+      - Renders and loads a default-drop input ruleset. On k3s nodes it carries the single-node k3s and Cilium rules;
+        other hosts get SSH plus their per-service allow-list.
     options:
+      firewall_k3s_enabled:
+        description: Render the kube-apiserver, pod/service CIDR, Cilium and accepting forward-chain rules. Defaults to membership
+          of the k3s_nodes group.
+        type: bool
+      firewall_services:
+        description: Per-service accept rules, one per entry.
+        type: list
+        elements: dict
+        options:
+          name:
+            description: Rule comment.
+            type: str
+            required: true
+          port:
+            description: Destination port.
+            type: int
+            required: true
+          proto:
+            description: Transport protocol.
+            type: str
+            choices: [tcp, udp]
+            required: true
+          sources:
+            description: Source CIDRs allowed to reach the port.
+            type: list
+            elements: str
+            required: true
       firewall_config_path:
         description: Path of the rendered nftables ruleset.
         type: str

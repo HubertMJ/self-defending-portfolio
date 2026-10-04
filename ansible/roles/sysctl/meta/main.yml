@@ -2,7 +2,7 @@
 galaxy_info:
   role_name: sysctl
   author: self-defending-portfolio
-  description: Kernel parameter hardening tuned for Cilium and k3s.
+  description: Kernel parameter hardening, with the Cilium and k3s values on k3s nodes only.
   license: MIT
   min_ansible_version: "2.17"
   platforms:

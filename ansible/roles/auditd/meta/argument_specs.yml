@@ -3,8 +3,26 @@ argument_specs:
   main:
     short_description: Audit framework configuration and rules
     description:
-      - Installs auditd, its rotation policy and rule files for identity, privilege and k3s paths.
+      - Installs auditd, its rotation policy and rule files for identity, privilege, k3s paths (k3s nodes) and host-specific
+        watches.
     options:
+      auditd_k3s_enabled:
+        description: Install 50-k3s.rules and create the directories it watches; remove the file when false. Defaults to
+          membership of the k3s_nodes group.
+        type: bool
+      auditd_extra_watches:
+        description: Write watches rendered into 60-extra.rules; the file is removed when the list is empty.
+        type: list
+        elements: dict
+        options:
+          path:
+            description: Watched path.
+            type: str
+            required: true
+          key:
+            description: Audit key of the watch.
+            type: str
+            required: true
       auditd_buffer_size:
         description: Kernel audit backlog size (-b).
         type: int

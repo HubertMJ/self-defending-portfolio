@@ -25,6 +25,10 @@ argument_specs:
         description: Value for AllowTcpForwarding.
         type: str
         default: "no"
+      ssh_hardening_permit_open:
+        description: PermitOpen destinations (host:port) for local forwarding; not rendered when empty.
+        type: list
+        elements: str
       ssh_hardening_max_auth_tries:
         description: Value for MaxAuthTries.
         type: int

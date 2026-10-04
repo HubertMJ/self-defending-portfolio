@@ -17,10 +17,33 @@ sysctl_file: /etc/sysctl.d/90-hardening.conf
 # error message anywhere.
 sysctl_rp_filter_file: /etc/sysctl.d/99-cilium-rp-filter.conf
 
-# Complete kernel parameter map. Override individual keys by redefining the
-# whole dict (Ansible does not deep-merge by default) or set
-# hash_behaviour=merge in ansible.cfg.
-sysctl_settings:
+# The kernel parameter map is built from three parts (ADR 0009 amendment
+# 2026-10-04): hardening keys every host gets, the keys a k3s node with Cilium
+# needs (rp_filter off, forwarding on, kubelet's protect-kernel-defaults
+# values) and host-specific extras. Each part is replaced as a whole when
+# overridden (Ansible does not deep-merge by default).
+#
+# The effective map, in loop order. On k3s nodes it must equal the single map
+# the role had before the split, key for key and in the same order, because
+# the loop order is the drop-in's line order on a fresh host
+# (tests/golden/render.sh compares it with the pre-split render). combine()
+# keeps the position of a key that already exists and appends new keys, so the
+# two rp_filter keys, which sat in the middle of the old map, keep their slot in
+# sysctl_common_settings as null placeholders; null entries are dropped here,
+# so a host without the k3s part never sets them.
+sysctl_settings: >-
+  {{ sysctl_common_settings
+     | combine(sysctl_k3s_settings if sysctl_k3s_enabled | bool else {}, sysctl_extra_settings)
+     | dict2items | rejectattr('value', 'none') | items2dict }}
+
+# Whether this host gets sysctl_k3s_settings and the rp_filter drop-in.
+sysctl_k3s_enabled: "{{ 'k3s_nodes' in group_names }}"
+
+# Host-specific additions, appended after the other parts (siem01:
+# vm.max_map_count for OpenSearch's mmapped index files, vm.swappiness 1).
+sysctl_extra_settings: {}
+
+sysctl_common_settings:
   # --- Kernel information leaks and attack surface ---
   kernel.kptr_restrict: "2"
   kernel.dmesg_restrict: "1"
@@ -48,13 +71,9 @@ sysctl_settings:
   fs.protected_fifos: "2"
   fs.protected_regular: "2"
 
-  # --- Network: required by Cilium ---
-  # Cilium REQUIRES reverse path filtering to be disabled. Its datapath sends
-  # replies from interfaces the kernel does not consider the route source
-  # (veth pairs, cilium_host); with rp_filter enabled those packets are
-  # silently dropped and pod networking breaks. Do not raise these to 1 or 2.
-  net.ipv4.conf.all.rp_filter: "0"
-  net.ipv4.conf.default.rp_filter: "0"
+  # --- Network: position of the Cilium rp_filter keys (set in sysctl_k3s_settings) ---
+  net.ipv4.conf.all.rp_filter: null
+  net.ipv4.conf.default.rp_filter: null
 
   # --- Network hardening ---
   net.ipv4.conf.all.accept_redirects: "0"
@@ -70,6 +89,15 @@ sysctl_settings:
   # The node has a static address from cloud-init, so router advertisements
   # are not needed. Set to 1 if the LAN relies on SLAAC.
   net.ipv6.conf.all.accept_ra: "0"
+
+sysctl_k3s_settings:
+  # --- Network: required by Cilium ---
+  # Cilium REQUIRES reverse path filtering to be disabled. Its datapath sends
+  # replies from interfaces the kernel does not consider the route source
+  # (veth pairs, cilium_host); with rp_filter enabled those packets are
+  # silently dropped and pod networking breaks. Do not raise these to 1 or 2.
+  net.ipv4.conf.all.rp_filter: "0"
+  net.ipv4.conf.default.rp_filter: "0"
 
   # --- Routing required by Kubernetes ---
   net.ipv4.ip_forward: "1"

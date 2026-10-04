@@ -36,11 +36,19 @@ table inet filter {
                       nd-router-advert, nd-neighbor-solicit, nd-neighbor-advert } accept
 
         ip saddr { {{ firewall_admin_cidrs | join(', ') }} } tcp dport {{ firewall_ssh_port }} accept comment "ssh"
+{% if firewall_k3s_enabled | bool %}
         ip saddr { {{ firewall_k3s_api_cidrs | join(', ') }} } tcp dport {{ firewall_k3s_api_port }} accept comment "kube-apiserver"
+{% endif %}
 {% if firewall_admin_cidrs6 | length > 0 %}
         ip6 saddr { {{ firewall_admin_cidrs6 | join(', ') }} } tcp dport {{ firewall_ssh_port }} accept comment "ssh v6"
+{% if firewall_k3s_enabled | bool %}
         ip6 saddr { {{ firewall_admin_cidrs6 | join(', ') }} } tcp dport {{ firewall_k3s_api_port }} accept comment "kube-apiserver v6"
 {% endif %}
+{% endif %}
+{% for service in firewall_services %}
+        ip saddr { {{ service.sources | join(', ') }} } {{ service.proto }} dport {{ service.port }} accept comment "{{ service.name }}"
+{% endfor %}
+{% if firewall_k3s_enabled | bool %}
 
         # Cluster-internal traffic terminating on the host, restricted to the
         # ports the cluster actually needs (see firewall_pod_to_host_*_ports).
@@ -59,6 +67,7 @@ table inet filter {
     # direction) and accepts it in its own iptables INPUT chain; this chain must agree.
     meta mark & 0x00000f00 == 0x00000200 accept comment "cilium proxy traffic"
     meta mark & 0x00000f00 == 0x00000a00 accept comment "cilium proxy reply traffic"
+{% endif %}
 {% if firewall_extra_tcp_ports | length > 0 %}
         ip saddr { {{ firewall_cluster_cidrs | join(', ') }} } tcp dport { {{ firewall_extra_tcp_ports | join(', ') }} } accept
 {% endif %}
@@ -70,6 +79,7 @@ table inet filter {
 {% endif %}
     }
 
+{% if firewall_k3s_enabled | bool %}
     # Cilium runs in eBPF mode with kube-proxy replacement: pod-to-pod and
     # pod-to-world forwarding is handled by BPF programs and by CiliumNetwork
     # Policy, not by this chain. A drop policy here breaks containerd/CNI
@@ -78,6 +88,13 @@ table inet filter {
     chain forward {
         type filter hook forward priority filter; policy accept;
     }
+{% else %}
+    # A host without a cluster routes nothing (forwarding stays off in sysctl);
+    # the drop policy keeps it that way if forwarding is ever switched on.
+    chain forward {
+        type filter hook forward priority filter; policy drop;
+    }
+{% endif %}
 
     chain output {
         type filter hook output priority filter; policy accept;
