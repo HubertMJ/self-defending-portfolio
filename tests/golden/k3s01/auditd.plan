@@ -1,0 +1,10 @@
+template|/etc/audit/auditd.conf|auditd.conf.j2
+file|directory|/etc/rancher/k3s
+file|directory|/var/lib/rancher/k3s/server
+file|directory|/var/lib/rancher/k3s/server/tls
+file|directory|/var/lib/rancher/k3s/server/cred
+template|/etc/audit/rules.d/10-base.rules|10-base.rules.j2
+template|/etc/audit/rules.d/30-identity.rules|30-identity.rules.j2
+template|/etc/audit/rules.d/40-privileged.rules|40-privileged.rules.j2
+template|/etc/audit/rules.d/50-k3s.rules|50-k3s.rules.j2
+template|/etc/audit/rules.d/99-finalize.rules|99-finalize.rules.j2

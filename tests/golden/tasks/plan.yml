@@ -1,0 +1,36 @@
+# Copied into a scratch copy of the role as tasks/golden-render.yml by tests/golden/render.sh, next
+# to templates/golden-plan.j2 generated from the role's own tasks/main.yml (tests/golden/plan.py).
+- name: Render the plan of this role (its file tasks, with their real loops and conditions)
+  ansible.builtin.template:
+    src: golden-plan.j2
+    dest: "{{ golden_out }}/{{ golden_role }}.plan"
+    mode: "0644"
+
+- name: Render every template the plan writes
+  ansible.builtin.template:
+    src: "{{ item.split('|')[2] }}"
+    dest: "{{ golden_out }}/{{ item.split('|')[1] | basename }}"
+    mode: "0644"
+  loop: "{{ golden_plan | select('match', '^template[|]') | list }}"
+  vars:
+    golden_plan: "{{ lookup('ansible.builtin.file', golden_out ~ '/' ~ golden_role ~ '.plan').splitlines() }}"
+
+- name: Write every copy the plan writes
+  ansible.builtin.copy:
+    content: "{{ item.split('|')[2] | b64decode }}"
+    dest: "{{ golden_out }}/{{ item.split('|')[1] | basename }}"
+    mode: "0644"
+  loop: "{{ golden_plan | select('match', '^copy[|]') | list }}"
+  vars:
+    golden_plan: "{{ lookup('ansible.builtin.file', golden_out ~ '/' ~ golden_role ~ '.plan').splitlines() }}"
+
+# ansible.posix.sysctl appends one key=value line per loop item to a fresh drop-in, so the order
+# of the plan's sysctl lines IS the file content on a new host.
+- name: Assemble every sysctl drop-in the plan writes
+  ansible.builtin.copy:
+    content: "{% for line in golden_plan if line.startswith('sysctl|' ~ item ~ '|') %}{{ line.split('|')[2] }}\n{% endfor %}"
+    dest: "{{ golden_out }}/{{ item | basename }}"
+    mode: "0644"
+  loop: "{{ golden_plan | select('match', '^sysctl[|]') | map('split', '|') | map(attribute='1') | unique | list }}"
+  vars:
+    golden_plan: "{{ lookup('ansible.builtin.file', golden_out ~ '/' ~ golden_role ~ '.plan').splitlines() }}"

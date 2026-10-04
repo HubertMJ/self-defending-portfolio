@@ -1,6 +1,0 @@
-# Copied into a scratch copy of the role as tasks/golden-render.yml by tests/golden/render.sh.
-- name: Render the nftables ruleset
-  ansible.builtin.template:
-    src: nftables.conf.j2
-    dest: "{{ golden_out }}/nftables.conf"
-    mode: "0644"

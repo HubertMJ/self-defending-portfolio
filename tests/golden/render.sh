@@ -1,8 +1,12 @@
 #!/usr/bin/env bash
 # Golden render of the host roles that k3s01 and siem01 share (firewall, sysctl, auditd, ssh_hardening).
 # Each role is rendered by Ansible itself, in the tooling container, with the host's real inventory
-# variables (hosts.yml + group_vars + role defaults), from a scratch copy of ansible/ that gains one
-# render task file per role (tests/golden/tasks/<role>.yml) - the worktree is never modified.
+# variables (hosts.yml + group_vars + role defaults), from a scratch copy of ansible/ - the worktree is
+# never modified. For firewall, sysctl and auditd, tests/golden/plan.py turns the role's own
+# tasks/main.yml into a program that evaluates each file task's real `loop` and `when`: the result is
+# the role's plan (<role>.plan: every file it would write or remove, every sysctl key in order), and
+# the files are rendered from that plan. A dropped condition or a changed loop therefore shows up,
+# not only a changed template. ssh_hardening's one template is rendered directly.
 #
 #   k3s01:  the output must equal tests/golden/k3s01/ byte for byte. Those goldens were rendered the
 #           same way from b374c0e, before the roles became group-conditional, so the split for siem01
@@ -29,7 +33,14 @@ render() {
   local tree=$1 out=$2 role
   shift 2
   for role in "${ROLES[@]}"; do
-    cp tests/golden/tasks/"$role".yml "$tree/ansible/roles/$role/tasks/golden-render.yml"
+    if [ "$role" = ssh_hardening ]; then
+      # Its file tasks depend on facts read at run time (socket activation); its one template is
+      # gated by variables only and is rendered directly.
+      cp tests/golden/tasks/ssh_hardening.yml "$tree/ansible/roles/$role/tasks/golden-render.yml"
+    else
+      cp tests/golden/tasks/plan.yml "$tree/ansible/roles/$role/tasks/golden-render.yml"
+      python3 tests/golden/plan.py "$tree/ansible/roles/$role"
+    fi
   done
   cp tests/golden/render.yml "$tree/ansible/golden-render.yml"
   mkdir -p "$out"
@@ -61,10 +72,27 @@ render "$work/cur" "$work/out" k3s01 siem01
 [ -n "${GOLDEN_KEEP:-}" ] && { mkdir -p "$GOLDEN_KEEP"; cp -r "$work/out/." "$GOLDEN_KEEP/"; }
 
 fail=0
+# The plans must match too, with one allowance: removing a file that the golden plan never writes
+# (e.g. 60-extra.rules, the new role's clean-up of a file k3s01 never had) changes nothing on k3s01
+# and is listed instead of failing the comparison.
+for plan in "$work/out/k3s01"/*.plan; do
+  name=$(basename "$plan")
+  golden_plan=$GOLDEN/$name
+  while IFS= read -r line; do
+    path=${line#file|absent|}
+    if [ "$path" != "$line" ] && ! grep -qF "|$path|" "$golden_plan" && ! grep -qF "|$path" "$golden_plan"; then
+      echo "     k3s01: allowed extra in $name: $line" >>"$work/allowed"
+    else
+      printf '%s\n' "$line"
+    fi
+  done <"$plan" >"$work/plan.cmp"
+  mv "$work/plan.cmp" "$plan"
+done
+[ -s "$work/allowed" ] && cat "$work/allowed"
 if diff -r "$GOLDEN" "$work/out/k3s01"; then
-  echo "ok   k3s01: rendered files equal the goldens from b374c0e ($(find "$GOLDEN" -type f | wc -l) files)"
+  echo "ok   k3s01: rendered files and plans equal the goldens from b374c0e ($(find "$GOLDEN" -type f | wc -l) files)"
 else
-  echo "FAIL k3s01: rendered files differ from the goldens (diff above)"; fail=1
+  echo "FAIL k3s01: rendered files or plans differ from the goldens (diff above)"; fail=1
 fi
 
 s=$work/out/siem01
@@ -93,7 +121,12 @@ check "sysctl sets strict rp_filter (all, default and eth0 = 1)" \
   test "$(grep -E 'rp_filter' "$s/90-hardening.conf" | tr '\n' ' ')" = 'net.ipv4.conf.all.rp_filter=1 net.ipv4.conf.default.rp_filter=1 net.ipv4.conf.eth0.rp_filter=1 '
 check "sysctl sets vm.max_map_count=262144" grep -qx 'vm.max_map_count=262144' "$s/90-hardening.conf"
 check "no rp_filter drop-in" test ! -e "$s/99-cilium-rp-filter.conf"
+check "the sysctl role removes the rp_filter drop-in and never writes it" \
+  test "$(grep -c '99-cilium-rp-filter.conf' "$s/sysctl.plan")|$(grep -c '^file|absent|/etc/sysctl.d/99-cilium-rp-filter.conf$' "$s/sysctl.plan")" = '1|1'
 check "no 50-k3s.rules" test ! -e "$s/50-k3s.rules"
+check "the auditd role removes 50-k3s.rules and never writes it" \
+  test "$(grep -c '50-k3s.rules' "$s/auditd.plan")|$(grep -c '^file|absent|/etc/audit/rules.d/50-k3s.rules$' "$s/auditd.plan")" = '1|1'
+check "the auditd role creates no k3s directory" absent 'rancher' "$s/auditd.plan"
 check "60-extra.rules watches the SIEM config, plugins and sync" \
   test "$(grep -oE '^-w [^ ]+ -p wa -k [a-z_]+$' "$s/60-extra.rules" | wc -l)" = 5
 check "sshd allows local forwarding to 127.0.0.1:5601 only" \
