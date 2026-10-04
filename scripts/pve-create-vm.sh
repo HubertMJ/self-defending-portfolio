@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Create the k3s VM on Proxmox from the official Debian 13 generic cloud image via the REST API.
+# Create a Debian 13 VM on Proxmox (k3s01 by default; siem01 per ADR 0034) from the official generic cloud image
+# via the REST API.
 #
 # Requires: curl, jq, python3 (used to URL-encode the SSH public key).
 # Credentials only from the environment (see docs/bootstrap.md):
@@ -10,7 +11,11 @@
 #   PVE_NODE (auto-detected if the host has a single node), VMID (default 120), VM_NAME (k3s01),
 #   VM_CORES (4), VM_MEMORY_MB (8192), VM_DISK_GB (60), VM_STORAGE (Lexar), VM_BRIDGE (vmbr0),
 #   VM_VLAN (41 = DMZ), VM_IP (10.4.1.20/24), VM_GW (10.4.1.1), VM_DNS (1.1.1.1), VM_MAC,
+#   VM_DATA_DISK_GB (unset = no second disk), VM_DESCRIPTION,
 #   VM_USER (ansible), SSH_PUBKEY_FILE (~/.ssh/id_ed25519.pub), DEBIAN_IMAGE_URL, PVE_INSECURE (0/1)
+# siem01 (ADR 0034): VMID=121 VM_NAME=siem01 VM_VLAN=42 VM_IP=10.4.2.10/24 VM_GW=10.4.2.1 VM_DISK_GB=80
+#   VM_DATA_DISK_GB=20 (static address, so no MAC reservation is needed: Proxmox picks the MAC). The data disk
+#   carries serial <name>-data, so the guest finds it at /dev/disk/by-id/scsi-0QEMU_QEMU_HARDDISK_<name>-data.
 #
 # Idempotent-ish: refuses to run if VMID already exists. Destroy with: qm destroy <VMID> --purge (on the node).
 set -euo pipefail
@@ -93,8 +98,12 @@ wait_task "$UPID"
 # first boot and holds the dpkg lock for minutes, which collides with the first
 # Ansible run. Patching is the unattended_upgrades role's job, and hardening.yml
 # additionally waits for `cloud-init status --wait` before touching apt.
-VM_MAC="${VM_MAC:-BC:24:11:4B:35:01}"   # fixed so the UniFi reservation exists before first boot
-NET="virtio=${VM_MAC},bridge=${VM_BRIDGE}"; [[ -n "$VM_VLAN" ]] && NET+=",tag=${VM_VLAN}"
+# k3s01's MAC is fixed so its UniFi reservation exists before first boot. It is the default for k3s01
+# only: reusing it for another VM on the same segment would knock the cluster node off the network.
+if [[ -z "${VM_MAC:-}" && "$VM_NAME" == "k3s01" ]]; then VM_MAC="BC:24:11:4B:35:01"; fi
+NET="virtio${VM_MAC:+=${VM_MAC}},bridge=${VM_BRIDGE}"; [[ -n "$VM_VLAN" ]] && NET+=",tag=${VM_VLAN}"
+VM_DESCRIPTION="${VM_DESCRIPTION:-self-defending-portfolio ${VM_NAME}. Managed by Ansible; do not edit by hand.}"
+DATA_DISK=(); [[ -n "${VM_DATA_DISK_GB:-}" ]] && DATA_DISK=("scsi1=${VM_STORAGE}:${VM_DATA_DISK_GB},discard=on,ssd=1,iothread=1,serial=${VM_NAME}-data")
 SSHKEYS=$(python3 -c 'import sys,urllib.parse;print(urllib.parse.quote(open(sys.argv[1]).read().strip(),safe=""))' "$SSH_PUBKEY_FILE")
 UPID=$(api POST "/nodes/${PVE_NODE}/qemu" \
   "vmid=${VMID}" "name=${VM_NAME}" "ostype=l26" "machine=q35" "bios=ovmf" \
@@ -103,10 +112,10 @@ UPID=$(api POST "/nodes/${PVE_NODE}/qemu" \
   "net0=${NET}" \
   "efidisk0=${VM_STORAGE}:0,efitype=4m,pre-enrolled-keys=0" \
   "scsi0=${VM_STORAGE}:0,import-from=${IMPORT_STORAGE}:import/${IMG_NAME},discard=on,ssd=1,iothread=1" \
-  "ide2=${VM_STORAGE}:cloudinit" "boot=order=scsi0" \
+  "${DATA_DISK[@]}" "ide2=${VM_STORAGE}:cloudinit" "boot=order=scsi0" \
   "ciuser=${VM_USER}" "ipconfig0=ip=${VM_IP},gw=${VM_GW}" "nameserver=${VM_DNS}" \
   "sshkeys=${SSHKEYS}" "ciupgrade=0" "onboot=1" \
-  "description=self-defending-portfolio k3s node. Managed by Ansible; do not edit by hand." | jq -r '.data')
+  "description=${VM_DESCRIPTION}" | jq -r '.data')
 wait_task "$UPID"
 
 # 3. Grow the root disk (image is 3 GB); cloud-init growpart expands the filesystem on first boot.

@@ -63,9 +63,9 @@ periodicity and interval logic. Wazuh is not used.
   off the node whose memory the demo needs, and out of the `restricted` / signed-image admission story,
   which a third-party database would only dilute.
 - **The VM:** `scripts/pve-create-vm.sh` with `VMID=121 VM_NAME=siem01 VM_VLAN=42 VM_IP=10.4.2.10/24
-  VM_GW=10.4.2.1 VM_DISK_GB=80 VM_MAC=<new>` (the script's MAC default is k3s01's: it must be
-  overridden, and the hard-coded VM description is made a parameter), 4 vCPU, 8 GB, plus a second
-  20 GB disk for snapshots. Debian 13 cloud image, configured by Ansible (ADR 0007) as a new inventory
+  VM_GW=10.4.2.1 VM_DISK_GB=80 VM_DATA_DISK_GB=20` (the script's fixed MAC is k3s01's and is now its default
+  for k3s01 only; siem01 has a static address, so Proxmox picks its MAC; the data disk carries serial
+  `siem01-data`), 4 vCPU, 8 GB. Debian 13 cloud image, configured by Ansible (ADR 0007) as a new inventory
   group `siem_nodes` with its own group_vars and playbook: base (with time sync - correlation depends
   on both clocks), sysctl (`vm.max_map_count=262144`), ssh_hardening, auditd, unattended upgrades,
   nftables default-deny (ADR 0009). The firewall role gains per-service source lists and its k3s rules
