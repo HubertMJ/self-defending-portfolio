@@ -127,3 +127,15 @@ prevented terminal commands map to no rule by design (the defence map shows whic
 did). `tests/scenarios/offline.sh` checks every terminal command's precondition under the pod's security
 context, and that every scenario/terminal detection and Talon match is a loaded, enabled rule at or above
 Falcosidekick's cut-off; a fifth-scenario detection with no offline check fails the script.
+
+## Amendment 2026-10-04: `dns-exfil` maps to no Falco rule, by design (ADR 0034)
+
+The terminal's fifteenth command, `dns-exfil` (`allowed`, layer `network`, T1048.003), looks up a name
+that carries the run's flag under `exfil.sdp.test` (ADR 0017 and 0032 amendments). No Falco rule
+fires for it and none is added: busybox `nslookup` is not in the "SDP network tool in sandbox" list
+(`wget`, `nc`, `curl`), no stock rule watches name lookups, and a shell without a TTY is not "Terminal
+shell in container". That blindness is the exhibit - the detection is the SIEM's, from Hubble's record
+of the query joined with the run (ADR 0034) - so the table of terminal detections above gains no row
+and Talon gets no rule. tests/scenarios/run.sh keeps the claim honest: it asserts zero Falco log lines
+naming the pod after the command (and after a plain lookup in the zone from a sandbox pod), so a
+future rule that does catch it turns the test red and the page's claim is re-examined.

