@@ -119,12 +119,15 @@ bulk_create() { # <identity> <stream> <marker> -> sets CREATED_INDEX CREATED_ID 
 }
 
 # --- 5: TLS only with a client certificate; a password header is ignored -----------------------
+# A refused handshake, not some other failure: curl rc 35 (handshake) or 56 (the server's
+# certificate_required alert on receive), or the alert named in curl's message, and no HTTP code.
+tls_refused() { [ "$2" = 000 ] && { [ "$1" = 35 ] || [ "$1" = 56 ] || grep -qi 'certificate required' "$T/tls.err"; }; }
 code=$(curl -sS -m 10 -o /dev/null -w '%{http_code}' --cacert "$CA" "$U/" 2>"$T/tls.err"); rc=$?
-if [ "$rc" != 0 ] && [ "$code" = 000 ]; then ok "5 no client certificate -> no TLS session (curl rc $rc: $(grep -oE 'alert [a-z ]+|certificate required' "$T/tls.err" | head -n1))"
-else bad "5 no client certificate -> rc $rc code $code"; fi
-code=$(curl -sS -m 10 -o /dev/null -w '%{http_code}' --cacert "$CA" -u admin:x "$U/" 2>/dev/null); rc=$?
-if [ "$rc" != 0 ] && [ "$code" = 000 ]; then ok "5 -u admin:x without a certificate -> no TLS session (curl rc $rc)"
-else bad "5 -u admin:x without a certificate -> rc $rc code $code"; fi
+if tls_refused "$rc" "$code"; then ok "5 no client certificate -> no TLS session (curl rc $rc: $(grep -oiE 'alert [a-z ]+|certificate required' "$T/tls.err" | head -n1))"
+else bad "5 no client certificate -> rc $rc code $code: $(cat "$T/tls.err")"; fi
+code=$(curl -sS -m 10 -o /dev/null -w '%{http_code}' --cacert "$CA" -u admin:x "$U/" 2>"$T/tls.err"); rc=$?
+if tls_refused "$rc" "$code"; then ok "5 -u admin:x without a certificate -> no TLS session (curl rc $rc)"
+else bad "5 -u admin:x without a certificate -> rc $rc code $code: $(cat "$T/tls.err")"; fi
 got=$(curl -sS -m 10 -o "$T/body" -w '%{http_code}' --cacert "$CA" --cert "$T/shipper-test.crt" --key "$T/shipper-test.key" \
   -u admin:x "$U/_plugins/_security/authinfo")
 user=$(j "d.get('user_name')")
@@ -317,8 +320,10 @@ ansible_siem --tags opensearch_config >"$work/unmap.log" 2>&1 || { tail -n 30 "$
 mapped=0
 users=$(ssh_siem "sudo curl -sS -m 30 --cacert /etc/opensearch/certs/ca.crt --cert /etc/sdp-siem/pki/admin.crt \
   --key /etc/sdp-siem/pki/admin.key https://127.0.0.1:9200/_plugins/_security/api/rolesmapping/sdp_shipper_k3s01")
-if [ -n "$users" ] && ! grep -q 'shipper-test' <<<"$users"; then echo "ok   cleanup: shipper-test-g1 is no longer mapped ($users)"
-else echo "FAIL cleanup: shipper-test-g1 is still mapped: $users"; fail=1; fi
+# Parsed, not grepped (review L4): the k3s01 shipper role maps exactly its real identity again.
+if [ "$(python3 -c 'import json,sys; print(json.load(sys.stdin)["sdp_shipper_k3s01"]["users"])' <<<"$users" 2>/dev/null)" = "['shipper-k3s01-g1']" ]; then
+  echo "ok   cleanup: sdp_shipper_k3s01 maps exactly ['shipper-k3s01-g1'] again"
+else echo "FAIL cleanup: sdp_shipper_k3s01 mapping is $users"; fail=1; fi
 
 if [ "$fail" != 0 ]; then echo "p1-acceptance: FAIL"; exit 1; fi
 echo "p1-acceptance: PASS"
