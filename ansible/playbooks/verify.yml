@@ -396,7 +396,9 @@
         that:
           - verify_ism_indices | length >= 7
           - verify_ism_indices | map(attribute='value.policy_id', default='none') | unique | list == ['sdp-30d']
-          - verify_ism_indices | selectattr('value.retry_info.failed', 'defined') | selectattr('value.retry_info.failed') | list | length == 0
+          - >-
+            verify_ism_indices | selectattr('value.retry_info.failed', 'defined')
+            | selectattr('value.retry_info.failed') | list | length == 0
         fail_msg: "ISM: {{ verify_ism_indices | items2dict | to_json }}"
         success_msg: "{{ verify_ism_indices | length }} backing indices under sdp-30d, none failed."
       vars:
