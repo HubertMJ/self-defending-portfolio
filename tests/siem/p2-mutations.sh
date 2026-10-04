@@ -22,10 +22,16 @@ MUTATIONS=(
   "lua-f13|lua|ansible/roles/fluent_bit/files/sdp.lua|s.replace('return type(rec.flow) == \"table\"', 'return true')|F13: Hubble's non-flow records shipped"
   "lua-ref|lua|ansible/roles/fluent_bit/files/sdp.lua|s.replace('if f.name == \"k8s.pod.ref\" and v ~= nil and not v:match(REF_PATTERN) then v = nil end', '')|a pod ref that is not <ns>_<pod> shipped"
   "lua-f1|lua|siem/fields/api.yaml|s.replace('fields:\\n', 'fields:\\n  event.overwrite: {type: boolean, from: event.overwrite}\\n', 1)|F1: an allow-list that lets a client-sent event.overwrite through"
+  "lua-bracket|lua|siem/fields/talon.yaml|s.replace('note: \"Quarantine Pod -> quarantine-pod\"', 'note: \"x]==]y\"')|a field string that would end the Lua long bracket early"
+  "lua-sshgreedy|lua|ansible/roles/fluent_bit/files/sdp.lua|s.replace('u, ip = msg:match(\"^Invalid user (.+) from (%S+) port %d+$\")', 'u, ip = msg:match(\"^Invalid user (.-) from (%S+) port %d+\")')|a lazy, unanchored ssh pattern (the user name chooses the address)"
+  "lua-falcoip|lua|siem/fields/falco.yaml|s.replace(', transform: ip_pseudonyms', '')|Falco's fd.name shipped with its addresses"
+  "lua-falcouser|lua|siem/fields/falco.yaml|s.replace('transform: hmac_unless_sandbox', 'transform: hmac_unless_system')|Falco's user outside sandbox* verbatim"
+  "lua-loss|lua|ansible/roles/fluent_bit/files/sdp.lua|s.replace('throttled = throttled + counter_delta', 'throttled = 0 * counter_delta')|throttle drops not reported"
   "audit-order|audit|ansible/roles/k3s/templates/audit-policy.yaml.j2|s.replace('  - level: Metadata\\n    resources:\\n      - group: authentication.k8s.io\\n        resources: [\"*\"]\\n', '').replace('  # Everything else: who, what, when.', '  - level: Metadata\\n    resources:\\n      - group: authentication.k8s.io\\n        resources: [\"*\"]\\n\\n  # Everything else: who, what, when.')|the Metadata rule after the RequestResponse rule (TokenReviews keep their bodies)"
   "cilium-ip|cilium|ansible/roles/cilium/defaults/main.yml|s.replace('          - event_type\\n', '          - event_type\\n          - IP\\n')|addresses in the Hubble export (Ansible side)"
   "e2e-sandbox|e2e|ansible/roles/fluent_bit/templates/sdp.conf.j2|s.replace('InaccessiblePaths=', '# InaccessiblePaths=')|no InaccessiblePaths in the role's drop-in (the start check must refuse the start)"
   "e2e-devices|e2e|ansible/roles/fluent_bit/templates/sdp.conf.j2|s.replace('PrivateDevices=yes', 'PrivateDevices=no')|raw block devices visible to the unit (the start check must refuse the start)"
+  "e2e-ipdeny|e2e|ansible/roles/fluent_bit/templates/sdp.conf.j2|s.replace('IPAddressDeny=any', 'IPAddressDeny=')|the unit may connect anywhere"
   "e2e-check|e2e|ansible/roles/fluent_bit/files/sandbox-check.sh|s.replace('    exit 1\\n', '    exit 0\\n')|the start check reports but never refuses"
   "e2e-hostname|e2e|ansible/roles/fluent_bit/templates/fluent-bit.conf.j2|s.replace('tls.verify_hostname      On', 'tls.verify_hostname      Off')|host name verification off on the outputs"
   "e2e-id|e2e|ansible/roles/fluent_bit/templates/fluent-bit.conf.j2|s.replace('    Write_Operation          create\\n', '    Write_Operation          create\\n    Generate_ID              On\\n')|an id on every write (sdp-final refuses it, nothing arrives)"
@@ -73,7 +79,7 @@ for m in "${MUTATIONS[@]}"; do
   if run_test "$kind" "$tree" >"$tree.log" 2>&1; then
     echo "SURVIVED $id ($what): the $kind test passed"; fail=1
   else
-    echo "killed   $id ($what): $(grep -m1 -E 'FAIL|refusing|unknown transform|not an allowed|differs|expected|  - ' "$tree.log" | cut -c1-150)"
+    echo "killed   $id ($what): $(grep -m1 -E 'FAIL|refusing|unknown transform|not an allowed|differs|expected|field strings|  - ' "$tree.log" | cut -c1-150)"
   fi
   rm -rf "$tree" "$tree.log"
 done

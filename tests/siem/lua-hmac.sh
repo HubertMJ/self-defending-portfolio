@@ -45,6 +45,20 @@ env = jinja2.Environment(trim_blocks=True, undefined=jinja2.StrictUndefined)
 template = env.from_string(open(f"{root}/ansible/roles/fluent_bit/templates/sdp_fields.lua.j2").read())
 sources = ["falco", "talon", "api", "k8s-audit", "hubble", "host", "siem01"]
 sets = {s: yaml.safe_load(open(f"{root}/siem/fields/{s}.yaml")) for s in sources}
+# Review L4: the template writes every string inside [==[ ]==]; one containing "]==" would end it early.
+def strings(x):
+    if isinstance(x, dict):
+        for k, v in x.items():
+            yield from strings(k)
+            yield from strings(v)
+    elif isinstance(x, list):
+        for v in x:
+            yield from strings(v)
+    elif isinstance(x, str):
+        yield x
+bad = [v for spec in sets.values() for v in strings(spec["fields"]) if "]==" in v]
+if bad:
+    sys.exit(f"lua-hmac: field strings contain ']==': {bad}")
 open(out, "w").write(template.render(fluent_bit_field_sets=sets))
 PY
 
@@ -66,6 +80,7 @@ tail_input() {
   tail_input sdp.hubble.log /fixtures/hubble.log json
   tail_input sdp.host.journal '/fixtures/host-*.json,/extra/extra-journal.json' json
   tail_input sdp.host.auditd /fixtures/host-auditd.log raw
+  tail_input sdp.host.fbmetrics /extra/extra-fbmetrics.json json
   tail_input sdp.siem01.journal '/fixtures/siem01-*.json' json
   tail_input sdp.siem01.auditd /fixtures/siem01-auditd.log raw
   tail_input sdp.siem01.osaudit /fixtures/siem01-osaudit.log osaudit

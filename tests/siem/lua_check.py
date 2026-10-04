@@ -94,7 +94,7 @@ for doc in records:
 # --- nothing that must never leave a host --------------------------------------------------------
 text = "\n".join(json.dumps(r) for r in records)
 for needle in ["SDP{", "0000000000000000", "requestObject", "responseObject", "token", "Bearer",
-               "REDACTED", "10.1.1.250", "10.42.", "10.4.1.", "k3s01", '"hostname"', "node_name", "userAgent",
+               "REDACTED", "10.1.1.250", "6.6.6.6", "203.0.113.", "10.42.", "10.4.1.", "k3s01", '"hostname"', "node_name", "userAgent",
                "operator", "ansible", "sdp-fixture-probe", "overwrite", "ingested", "stacktrace", "SHA256:",
                "lost_events", "agent_event", "IP\"", "terminal command exec ended", "listening"]:
     check(needle not in text, f"output contains {needle!r}")
@@ -108,7 +108,15 @@ falco = only("falco")
 alerts = [r for r in falco if r.get("event.kind") == "alert"]
 metrics = [r for r in falco if r.get("event.kind") == "metric"]
 beats = [r for r in falco if r.get("event.kind") == "heartbeat"]
-check(len(alerts) == 3, f"falco alerts: {len(alerts)}")
+check(len(alerts) == 5, f"falco alerts: {len(alerts)}")
+# Review L2: addresses in fd.name and users outside sandbox* are pseudonymised.
+redirect = [r for r in alerts if r.get("falco.rule", "").startswith("Redirect STDOUT")]
+check(redirect and redirect[0].get("fd.name") == f"{hm1('10.42.0.12')}:40000->{hm1('203.0.113.7')}:4444"
+      and redirect[0].get("user.name") == hm1("root"), f"falco: fd.name / user.name outside sandbox {redirect}")
+hostproc = [r for r in alerts if r.get("fd.name", "").startswith(hm1("10.4.1.20"))]
+check(hostproc and hostproc[0].get("user.name") == hm1("operator") and "k8s.pod.ref" not in hostproc[0],
+      f"falco: a host process's user pseudonymised {hostproc}")
+check(all(not re.search(r"\d+\.\d+\.\d+\.\d+", str(r.get("fd.name", ""))) for r in alerts), "falco: a dotted quad in fd.name")
 check(len(metrics) == 1, f"falco metric records: {len(metrics)}")
 check(len(beats) == 1 and set(beats[0]) == {"@timestamp", "event.kind", "event.dataset"} if beats else False,
       f"falco heartbeat: {beats}")
@@ -171,13 +179,22 @@ check(ingress and ingress[0].get("k8s.pod.ref") == "sandbox-unguarded_shell-in-c
       "hubble: the sandbox side is the destination when the source is not in sandbox*")
 check(all(r.get("hubble.is_reply") in (True, False) for r in hubble), "hubble: is_reply boolean")
 
-host = only("host")
+host_all = only("host")
+loss = [r for r in host_all if r.get("event.kind") == "metric"]
+check(len(loss) == 1 and loss[0].get("host.log") == "fluent-bit" and loss[0].get("fluentbit.throttle_dropped") == 17
+      and loss[0].get("fluentbit.output_dropped") == 4 and loss[0].get("fluentbit.output_errors") == 2
+      and loss[0].get("fluentbit.filter_errors") == 0, f"host: the shipper's loss report {loss}")
+host = [r for r in host_all if r.get("event.kind") != "metric"]
 logs = sorted(r.get("host.log") for r in host)
-check(logs == ["auditd", "auditd", "auditd", "nft", "ssh", "ssh", "ssh", "ssh", "sudo"], f"host records {logs}")
+check(logs == ["auditd", "auditd", "auditd", "nft", "ssh", "ssh", "ssh", "ssh", "ssh", "ssh", "sudo"], f"host records {logs}")
+# Review L3: a user name carrying " from <ip> port <n>" does not choose the address.
+spoof = [r for r in host if r.get("user.name") == hm1("a from 6.6.6.6 port 1")]
+check(len(spoof) == 2 and all(r.get("source.ip") == hm1("10.1.1.250") for r in spoof), f"host: ssh address spoofed {spoof}")
 ssh_op = [r for r in host if r.get("ssh.event") == "accepted" and r.get("user.name") == hm1("operator")]
 check(ssh_op and ssh_op[0].get("source.ip") == hm1("10.1.1.250") and ssh_op[0].get("ssh.method") == "publickey",
       "host: the project pseudonyms equal Python's")
-check(sorted(r.get("ssh.event") for r in host if r.get("host.log") == "ssh") == ["accepted", "accepted", "closed-preauth", "invalid-user"],
+check(sorted(r.get("ssh.event") for r in host if r.get("host.log") == "ssh")
+      == ["accepted", "accepted", "accepted", "closed-preauth", "invalid-user", "invalid-user"],
       "host: ssh events")
 keys = sorted(r.get("audit.key") for r in host if r.get("host.log") == "auditd")
 check(keys == ["identity", "k3s_config", "privileged"], f"host: audit keys {keys}")
@@ -199,7 +216,15 @@ check(missing and missing[0].get("opensearch.audit.user") == "dashboards-g1"
       f"siem01 audit fields {missing}")
 
 # --- golden: the whole output, heartbeats aside, order-free ----------------------------------------
-canon = sorted(json.dumps(r, sort_keys=True) for r in records if flatten(r).get("event.kind") != "heartbeat")
+def stable(r):
+    # The loss report carries no event time of its own (it is stamped when read), so its time is
+    # left out of the comparison.
+    if flatten(r).get("host.log") == "fluent-bit":
+        r = {k: v for k, v in r.items() if k != "@timestamp"}
+    return json.dumps(r, sort_keys=True)
+
+
+canon = sorted(stable(r) for r in records if flatten(r).get("event.kind") != "heartbeat")
 if write:
     open(expected_path, "w").write("\n".join(canon) + "\n")
     print(f"lua_check: wrote {expected_path} ({len(canon)} records)")

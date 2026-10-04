@@ -31,6 +31,7 @@ cleanup() {
   if [ -z "${KEEP:-}" ]; then
     for c in "$OS" "$SIGNER" "$K3S" sdp-ingest-n5; do $DOCKER rm -f "$c" >/dev/null 2>&1 || true; done
     $DOCKER network rm "$NET" >/dev/null 2>&1 || true
+    $DOCKER volume rm sdp-ingest-it-collections >/dev/null 2>&1 || true
   fi
   rm -rf "$work"
 }
@@ -141,12 +142,19 @@ mkdir -p "$work/inv/group_vars"
 cp tests/siem/ingest-it.inventory.yml "$work/inv/hosts.yml"
 cp ansible/inventory/group_vars/all.yml "$work/inv/group_vars/all.yml"
 chmod -R a+rX "$work/inv"
+# Collections are installed once per test into a volume: one Galaxy outage mid-test is one less
+# way for it to fail for reasons that are not the role's.
+COLLECTIONS=sdp-ingest-it-collections
 tooling() { # <command...> in the tooling container on the test network
   $DOCKER run --rm --network "$NET" -v "$PWD":/work:ro -v "$pki":/pki:ro -v "$work/inv":/inv:ro -v /var/run/docker.sock:/var/run/docker.sock \
-    -e ANSIBLE_COLLECTIONS_PATH=/tmp/collections -e ANSIBLE_ROLES_PATH=/work/ansible/roles -e ANSIBLE_HOST_KEY_CHECKING=False \
+    -v "$COLLECTIONS":/collections \
+    -e ANSIBLE_COLLECTIONS_PATH=/collections -e ANSIBLE_ROLES_PATH=/work/ansible/roles -e ANSIBLE_HOST_KEY_CHECKING=False \
     -e ANSIBLE_LOCAL_TEMP=/tmp/.ansible-local -w /work/ansible sdp-tooling sh -ec "
-      ansible-galaxy collection install -r requirements.yml -p /tmp/collections >/dev/null
-      ansible-galaxy collection install community.docker -p /tmp/collections >/dev/null
+      if [ ! -e /collections/.installed ]; then
+        ansible-galaxy collection install -r requirements.yml -p /collections >/dev/null
+        ansible-galaxy collection install community.docker -p /collections >/dev/null
+        touch /collections/.installed
+      fi
       $*"
 }
 
@@ -173,6 +181,15 @@ tail -4 "$work/run2.log"
 grep -qE "$K3S +: ok=[0-9]+ +changed=0 +unreachable=0 +failed=0" "$work/run2.log" || fail "second run is not changed=0"
 echo "IDEMPOTENT: second run changed=0"
 
+step "check mode after the keys were deleted does not fail (review code L2), then the keys come back"
+$DOCKER exec "$K3S" sh -c 'cp -a /etc/fluent-bit/keys /root/keys-backup && rm -f /etc/fluent-bit/keys/hmac.key /etc/fluent-bit/keys/client.key'
+tooling "ansible-playbook -i /inv/hosts.yml playbooks/ingest.yml --limit $K3S --check" >"$work/check.log" 2>&1 \
+  || { tail -40 "$work/check.log"; fail "check mode with deleted keys"; }
+tail -2 "$work/check.log"
+$DOCKER exec "$K3S" sh -c 'cp -a /root/keys-backup/. /etc/fluent-bit/keys/ && rm -rf /root/keys-backup'
+run_ingest >"$work/run3.log" 2>&1 || { tail -40 "$work/run3.log"; fail "ingest.yml run 3"; }
+grep -qE "$K3S +: ok=[0-9]+ +changed=0 +unreachable=0 +failed=0" "$work/run3.log" || fail "after restoring the keys the run is not changed=0"
+
 step "the unit and its sandbox"
 state=$($DOCKER exec "$K3S" systemctl show fluent-bit -p ActiveState -p SubState -p NRestarts -p User | sort | paste -sd' ')
 [ "$state" = "ActiveState=active NRestarts=0 SubState=running User=fluent-bit" ] || fail "unit state: $state"
@@ -187,6 +204,23 @@ props=$($DOCKER exec "$K3S" systemctl show fluent-bit -p ProtectProc -p ProcSubs
   -p ProtectKernelLogs -p ProtectControlGroups -p ProtectClock -p ProtectHostname -p LockPersonality -p RestrictSUIDSGID | sort | paste -sd' ')
 [ "$props" = "LockPersonality=yes ProcSubset=pid ProtectClock=yes ProtectControlGroups=yes ProtectHostname=yes ProtectKernelLogs=yes ProtectProc=invisible RestrictNamespaces=yes RestrictSUIDSGID=yes" ] \
   || fail "sandbox properties: $props"
+# M2: a process in the unit's cgroup reaches OpenSearch but nothing else - the signer's sshd, which
+# answers from outside the cgroup, is not reachable from inside it (the unit's IP filter drops the
+# packets; the connect times out).
+probe='import socket, sys
+for host, port in ((sys.argv[1], 9200), (sys.argv[2], 22)):
+    s = socket.socket(); s.settimeout(5)
+    try:
+        s.connect((host, port)); print(host, "open")
+    except OSError as e:
+        print(host, "refused", type(e).__name__)'
+outside=$($DOCKER exec "$K3S" python3 -c "$probe" 172.31.250.10 172.31.250.11 | paste -sd' ')
+cg=$($DOCKER exec "$K3S" systemctl show fluent-bit -p ControlGroup --value)
+inside=$($DOCKER exec "$K3S" sh -c 'echo $$ > "/sys/fs/cgroup$1/cgroup.procs" && exec python3 -c "$2" 172.31.250.10 172.31.250.11' \
+  sh "$cg" "$probe" | paste -sd' ')
+echo "outside the unit: $outside; inside: $inside"
+[ "$outside" = "172.31.250.10 open 172.31.250.11 open" ] || fail "the probe targets are not reachable from outside the unit"
+case $inside in "172.31.250.10 open 172.31.250.11 refused "*) ;; *) fail "IP filter: $inside" ;; esac
 # H1: inside the unit's namespace there is no block device to open, though the container's /dev has them.
 outside=$($DOCKER exec "$K3S" sh -c 'find /dev -type b | wc -l')
 inside=$($DOCKER exec "$K3S" sh -c 'nsenter -t "$(systemctl show fluent-bit -p MainPID --value)" -m find /dev -type b | wc -l')
@@ -198,6 +232,13 @@ for want in 'tls.verify +On' 'tls.verify_hostname +On' 'Write_Operation +create'
   [ "$(grep -cE "^ +$want" <<<"$conf")" = 6 ] || fail "fluent-bit.conf: '$want' is not on all six outputs"
 done
 ! grep -qiE '^ +(Generate_ID|Id_Key|HTTP_User|HTTP_Passwd)' <<<"$conf" || fail "fluent-bit.conf sets an id or a password"
+# M4: the throttles see the data inputs only; Falco's Warning+ alerts and metrics snapshot are re-tagged
+# away from sdp.falco.log before them.
+throttles=$(grep -cE '^ +Name +throttle$' <<<"$conf")
+data_only=$(grep -A3 -E '^ +Name +throttle$' <<<"$conf" | grep -cF '\.(log|journal|auditd|osaudit)$')
+[ "$throttles" = 6 ] && [ "$data_only" = 6 ] || fail "throttles: $throttles, matching the data inputs only: $data_only"
+grep -qF 'Rule                  $priority ^(Warning|Error|Critical|Alert|Emergency)$ sdp.falco.urgent false' <<<"$conf" \
+  || fail "Falco's Warning+ alerts are not re-tagged before the throttle"
 echo "unit: $state; listens on $listen; $subject"
 
 step "feed the fixtures at their k3s01 paths and through journald"
@@ -228,6 +269,12 @@ for _ in $(seq 1 45); do
     -d '{"query":{"term":{"event.kind":"heartbeat"}},"aggs":{"s":{"terms":{"field":"event.dataset"}}}}' \
     | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["aggregations"]["s"]["buckets"]))')
   [ "$n" -ge 6 ] && break
+  sleep 2
+done
+# The shipper's loss report comes once a minute too.
+for _ in $(seq 1 45); do
+  n=$(q "$OSURL/sdp-host/_count?q=host.log:fluent-bit" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("count",0))')
+  [ "$n" -ge 1 ] && break
   sleep 2
 done
 sleep 3

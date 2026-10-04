@@ -38,7 +38,7 @@ for source, want in expected.items():
     allow = set(spec["fields"]) | {"event.kind", "event.dataset", "event.ingested", "event.overwrite"}
     hits = json.load(open(f"{work}/docs-{source}.json"))["hits"]["hits"]
     docs = [flatten(h["_source"]) for h in hits]
-    events = [d for d in docs if d.get("event.kind") != "heartbeat"]
+    events = [d for d in docs if d.get("event.kind") != "heartbeat" and d.get("host.log") != "fluent-bit"]
     beats = [d for d in docs if d.get("event.kind") == "heartbeat"]
     total += len(events)
     check(len(events) == want, f"sdp-{source}: {len(events)} documents, expected {want}")
@@ -59,7 +59,12 @@ for source, want in expected.items():
         check(needle not in text, f"sdp-{source}: contains {needle!r}")
 
 host = [flatten(h["_source"]) for h in json.load(open(f"{work}/docs-host.json"))["hits"]["hits"]]
-check(sorted(d.get("host.log") for d in host if d.get("event.kind") != "heartbeat")
+loss = [d for d in host if d.get("event.kind") == "metric"]
+check(loss and all(d.get("host.log") == "fluent-bit" and d.get("fluentbit.throttle_dropped") == 0
+                   and d.get("fluentbit.output_dropped") == 0 and d.get("fluentbit.filter_errors") == 0 for d in loss),
+      f"sdp-host: the shipper's loss reports {loss}")
+host = [d for d in host if d.get("event.kind") != "metric"]
+check(sorted(d.get("host.log") for d in host if d.get("event.kind") not in ("heartbeat", "metric"))
       == ["auditd", "auditd", "auditd", "ssh", "ssh", "sudo"], "sdp-host: journald (ssh as sshd-session, sudo) and auditd")
 audit = [flatten(h["_source"]) for h in json.load(open(f"{work}/docs-k8s-audit.json"))["hits"]["hits"]]
 check(not any(d.get("audit.object.resource") in ("tokenreviews", "subjectaccessreviews") for d in audit),
