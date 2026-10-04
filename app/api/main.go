@@ -25,6 +25,7 @@ import (
 	"k8s.io/client-go/rest"
 
 	"github.com/hubertmj/self-defending-portfolio/app/api/internal/events"
+	"github.com/hubertmj/self-defending-portfolio/app/api/internal/incidents"
 	"github.com/hubertmj/self-defending-portfolio/app/api/internal/limits"
 	"github.com/hubertmj/self-defending-portfolio/app/api/internal/posture"
 	"github.com/hubertmj/self-defending-portfolio/app/api/internal/ruleindex"
@@ -32,6 +33,8 @@ import (
 	"github.com/hubertmj/self-defending-portfolio/app/api/internal/runner"
 	"github.com/hubertmj/self-defending-portfolio/app/api/internal/scenarios"
 	"github.com/hubertmj/self-defending-portfolio/app/api/internal/server"
+	"github.com/hubertmj/self-defending-portfolio/app/api/internal/siem"
+	"github.com/hubertmj/self-defending-portfolio/app/api/internal/siemindex"
 	"github.com/hubertmj/self-defending-portfolio/app/api/internal/siemlog"
 	"github.com/hubertmj/self-defending-portfolio/app/api/internal/stats"
 )
@@ -128,13 +131,39 @@ func run(log *slog.Logger) error {
 	lcancel()
 	go statsStore.Run(ctx, statsCollector, time.Minute)
 
+	// The SIEM (ADR 0034, ADR 0036): a read-only client when SIEM_URL and the mounted client
+	// certificate are both there. Without them - or with a file missing or unreadable - the API starts
+	// as before and GET /api/correlation answers available:false, so the page hides the section.
+	var siemSource incidents.Source
+	if u := os.Getenv("SIEM_URL"); u != "" {
+		client, err := siem.New(siem.Config{URL: u, CertDir: env("SIEM_CERT_DIR", "/etc/portfolio-api/siem")})
+		if err != nil {
+			log.Warn("SIEM part off", "err", err)
+		} else {
+			siemSource = client
+		}
+	}
+	siemRules, err := siemindex.Load()
+	if err != nil {
+		return fmt.Errorf("siem index: %w", err)
+	}
+	tracker := incidents.New(incidents.Config{Source: siemSource, Rules: siemRules, Namespace: sandbox,
+		UnguardedNamespace: unguarded, Log: log})
+	go tracker.Run(ctx)
+	// The flag match hands only HMAC(process key, flag label) from the runner to the tracker.
+	var flags runner.FlagSink
+	var flagMAC func(string) []byte
+	if tracker.Enabled() {
+		flags, flagMAC = tracker, tracker.FlagMAC
+	}
+
 	// The webhooks count into the stats collector's hourly window, which the ConfigMap persists, so
 	// posture's alerts_24h and actions_24h survive a restart with the hero's numbers (ADR 0035).
 	falcoAlerts := statsCollector.AlertCounter()
 	talonActions := statsCollector.ActionCounter()
 	run := runner.New(kube, &runner.KubeExecer{Config: restCfg, Client: kube}, hub, log,
 		runner.Config{Namespace: sandbox, UnguardedNamespace: unguarded,
-			CompareHold: time.Duration(compareHoldS) * time.Second})
+			CompareHold: time.Duration(compareHoldS) * time.Second, Flags: flags, FlagMAC: flagMAC})
 
 	octx, ocancel := context.WithTimeout(ctx, 30*time.Second)
 	if err := run.CleanupOrphans(octx); err != nil {
@@ -167,8 +196,10 @@ func run(log *slog.Logger) error {
 		Commit: os.Getenv("GIT_SHA"),
 		// Set by the Dockerfile from --build-arg CI_RUN_ID (github.run_id): the run that built this
 		// image, published by GET /api/provenance with StartedAt (ADR 0035).
-		CIRunID:   os.Getenv("CI_RUN_ID"),
-		StartedAt: startedAt,
+		CIRunID:     os.Getenv("CI_RUN_ID"),
+		StartedAt:   startedAt,
+		Correlation: tracker,
+		SiemIndex:   siemRules,
 	})
 
 	errc := make(chan error, 2)
@@ -179,7 +210,8 @@ func run(log *slog.Logger) error {
 		errc <- server.ListenAndServe(ctx, env("INTERNAL_LISTEN_ADDR", ":8081"), srv.Internal(), log)
 	}()
 	log.Info("listening", "public", env("LISTEN_ADDR", ":8080"), "internal", env("INTERNAL_LISTEN_ADDR", ":8081"),
-		"sandbox", sandbox, "attacks_per_ip", attackCfg.PerKey, "attacks_global", attackCfg.Global, "commit", os.Getenv("GIT_SHA"))
+		"sandbox", sandbox, "attacks_per_ip", attackCfg.PerKey, "attacks_global", attackCfg.Global, "commit", os.Getenv("GIT_SHA"),
+		"siem", tracker.Enabled())
 
 	var first error
 	select {
