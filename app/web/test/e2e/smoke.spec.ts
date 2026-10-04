@@ -31,6 +31,22 @@ async function wideFonts(page: Page) {
   });
 }
 
+/**
+ * The hero shows no provenance data (ADR 0035, amended 2026-10-04): its copy has no commit, digest,
+ * cosign or Rekor, and nothing in it (the evidence card included, which shows the attacked pod's own
+ * image) names the api or web image or the commit they were built from. One link leads to #verify.
+ */
+async function hasNoProvenance(page: Page) {
+  const hero = page.locator("#top");
+  const copy = hero.locator(".hero__copy");
+  await expect(hero.locator("#verify-strip, .vstrip, .vimage, .verify-panel")).toHaveCount(0);
+  await expect(copy).not.toContainText(/sha256:|cosign|Rekor|provenance|signed in CI/i);
+  await expect(copy.locator('a[href*="/commit/"], a[href*="sigstore"], a[href*="/actions/runs/"], button.copy')).toHaveCount(0);
+  // serve.mjs's provenance: commit 0448cff…, api sha256:bbbb…, web sha256:1111….
+  await expect(hero).not.toContainText(/0448cff|sha256:b{8}|sha256:1{8}|self-defending-portfolio\/(api|web)@/);
+  await expect(hero.locator('a[href="#verify"]')).toHaveCount(1);
+}
+
 async function noHorizontalScroll(page: Page) {
   const [scroll, client] = await page.evaluate(() => [document.documentElement.scrollWidth, document.documentElement.clientWidth]);
   expect(scroll, "page must not scroll horizontally").toBeLessThanOrEqual(client);
@@ -731,25 +747,25 @@ test.describe("accessibility basics", () => {
 test.describe("credibility on the production bundle (ADR 0035; serve.mjs --terminal-api, not ?mock)", () => {
   const CRED = "http://127.0.0.1:4176/";
 
-  test("above the fold: the verify strip and the evidence card; on a phone the card follows the counters", async ({ page, isMobile }) => {
+  test("above the fold: the evidence card, no provenance data in the hero, one link to #verify after the posture; on a phone the card follows the counters", async ({ page, isMobile }) => {
     const problems = guardConsole(page);
     if (!isMobile) await page.setViewportSize({ width: 1280, height: 720 });
     await page.goto(CRED);
-    const strip = page.locator("#verify-strip");
     const card = page.locator("#evidence-card .evcard");
-    await expect(strip.locator('[data-image="api"]')).toContainText("0448cff");
+    // The provenance has arrived (the panel names the api's commit), and none of it is in the hero.
+    await expect(page.locator('#verify-panel [data-image="api"]')).toContainText("0448cff");
     await expect(card).toBeVisible();
+    await hasNoProvenance(page);
     await expect(card.locator(".evlist__item").first()).toContainText("UTC");
     await expect(page.locator("#hero-stats")).toBeVisible();
     // The card is never folded away.
     expect(await card.evaluate((el) => el.closest("details:not([open])") === null)).toBe(true);
     const box = await page.evaluate(() => {
       const r = (s: string) => (document.querySelector(s) as HTMLElement).getBoundingClientRect();
-      return { scrollY: window.scrollY, strip: r("#verify-strip").bottom, card: r("#evidence-card").top, stats: r("#hero-stats").bottom, next: (document.querySelector("#hero-stats")?.parentElement?.nextElementSibling as HTMLElement | null)?.id };
+      return { scrollY: window.scrollY, card: r("#evidence-card").top, stats: r("#hero-stats").bottom, next: (document.querySelector("#hero-stats")?.parentElement?.nextElementSibling as HTMLElement | null)?.id };
     });
     expect(box.scrollY).toBe(0);
     if (!isMobile) {
-      expect(box.strip).toBeLessThanOrEqual(720);
       expect(box.card).toBeLessThan(720);
     } else {
       // Stacked: the card comes right after the copy, whose last child is #hero-stats.
@@ -757,6 +773,12 @@ test.describe("credibility on the production bundle (ADR 0035; serve.mjs --termi
       expect(box.card).toBeGreaterThanOrEqual(box.stats);
       expect(box.card - box.stats).toBeLessThan(80);
     }
+    // The order the owner asked for (ADR 0035, amended 2026-10-04): the proof first, the verify panel after the posture.
+    expect(await page.evaluate(() => [...document.querySelectorAll("main > section")].map((el) => el.id).slice(0, 5))).toEqual(["top", "evidence", "posture", "verify", "attack"]);
+    const link = page.locator('#top a[href="#verify"]');
+    await expect(link).toHaveText("Verify it yourself");
+    await link.click();
+    await expect(page.locator("#verify-title")).toBeInViewport();
     expect(problems).toEqual([]);
   });
 
@@ -821,21 +843,21 @@ test.describe("credibility on the production bundle (ADR 0035; serve.mjs --termi
       }
     });
 
-    test(`the strip stays above the fold at 1280x720 with headroom${fonts}`, async ({ page, isMobile }) => {
+    test(`the evidence card is above the fold at 1280x720, the hero carries no provenance${fonts}`, async ({ page, isMobile }) => {
       test.skip(isMobile, "a desktop viewport");
       if (wide) await wideFonts(page);
       await page.setViewportSize({ width: 1280, height: 720 });
       await page.goto(CRED);
       if (wide) expect(await page.evaluate(() => getComputedStyle(document.body).fontFamily)).toContain("DejaVu Sans");
-      await expect(page.locator("#verify-strip [data-image=\"api\"]")).toBeVisible();
+      await expect(page.locator('#verify-panel [data-image="api"]')).toContainText("0448cff");
       await expect(page.locator("#evidence-card .evcard")).toBeVisible();
+      await hasNoProvenance(page);
       const m = await page.evaluate(() => ({
-        strip: (document.getElementById("verify-strip") as HTMLElement).getBoundingClientRect().bottom,
+        scrollY: window.scrollY,
         card: (document.getElementById("evidence-card") as HTMLElement).getBoundingClientRect().top,
         titleLines: Math.round((document.getElementById("hero-title") as HTMLElement).getBoundingClientRect().height / parseFloat(getComputedStyle(document.getElementById("hero-title") as HTMLElement).lineHeight)),
       }));
-      // 660 with whatever fonts are installed leaves room for a wider one; the wide font must still fit 720.
-      expect(m.strip).toBeLessThanOrEqual(wide ? 720 : 660);
+      expect(m.scrollY).toBe(0);
       expect(m.card).toBeLessThan(720);
       expect(m.titleLines, "the name stays on one line").toBe(1);
     });
@@ -853,8 +875,8 @@ test.describe("credibility on the production bundle (ADR 0035; serve.mjs --termi
     test(`degrades on ${label}: provenance unavailable, liveness without server time, posture as before`, async ({ page }) => {
       const problems = guardConsole(page);
       await page.goto(base);
-      await expect(page.locator("#verify-strip")).toContainText("API provenance unavailable");
       await expect(page.locator("#verify-panel")).toContainText("API provenance unavailable");
+      await hasNoProvenance(page);
       await expect(page.locator("#posture-panel .tile")).toHaveCount(4);
       await expect(page.locator("#posture-panel .tile__list")).toHaveCount(0);
       await expect(page.locator("#posture-panel")).toContainText("Runtime, last 24 h");

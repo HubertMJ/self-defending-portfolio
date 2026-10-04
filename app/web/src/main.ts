@@ -97,7 +97,7 @@ function main(): void {
   );
   let latestView: TimelineView = { runs: [], unmatched: [] };
 
-  const verify = mountVerify(byId("verify-strip"), byId("verify-panel"));
+  const verify = mountVerify(byId("verify-panel"));
   const posture = mountPosture(byId("posture-panel"), api, (p) => evidence.setPosture(p));
   pollProvenance(() => api.provenance(), {
     data: (p) => {

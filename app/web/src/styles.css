@@ -498,7 +498,7 @@ main {
 
 .hero {
   position: relative;
-  /* The verify strip has to stay above a 720 px fold whatever fonts the visitor has (ADR 0035):
+  /* The evidence card has to stay above a 720 px fold whatever fonts the visitor has (ADR 0035):
      the top padding is kept modest, the name below is sized to its column. */
   padding-block: clamp(2.25rem, 5vw, 4rem) clamp(2.5rem, 6vw, 4.5rem);
   background-image:
@@ -509,9 +509,9 @@ main {
   border-bottom: 1px solid var(--border);
 }
 
-/* Two columns from 1024 px: the copy (with the verify strip and the counters) and the evidence card.
-   Below that the card follows the counters (ADR 0035). Aligned to the top: a tall card must not push
-   the copy, and with it the verify strip, below the fold. */
+/* Two columns from 1024 px: the copy (with the counters) and the evidence card. Below that the card
+   follows the counters (ADR 0035). Aligned to the top: a tall copy must not push the card below the
+   fold, nor a tall card the copy. */
 .hero__grid {
   display: grid;
   gap: clamp(2rem, 4vw, 3.5rem);
@@ -561,6 +561,13 @@ main {
   flex-wrap: wrap;
   gap: 0.75rem;
   margin-top: 1.75rem;
+}
+
+/* The one way from the hero to the #verify panel (ADR 0035, amended 2026-10-04): a text link, not a
+   third button and not a block of data. */
+.hero__verify {
+  align-self: center;
+  font-size: 0.9rem;
 }
 
 .loop {
@@ -3577,75 +3584,7 @@ html[data-terminal="off"] .needs-terminal {
   unicode-bidi: plaintext;
 }
 
-/* ---------- verify strip, evidence card, ticker, liveness, verify panel (ADR 0035) ---------- */
-
-.verifystrip {
-  margin-top: 1rem;
-}
-
-.vstrip__label {
-  font: 600 0.72rem/1.4 var(--font-mono);
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: var(--text-faint);
-  margin: 0 0 0.3rem;
-}
-
-.vstrip__rows {
-  display: grid;
-  gap: 0.2rem;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-/* One line per image while it fits: the digest is the part that gives way (its basis is small, it
-   grows back to its full text when there is room, and is cut with an ellipsis otherwise; the whole
-   digest is in its title and in the copied command). Only when even that is not enough does the
-   row wrap. */
-.vstrip__row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  min-width: 0;
-  gap: 0.15rem 0.45rem;
-  font-size: 0.85rem;
-  line-height: 1.6;
-}
-
-.vstrip__row .btn--small {
-  padding-block: 0.05rem;
-}
-
-.vstrip__name {
-  font: 600 0.8rem/1.6 var(--font-mono);
-  min-width: 2rem;
-  color: var(--text-muted);
-}
-
-.vstrip__digest {
-  flex: 1 1 4.5rem;
-  max-width: max-content;
-  min-width: 0;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-
-.vstrip__digest,
-.vstrip__more {
-  font-size: 0.8rem;
-  color: var(--text-faint);
-}
-
-.vstrip__foot {
-  margin: 0.25rem 0 0;
-  font-size: 0.85rem;
-}
-
-.vstrip__na {
-  color: var(--text-muted);
-}
+/* ---------- evidence card, ticker, liveness, verify panel (ADR 0035) ---------- */
 
 .evcard {
   padding: 1rem 1.15rem;

@@ -1,14 +1,15 @@
-// "Verify it yourself" for the site itself (ADR 0035, B3). A compact strip in the hero, above the
-// fold: which commit each running image was built from, its digest, a copy of the cosign command
-// and the digest's Rekor search. The #verify panel has the full digests, commands, CI runs and a
-// copyable curl for every public endpoint. The api's commit, CI run and digests come from
-// GET /api/provenance; the web's commit and CI run from /build.json; either may be missing (an API
-// before ADR 0035, a local build), and then the panel shows what is known and says what is not.
+// "Verify it yourself" for the site itself (ADR 0035, B3; amended 2026-10-04). The #verify panel,
+// after the posture: which commit each running image was built from, by which CI run, its digests,
+// the cosign command to check each one, the digest's Rekor search, and a copyable curl for every
+// public endpoint. The hero carries only a link to it; the evidence card is the above-the-fold proof.
+// The api's commit, CI run and digests come from GET /api/provenance; the web's commit and CI run
+// from /build.json; either may be missing (an API before ADR 0035, a local build), and then the
+// panel shows what is known and says what is not.
 
 import type { Result } from "../lib/api";
 import type { BuildInfo, Provenance } from "../lib/contract";
 import { h, replace, timeEl, when } from "../lib/dom";
-import { ciRunUrl, commitUrl, cosignVerifyCommand, digestOf, isPinnedImageRef, oneLine, rekorSearchUrl, shortDigest } from "../lib/provenance";
+import { ciRunUrl, commitUrl, cosignVerifyCommand, digestOf, isPinnedImageRef, oneLine, rekorSearchUrl } from "../lib/provenance";
 import { copyButton, extLink } from "./common";
 
 /** The public origin the raw-data commands name: the commands are for the visitor's own terminal. */
@@ -52,41 +53,6 @@ const short = (sha: string) => sha.slice(0, 7);
 function commitLink(sha: string): Node | string {
   const url = commitUrl(sha);
   return url ? extLink(url, h("code", {}, short(sha))) : "unknown commit";
-}
-
-/** The hero strip: one line per image, then the way to the full panel. */
-export function renderStrip(d: VerifyData): HTMLElement {
-  const unavailable = d.provenance === null;
-  const lines = rows(d)
-    .filter((r) => r.commit || r.images.length)
-    .map((r) => {
-      const image = r.images[0];
-      const digest = image ? digestOf(image) : "";
-      const rekor = digest ? rekorSearchUrl(digest) : null;
-      return h(
-        "li",
-        { class: "vstrip__row", "data-image": r.name },
-        h("span", { class: "vstrip__name" }, r.name),
-        " ",
-        r.commit ? commitLink(r.commit) : null,
-        digest ? [" ", h("code", { class: "vstrip__digest", title: digest }, shortDigest(digest))] : null,
-        image && isPinnedImageRef(image) ? [" ", copyButton(() => oneLine(cosignVerifyCommand(image)), "Copy cosign")] : null,
-        rekor ? [" ", extLink(rekor, "Rekor")] : null,
-        r.images.length > 1 ? h("span", { class: "vstrip__more" }, ` +${r.images.length - 1} during a rollout`) : null,
-      );
-    });
-  return h(
-    "div",
-    { class: "vstrip" },
-    lines.length ? h("p", { class: "vstrip__label" }, "Running now, signed in CI") : null,
-    lines.length ? h("ul", { class: "vstrip__rows", role: "list" }, lines) : null,
-    h(
-      "p",
-      { class: "vstrip__foot" },
-      unavailable ? h("span", { class: "vstrip__na" }, "API provenance unavailable · ") : null,
-      h("a", { href: "#verify" }, "Verify & raw data"),
-    ),
-  );
 }
 
 function curlLine(path: string, stream = false): HTMLElement {
@@ -169,7 +135,7 @@ export interface VerifyHandle {
   set(patch: Partial<VerifyData>): void;
 }
 
-export function mountVerify(strip: HTMLElement, panel: HTMLElement): VerifyHandle {
+export function mountVerify(panel: HTMLElement): VerifyHandle {
   let data: VerifyData = {};
   let key = "";
   const draw = () => {
@@ -178,10 +144,6 @@ export function mountVerify(strip: HTMLElement, panel: HTMLElement): VerifyHandl
     const k = JSON.stringify({ ...data, provenance: data.provenance ? { ...data.provenance, generated_at: undefined } : data.provenance });
     if (k === key) return;
     key = k;
-    if (data.provenance !== undefined || data.build !== undefined) {
-      strip.hidden = false;
-      replace(strip, renderStrip(data));
-    }
     replace(panel, renderVerifyPanel(data));
   };
   return {
