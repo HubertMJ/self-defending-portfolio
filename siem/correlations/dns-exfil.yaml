@@ -1,0 +1,13 @@
+# DNS exfiltration (ADR 0034 "A scenario only correlation catches", ADR 0032 amendment): a flag-shaped
+# DNS lookup from a pod (sdp-hubble) and the API's record of the dns-exfil command in that pod's
+# terminal (sdp-api) within five minutes. Joined on k8s.pod.ref (<ns>_<pod>, S0-#1). Falco has no rule
+# for name lookups, so this pair is the whole detection; the API matches the flag itself (ADR 0036) and
+# cites this correlation when SA recorded it (S0-#13).
+name: dns-exfil
+time_window_ms: 300000
+field: k8s.pod.ref
+correlate:
+  - source: hubble
+    query: "_exists_:dns.query"
+  - source: api
+    query: "api.command_id:dns-exfil"

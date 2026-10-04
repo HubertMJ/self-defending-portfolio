@@ -1,0 +1,26 @@
+# The portfolio API's own record of a catalogue command it started in a visitor's terminal (sdp-api,
+# siem.command). The command id is fixed by the catalogue, so the technique is the catalogue's claim; the SIEM
+# evidence that it happened comes from the other sources.
+title: Terminal execution - dropped binary
+id: 9f000f47-2f12-40b1-b04a-06319e1ef425
+status: experimental
+level: medium
+description: >-
+  A visitor copied a binary into the shop volume and ran it in the attacker terminal (catalogue T1105); Falco
+  answers it.
+author: Hubert Jabłoński
+date: 2026/10/04
+logsource:
+  product: sdp
+  service: api
+detection:
+  selection:
+    event.action: siem.command
+    api.state: started
+    api.technique: T1105
+  condition: selection
+tags:
+  - attack.command_and_control
+  - attack.t1105
+falsepositives:
+  - "A visitor (or the canary) running this catalogue command on the public page - that is the point"

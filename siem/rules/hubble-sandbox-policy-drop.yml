@@ -1,0 +1,28 @@
+# A Hubble flow of a sandbox pod (sdp-hubble; the exporter keeps sandbox flows only). Enum names are case-
+# sensitive in the SIEM (S0-b).
+title: Hubble - sandbox traffic dropped by policy
+id: 1c543e7e-a886-43fa-9e75-6c93368d3f1a
+status: experimental
+level: low
+description: >-
+  Cilium dropped a flow of a sandbox pod by policy - after a quarantine every packet of the pod, DNS included.
+  Both drop reasons are matched: POLICY_DENY is a deny rule (the quarantine policy), POLICY_DENIED a flow no
+  rule allows.
+author: Hubert Jabłoński
+date: 2026/10/04
+logsource:
+  product: sdp
+  service: hubble
+detection:
+  selection:
+    hubble.verdict: DROPPED
+    hubble.drop_reason:
+      - POLICY_DENIED
+      - POLICY_DENY
+    k8s.ns.name|startswith: sandbox
+  condition: selection
+tags:
+  - attack.command_and_control
+  - attack.t1071
+falsepositives:
+  - "A quarantined pod that keeps trying to talk (the canary: beacon, then any command)"

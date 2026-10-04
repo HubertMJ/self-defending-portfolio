@@ -1,0 +1,12 @@
+# The Security Analytics detector of the sdp-falco data stream (ADR 0034 "Rules from git"): every rule of
+# log type sdp_falco runs here once a minute, and each finding raises an alert through the one trigger
+# the sync adds. A rule belongs to exactly one detector, the one of its source (siem_lint.py).
+name: sdp-falco-rules
+source: falco
+interval_minutes: 1
+rules:
+  - b3a3f3cb-7971-40e2-a1ee-35e82e1a5dfd  # falco-drop-and-execute
+  - d546021b-1d62-4dfa-b2d3-7e94822640d4  # falco-network-tool
+  - fcdedb54-6d05-4d6d-a319-005dbf970467  # falco-sensitive-file
+  - 44a53745-246a-4179-bb42-04ce4b023de8  # falco-shop-volume-exec
+  - 14a9ddb2-f159-47ca-a138-4addee907b0f  # falco-terminal-shell

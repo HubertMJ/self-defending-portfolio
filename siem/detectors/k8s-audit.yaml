@@ -1,0 +1,9 @@
+# The Security Analytics detector of the sdp-k8s-audit data stream (ADR 0034 "Rules from git"): every rule of
+# log type sdp_k8s_audit runs here once a minute, and each finding raises an alert through the one trigger
+# the sync adds. A rule belongs to exactly one detector, the one of its source (siem_lint.py).
+name: sdp-k8s-audit-rules
+source: k8s-audit
+interval_minutes: 1
+rules:
+  - b1b84b49-2ff5-4245-b753-69e1da48de20  # k8s-admission-denied
+  - bcef7457-e973-4d34-a82b-e7705623bdc5  # k8s-exec-outside-api

@@ -1,0 +1,15 @@
+# Contained intrusion (ADR 0034 "Who detects what"): a Falco finding and a Talon finding on the same pod
+# within five minutes - the attack was seen and answered. Joined on k8s.pod.ref, stored as <ns>_<pod>
+# because SA's join builds an unescaped query_string in which "/" starts a regex (S0-e, S0-#1).
+# SA correlations are evidence, not the condition: S0 saw 13 of 14 pairs correlate, so the API joins
+# the findings by pod itself and cites the correlation when there is one (S0-#13).
+# Each query is a query_string over the OTHER side's documents; a side's own documents are only checked
+# for the join field (S0-e, from JoinEngine).
+name: contained-intrusion
+time_window_ms: 300000
+field: k8s.pod.ref
+correlate:
+  - source: falco
+    query: "event.kind:alert"
+  - source: talon
+    query: "talon.status:success"

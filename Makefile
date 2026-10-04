@@ -25,6 +25,7 @@ validate:        ## render every kustomization under cluster/ and validate it ag
 	@scripts/check-web-csp.sh
 	@scripts/check-web-identity.sh
 	@scripts/check-image-digests.sh
+	@scripts/check-siem.sh
 	@DOCKER="$(DOCKER)" scripts/validate-cluster.sh
 
 smoke:           ## idempotency smoke test in a container

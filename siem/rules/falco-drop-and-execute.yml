@@ -1,0 +1,24 @@
+# A Falco alert shipped from k3s01 (sdp-falco). Rule names have spaces and SA never matches a value with a
+# space, so the rule matches the slug sdp.lua writes next to the name (siem contract S0-#4).
+title: Falco - dropped binary executed
+id: b3a3f3cb-7971-40e2-a1ee-35e82e1a5dfd
+status: experimental
+level: high
+description: >-
+  Falco rule "Drop and execute new binary in container" fired: a binary that was not in the image ran from the
+  container's upper layer (scenario drop-and-execute).
+author: Hubert Jabłoński
+date: 2026/10/04
+logsource:
+  product: sdp
+  service: falco
+detection:
+  selection:
+    event.kind: alert
+    falco.rule_slug: drop-and-execute-new-binary-in-container
+  condition: selection
+tags:
+  - attack.command_and_control
+  - attack.t1105
+falsepositives:
+  - "A scenario or terminal command on the public page, or tests/scenarios/run.sh - each is a real attack on a sandbox pod"

@@ -1,0 +1,9 @@
+# The Security Analytics detector of the sdp-siem01 data stream (ADR 0034 "Rules from git"): every rule of
+# log type sdp_siem01 runs here once a minute, and each finding raises an alert through the one trigger
+# the sync adds. A rule belongs to exactly one detector, the one of its source (siem_lint.py).
+name: sdp-siem01-rules
+source: siem01
+interval_minutes: 1
+rules:
+  - be0a7f61-9416-4b12-a6bb-e597485e9538  # siem01-ssh-accepted
+  - 073abeb3-92b1-48b5-bad5-040b71030364  # siem01-ssh-failed

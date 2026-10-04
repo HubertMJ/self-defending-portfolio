@@ -1,0 +1,111 @@
+# Canaries (ADR 0034 "Rules from git", siem contract P3, MJ6): every rule, correlation and monitor the sync
+# applies names the run that must produce its finding or alert. tests/siem/canaries.sh runs them live; a canary
+# that stops producing its finding is the detection-drift signal. siem_lint.py refuses an object without one.
+#
+# kind api       through the public API from the operator machine: terminal: [<command id>, ...] is one
+#                terminal session running those catalogue commands in order (scenarios.yaml, scenario
+#                terminal); scenario: <id> is one one-click run of that scenario.
+# kind exec      an operator step outside the API: run is the command, step what in it produces the event.
+# kind synthetic documents written by tests/siem/canaries.sh with the temporary shipper-test identity
+#                (tests/siem/canary_docs.py, by name), for a check whose trigger is a failure of the demo
+#                itself - a detection that does not happen cannot be caused through the public API.
+rules:
+  c688437b-f1eb-4c1b-af13-13738b0fce91:  # api-credentials-flag
+    kind: api
+    terminal: [read-flag]
+  8e8c5e64-5298-46cb-bb6f-45d11ff9f40b:  # api-credentials-shadow
+    kind: api
+    terminal: [read-shadow]
+  9f000f47-2f12-40b1-b04a-06319e1ef425:  # api-exec-dropped-binary
+    kind: api
+    terminal: [drop-run]
+  c78e8dde-6c3b-4410-8425-bd3ccf82bd1a:  # api-exec-shell
+    kind: api
+    terminal: [shell]
+  f4c0703b-e8a3-4540-a944-bfcc86783dc1:  # api-exfil-dns
+    kind: api
+    terminal: [dns-exfil]
+  a3480924-d541-4ad0-acd5-61487b20547e:  # api-exfil-web
+    kind: api
+    terminal: [beacon]
+  344dca25-2ac6-4a93-b5b3-7db61552f229:  # api-recon-files
+    kind: api
+    terminal: [ls-shop]
+  e73b1008-1ef3-4438-b3df-a60e9251ac9b:  # api-recon-process
+    kind: api
+    terminal: [ps]
+  03ffcde5-3de6-4626-93dd-dd98f1d8cde3:  # api-recon-system
+    kind: api
+    terminal: [hostname]
+  43a02cd0-4943-4c88-9eed-b8ff82d541a9:  # api-recon-user
+    kind: api
+    terminal: [whoami]
+  b3a3f3cb-7971-40e2-a1ee-35e82e1a5dfd:  # falco-drop-and-execute
+    kind: api
+    scenario: drop-and-execute
+  d546021b-1d62-4dfa-b2d3-7e94822640d4:  # falco-network-tool
+    kind: api
+    scenario: network-tool
+  fcdedb54-6d05-4d6d-a319-005dbf970467:  # falco-sensitive-file
+    kind: api
+    scenario: sensitive-file-read
+  44a53745-246a-4179-bb42-04ce4b023de8:  # falco-shop-volume-exec
+    kind: api
+    terminal: [drop-run]
+  14a9ddb2-f159-47ca-a138-4addee907b0f:  # falco-terminal-shell
+    kind: api
+    scenario: shell-in-container
+  0ee27053-8f8c-4740-a990-98d398477490:  # host-ssh-accepted
+    kind: exec
+    run: "ssh ansible@10.4.1.20 true"
+    step: "an operator login to k3s01"
+  0a66d582-41d5-41ed-9c45-074725c6f640:  # host-ssh-failed
+    kind: exec
+    run: "ssh -o IdentitiesOnly=yes -i <a key the host does not know> nobody@10.4.1.20"
+    step: "one refused login to k3s01"
+  fa0bd074-18fc-4827-834c-705c707a94f9:  # hubble-dns-exfil
+    kind: api
+    terminal: [dns-exfil]
+  1c543e7e-a886-43fa-9e75-6c93368d3f1a:  # hubble-sandbox-policy-drop
+    kind: api
+    terminal: [beacon, whoami]
+  b1b84b49-2ff5-4245-b753-69e1da48de20:  # k8s-admission-denied
+    kind: exec
+    run: "tests/admission/run.sh"
+    step: "the server-side dry-run of each refused test pod"
+  bcef7457-e973-4d34-a82b-e7705623bdc5:  # k8s-exec-outside-api
+    kind: exec
+    run: "tests/scenarios/run.sh"
+    step: "kubectl exec into each scenario pod (ONLY=shell-in-container is enough)"
+  be0a7f61-9416-4b12-a6bb-e597485e9538:  # siem01-ssh-accepted
+    kind: exec
+    run: "ssh ansible@10.4.2.10 true"
+    step: "an operator login to siem01"
+  073abeb3-92b1-48b5-bad5-040b71030364:  # siem01-ssh-failed
+    kind: exec
+    run: "ssh -o IdentitiesOnly=yes -i <a key the host does not know> nobody@10.4.2.10"
+    step: "one refused login to siem01"
+  ab2bc6ee-e717-4b7a-a69e-92acb304903e:  # talon-quarantine
+    kind: api
+    scenario: network-tool
+  ba58109c-e0e4-4409-9c4c-0a80bfca3dce:  # talon-terminate
+    kind: api
+    scenario: shell-in-container
+correlations:
+  contained-intrusion:
+    kind: api
+    scenario: shell-in-container
+  dns-exfil:
+    kind: api
+    terminal: [dns-exfil]
+monitors:
+  "sdp-git: policy probing":
+    kind: exec
+    run: "tests/admission/run.sh"
+    step: "its refused pods, then the pod it expects admitted"
+  "sdp-git: prevented not detected":
+    kind: api
+    terminal: [touch-bin]
+  "sdp-git: detection missing":
+    kind: synthetic
+    docs: detection-missing

@@ -1,0 +1,9 @@
+# The Security Analytics detector of the sdp-hubble data stream (ADR 0034 "Rules from git"): every rule of
+# log type sdp_hubble runs here once a minute, and each finding raises an alert through the one trigger
+# the sync adds. A rule belongs to exactly one detector, the one of its source (siem_lint.py).
+name: sdp-hubble-rules
+source: hubble
+interval_minutes: 1
+rules:
+  - fa0bd074-18fc-4827-834c-705c707a94f9  # hubble-dns-exfil
+  - 1c543e7e-a886-43fa-9e75-6c93368d3f1a  # hubble-sandbox-policy-drop

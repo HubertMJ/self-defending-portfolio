@@ -1,0 +1,24 @@
+# A Falco alert shipped from k3s01 (sdp-falco). Rule names have spaces and SA never matches a value with a
+# space, so the rule matches the slug sdp.lua writes next to the name (siem contract S0-#4).
+title: Falco - execution from the shop volume
+id: 44a53745-246a-4179-bb42-04ce4b023de8
+status: experimental
+level: high
+description: >-
+  Falco rule "SDP execution from shop volume" (custom) fired: a program ran from the writable shop volume,
+  which the stock drift rule does not watch (terminal command drop-run).
+author: Hubert Jabłoński
+date: 2026/10/04
+logsource:
+  product: sdp
+  service: falco
+detection:
+  selection:
+    event.kind: alert
+    falco.rule_slug: sdp-execution-from-shop-volume
+  condition: selection
+tags:
+  - attack.command_and_control
+  - attack.t1105
+falsepositives:
+  - "A scenario or terminal command on the public page, or tests/scenarios/run.sh - each is a real attack on a sandbox pod"
