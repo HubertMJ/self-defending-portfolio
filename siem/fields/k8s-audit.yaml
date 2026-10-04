@@ -1,0 +1,33 @@
+# Allow-list of the sdp-k8s-audit data stream (siem/fields/README.md). Derived from
+# tests/siem/fixtures/k8s-audit.jsonl (F0, 2026-10-04).
+# F2: requestObject and responseObject are never shipped (record 1 carries the run's flag in the pod
+# spec, record 7 a bearer token); neither are requestURI (exec URIs carry the command line),
+# userAgent, user.groups, user.extra (credential ids, node and pod names) or annotations other than
+# the authorization decision. Which events are shipped at all is P2's filter (F2).
+owner: host
+source: k8s-audit
+stream: sdp-k8s-audit
+log_type: sdp_k8s_audit
+input: k3s API server audit log /var/lib/rancher/k3s/server/logs/audit.log on k3s01, one JSON event per line.
+fixture: tests/siem/fixtures/k8s-audit.jsonl
+fields:
+  "@timestamp": {type: date, from: requestReceivedTimestamp}
+  event.kind: {type: keyword, value: event, note: "event | heartbeat"}
+  event.dataset: {type: keyword, value: k8s-audit}
+  audit.id: {type: keyword, from: auditID}
+  audit.stage: {type: keyword, from: stage}
+  audit.level: {type: keyword, from: level}
+  audit.verb: {type: keyword, from: verb}
+  audit.object.resource: {type: keyword, from: [objectRef, resource]}
+  audit.object.subresource: {type: keyword, from: [objectRef, subresource]}
+  audit.object.api_group: {type: keyword, from: [objectRef, apiGroup]}
+  audit.object.name: {type: keyword, from: [objectRef, name]}
+  audit.response.code: {type: integer, from: [responseStatus, code], transform: int}
+  audit.response.status: {type: keyword, from: [responseStatus, status], note: Failure on a refusal}
+  audit.decision: {type: keyword, from: [annotations, authorization.k8s.io/decision]}
+  audit.dry_run: {type: boolean, from: requestURI, transform: audit_dry_run, note: "true when the query string has dryRun=All"}
+  k8s.ns.name: {type: keyword, from: [objectRef, namespace]}
+  k8s.pod.name: {type: keyword, from: [objectRef, name], note: only when objectRef.resource is pods}
+  k8s.pod.ref: {type: keyword, from: [[objectRef, namespace], [objectRef, name]], transform: pod_ref, note: only for pods}
+  user.name: {type: keyword, from: [user, username], transform: hmac_unless_system}
+  source.ip: {type: keyword, from: [sourceIPs, 0], transform: hmac}

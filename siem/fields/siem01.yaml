@@ -1,0 +1,30 @@
+# Allow-list of the sdp-siem01 data stream: the SIEM host's own logs, shipped by Fluent Bit on siem01
+# with its own certificate and HMAC key (F4). Same shapes as sdp-host, captured on siem01 after P1
+# hardening (tests/siem/fixtures/siem01-*). Host-derived findings are published as counts only.
+owner: host
+source: siem01
+stream: sdp-siem01
+log_type: sdp_siem01
+input: >-
+  journald on siem01 (ssh.service / sshd-session, sudo, kernel "nft-drop: ") and /var/log/audit/audit.log,
+  exactly as for sdp-host; the siem watches (keys siem_config, siem_plugins, siem_sync) appear in audit.key.
+fixture: tests/siem/fixtures/siem01-ssh.json
+fields:
+  "@timestamp": {type: date, from: __REALTIME_TIMESTAMP, transform: epoch_us, note: audit lines use msg=audit(<epoch>.<ms>:<serial>)}
+  event.kind: {type: keyword, value: event, note: "event | heartbeat"}
+  event.dataset: {type: keyword, value: siem01}
+  host.log: {type: keyword, note: "ssh | sudo | nft | auditd, from the input"}
+  ssh.event: {type: keyword, from: MESSAGE, transform: ssh_event, note: "accepted | failed | invalid-user | closed-preauth"}
+  ssh.method: {type: keyword, from: MESSAGE, transform: ssh_method, note: "publickey | password | keyboard-interactive"}
+  sudo.result: {type: keyword, from: MESSAGE, transform: sudo_result, note: "command | incorrect-password | not-allowed"}
+  nft.protocol: {type: keyword, from: MESSAGE, transform: nft_proto, note: PROTO=<x>, lower-cased}
+  nft.destination_port: {type: integer, from: MESSAGE, transform: nft_dpt, note: DPT=<n>}
+  audit.type: {type: keyword, transform: audit_type, note: "type=<X> (SYSCALL, CONFIG_CHANGE, ...)"}
+  audit.key: {type: keyword, transform: audit_key, note: key="<k>"}
+  audit.syscall: {type: keyword, transform: audit_syscall, note: SYSCALL=<name> of the enriched record}
+  audit.success: {type: keyword, transform: audit_success, note: success=<yes|no>}
+  process.exe: {type: keyword, transform: audit_exe, note: exe="<path>"}
+  process.name: {type: keyword, transform: audit_comm, note: comm="<name>"}
+  user.name: {type: keyword, transform: hmac, note: "ssh/sudo: the login user; auditd: AUID=\"<name>\" (unset kept as unset)"}
+  user.effective: {type: keyword, transform: hmac, note: "auditd: EUID=\"<name>\"; sudo: USER=<target>"}
+  source.ip: {type: keyword, transform: hmac, note: "ssh: from <ip>; nft: SRC=<ip>"}

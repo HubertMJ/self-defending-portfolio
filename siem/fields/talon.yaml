@@ -1,0 +1,25 @@
+# Allow-list of the sdp-talon data stream (siem/fields/README.md). Derived from
+# tests/siem/fixtures/talon.log (F0, 2026-10-04; closes N8: Talon logs pod and namespace as
+# top-level keys).
+owner: host
+source: talon
+stream: sdp-talon
+log_type: sdp_talon
+input: >-
+  CRI lines of /var/log/pods/falco-response_falco-talon-*/falco-talon/*.log on k3s01, action-result lines only
+  (message "action"). The echoed Falco event text and the human-readable output are dropped.
+fixture: tests/siem/fixtures/talon.log
+fields:
+  "@timestamp": {type: date, from: time}
+  event.kind: {type: keyword, value: action, note: "action | heartbeat"}
+  event.dataset: {type: keyword, value: talon}
+  talon.rule: {type: keyword, from: rule}
+  talon.rule_slug: {type: keyword, from: rule, transform: slug}
+  talon.action: {type: keyword, from: action}
+  talon.action_slug: {type: keyword, from: action, transform: slug, note: "Quarantine Pod -> quarantine-pod"}
+  talon.actionner: {type: keyword, from: actionner, note: "kubernetes:terminate | kubernetes:label"}
+  talon.status: {type: keyword, from: status}
+  talon.trace_id: {type: keyword, from: trace_id}
+  k8s.ns.name: {type: keyword, from: namespace}
+  k8s.pod.name: {type: keyword, from: pod}
+  k8s.pod.ref: {type: keyword, from: [[namespace], [pod]], transform: pod_ref}
