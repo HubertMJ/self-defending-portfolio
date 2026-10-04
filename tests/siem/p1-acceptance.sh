@@ -138,6 +138,15 @@ else
   bad "1 setup: shipper-style create into sdp-falco failed: $(head -c 300 "$T/body")"; exit 1
 fi
 
+# F1: a Fluent-Bit-style create (no id) is stamped event.overwrite=false and the server's
+# event.ingested, even when the client sends its own values for both (S0-c).
+got=$(req shipper POST /sdp-falco/_bulk "$(printf '{"create":{}}\n{"@timestamp":"%s","event":{"kind":"acceptance","dataset":"falco","overwrite":true,"ingested":"2000-01-01T00:00:00Z"},"event.overwrite":true}\n' "$(date -u +%FT%TZ)")")
+fid=$(j "d['items'][0]['create']['_id']") findex=$(j "d['items'][0]['create']['_index']")
+req admin GET "/$findex/_doc/$fid" >/dev/null
+stamp=$(j "(d['_source']['event']['overwrite'], d['_source']['event']['ingested'][:4], 'event.overwrite' in d['_source'])")
+if [ "$stamp" = "(False, '$(date -u +%Y)', False)" ]; then ok "1 F1 create without an id: client-sent event.overwrite/ingested replaced -> overwrite false, ingested now"
+else bad "1 F1 create without an id stored $stamp"; fi
+
 # --- 2: CAS on a rolled backing index is write-blocked -------------------------------------------
 bulk_create shipper sdp-falco "$mark-2" || { bad "2 setup: create failed"; exit 1; }
 rolled=$CREATED_INDEX rolled_id=$CREATED_ID
