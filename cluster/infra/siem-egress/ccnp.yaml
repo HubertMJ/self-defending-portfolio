@@ -1,0 +1,26 @@
+# Only the portfolio API may open a connection to the SIEM (ADR 0034 "Who may talk to 9200", siem
+# contract M17). siem01 (10.4.2.10:9200) answers only to a client certificate, and the one in the
+# cluster is the API's (cluster/infra/portfolio-api/siem-client.sops.yaml); this keeps every other pod -
+# a compromised scenario pod above all - from even reaching the TLS handshake, whatever the CNPs of
+# its namespace allow. k3s01's Fluent Bit is a host process, not an endpoint, and is not affected;
+# the gateway and siem01's nftables limit 9200 to k3s01 as well.
+#
+# Deny rules win over every allow (Cilium), so the portfolio-api namespace is left out by the selector
+# rather than allowed back in. enableDefaultDeny stays off in both directions: selecting every pod
+# must not turn on default-deny for pods that have no policy of their own.
+apiVersion: cilium.io/v2
+kind: CiliumClusterwideNetworkPolicy
+metadata:
+  name: siem-egress-deny
+spec:
+  endpointSelector:
+    matchExpressions:
+      - key: io.kubernetes.pod.namespace
+        operator: NotIn
+        values: [portfolio-api]
+  enableDefaultDeny:
+    egress: false
+    ingress: false
+  egressDeny:
+    - toCIDR:
+        - 10.4.2.10/32
