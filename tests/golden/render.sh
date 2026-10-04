@@ -96,4 +96,5 @@ check "sshd allows local forwarding to 127.0.0.1:5601 only" \
   grep -qx 'AllowTcpForwarding local' "$s/00-hardening.conf"
 check "sshd PermitOpen is 127.0.0.1:5601" grep -qx 'PermitOpen 127.0.0.1:5601' "$s/00-hardening.conf"
 
-[ "$fail" = 0 ] && echo "golden: PASS" || { echo "golden: FAIL"; exit 1; }
+if [ "$fail" != 0 ]; then echo "golden: FAIL"; exit 1; fi
+echo "golden: PASS"
