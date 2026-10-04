@@ -1,6 +1,9 @@
 # Allow-list of the sdp-siem01 data stream: the SIEM host's own logs, shipped by Fluent Bit on siem01
 # with its own certificate and HMAC key (F4). Same shapes as sdp-host, captured on siem01 after P1
 # hardening (tests/siem/fixtures/siem01-*). Host-derived findings are published as counts only.
+# P2 (ingest, at P1's hand-over) adds the OpenSearch security audit log (fixture
+# tests/siem/fixtures/siem01-osaudit.log): refused logins, missing privileges, TLS failures and the
+# admin's index events, with the certificate identity kept verbatim (a SIEM identity, not a person).
 owner: host
 source: siem01
 stream: sdp-siem01
@@ -8,12 +11,17 @@ log_type: sdp_siem01
 input: >-
   journald on siem01 (ssh.service / sshd-session, sudo, kernel "nft-drop: ") and /var/log/audit/audit.log,
   exactly as for sdp-host; the siem watches (keys siem_config, siem_plugins, siem_sync) appear in audit.key.
+  Plus /var/log/opensearch/sdp-security-audit.log ("[<time>] <JSON audit event>" per line).
 fixture: tests/siem/fixtures/siem01-ssh.json
 fields:
-  "@timestamp": {type: date, from: __REALTIME_TIMESTAMP, transform: epoch_us, note: audit lines use msg=audit(<epoch>.<ms>:<serial>)}
+  "@timestamp":
+    type: date
+    from: __REALTIME_TIMESTAMP
+    transform: epoch_us
+    note: "audit lines use msg=audit(<epoch>.<ms>:<serial>), opensearch-audit lines their @timestamp"
   event.kind: {type: keyword, value: event, note: "event | heartbeat"}
   event.dataset: {type: keyword, value: siem01}
-  host.log: {type: keyword, note: "ssh | sudo | nft | auditd, from the input"}
+  host.log: {type: keyword, note: "ssh | sudo | nft | auditd | opensearch-audit, from the input"}
   ssh.event: {type: keyword, from: MESSAGE, transform: ssh_event, note: "accepted | failed | invalid-user | closed-preauth"}
   ssh.method: {type: keyword, from: MESSAGE, transform: ssh_method, note: "publickey | password | keyboard-interactive"}
   sudo.result: {type: keyword, from: MESSAGE, transform: sudo_result, note: "command | incorrect-password | not-allowed"}
@@ -27,4 +35,18 @@ fields:
   process.name: {type: keyword, transform: audit_comm, note: comm="<name>"}
   user.name: {type: keyword, transform: hmac, note: "ssh/sudo: the login user; auditd: AUID=\"<name>\" (unset kept as unset)"}
   user.effective: {type: keyword, transform: hmac, note: "auditd: EUID=\"<name>\"; sudo: USER=<target>"}
-  source.ip: {type: keyword, transform: hmac, note: "ssh: from <ip>; nft: SRC=<ip>"}
+  source.ip: {type: keyword, transform: hmac, note: "ssh: from <ip>; nft: SRC=<ip>; opensearch-audit: audit_request_remote_address"}
+  opensearch.audit.category:
+    type: keyword
+    from: audit_category
+    note: "FAILED_LOGIN | MISSING_PRIVILEGES | SSL_EXCEPTION | BAD_HEADERS | INDEX_EVENT | ..."
+  opensearch.audit.layer: {type: keyword, from: audit_request_layer, note: "REST | TRANSPORT"}
+  opensearch.audit.origin: {type: keyword, from: audit_request_origin}
+  opensearch.audit.privilege: {type: keyword, from: audit_request_privilege, note: "the action, e.g. indices:data/write/bulk"}
+  opensearch.audit.user:
+    type: keyword
+    from: audit_request_effective_user
+    note: "the certificate identity (its CN, or the admin's DN), e.g. shipper-k3s01-g1"
+  opensearch.audit.rest_method: {type: keyword, from: audit_rest_request_method}
+  opensearch.audit.rest_path: {type: keyword, from: audit_rest_request_path}
+  opensearch.audit.indices: {type: keyword, from: audit_trace_indices, note: array of index names}

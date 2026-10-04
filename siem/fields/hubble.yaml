@@ -1,0 +1,44 @@
+# Allow-list of the sdp-hubble data stream (siem/fields/README.md). Shaped after Cilium 1.19's static
+# flow exporter with the field mask of cluster/apps/cilium.yaml (hubble.export.static), fixture
+# tests/siem/fixtures/hubble.log (P2; replaced by a live capture in the maintenance window, L9).
+# The exporter already drops addresses, node names and labels (fieldMask); the file still holds
+# non-flow records (lost_events, agent_event, ...) carrying node_name, and the record envelope has
+# node_name too - only `.flow` is read, everything else is dropped (F13).
+owner: ingest
+source: hubble
+stream: sdp-hubble
+log_type: sdp_hubble
+input: >-
+  /var/run/cilium/hubble/events.log on k3s01, one JSON export record per line; only records with a flow, and
+  the exporter's allowList keeps flows whose source or destination pod is in sandbox/ or sandbox-unguarded/.
+fixture: tests/siem/fixtures/hubble.log
+fields:
+  "@timestamp": {type: date, from: [flow, time]}
+  event.kind: {type: keyword, value: flow, note: "flow | heartbeat"}
+  event.dataset: {type: keyword, value: hubble}
+  hubble.verdict: {type: keyword, from: [flow, verdict], note: "FORWARDED | DROPPED | ... (enum name, case-sensitive)"}
+  hubble.drop_reason: {type: keyword, from: [flow, drop_reason_desc], note: "POLICY_DENIED, POLICY_DENY, ... (enum name)"}
+  hubble.traffic_direction: {type: keyword, from: [flow, traffic_direction], note: "INGRESS | EGRESS"}
+  hubble.is_reply: {type: boolean, from: [flow, is_reply], transform: bool}
+  hubble.event_type: {type: integer, from: [flow, event_type, type], transform: int, note: "1 drop, 4 trace, 129 L7"}
+  hubble.event_sub_type: {type: integer, from: [flow, event_type, sub_type], transform: int}
+  hubble.l4.protocol:
+    type: keyword
+    from: [flow, l4]
+    transform: l4_protocol
+    note: "the l4 object's one key, lower-cased: tcp | udp | icmpv4 | icmpv6 | sctp"
+  hubble.l4.destination_port: {type: integer, from: [flow, l4], transform: l4_destination_port}
+  hubble.l7.type: {type: keyword, from: [flow, l7, type], note: "REQUEST | RESPONSE"}
+  hubble.source.namespace: {type: keyword, from: [flow, source, namespace]}
+  hubble.source.pod_name: {type: keyword, from: [flow, source, pod_name]}
+  hubble.destination.namespace: {type: keyword, from: [flow, destination, namespace]}
+  hubble.destination.pod_name: {type: keyword, from: [flow, destination, pod_name]}
+  k8s.ns.name:
+    type: keyword
+    from: &hubble_sides [[flow, source, namespace], [flow, source, pod_name], [flow, destination, namespace], [flow, destination, pod_name]]
+    transform: sandbox_ns
+    note: the sandbox side - the source pod when it is in sandbox*, else the destination pod
+  k8s.pod.name: {type: keyword, from: *hubble_sides, transform: sandbox_pod, note: as k8s.ns.name}
+  k8s.pod.ref: {type: keyword, from: *hubble_sides, transform: sandbox_pod_ref, note: "<ns>_<pod> of the sandbox side, the join key"}
+  dns.query: {type: keyword, from: [flow, l7, dns, query], transform: lower, note: "lower-cased, trailing dot kept; never published (B9)"}
+  dns.rcode: {type: integer, from: [flow, l7, dns, rcode], transform: int, note: 3 = NXDOMAIN}
