@@ -131,6 +131,44 @@
       changed_when: false
       failed_when: verify_kube_proxy.rc == 0
 
+    # The SIEM shipper (ADR 0034, siem contract P2): running, and inside its sandbox - the unit's
+    # start check refuses to run when the sandbox stops hiding the kubeconfig.
+    - name: Read the Fluent Bit unit
+      ansible.builtin.systemd_service:
+        name: fluent-bit
+      register: verify_fluent_bit
+      check_mode: true
+
+    - name: Assert Fluent Bit runs as its own user inside its sandbox
+      ansible.builtin.assert:
+        that:
+          - verify_fluent_bit.status.ActiveState == 'active'
+          - verify_fluent_bit.status.SubState == 'running'
+          - verify_fluent_bit.status.User == 'fluent-bit'
+          - "'/etc/rancher' in verify_fluent_bit.status.InaccessiblePaths"
+          - verify_fluent_bit.status.CapabilityBoundingSet == 'cap_dac_read_search'
+        fail_msg: >-
+          fluent-bit is {{ verify_fluent_bit.status.ActiveState }}/{{ verify_fluent_bit.status.SubState }} as
+          {{ verify_fluent_bit.status.User | default('root') }}, InaccessiblePaths
+          {{ verify_fluent_bit.status.InaccessiblePaths | default('') }}, capabilities
+          {{ verify_fluent_bit.status.CapabilityBoundingSet | default('') }}.
+        success_msg: fluent-bit runs as fluent-bit with CAP_DAC_READ_SEARCH only and /etc/rancher inaccessible.
+
+    # M7 for k3s01's shipper identity: ingest.yml re-requests it at 45 days left.
+    - name: Read the validity of the shipper's client certificate
+      community.crypto.x509_certificate_info:
+        path: /etc/fluent-bit/tls/client.crt
+        valid_at:
+          month: +30d
+      register: verify_fluent_bit_cert
+
+    - name: Assert the shipper's client certificate is valid for more than 30 days
+      ansible.builtin.assert:
+        that:
+          - verify_fluent_bit_cert.valid_at.month
+        fail_msg: /etc/fluent-bit/tls/client.crt ends at {{ verify_fluent_bit_cert.not_after }}, within 30 days.
+        success_msg: The shipper's client certificate is valid until {{ verify_fluent_bit_cert.not_after }}.
+
 - name: Verify the SIEM host
   hosts: siem_nodes
   become: true
@@ -428,3 +466,26 @@
       loop: "{{ verify_certs.results }}"
       loop_control:
         label: "{{ item.item }}"
+
+    # The SIEM shipper (ADR 0034, siem contract P2): running, and inside its sandbox - the unit's
+    # start check refuses to run when the sandbox stops hiding the admin key.
+    - name: Read the Fluent Bit unit
+      ansible.builtin.systemd_service:
+        name: fluent-bit
+      register: verify_fluent_bit
+      check_mode: true
+
+    - name: Assert Fluent Bit runs as its own user inside its sandbox
+      ansible.builtin.assert:
+        that:
+          - verify_fluent_bit.status.ActiveState == 'active'
+          - verify_fluent_bit.status.SubState == 'running'
+          - verify_fluent_bit.status.User == 'fluent-bit'
+          - "'/etc/rancher' in verify_fluent_bit.status.InaccessiblePaths"
+          - verify_fluent_bit.status.CapabilityBoundingSet == 'cap_dac_read_search'
+        fail_msg: >-
+          fluent-bit is {{ verify_fluent_bit.status.ActiveState }}/{{ verify_fluent_bit.status.SubState }} as
+          {{ verify_fluent_bit.status.User | default('root') }}, InaccessiblePaths
+          {{ verify_fluent_bit.status.InaccessiblePaths | default('') }}, capabilities
+          {{ verify_fluent_bit.status.CapabilityBoundingSet | default('') }}.
+        success_msg: fluent-bit runs as fluent-bit with CAP_DAC_READ_SEARCH only and /etc/rancher inaccessible.
