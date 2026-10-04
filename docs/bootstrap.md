@@ -1401,6 +1401,120 @@ kube-bench images); then revert 2a, and upstream's images come back with the sam
 metrics-server: revert the switch commit (Argo CD prunes its objects), then revert the Ansible change
 and run the k3s role again - k3s re-extracts its bundled manifests on start and deploys its own copy.
 
+## 9. The SIEM host siem01 (ADR 0034)
+
+OpenSearch 3.9.0 with Security Analytics, single node, on its own VM in its own VLAN and firewall zone.
+k3s01 can append to it but not rewrite it (see ADR 0034 and its amendment of 2026-10-04 for what
+"cannot rewrite" means exactly). Everything runs from Ansible in the tooling container: Ansible is
+not installed on the operator machine, and `make siem` wraps the container invocation (`ARGS=` passes
+playbook arguments through).
+
+### 9.1 Create the VM
+
+```sh
+VMID=121 VM_NAME=siem01 VM_VLAN=42 VM_IP=10.4.2.10/24 VM_GW=10.4.2.1 VM_DISK_GB=80 VM_DATA_DISK_GB=20 \
+  scripts/pve-create-vm.sh                   # 4 vCPU and 8 GB are the script defaults (VM_CORES, VM_MEMORY_MB)
+ssh ansible@10.4.2.10 true                    # accept the host key after checking it on the Proxmox console
+```
+
+The data disk carries the serial `siem01-data`; the `siem_disk` role finds it by that serial and
+never by device name, formats it only while it holds no filesystem and mounts it by label at
+`/var/lib/opensearch-snapshots`. The UniFi zone `Siem` allows exactly k3s01 → 10.4.2.10:9200/tcp and
+the admin networks → :22/tcp; the host firewall repeats that list.
+
+### 9.2 Apply
+
+```sh
+make siem ARGS="--check --diff"   # look first
+make siem                          # base, ssh, firewall, sysctl, auditd, patching, disk, OpenSearch, Dashboards, config
+make siem                          # second run must report changed=0
+make siem-verify                   # read-only: sshd, nft 22+9200 only, audit watches, NTP, listeners, green, PA off, certs
+make siem-acceptance               # live acceptance (P1): refusals, write block, rewrite alarm, TLS, restore, tunnel
+```
+
+What the playbook guarantees, and where:
+- The OpenSearch and Dashboards debs come only from their repository whose key's primary fingerprint
+  equals the pin (`opensearch_apt_key_fingerprint`), with the package SHA256 in the signed index equal
+  to the pin before install, an apt preference at 1001 and a dpkg hold. The deb's demo security
+  configuration is never installed (`DISABLE_INSTALL_DEMO_CONFIG=true`).
+- `/tmp` must allow executables: the security plugin unpacks a JNI probe there and OpenSearch does
+  not start otherwise. The role checks it before the first start.
+- Every client authenticates with a certificate of the host's own CA; there is no password path and
+  no internal user. Performance Analyzer is off. Health is green (0 replicas everywhere).
+- Inside OpenSearch: the `sdp-final` pipeline, the ISM policy `sdp-30d` (created before the streams,
+  because it only attaches to indices created after it), one template and data stream per source from
+  `siem/fields/`, the snapshot repository on the data disk with an hourly policy, and the ops monitors.
+  Request bodies the role last wrote are hashed under `/var/lib/sdp-siem/state`; an unchanged object is
+  not re-sent. The security configuration is re-applied whenever its files changed or the live role
+  mapping differs from them.
+
+Bursts of new SSH connections from the operator network to the Siem zone have been seen to be
+dropped for several minutes (connection timeouts, nothing logged on siem01). Each `make siem` uses one
+connection; `tests/siem/p1-acceptance.sh` multiplexes everything over one control master. For manual
+work, use a control master as well (`-o ControlMaster=auto -o ControlPath=... -o ControlPersist=10m`).
+
+### 9.3 Dashboards through the tunnel
+
+```sh
+ssh -N -L 5601:127.0.0.1:5601 ansible@10.4.2.10
+# then http://127.0.0.1:5601 in a local browser
+```
+
+Dashboards listens on 127.0.0.1 only and runs without the security plugin; it talks to OpenSearch
+with its own certificate (`dashboards-g<N>`), mapped to the read-only analyst role. sshd allows local
+forwarding to exactly `127.0.0.1:5601` (`PermitOpen`) and nothing else.
+
+### 9.4 Certificates
+
+All keys are made on siem01 and stay there: the CA (`/etc/sdp-siem/pki/ca.key`, 10 years), the node
+key (`/etc/opensearch/certs/node.key`) and the local client identities `admin`, `rules-sync`,
+`shipper-siem01` (`/etc/sdp-siem/pki/`) and `dashboards` (`/etc/opensearch-dashboards/certs/`). Client
+certificates are `CN=<name>-g<N>,OU=siem,O=sdp`, valid one year; the role re-issues any certificate
+with fewer than 45 days left, and `make siem-verify` fails at 30.
+
+Generations (`opensearch_cert_generations` in `group_vars/siem_nodes.yml`):
+- Rotation of a local identity: raise its generation and run `make siem`; the new certificate is
+  issued and mapped in the same run. For `admin` the run also changes `plugins.security.authcz.admin_dn`
+  and restarts OpenSearch.
+- Rotation of a remote identity (`shipper-k3s01`, `portfolio-api`): keep the old generation mapped
+  with `opensearch_config_extra_generations: {portfolio-api: [1]}`, raise the generation, sign and
+  deploy the new certificate, then drop the extra generation and run `make siem` again.
+- Revocation is removing the identity from the role mapping (`make siem` re-applies it).
+
+### 9.5 Signing a CSR made elsewhere
+
+`roles/opensearch/tasks/sign_client_csr.yml` is the only way a key made elsewhere gets a certificate.
+The expected identity comes from the command line, never from the CSR, and only `shipper-k3s01`,
+`portfolio-api` and `shipper-test` are signed. The CSR's subject must be exactly
+`CN=<name>-g<N>,OU=siem,O=sdp`; a CSR asking for `CA:TRUE` or a SAN is refused; the certificate gets
+CA:FALSE, keyUsage digitalSignature, EKU clientAuth, no SAN, 365 days, and no extension of the CSR.
+
+```sh
+# the CSR must be inside the checkout (the container sees it as /work); .ansible/ is gitignored
+make siem ARGS="--tags client-cert -e siem_client_csr=../.ansible/shipper-k3s01-g1.csr \
+  -e siem_client_name=shipper-k3s01 -e siem_client_generation=1"
+# -> ../.ansible/shipper-k3s01-g1.crt next to it
+make siem ARGS="--tags api-cert -e siem_api_csr=../.ansible/portfolio-api-g1.csr -e siem_api_generation=1"
+```
+
+`make siem-csr-test` runs the same task file against generated CSRs in the container
+(`tests/siem/csr-signer.sh`).
+
+### 9.6 Recovery and rollback
+
+```sh
+# on the Proxmox node, when SSH is lost
+qm guest exec 121 -- /usr/sbin/nft flush ruleset          # siem01 runs no other nftables tables
+qm guest exec 121 -- /usr/bin/systemctl restart ssh
+qm guest exec 121 -- /usr/bin/journalctl -u opensearch -n 50
+```
+
+Nothing depends on siem01 before ingest (P2). Rollback of P1 is restoring the vzdump backup taken
+before the first apply (`qmrestore <archive> 121 --force` on the Proxmox node). The OpenSearch
+repository key's signing subkey expires on 2027-03-06: before then delete
+`/var/lib/sdp-siem/opensearch-release.pgp` on siem01 and run `make siem`; the new key is trusted only
+if its primary fingerprint still equals the pin.
+
 ## Rebuild from zero
 
 ```sh

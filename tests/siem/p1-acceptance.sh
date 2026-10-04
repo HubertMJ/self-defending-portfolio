@@ -79,6 +79,8 @@ bad() { echo "FAIL $*"; fail=1; }
 # req <identity> <METHOD> <path> [json body] -> prints the HTTP code, body in $T/body
 req() {
   local id=$1 m=$2 p=$3 b=${4-} cert key
+  # $(...) strips trailing newlines; a bulk body must end with one.
+  [[ $p == *_bulk* ]] && b+=$'\n'
   case $id in
     admin) cert=/etc/sdp-siem/pki/admin.crt key=/etc/sdp-siem/pki/admin.key ;;
     shipper) cert=$T/shipper-test.crt key=$T/shipper-test.key ;;
@@ -92,7 +94,7 @@ req() {
   fi
 }
 # j <python expression over d> -> evaluates against the last body
-j() { python3 -c "import json,sys; d=json.load(open('$T/body')); print($1)"; }
+j() { python3 -c "import json,sys; d=json.load(open('$T/body')); print($1)" 2>/dev/null; }
 expect() { # <expected code> <description> <identity> <METHOD> <path> [body]
   local want=$1 desc=$2 got; shift 2
   got=$(req "$@")
@@ -129,11 +131,15 @@ if [ "$got" = 200 ] && [ "$user" = shipper-test-g1 ]; then ok "5 valid certifica
 else bad "5 valid certificate + basic header -> $got user $user"; fi
 
 # --- 1: a data stream refuses op_type index ------------------------------------------------------
-bulk_create shipper sdp-falco "$mark-1" || bad "1 setup: shipper-style create into sdp-falco failed"
-expect 400 "1 PUT sdp-falco/_doc/<id>" shipper PUT "/sdp-falco/_doc/$CREATED_ID" "$(doc "$mark-1x")"
+if bulk_create shipper sdp-falco "$mark-1"; then
+  ok "1 setup: shipper-style _bulk create into sdp-falco -> 201 ($CREATED_INDEX)"
+  expect 400 "1 PUT sdp-falco/_doc/<id>" shipper PUT "/sdp-falco/_doc/$CREATED_ID" "$(doc "$mark-1x")"
+else
+  bad "1 setup: shipper-style create into sdp-falco failed: $(head -c 300 "$T/body")"; exit 1
+fi
 
 # --- 2: CAS on a rolled backing index is write-blocked -------------------------------------------
-bulk_create shipper sdp-falco "$mark-2" || bad "2 setup: create failed"
+bulk_create shipper sdp-falco "$mark-2" || { bad "2 setup: create failed"; exit 1; }
 rolled=$CREATED_INDEX rolled_id=$CREATED_ID
 req admin GET "/$rolled/_doc/$rolled_id" >/dev/null
 seq=$(j "d['_seq_no']") term=$(j "d['_primary_term']")
@@ -154,7 +160,7 @@ expect_item "2 the same CAS through _bulk" shipper /_bulk \
   "$(printf '{"index":{"_index":"%s","_id":"%s","if_seq_no":%s,"if_primary_term":%s}}\n%s\n' "$rolled" "$rolled_id" "$seq" "$term" "$(doc "$mark-2-bulk")")"
 
 # --- 3: the role refuses everything but create ---------------------------------------------------
-bulk_create shipper sdp-falco "$mark-3" || bad "3 setup: create failed"
+bulk_create shipper sdp-falco "$mark-3" || { bad "3 setup: create failed"; exit 1; }
 w=$CREATED_INDEX wid=$CREATED_ID
 expect 403 "3 DELETE $w/_doc/<id>" shipper DELETE "/$w/_doc/$wid"
 expect_item "3 _bulk delete" shipper /_bulk "$(printf '{"delete":{"_index":"%s","_id":"%s"}}\n' "$w" "$wid")"
@@ -173,7 +179,7 @@ expect 403 "3 write to sdp-siem01" shipper POST /sdp-siem01/_doc "$(doc "$mark-3
 expect_item "3 _bulk create into sdp-siem01" shipper /_bulk "$(printf '{"create":{"_index":"sdp-siem01"}}\n%s\n' "$(doc "$mark-3b")")"
 
 # --- 8 (setup) + 4: snapshot holds the original; CAS on the write index succeeds and is alarmed ---
-bulk_create shipper sdp-falco "$mark-4-original" || bad "4 setup: create failed"
+bulk_create shipper sdp-falco "$mark-4-original" || { bad "4 setup: create failed"; exit 1; }
 w=$CREATED_INDEX wid=$CREATED_ID
 if [ "$WAIT_HOURLY" = 1 ]; then
   echo "     8: waiting for the next hourly snapshot of sdp-hourly (up to 60 min)"

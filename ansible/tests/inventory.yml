@@ -15,3 +15,26 @@ all:
           ssh_hardening_allow_users: [ansible]
           firewall_admin_cidrs: [172.17.0.0/16]
           firewall_k3s_api_cidrs: [172.17.0.0/16]
+    # The SIEM host's hardening (siem.yml --tags base,ssh,firewall,patching): the group switches
+    # firewall, sysctl and auditd to their non-k3s shape (ADR 0009 amendment 2026-10-04).
+    siem_nodes:
+      hosts:
+        sdp-smoke-siem:
+          ansible_connection: community.docker.docker_api
+          ansible_user: root
+          ansible_python_interpreter: /usr/bin/python3
+          base_hostname: sdp-smoke-siem
+          ssh_hardening_allow_users: [ansible]
+          ssh_hardening_allow_tcp_forwarding: local
+          ssh_hardening_permit_open: ["127.0.0.1:5601"]
+          firewall_admin_cidrs: [172.17.0.0/16]
+          firewall_services:
+            - {name: opensearch, port: 9200, proto: tcp, sources: [172.17.0.1/32]}
+          # Only read by the argument validation of the roles the tags skip (it always runs).
+          siem_node_ip: 172.17.0.3
+          opensearch_version: "3.9.0"
+          opensearch_deb_sha256: "0000000000000000000000000000000000000000000000000000000000000000"
+          opensearch_dashboards_version: "3.9.0"
+          opensearch_dashboards_deb_sha256: "0000000000000000000000000000000000000000000000000000000000000000"
+          opensearch_apt_key_fingerprint: "0000000000000000000000000000000000000000"
+          opensearch_cert_generations: {admin: 1, rules-sync: 1, dashboards: 1, shipper-siem01: 1, shipper-k3s01: 1, portfolio-api: 1}
