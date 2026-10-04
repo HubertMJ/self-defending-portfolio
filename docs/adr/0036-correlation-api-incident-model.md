@@ -136,15 +136,18 @@ an SA correlation, when one pairs two of the incident's findings, is cited as ev
 - At terminal start the runner computes `HMAC-SHA256(procKey, "sdp-" + <16 hex of the flag>)` and hands
   only that MAC, with the run id and the pod ref, to the incident tracker; `procKey` is 32 random bytes per
   process (`internal/flagmac`). The flag never enters the incidents package and nothing is logged.
-- A registration is kept while the run lasts and for **15 minutes after it ends** (the runner reports the
-  end), so findings that arrive a minute or more after the visitor pressed Leave still match.
+- The runner also reports the run's end. A query matches a run's MAC only if it happened **while the run
+  lasted or at most 15 minutes after it ended** - judged by the query's own `@timestamp`, not by when the
+  finding is read, so a finding that arrives late (the visitor pressed Leave right after the command, a
+  slow detector run, an outage) matches exactly as it would have on time. The registrations (run id, pod
+  ref, MAC; at most 64) are kept for the 24 h evidence retention.
 - When a DNS finding is first read, its query's first label must match `^sdp-[0-9a-f]{16}$`; it is
   HMAC'd and compared in constant time with the registrations **for the same ref**. The result is
-  stored with the finding and the label is discarded: `true` (this run's secret), `false` (a
-  registration for the ref exists and does not match - another run's flag; or the event happened while
-  this process was running and no registration for the ref is live - the same pod name in the twin
-  namespace, or more than 15 minutes after the run), `null` when the event predates this process: an
-  API restart lost `procKey` ("flag match unavailable").
+  stored with the finding and the label is discarded: `true` (this run's secret), `false` (the ref has a
+  registration and none matches - another run's flag, or a query more than 15 minutes after the run; or
+  the query happened while this process was running and the ref has no registration - the same pod name
+  in the twin namespace), `null` when the query predates this process and the ref has no registration:
+  an API restart lost `procKey` ("flag match unavailable").
 
 ### 7. Health on the page (D1)
 - `rules`: the newest `siem-sync` record gives `status` (`applied|refused|failed`, else `unknown`); the

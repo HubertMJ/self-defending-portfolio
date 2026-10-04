@@ -178,22 +178,24 @@ func TestDNSExfilUnderQuarantine(t *testing.T) {
 }
 
 func TestFlagMatch(t *testing.T) {
-	poll := func(label string, register func(*Tracker, *clock), readAt time.Duration) *bool {
+	runEnd := t0.Add(30 * time.Second)
+	// poll: the DNS query happens at dnsAt (its finding 30 s later), the tracker reads at readAt.
+	poll := func(label string, register func(*Tracker), dnsAt, readAt time.Time) *bool {
 		t.Helper()
 		f := newFake()
 		terminalRun(f, label)
+		f.findings["sdp_hubble"] = []siem.Finding{dnsFinding("f-dns-1", dnsAt, termRef, label)}
 		clk := &clock{t: t0}
 		tr := newTracker(t, f, clk)
-		register(tr, clk)
-		clk.Set(t0.Add(readAt))
+		register(tr)
+		clk.Set(readAt)
 		tr.Poll(context.Background())
 		return one(t, tr.View(), KindDNSExfil).FlagMatch
 	}
-	runEnd := 30 * time.Second
-	reg := func(hex string) func(*Tracker, *clock) {
-		return func(tr *Tracker, clk *clock) {
+	reg := func(hex string) func(*Tracker) {
+		return func(tr *Tracker) {
 			registerTerminalFlag(tr, hex)
-			tr.EndFlag(termRun, t0.Add(runEnd))
+			tr.EndFlag(termRun, runEnd)
 		}
 	}
 	check := func(name string, got *bool, want *bool) {
@@ -206,24 +208,46 @@ func TestFlagMatch(t *testing.T) {
 		}
 	}
 	yes, no := true, false
-	check("own flag", poll("sdp-"+flagHex, reg(flagHex), time.Minute), &yes)
-	check("upper-case query", poll("SDP-"+strings.ToUpper(flagHex), reg(flagHex), time.Minute), &yes)
-	check("another run's flag", poll("sdp-"+otherHex, reg(flagHex), time.Minute), &no)
+	during := t0.Add(20 * time.Second)
+	check("own flag", poll("sdp-"+flagHex, reg(flagHex), during, t0.Add(time.Minute)), &yes)
+	check("upper-case query", poll("SDP-"+strings.ToUpper(flagHex), reg(flagHex), during, t0.Add(time.Minute)), &yes)
+	check("another run's flag", poll("sdp-"+otherHex, reg(flagHex), during, t0.Add(time.Minute)), &no)
 	// Leave right after the command: the run is over, the finding arrives 90 s later.
-	check("finding 90 s after the run", poll("sdp-"+flagHex, reg(flagHex), runEnd+90*time.Second), &yes)
-	// Retention: kept 15 min after the run's end.
-	check("14:59 after the run", poll("sdp-"+flagHex, reg(flagHex), runEnd+14*time.Minute+59*time.Second), &yes)
-	check("15:01 after the run", poll("sdp-"+flagHex, reg(flagHex), runEnd+15*time.Minute+time.Second), &no)
+	check("finding read 90 s after the run", poll("sdp-"+flagHex, reg(flagHex), during, runEnd.Add(90*time.Second)), &yes)
+	// The match is judged by the query's time, not by when the finding is read.
+	check("query during the run, read 20 min after its end", poll("sdp-"+flagHex, reg(flagHex), during, runEnd.Add(20*time.Minute)), &yes)
+	check("query during the run, read 23 h after its end", poll("sdp-"+flagHex, reg(flagHex), during, runEnd.Add(23*time.Hour)), &yes)
+	// A query up to 15 min after the run's end still matches; later it does not.
+	check("query 14:59 after the run", poll("sdp-"+flagHex, reg(flagHex), runEnd.Add(14*time.Minute+59*time.Second), runEnd.Add(16*time.Minute)), &yes)
+	check("query 15:01 after the run", poll("sdp-"+flagHex, reg(flagHex), runEnd.Add(15*time.Minute+time.Second), runEnd.Add(16*time.Minute)), &no)
 	// The same pod name in the twin namespace is another pod.
-	twin := func(tr *Tracker, _ *clock) {
+	twin := func(tr *Tracker) {
 		tr.RegisterFlag(termRun, "sandbox-unguarded_terminal-3755e65530", tr.FlagMAC("sdp-"+flagHex))
 	}
-	check("same pod name in the twin namespace", poll("sdp-"+flagHex, twin, time.Minute), &no)
+	check("same pod name in the twin namespace", poll("sdp-"+flagHex, twin, during, t0.Add(time.Minute)), &no)
 	// Restart: the run registered with the previous process; this one started after the query.
-	restart := func(tr *Tracker, _ *clock) { tr.start = t0.Add(40 * time.Second) }
-	check("after a restart", poll("sdp-"+flagHex, restart, time.Minute), nil)
+	restart := func(tr *Tracker) { tr.start = t0.Add(40 * time.Second) }
+	check("after a restart", poll("sdp-"+flagHex, restart, during, t0.Add(time.Minute)), nil)
 	// The label must be exactly sdp-<16 hex>.
-	check("malformed label", poll("sdp-"+flagHex+"aa", reg(flagHex), time.Minute), &no)
+	check("malformed label", poll("sdp-"+flagHex+"aa", reg(flagHex), during, t0.Add(time.Minute)), &no)
+}
+
+// Registrations (MACs only) are kept for the evidence retention, then dropped.
+func TestFlagRegistrationsExpire(t *testing.T) {
+	clk := &clock{t: t0}
+	tr := New(Config{Now: clk.Now})
+	registerTerminalFlag(tr, flagHex)
+	tr.EndFlag(termRun, t0)
+	clk.Set(t0.Add(retention - time.Minute))
+	tr.RegisterFlag("other", "sandbox_x", []byte{1})
+	if len(tr.flags) != 2 {
+		t.Fatalf("%d registrations before the retention ended", len(tr.flags))
+	}
+	clk.Set(t0.Add(retention + time.Minute))
+	tr.RegisterFlag("third", "sandbox_y", []byte{1})
+	if _, ok := tr.flags[termRun]; ok || len(tr.flags) != 2 {
+		t.Fatalf("registrations after the retention: %d", len(tr.flags))
+	}
 }
 
 func ptr(b *bool) any {

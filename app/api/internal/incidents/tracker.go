@@ -43,7 +43,10 @@ const (
 	// staleAfter: the section is available while the last fully successful poll is at most this old
 	// (three polls), so a stopped SIEM hides it within a minute (L11) and one slow poll does not.
 	staleAfter = 45 * time.Second
-	// flagKeep: a terminal run's flag registration outlives the run by this much (ADR 0034).
+	// flagKeep: a DNS query up to this long after its run ended still matches the run's flag
+	// (ADR 0034). Judged by the query's own time, so a finding read late (an outage, a slow detector)
+	// matches as it would have on time; the registrations themselves (MACs only) are kept for the
+	// evidence retention.
 	flagKeep = 15 * time.Minute
 	// maxFlags bounds the registrations (one run at a time; the cap only matters for a burst).
 	maxFlags = 64
@@ -472,16 +475,21 @@ func (t *Tracker) FlagMAC(label string) []byte { return t.cfg.MAC.Sum(label) }
 
 func (t *Tracker) expireFlags(now time.Time) {
 	for id, e := range t.flags {
-		if !e.ended.IsZero() && now.After(e.ended.Add(flagKeep)) {
+		end := e.ended
+		if end.IsZero() {
+			end = e.created
+		}
+		if now.After(end.Add(retention)) {
 			delete(t.flags, id)
 		}
 	}
 }
 
-// flagMatch compares a DNS query's first label with the live registrations for the same ref: true
-// on a match, false when a registration for the ref exists and does not match or when the event
-// happened under this process with none live, null when the event predates this process (its key is
-// gone with the previous process).
+// flagMatch compares a DNS query's first label with the registrations for the same ref whose run
+// was still going, or had ended at most flagKeep before, when the query happened: true on a match,
+// false when the ref has a registration and none matches or when the query happened under this
+// process with no registration for the ref, null when the query predates this process (its key went
+// with the previous process).
 func (t *Tracker) flagMatch(ref, query string, at, now time.Time) *bool {
 	t.fmu.Lock()
 	defer t.fmu.Unlock()
@@ -491,17 +499,18 @@ func (t *Tracker) flagMatch(ref, query string, at, now time.Time) *bool {
 	if labelPat.MatchString(label) {
 		sum = t.cfg.MAC.Sum(label)
 	}
-	live, match := false, false
+	known, match := false, false
 	for _, e := range t.flags {
 		if e.ref != ref {
 			continue
 		}
-		live = true
-		if sum != nil && hmac.Equal(sum, e.mac) {
+		known = true
+		inRun := e.ended.IsZero() || !at.After(e.ended.Add(flagKeep))
+		if inRun && sum != nil && hmac.Equal(sum, e.mac) {
 			match = true
 		}
 	}
-	if !live && at.Before(t.start) {
+	if !known && at.Before(t.start) {
 		return nil
 	}
 	return &match
