@@ -97,6 +97,7 @@ check "60-extra.rules watches the SIEM config, plugins and sync" \
 check "sshd allows local forwarding to 127.0.0.1:5601 only" \
   grep -qx 'AllowTcpForwarding local' "$s/00-hardening.conf"
 check "sshd PermitOpen is 127.0.0.1:5601" grep -qx 'PermitOpen 127.0.0.1:5601' "$s/00-hardening.conf"
+check "sshd forwards no Unix sockets" grep -qx 'AllowStreamLocalForwarding no' "$s/00-hardening.conf"
 
 if [ "$fail" != 0 ]; then echo "golden: FAIL"; exit 1; fi
 echo "golden: PASS"

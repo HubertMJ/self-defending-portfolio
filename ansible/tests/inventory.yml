@@ -27,6 +27,7 @@ all:
           ssh_hardening_allow_users: [ansible]
           ssh_hardening_allow_tcp_forwarding: local
           ssh_hardening_permit_open: ["127.0.0.1:5601"]
+          ssh_hardening_allow_stream_local_forwarding: "no"
           firewall_admin_cidrs: [172.17.0.0/16]
           firewall_services:
             - {name: opensearch, port: 9200, proto: tcp, sources: [172.17.0.1/32]}

@@ -25,6 +25,10 @@ argument_specs:
         description: Value for AllowTcpForwarding.
         type: str
         default: "no"
+      ssh_hardening_allow_stream_local_forwarding:
+        description: Value for AllowStreamLocalForwarding; not rendered when empty.
+        type: str
+        default: ""
       ssh_hardening_permit_open:
         description: PermitOpen destinations (host:port) for local forwarding; not rendered when empty.
         type: list

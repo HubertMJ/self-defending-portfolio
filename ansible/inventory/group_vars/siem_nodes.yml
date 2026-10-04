@@ -24,6 +24,7 @@ firewall_services:
 # (ssh -N -L 5601:127.0.0.1:5601 ansible@10.4.2.10); sshd permits that one destination.
 ssh_hardening_allow_tcp_forwarding: local
 ssh_hardening_permit_open: ["127.0.0.1:5601"]
+ssh_hardening_allow_stream_local_forwarding: "no"
 
 # --- kernel and audit ---
 sysctl_extra_settings:

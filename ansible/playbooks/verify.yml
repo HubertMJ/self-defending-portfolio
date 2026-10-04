@@ -156,6 +156,7 @@
           - "'permitrootlogin no' in verify_sshd.stdout_lines"
           - "'allowtcpforwarding local' in verify_sshd.stdout_lines"
           - "'permitopen 127.0.0.1:5601' in verify_sshd.stdout_lines"
+          - "'allowstreamlocalforwarding no' in verify_sshd.stdout_lines"
           - "'permittunnel no' in verify_sshd.stdout_lines"
         fail_msg: sshd accepts passwords or root, or forwards more than the Dashboards tunnel.
         success_msg: sshd is key-only, no root, local forwarding to 127.0.0.1:5601 only.
