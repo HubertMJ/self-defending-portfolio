@@ -15,7 +15,8 @@
 #   VM_USER (ansible), SSH_PUBKEY_FILE (~/.ssh/id_ed25519.pub), DEBIAN_IMAGE_URL, PVE_INSECURE (0/1)
 # siem01 (ADR 0034): VMID=121 VM_NAME=siem01 VM_VLAN=42 VM_IP=10.4.2.10/24 VM_GW=10.4.2.1 VM_DISK_GB=80
 #   VM_DATA_DISK_GB=20 (static address, so no MAC reservation is needed: Proxmox picks the MAC). The data disk
-#   carries serial <name>-data, so the guest finds it at /dev/disk/by-id/scsi-0QEMU_QEMU_HARDDISK_<name>-data.
+#   carries serial <name>-data: the guest finds it by `lsblk -o NAME,SERIAL` (udev's by-id link is named after
+#   the drive, scsi-0QEMU_QEMU_HARDDISK_drive-scsi1, not after the serial).
 #
 # Idempotent-ish: refuses to run if VMID already exists. Destroy with: qm destroy <VMID> --purge (on the node).
 set -euo pipefail
