@@ -1,7 +1,7 @@
 {
   "type": "monitor",
   "monitor_type": "bucket_level_monitor",
-  "name": "sdp-git: policy probing",
+  "name": "sdp-git: policy-probing",
   "enabled": true,
   "schedule": {
     "period": {

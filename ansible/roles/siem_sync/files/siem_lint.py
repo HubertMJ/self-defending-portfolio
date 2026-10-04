@@ -228,8 +228,13 @@ def check_rule_form(t):
 
 @check
 def check_rule_ids(t):
-    errs, seen = [], {}
+    errs, seen, titles = [], {}, {}
     for rel, d in t.rules.items():
+        title = d.get("title")
+        if title in titles:
+            # SA hands back the rule title with a finding; the API maps it to the Sigma id (ADR 0036).
+            errs.append((rel, f"title {title!r} is also the title of {titles[title]}"))
+        titles[title] = rel
         rid = d.get("id")
         if not isinstance(rid, str) or not UUID_RE.match(rid):
             errs.append((rel, f"id {rid!r} is not a lower-case UUID"))
@@ -458,6 +463,9 @@ def check_monitors(t):
             errs.append((rel, f"name {name!r} must start with {MONITOR_PREFIX!r}"))
         elif name in names:
             errs.append((rel, f"monitor name {name!r} also used by {names[name]}"))
+        elif name != MONITOR_PREFIX + rel[len("monitors/"): -len(".json")]:
+            # The API recognises a monitor's kind by this slug (ADR 0036).
+            errs.append((rel, f"name {name!r} must be {MONITOR_PREFIX!r} + the file name without .json"))
         names[name] = rel
         if d.get("type") != "monitor" or d.get("monitor_type") not in MONITOR_TYPES:
             errs.append((rel, f"type must be monitor and monitor_type one of {', '.join(sorted(MONITOR_TYPES))}"))
@@ -505,6 +513,9 @@ def check_canaries(t):
             if kind not in CANARY_KINDS:
                 errs.append(("canaries.yaml", f"{section}: {oid}: kind must be one of {', '.join(sorted(CANARY_KINDS))}"))
                 continue
+            if re.search(r"\b\d{1,3}(\.\d{1,3}){3}\b|k3s01|siem01|\.svc\b|cluster\.local", json.dumps(can)):
+                # The page publishes canaries (ADR 0036); ADR 0021 never publishes addresses or node names.
+                errs.append(("canaries.yaml", f"{section}: {oid}: names an address or a node; canaries are published"))
             required, optional = CANARY_KINDS[kind]
             if not required <= set(can) or set(can) - required - optional:
                 errs.append(("canaries.yaml", f"{section}: {oid}: a {kind} canary has {', '.join(sorted(required))}"

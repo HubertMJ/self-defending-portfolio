@@ -1,7 +1,7 @@
 {
   "type": "monitor",
   "monitor_type": "bucket_level_monitor",
-  "name": "sdp-git: prevented not detected",
+  "name": "sdp-git: prevented-not-detected",
   "enabled": true,
   "schedule": {
     "period": {
