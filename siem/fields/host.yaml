@@ -13,7 +13,14 @@ input: >-
   addresses are dropped.
 fixture: tests/siem/fixtures/host-ssh.json
 fields:
-  "@timestamp": {type: date, from: __REALTIME_TIMESTAMP, transform: epoch_us, note: audit lines use msg=audit(<epoch>.<ms>:<serial>)}
+  "@timestamp":
+    type: date
+    from: __REALTIME_TIMESTAMP
+    transform: epoch_us
+    note: >-
+      audit lines use msg=audit(<epoch>.<ms>:<serial>). Journal records: Fluent Bit's systemd input passes the
+      entry's realtime timestamp as the record time and no __REALTIME_TIMESTAMP key (the key is in the
+      journalctl -o json fixtures only), so the record time is used when the key is absent (review code L6)
   event.kind: {type: keyword, value: event, note: "event | heartbeat | metric (the shipper's own losses)"}
   event.dataset: {type: keyword, value: host}
   host.log: {type: keyword, note: "ssh | sudo | nft | auditd | fluent-bit, from the input"}

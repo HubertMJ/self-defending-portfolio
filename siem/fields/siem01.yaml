@@ -18,7 +18,11 @@ fields:
     type: date
     from: __REALTIME_TIMESTAMP
     transform: epoch_us
-    note: "audit lines use msg=audit(<epoch>.<ms>:<serial>), opensearch-audit lines their @timestamp"
+    note: >-
+      audit lines use msg=audit(<epoch>.<ms>:<serial>), opensearch-audit lines their @timestamp. Journal records:
+      Fluent Bit's systemd input passes the entry's realtime timestamp as the record time and no
+      __REALTIME_TIMESTAMP key (the key is in the journalctl -o json fixtures only), so the record time is used
+      when the key is absent (review code L6)
   event.kind: {type: keyword, value: event, note: "event | heartbeat | metric (the shipper's own losses)"}
   event.dataset: {type: keyword, value: siem01}
   host.log: {type: keyword, note: "ssh | sudo | nft | auditd | opensearch-audit | fluent-bit, from the input"}
