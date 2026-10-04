@@ -406,7 +406,7 @@ func TestNonIdentifierValuesAreWrittenEmpty(t *testing.T) {
 	if len(runs) != 2 || len(cmds) != 1 {
 		t.Fatalf("runs %v cmds %v", runs, cmds)
 	}
-	if runs[0]["pod_ref"] != "" || runs[1]["scenario"] != "" || runs[1]["pod_ref"] != "sandbox_p" {
+	if runs[0]["pod_ref"] != nil || runs[1]["scenario"] != "" || runs[1]["pod_ref"] != "sandbox_p" {
 		t.Fatalf("runs %v", runs)
 	}
 	if cmds[0]["technique"] != "" || cmds[0]["objective"] != "recon" {

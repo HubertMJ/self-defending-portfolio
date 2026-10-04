@@ -30,4 +30,4 @@ fields:
   api.technique: {type: keyword, from: technique, note: "siem.command only: ATT&CK id from the catalogue (T1552.001)"}
   api.objective: {type: keyword, from: objective, note: "siem.command only: recon | tamper | credentials | exfiltration | execution, empty for none"}
   api.outcome: {type: keyword, from: outcome, note: "siem.command only: allowed | prevented | detected (the catalogue's claim)"}
-  k8s.pod.ref: {type: keyword, from: pod_ref, note: "<ns>_<pod> as written by the API (S0-#1), empty before the pod exists; no transform"}
+  k8s.pod.ref: {type: keyword, from: pod_ref, note: "<ns>_<pod> as written by the API (S0-#1); null (not indexed) before the pod exists; no transform"}

@@ -1,4 +1,4 @@
-{"level":"INFO","msg":"siem.run","run_id":"3755e65530aa11bb","scenario":"terminal","state":"queued","arm":"","pod_ref":"","command_seq":null,"at":"2026-10-04T10:00:00Z"}
+{"level":"INFO","msg":"siem.run","run_id":"3755e65530aa11bb","scenario":"terminal","state":"queued","arm":"","pod_ref":null,"command_seq":null,"at":"2026-10-04T10:00:00Z"}
 {"level":"INFO","msg":"siem.run","run_id":"3755e65530aa11bb","scenario":"terminal","state":"started","arm":"","pod_ref":"sandbox_terminal-3755e65530","command_seq":null,"at":"2026-10-04T10:00:00.12Z"}
 {"level":"INFO","msg":"siem.run","run_id":"3755e65530aa11bb","scenario":"terminal","state":"pod_ready","arm":"","pod_ref":"sandbox_terminal-3755e65530","command_seq":null,"at":"2026-10-04T10:00:02.4Z"}
 {"level":"INFO","msg":"siem.command","run_id":"3755e65530aa11bb","seq":1,"command_id":"whoami","state":"started","exit_code":null,"achieved":false,"technique":"T1033","objective":"recon","outcome":"allowed","pod_ref":"sandbox_terminal-3755e65530","at":"2026-10-04T10:00:05Z"}
@@ -12,7 +12,7 @@
 {"level":"INFO","msg":"siem.command","run_id":"3755e65530aa11bb","seq":4,"command_id":"read-shadow","state":"killed","exit_code":null,"achieved":false,"technique":"T1003.008","objective":"credentials","outcome":"detected","pod_ref":"sandbox_terminal-3755e65530","at":"2026-10-04T10:00:15.4Z"}
 {"level":"INFO","msg":"siem.run","run_id":"3755e65530aa11bb","scenario":"terminal","state":"responded","arm":"","pod_ref":"sandbox_terminal-3755e65530","command_seq":4,"at":"2026-10-04T10:00:15.45Z"}
 {"level":"INFO","msg":"siem.run","run_id":"3755e65530aa11bb","scenario":"terminal","state":"finished","arm":"","pod_ref":"sandbox_terminal-3755e65530","command_seq":null,"at":"2026-10-04T10:00:16Z"}
-{"level":"INFO","msg":"siem.run","run_id":"a1b2c3d4e5f60718","scenario":"shell-in-container","state":"queued","arm":"guarded","pod_ref":"","command_seq":null,"at":"2026-10-04T10:00:30Z"}
+{"level":"INFO","msg":"siem.run","run_id":"a1b2c3d4e5f60718","scenario":"shell-in-container","state":"queued","arm":"guarded","pod_ref":null,"command_seq":null,"at":"2026-10-04T10:00:30Z"}
 {"level":"INFO","msg":"siem.run","run_id":"a1b2c3d4e5f60718","scenario":"shell-in-container","state":"started","arm":"guarded","pod_ref":"sandbox_shell-in-container-a1b2c3d4e5","command_seq":null,"at":"2026-10-04T10:00:31Z"}
 {"level":"INFO","msg":"siem.run","run_id":"a1b2c3d4e5f60718","scenario":"shell-in-container","state":"started","arm":"unguarded","pod_ref":"sandbox-unguarded_shell-in-container-a1b2c3d4e5-u","command_seq":null,"at":"2026-10-04T10:00:31Z"}
 {"level":"INFO","msg":"siem.run","run_id":"a1b2c3d4e5f60718","scenario":"shell-in-container","state":"detected","arm":"guarded","pod_ref":"sandbox_shell-in-container-a1b2c3d4e5","command_seq":null,"at":"2026-10-04T10:00:32Z"}

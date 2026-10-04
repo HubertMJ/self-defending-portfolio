@@ -17,9 +17,10 @@
 // value with a space (siem contract S0-#4), and free text has no business in these lines.
 //
 // pod_ref is `<namespace>_<pod>` (S0-#1: `/` breaks SA's correlation query, and `_` occurs in no
-// namespace or pod name, so the API can split it back for publication). A compare run (ADR 0031)
-// writes its states with arm `guarded`, and `started` and its final state once more with arm
-// `unguarded` and the twin's ref in the unguarded namespace, so the twin's pod is tied to the run.
+// namespace or pod name, so the API can split it back for publication), null while unknown. A
+// compare run (ADR 0031) writes its states with arm `guarded`, and `started` and its final state
+// once more with arm `unguarded` and the twin's ref in the unguarded namespace, so the twin's pod is
+// tied to the run.
 //
 // Record runs inside the hub's tap, under the hub lock, so it never blocks: events go into a buffered
 // channel drained by Run, and when the channel is full they are dropped and counted; the count is
@@ -233,13 +234,13 @@ func (r *Recorder) writeRun(e runEvent) {
 	}
 }
 
-func (r *Recorder) runLine(e runEvent, arm, podRef string) {
+func (r *Recorder) runLine(e runEvent, arm string, podRef any) {
 	r.cfg.Log.LogAttrs(context.Background(), slog.LevelInfo, MsgRun,
 		slog.String("run_id", e.RunID),
 		slog.String("scenario", clean(e.Scenario)),
 		slog.String("state", e.State),
 		slog.String("arm", arm),
-		slog.String("pod_ref", podRef),
+		slog.Any("pod_ref", podRef),
 		slog.Any("command_seq", optional(e.CommandSeq)),
 		slog.Time("at", e.At.UTC()),
 	)
@@ -271,15 +272,16 @@ func (r *Recorder) writeCommand(e commandEvent) {
 		slog.String("technique", clean(cmd.Technique)),
 		slog.String("objective", clean(cmd.Objective)),
 		slog.String("outcome", clean(cmd.Outcome)),
-		slog.String("pod_ref", r.podRef(ns, pod)),
+		slog.Any("pod_ref", r.podRef(ns, pod)),
 		slog.Time("at", e.At.UTC()),
 	)
 }
 
-// podRef is `<ns>_<pod>`, or empty when either part is unknown or could make the split ambiguous.
-func (r *Recorder) podRef(ns, pod string) string {
+// podRef is `<ns>_<pod>`, or null when either part is unknown or could make the split ambiguous:
+// an absent ref is not indexed, where an empty string would be a value a query could match.
+func (r *Recorder) podRef(ns, pod string) any {
 	if !identifier.MatchString(ns) || !identifier.MatchString(pod) || strings.Contains(ns+pod, "_") {
-		return ""
+		return nil
 	}
 	return ns + "_" + pod
 }
