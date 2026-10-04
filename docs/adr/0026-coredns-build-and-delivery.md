@@ -242,3 +242,62 @@ but the Deployment rolls with k3s's `maxUnavailable: 1`, so a gap of a few secon
 has none. The live cluster needs no repair: all six objects belong to `coredns-sdp` and its
 checksum is recorded.
 
+
+## Amendment 2026-10-04: the role also delivers `coredns-custom`, a sinkhole for `exfil.sdp.test` (ADR 0034)
+
+**What.** The template gains a seventh object, ConfigMap `kube-system/coredns-custom`, with one key,
+`exfil-sinkhole.server`:
+```
+exfil.sdp.test:53 {
+    errors
+    prometheus :9153
+    template ANY ANY exfil.sdp.test {
+      rcode NXDOMAIN
+    }
+}
+```
+The terminal's `dns-exfil` command (ADR 0034; ADR 0017 and 0032 amendments) looks up
+`sdp-<16 hex>.x.exfil.sdp.test.`, a label made from the run's flag. The flag must not leave the
+homelab, so CoreDNS answers that zone itself. The Deployment already mounted `coredns-custom` as an
+optional volume at `/etc/coredns/custom` and the Corefile already imported `*.server` from there (both
+mirrored from k3s, which ships no such ConfigMap); nothing else in the manifest changes.
+
+**Why it cannot forward.** A query is served by the server block of the most specific zone that
+contains it, and only by that block: a name under `exfil.sdp.test` never reaches the `.:53` block and
+its `forward . /etc/resolv.conf`. The sinkhole block has no `forward`, so the label cannot reach an
+upstream resolver by construction, and no `log`, so no query name is written anywhere. (CoreDNS
+orders plugins at compile time, `template` before `forward`, so even a `forward` added below the
+`template` would never run - but the block stays an allow-list anyway.) Guards:
+- `make validate` renders the template (scripts/lib/check_coredns_sinkhole.py) and refuses any block
+  other than exactly the one above, any further key in `coredns-custom`, a Corefile without the
+  top-level `import /etc/coredns/custom/*.server`, and a Deployment that does not mount the ConfigMap
+  there - the three one-line edits that would let the zone fall through to `forward`.
+- `make scenario-offline` runs the rendered Corefile in the pinned image under the Deployment's
+  security context against a stand-in upstream that logs every query it receives: a name outside the
+  zone is forwarded (the forward counter moves, the upstream logs it); a name in the zone gets
+  NXDOMAIN, `coredns_dns_requests_total{zone="exfil.sdp.test."}` rises, the forward counter does not
+  move and the upstream never sees it; `coredns_plugin_enabled` lists exactly errors, prometheus and
+  template for the zone. Replacing `template` with `forward` in a scratch copy fails five of those
+  assertions; without the sinkhole block the same lookup reaches the upstream.
+- `tests/scenarios/run.sh` asserts the same counters live, from a sandbox pod, over
+  `kubectl port-forward` to :9153 of every CoreDNS pod (`SINKHOLE_ONLY=1` runs only that).
+
+**Which counter shows a forward.** CoreDNS 1.14.7 has no `coredns_forward_requests_total`: since 1.11
+the forward plugin's request metrics are `coredns_proxy_*{proxy_name="forward"}`. The tests use
+`coredns_proxy_conn_cache_hits_total + coredns_proxy_conn_cache_misses_total`, which count every
+upstream exchange as it starts, answered or not (`coredns_proxy_request_duration_seconds` counts only
+answered ones). The forward counter is the whole cluster's, so another pod resolving an outside name
+in the same seconds also moves it; run.sh retries a moved reading up to three times before calling it
+a leak (a leak moves it every time), and also reads `coredns_plugin_enabled`, which names the zone's
+plugins without any background noise.
+
+**Delivery.** As with the image: `cluster.yml --tags k3s` after `--check --diff` shows only the new
+ConfigMap. The manifest changed, so the role's handover runs, but the Deployment did not, so nothing
+rolls and `rollout status` returns at once. Kubelet projects the newly created optional ConfigMap into
+the running pod's volume on a later sync, and `reload` (in the `.:53` block) re-reads imported files
+too - checked offline: a `*.server` file added to the mounted directory of a running CoreDNS is served
+after the next reload check, with no restart. Until then the zone is forwarded like any other name,
+which is why the catalogue command lands only after the live check has passed (siem contract P5:
+CoreDNS, then the probe from a sandbox pod, then the catalogue). Rollback: revert the template,
+re-run the role, then `kubectl -n kube-system delete configmap coredns-custom --ignore-not-found`
+(k3s's apply may already have pruned it with the manifest; deleting it is what makes sure).
