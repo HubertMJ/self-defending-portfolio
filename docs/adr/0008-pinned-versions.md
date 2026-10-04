@@ -30,3 +30,11 @@ Version, hash and fingerprint live in `group_vars/siem_nodes.yml` next to the ot
 **Consequences.** A rebuild installs exactly the reviewed package or stops before installing anything.
 A repository key rotation stops the role until the new fingerprint is reviewed and pinned; the
 current key's signing subkey expires on 2027-03-06.
+
+## Amendment 2026-10-04: Fluent Bit, pinned the same way (ADR 0034, P2)
+
+**Decision.** Fluent Bit 5.1.3 from packages.fluentbit.io (suite `trixie`) follows the rule above:
+primary key fingerprint `C3C0 A285 34B9 293E AF51 FABD 9F9D DC08 3888 C1CD` asserted before trust (the
+key has no expiry), package SHA256 asserted against the signed index, apt preference 1001, dpkg hold.
+Its pins live in `group_vars/all.yml`, because both groups run it; the CI test builds the same
+package into the pinned debian:13 image and checks the same hash.

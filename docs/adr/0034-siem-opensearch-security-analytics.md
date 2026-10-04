@@ -453,3 +453,78 @@ skipped on k3s01, and the golden render proves k3s01's files and file plans unch
 - Bursts of new SSH connections from the operator network into the Siem zone have been dropped for
   minutes at a time (nothing reaches siem01, nothing is logged there). Tooling keeps to one connection
   per run.
+
+## Amendment 2026-10-04: ingest as built (P2)
+
+**Context.** P2 connects the sources: Fluent Bit on k3s01 for the six cluster and host streams and on
+siem01 for its own logs, the audit policy, Hubble's flow export, Falco's own heartbeat and the network
+path of the one SIEM client in the cluster. k3s01 and the cluster change only in an announced
+maintenance window; everything was first proven offline (pinned Fluent Bit in containers against a
+throwaway OpenSearch shaped like siem01) and on siem01 itself.
+
+**Decision.**
+- **One shipper, two profiles.** Role `fluent_bit` (Fluent Bit 5.1.3, pinned like OpenSearch: key
+  fingerprint, indexed SHA256, apt preference, hold), applied by `playbooks/ingest.yml` on k3s01 and
+  by `siem.yml` on siem01 (F4). One opensearch output per stream, `Write_Operation create`, no id (the
+  `sdp-final` pipeline refuses any), certificate-only TLS with `tls.verify` and
+  `tls.verify_hostname` on. **N5 is closed without the fallback:** Fluent Bit verifies an IP address
+  against the node certificate's IP SAN (live on siem01 via 127.0.0.1; in the offline test via the
+  container's IP SAN), and refuses a name the certificate does not carry; `tls.vhost` stays unused.
+- **Keys never travel.** Each host makes its own 32-byte HMAC key (root 0400, never fetched, rotation
+  = deletion). k3s01 makes its client key and sends only the CSR, which siem01 signs through
+  `sign_client_csr.yml` for `shipper-k3s01-g<N>` (generation from `group_vars/siem_nodes.yml`);
+  siem01 uses its local `shipper-siem01` identity in place. Both keys reach the unit as systemd
+  credentials (`LoadCredential`), readable only through `$CREDENTIALS_DIRECTORY`.
+- **The unit is the sandbox.** User `fluent-bit`, the single capability `CAP_DAC_READ_SEARCH`
+  (pod, audit and journal files are root-only), `ProtectSystem=strict`, `ProtectHome`, `PrivateTmp`,
+  `@system-service` syscalls, `AF_INET AF_UNIX`, `MemoryMax=192M`, and `InaccessiblePaths` for the k3s
+  kubeconfig, server TLS, credentials, token, agent and kubelet directories, shadow files, `/etc/ssh`
+  and `/root` - plus, because that capability reads any file, siem01's PKI directory and OpenSearch's
+  configuration and data. An `ExecStartPre` check, running inside the same sandbox, refuses the start
+  if it can read the k3s kubeconfig (k3s01) or the admin key (siem01): with `InaccessiblePaths`
+  removed the unit does not start ("sandbox broken", tested). Metrics listen on 127.0.0.1:2020 only.
+- **One filter decides what leaves a host.** `sdp.lua` builds every record from
+  `siem/fields/<source>.yaml` field by field (nothing else is forwarded, so client-sent
+  `event.overwrite`/`event.ingested` are gone by construction, F1), pseudonymises with HMAC-SHA256 in
+  pure LuaJIT (`system:` identities verbatim, F3), applies F2 to the audit log (mutating verbs on
+  `sandbox*` objects or by Talon's or the API's ServiceAccount, any code >= 400, any
+  exec/attach/portforward), keeps Hubble's `.flow` records only (F13), the API's `siem.run`/
+  `siem.command` lines only and keyed auditd records only, and sets each record's time from the
+  event. It refuses to start on a missing or short key, on an unknown transform and when the
+  RFC 4231 known-answer test fails; an error on one record drops that record. CI runs it under the
+  pinned Fluent Bit against RFC 4231 cases 2, 6 and 7 and Python's `hmac` (`tests/siem/lua-hmac.sh`).
+- **Audit policy.** `authentication.k8s.io` has its own `Metadata` rule ahead of the
+  `RequestResponse` rule (TokenReviews carry bearer tokens); applied by `cluster.yml --tags k3s`
+  (one k3s restart, in the window).
+- **Hubble export.** `hubble.export.static` in both Cilium value sets: the four sandbox allow-list
+  filters and the field mask without addresses, node names or labels; `check-cilium-values.sh` now
+  also refuses any other mask field or filter. **N6, statically:** Cilium 1.19.8's own field-mask code
+  accepts the mask including `l7.dns.query`; the runtime check is L9 after the agent roll.
+- **Falco's heartbeat.** `metrics: {enabled, interval 5m, output_rule}` with every counter family off.
+  **N7 is closed:** the pinned Falco 0.45.0 writes the snapshot as rule "Falco internal: metrics
+  snapshot" at priority **Informational** (measured with the chart's rendered falco.yaml, schema
+  valid), below Falcosidekick's `notice`, so neither Talon nor the API's alert count sees it (L15);
+  `sdp.lua` keeps only rule, priority and source of it (the snapshot names the host and its address).
+- **siem01's stream also carries OpenSearch's security audit log** (`opensearch.audit.*` fields;
+  the certificate identity verbatim, the remote address pseudonymised).
+- **Network.** CCNP `siem-egress-deny` (its own Application) denies 10.4.2.10 to every pod outside
+  `portfolio-api`; the API's CNP allows 10.4.2.10:9200 (F9). The API's certificate is the KSOPS
+  Secret `portfolio-api-siem`, made by `scripts/siem-api-cert.sh` (key generated on the operator host,
+  CSR signed on siem01, `sops`-encrypted before it lands in the tree), mounted read-only 0440 to the
+  pod's `fsGroup`, optional.
+- **Buffering and caps.** Chunks on disk, 1 GB per stream, retries backing off to 5 minutes and given
+  up after 120 (longer than the lag monitor's 6 hours); throttle 50 records/s for the audit log and
+  20/s for the others, averaged over 5 minutes (a 5-second window dropped 1 217 records of one
+  `make siem` run on siem01), drops counted in the metrics endpoint. A retried chunk re-sends the items that
+  had succeeded: without ids (refused by design) a retry can duplicate documents; duplicates are
+  harmless to an append-only store and visible by their identical content.
+- **Monitors.** `ingest silent siem01` and `evidence lag` are on with P2; the six k3s01 `ingest
+  silent` monitors and `falco metrics silent` go on in the window, once their sources are live.
+
+**Consequences.**
+- A Fluent Bit 5.1.3 defect surfaced in the offline test: a heartbeat input with `Flush_On_Startup`
+  crashed the engine (its first chunk was picked up as backlog). Heartbeats therefore start one
+  minute after a (re)start; the ingest-silent window is 10 minutes.
+- siem01's own stream holds the gateway's discovery broadcast every 10 s as nft drops (about 8 600
+  small documents a day); left in, it is real traffic the firewall drops.
+- The hubble fixture is synthetic until the exporter runs; L9 replaces it with a capture.
