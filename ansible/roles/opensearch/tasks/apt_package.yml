@@ -34,11 +34,30 @@
     update_cache: true
   when: opensearch_pkg_repo.changed  # noqa: no-handler - the index is needed by the next task, not at the end
 
+# A run that added the repository but stopped before the refresh leaves no index for it; the
+# record is then missing and the index is refreshed once before reading it again (review L6).
 - name: Read the record in the signed index of {{ opensearch_pkg_name }}
   ansible.builtin.command:
     cmd: "apt-cache show {{ opensearch_pkg_name }}={{ opensearch_pkg_version }}"
-  register: opensearch_pkg_record
+  register: opensearch_pkg_record_first
   changed_when: false
+  failed_when: false
+
+- name: Refresh the apt index when the record is missing, {{ opensearch_pkg_name }}
+  ansible.builtin.apt:
+    update_cache: true
+  when: opensearch_pkg_record_first.rc != 0
+
+- name: Read the record again after the refresh of {{ opensearch_pkg_name }}
+  ansible.builtin.command:
+    cmd: "apt-cache show {{ opensearch_pkg_name }}={{ opensearch_pkg_version }}"
+  register: opensearch_pkg_record_second
+  changed_when: false
+  when: opensearch_pkg_record_first.rc != 0
+
+- name: Keep the record of {{ opensearch_pkg_name }}
+  ansible.builtin.set_fact:
+    opensearch_pkg_record: "{{ opensearch_pkg_record_second if opensearch_pkg_record_first.rc != 0 else opensearch_pkg_record_first }}"
 
 - name: Assert the indexed SHA256 equals the pin of {{ opensearch_pkg_name }}
   ansible.builtin.assert:
