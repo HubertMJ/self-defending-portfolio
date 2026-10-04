@@ -79,10 +79,12 @@ check "nftables has no kube-apiserver rule" absent '6443|kube-apiserver' "$work/
 check "nftables has no pod/service CIDR" absent '10\.42\.|10\.43\.' "$work/siem-rules.nft"
 check "nftables has no Cilium rule" absent 'cilium' "$work/siem-rules.nft"
 check "nftables accepts 9200/tcp from 10.4.1.20/32 only" \
-  test "$(grep -E 'dport 9200' "$s/nftables.conf" | tr -s ' ' | sed 's/^ //')" = \
+  test "$(grep -E 'dport 9200 accept' "$s/nftables.conf" | tr -s ' ' | sed 's/^ //')" = \
   'ip saddr { 10.4.1.20/32 } tcp dport 9200 accept comment "opensearch"'
 check "nftables accepts only ports 22 and 9200" \
   test "$(grep -oE 'dport [0-9{ ,}]+ accept' "$s/nftables.conf" | grep -oE '[0-9]+' | sort -n | tr '\n' ' ')" = '22 9200 '
+check "nftables caps 9200/tcp from 10.4.1.20/32 at 4 mbytes/second, ahead of the established accept" \
+  test "$(grep -nE 'dport 9200 limit rate over 4 mbytes/second counter drop|ct state established,related accept' "$s/nftables.conf" | cut -d: -f2 | tr -s ' ' | cut -c1-20 | tr '\n' '|')" = ' ip saddr { 10.4.1.2| ct state establishe|'
 check "nftables input and forward chains drop by default" \
   test "$(grep -c 'policy drop;' "$s/nftables.conf")" = 2
 check "sysctl has no rp_filter, forwarding or kubelet keys" \

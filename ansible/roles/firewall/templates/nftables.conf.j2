@@ -26,6 +26,11 @@ table inet filter {
         type filter hook input priority filter; policy drop;
 
         iif lo accept comment "loopback"
+{% for service in firewall_services if service.rate_limit is defined %}
+        # Byte-rate cap per service, ahead of the established/related accept so it also applies to
+        # the bulk of a connection: a flooding client loses packets instead of filling the disk.
+        ip saddr { {{ service.sources | join(', ') }} } {{ service.proto }} dport {{ service.port }} limit rate over {{ service.rate_limit }} counter drop comment "{{ service.name }} rate cap"
+{% endfor %}
         ct state established,related accept
         ct state invalid drop
 
@@ -67,12 +72,12 @@ table inet filter {
     # direction) and accepts it in its own iptables INPUT chain; this chain must agree.
     meta mark & 0x00000f00 == 0x00000200 accept comment "cilium proxy traffic"
     meta mark & 0x00000f00 == 0x00000a00 accept comment "cilium proxy reply traffic"
-{% endif %}
 {% if firewall_extra_tcp_ports | length > 0 %}
         ip saddr { {{ firewall_cluster_cidrs | join(', ') }} } tcp dport { {{ firewall_extra_tcp_ports | join(', ') }} } accept
 {% endif %}
 {% if firewall_extra_udp_ports | length > 0 %}
         ip saddr { {{ firewall_cluster_cidrs | join(', ') }} } udp dport { {{ firewall_extra_udp_ports | join(', ') }} } accept
+{% endif %}
 {% endif %}
 {% if firewall_log_dropped %}
         limit rate {{ firewall_log_rate }} log prefix "{{ firewall_log_prefix }}" level info

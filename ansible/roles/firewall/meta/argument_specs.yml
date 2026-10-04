@@ -33,6 +33,9 @@ argument_specs:
             type: list
             elements: str
             required: true
+          rate_limit:
+            description: nftables byte rate above which packets from the sources to the port are dropped, e.g. "4 mbytes/second".
+            type: str
       firewall_config_path:
         description: Path of the rendered nftables ruleset.
         type: str

@@ -63,6 +63,29 @@
     fail_msg: "Security Analytics alias components exist: {{ opensearch_config_sap_components.json | default({}) | to_json }}"
     success_msg: No Security Analytics alias component exists.
 
+# L9: every backing index of every stream is under sdp-30d and ISM has not given up on it.
+- name: Read the ISM state of every sdp backing index
+  ansible.builtin.uri:
+    url: "{{ opensearch_config_url }}/_plugins/_ism/explain/.ds-sdp-*"
+    ca_path: "{{ opensearch_config_ca }}"
+    client_cert: "{{ opensearch_config_admin_cert }}"
+    client_key: "{{ opensearch_config_admin_key }}"
+  register: opensearch_config_ism_explain
+
+- name: Assert every sdp backing index is managed by sdp-30d and not failed
+  ansible.builtin.assert:
+    that:
+      - opensearch_config_ism_indices | length >= opensearch_config_sources | length
+      - opensearch_config_ism_indices | rejectattr('value.policy_id', 'defined') | list | length == 0
+      - opensearch_config_ism_indices | map(attribute='value.policy_id') | unique | list == ['sdp-30d']
+      - opensearch_config_ism_indices | selectattr('value.retry_info.failed', 'defined')
+        | selectattr('value.retry_info.failed') | list | length == 0
+    fail_msg: "ISM: {{ opensearch_config_ism_indices | items2dict | to_json }}"
+    success_msg: "{{ opensearch_config_ism_indices | length }} backing indices, all under sdp-30d, none failed."
+  vars:
+    opensearch_config_ism_indices: >-
+      {{ opensearch_config_ism_explain.json | dict2items | selectattr('key', 'match', '^\.ds-sdp-') | list }}
+
 - name: Wait for green health
   ansible.builtin.uri:
     url: "{{ opensearch_config_url }}/_cluster/health?wait_for_status=green&timeout=50s"

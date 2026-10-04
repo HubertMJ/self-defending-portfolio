@@ -124,6 +124,27 @@
     opensearch_config_obj_body: "{{ lookup('ansible.builtin.file', 'ism-sdp-30d.json') }}"
     opensearch_config_obj_cas: true
 
+# A policy update reaches indices already managed only through change_policy (they keep the
+# version they started with); ISM switches each one once its current action is done.
+- name: Move every sdp backing index to the new version of sdp-30d
+  ansible.builtin.uri:
+    url: "{{ opensearch_config_url }}/_plugins/_ism/change_policy/.ds-sdp-*"
+    method: POST
+    body:
+      policy_id: sdp-30d
+    body_format: json
+    ca_path: "{{ opensearch_config_ca }}"
+    client_cert: "{{ opensearch_config_admin_cert }}"
+    client_key: "{{ opensearch_config_admin_key }}"
+  register: opensearch_config_change_policy
+  changed_when: true
+  failed_when: >-
+    opensearch_config_change_policy.status != 200
+    or opensearch_config_change_policy.json.failures | default(false) | bool
+  when:
+    - opensearch_config_obj_written | bool
+    - opensearch_config_obj_current.status == 200
+
 - name: Write the template and create the data stream of each source
   ansible.builtin.include_tasks: stream.yml
   loop: "{{ opensearch_config_sources }}"

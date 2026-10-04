@@ -17,7 +17,9 @@ admin_cidrs:
 ssh_hardening_allow_users: [ansible]
 firewall_admin_cidrs: "{{ admin_cidrs }}"
 firewall_services:
-  - {name: opensearch, port: 9200, proto: tcp, sources: [10.4.1.20/32]}
+  # The cap keeps a node attacker from filling the disk at line rate; Fluent Bit ships far less
+  # (L13 budget: <= 300 MB a day), and recovery from a hit cap is the operator's (bootstrap 9.6).
+  - {name: opensearch, port: 9200, proto: tcp, sources: [10.4.1.20/32], rate_limit: 4 mbytes/second}
 # Dashboards listens on 127.0.0.1 and is reached only through an SSH tunnel
 # (ssh -N -L 5601:127.0.0.1:5601 ansible@10.4.2.10); sshd permits that one destination.
 ssh_hardening_allow_tcp_forwarding: local

@@ -1,6 +1,6 @@
 {
   "policy": {
-    "description": "sdp evidence: roll over daily, write-block the rolled index in the same state (S0-h), delete at 30 days",
+    "description": "sdp evidence: roll over daily or at 2 GB, write-block the rolled index in the same state (S0-h), delete at 30 days",
     "default_state": "hot",
     "states": [
       {
@@ -8,19 +8,20 @@
         "actions": [
           {
             "retry": {
-              "count": 3,
-              "backoff": "exponential",
+              "count": 30,
+              "backoff": "constant",
               "delay": "1m"
             },
             "rollover": {
               "min_index_age": "1d",
+              "min_primary_shard_size": "2gb",
               "copy_alias": false
             }
           },
           {
             "retry": {
-              "count": 3,
-              "backoff": "exponential",
+              "count": 30,
+              "backoff": "constant",
               "delay": "1m"
             },
             "read_only": {}
@@ -40,8 +41,8 @@
         "actions": [
           {
             "retry": {
-              "count": 3,
-              "backoff": "exponential",
+              "count": 30,
+              "backoff": "constant",
               "delay": "1m"
             },
             "delete": {}
