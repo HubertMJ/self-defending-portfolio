@@ -39,6 +39,7 @@ decision are appended as dated amendments in the same file.
 | [0033](0033-interactive-terminal-defence-map-twin.md) | The front end becomes interactive: an attacker's terminal, a defence map, an unguarded twin and live stats; real-time-first playback, probe-based quarantine proof, placeholder copy stripped from production | 8 | accepted, amended 2026-10-03 (the mock is not shipped, ADR 0035) |
 | [0034](0034-siem-opensearch-security-analytics.md) | A ready-made SIEM: OpenSearch 3.9 with Security Analytics on its own VM `siem01`, Sigma rules and Alerting monitors synced from git, write-only, certificate-authenticated ingest into daily data streams whose rolled indices are write-blocked, host identities HMAC-pseudonymised, order/periodicity/intervals in the API; a DNS-exfiltration scenario Falco cannot see and correlation catches | 9 | accepted, amended 2026-10-04 (siem01 as built and the S0 results, P1; ingest as built, P2: shipper sandbox, sdp.lua, N5-N7 closed) |
 | [0035](0035-credibility-provenance-evidence-persisted-window.md) | Credibility: provenance on the page (commit, CI run, digests, one checked cosign identity), evidence by default, the 24 h Falco/Talon counters in the persisted stats as hourly buckets, no MockBackend in production, stale Talon/Falcosidekick ReplicaSets pruned | 8 | accepted, amended 2026-10-04 (verify panel at the bottom of the page, linked from the footer) |
+| [0036](0036-correlation-api-incident-model.md) | Correlation on the page: the API as a read-only SIEM client (method/path allow-list, 15 s single-flight poll, 24 h backfill), incidents joined by pod ref with SA correlations as cited evidence, TTI anchored on Talon's audited action, flag match by per-process HMAC, published field by field | 9 | accepted |
 
 Phases 5 and 6 were built on parallel branches and merged together; the numbers they had reserved
 are all in use except 0020 (phase 6 documentation needed no decision of its own), which is released.
@@ -46,7 +47,7 @@ are all in use except 0020 (phase 6 documentation needed no decision of its own)
 runs and command output, 0030 stats and persistence - API; 0031 unguarded twin, 0032 terminal catalogue and
 quarantine latency - cluster; 0033 terminal, defence map, twin view - web). 0034 is the SIEM decision (phase 9);
 0035 makes the existing page verifiable (provenance, evidence, the persisted 24 h window, no mock in production).
-The next free ADR is 0036.
+0036 is the API's half of the SIEM's page section (phase 9). The next free ADR is 0037.
 
 ## Open items carried by accepted ADRs
 
