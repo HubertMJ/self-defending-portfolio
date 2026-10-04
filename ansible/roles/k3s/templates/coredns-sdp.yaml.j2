@@ -101,6 +101,32 @@ data:
   NodeHosts: |
     {{ k3s_node_ip }} {{ ansible_facts['hostname'] }}
 ---
+# Differs from k3s: k3s ships no `coredns-custom`; the Deployment mounts it as an optional volume and
+# the Corefile imports its *.server keys as server blocks of their own. One block: the sinkhole for
+# `exfil.sdp.test`, the zone the terminal's dns-exfil command looks up (ADR 0034, ADR 0017 amendment
+# of 2026-10-03). CoreDNS answers every name in it itself with NXDOMAIN. There is no `forward` in the
+# block, and a query is served by the most specific zone's block alone, so it never falls through to
+# the `.:53` block's forward: the label (the run's flag) cannot reach a resolver outside the homelab,
+# by construction. No `log` either, so CoreDNS writes no query name anywhere. `prometheus` is the
+# evidence: coredns_dns_requests_total{zone="exfil.sdp.test."} counts the lookups while the forward
+# counters stay still (tests/scenarios/run.sh). A file inside the mounted directory: `reload` in the
+# main block re-reads the imports, so a change here needs no pod restart. scripts/lib/
+# check_coredns_sinkhole.py (make validate) refuses any other directive in this block.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: coredns-custom
+  namespace: kube-system
+data:
+  exfil-sinkhole.server: |
+    exfil.sdp.test:53 {
+        errors
+        prometheus :9153
+        template ANY ANY exfil.sdp.test {
+          rcode NXDOMAIN
+        }
+    }
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
