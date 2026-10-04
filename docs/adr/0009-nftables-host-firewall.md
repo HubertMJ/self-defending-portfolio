@@ -18,3 +18,27 @@ to the host (kubelet, host-network components). Dropped packets are logged with 
 - ufw/firewalld are not installed, so there is a single source of truth for host rules.
 - A mistake in the ruleset can lock out SSH: the role validates with `nft -c` before applying and
   the QEMU guest agent (`qm guest exec` from the Proxmox node) is the documented escape hatch, see docs/bootstrap.md.
+
+## Amendment 2026-10-04: a second host, siem01; the k3s rules become group-conditional
+
+**Context.** The SIEM host siem01 (ADR 0034) uses the same hardening roles as k3s01, but nearly
+everything k3s-shaped in them is wrong for it: the kube-apiserver port, the pod and service CIDRs, the
+Cilium interfaces and proxy marks, an accepting forward chain, rp_filter off and forwarding on, the
+kubelet's kernel values and the k3s audit watches.
+
+**Decision.** Each role gets one switch defaulting to membership of the `k3s_nodes` group
+(`firewall_k3s_enabled`, `sysctl_k3s_enabled`, `auditd_k3s_enabled`), so k3s01 keeps exactly what it
+had and every other host gets none of it. The firewall gains a per-service allow-list
+(`firewall_services: [{name, port, proto, sources}]`, one accept rule each); siem01's ruleset is SSH
+from the admin networks, 9200/tcp from 10.4.1.20/32 only, rate-limited ICMP, drop logging - and a
+forward chain with policy drop, since a host without a cluster routes nothing. sysctl is split into
+common hardening keys, the k3s/Cilium keys and host extras (siem01: `vm.max_map_count`,
+`vm.swappiness`); auditd renders host-specific watches into `60-extra.rules` (siem01: OpenSearch's
+configuration and plugins, `/etc/sdp-siem`, the rules sync) and removes `50-k3s.rules` where the switch
+is off. `tests/golden/render.sh` renders all four roles with each host's real inventory: k3s01's files
+must equal, byte for byte, the files rendered the same way from the commit before the split
+(b374c0e); siem01's must have the siem01 shape.
+
+**Consequences.** The split cannot change k3s01 unnoticed: dropping the default of any switch fails
+the golden test, and `hardening.yml --check --diff --limit k3s01` stays the live gate. The gateway's
+zone policy and the host firewall still express the same allow-list for siem01, twice on purpose.
