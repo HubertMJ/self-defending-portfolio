@@ -50,7 +50,7 @@
     - role: opensearch
       tags: [opensearch]
     - role: opensearch_dashboards
-      tags: [dashboards]
+      tags: [opensearch_dashboards]
     - role: opensearch_config
       tags: [opensearch_config]
 
