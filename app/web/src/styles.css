@@ -563,13 +563,6 @@ main {
   margin-top: 1.75rem;
 }
 
-/* The one way from the hero to the #verify panel (ADR 0035, amended 2026-10-04): a text link, not a
-   third button and not a block of data. */
-.hero__verify {
-  align-self: center;
-  font-size: 0.9rem;
-}
-
 .loop {
   margin: 0;
   padding: 1.25rem;
