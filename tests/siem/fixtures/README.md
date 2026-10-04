@@ -124,3 +124,31 @@ authentication method off for the refused login.
 Note: until auditd restarts after its configuration got `name_format = HOSTNAME`, records carry
 `node=(null) ` (a SIGHUP reload does not resolve the name); after the reboot they carry
 `node=siem01 `. The parser accepts any `node=<x> ` prefix and drops it.
+
+## api (P2 `api-events`, 2026-10-04)
+
+| file | lines | what each line is |
+|---|---|---|
+| api.log | 24 | raw CRI lines of the API container's stdout as Fluent Bit tails them from /var/log/pods/portfolio-api_portfolio-api-*/api/*.log: 21 `siem.run`/`siem.command` lines (a terminal run - whoami, read-flag (achieved), touch-bin (refused, exit 1), read-shadow (detected, killed) - and a one-click compare run with its guarded and unguarded arm) and 3 other API lines (`listening`, `terminal command exec ended`, `siem events dropped`) that the shipper must drop |
+
+Not captured live: the lines did not exist before this phase. The JSON bodies of the 21 siem lines are
+app/api/internal/siemlog/testdata/lines.golden (written by the package's golden test from real runner
+event types through a real hub) with slog's `time` key put back in front; the CRI timestamps are local
+time (+02:00) 180 us after it, as on k3s01. The three other lines are synthetic, shaped like the API's own log calls: the
+`listening` line carries the live Deployment's attack limits (60 per IP / 600 global from its env, not the code
+defaults 3/30) and a made-up commit; `terminal command exec ended` and `siem events dropped` carry made-up values.
+The read-flag command's output (the flag) is in no line: output events are never written. Regenerate after
+a golden change: same bodies, same order. Field allow-list: siem/fields/api.yaml.
+
+## hubble, falco metrics, siem01 security audit (P2 `ingest`, 2026-10-04)
+
+| file | lines | what each line is |
+|---|---|---|
+| hubble.log | 6 | SYNTHETIC export records in the shape of Cilium 1.19's static exporter (`{"flow":{...},"node_name":"k3s01","time":...}`, protojson field names) with the field mask of cluster/apps/cilium.yaml: a DNS request (query in mixed case, the dns-exfil label shape) and its NXDOMAIN response between a sandbox pod and CoreDNS, a policy drop of a quarantined pod's DNS packet (with an `IP` block the mask would have removed, to prove the projection drops it anyway), an ingress flow from the API to a twin pod, and two non-flow records (`lost_events`, `agent_event`) that must be dropped (F13) |
+| falco-metrics.log | 1 | the pinned Falco 0.45.0's `Falco internal: metrics snapshot` (priority Informational), captured from the image in nodriver mode with every counter family off, wrapped as a CRI line; hostname and the interface address set to k3s01's to prove they are dropped (F12, N7) |
+| siem01-osaudit.log | 3 | /var/log/opensearch/sdp-security-audit.log on siem01 as written (`[<time>] <JSON>`): an SSL_EXCEPTION (a client without certificate, P1 acceptance item 5), a MISSING_PRIVILEGES (dashboards-g1 refused a DELETE on sdp-falco, P1 L8) and an INDEX_EVENT of the admin |
+
+hubble.log is replaced by a live capture from /var/run/cilium/hubble/events.log on k3s01 after the
+exporter is rolled out in the P2 maintenance window (L9); until then it is the shape the exporter is
+documented to write, not a capture. The address-free projection does not depend on it: sdp.lua reads
+only the listed paths of `.flow`.
