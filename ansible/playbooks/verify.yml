@@ -168,13 +168,17 @@
       changed_when: false
 
     # Every accepting rule that matches a destination port, as port numbers.
-    - name: Assert the input chain drops by default and accepts only 22 and 9200
+    - name: Assert the input chain drops by default and accepts only 22 and 9200, each from its own sources
       ansible.builtin.assert:
         that:
           - verify_nft_chain | map(attribute='policy') | list == ['drop']
           - verify_nft_ports == [22, 9200]
-        fail_msg: "Input chain policy {{ verify_nft_chain | map(attribute='policy') | list }}, accepted ports {{ verify_nft_ports }}."
-        success_msg: The input chain drops by default and accepts only 22 and 9200.
+          - verify_nft_sources['9200'] | default([]) == ['10.4.1.20']
+          - verify_nft_sources['22'] | default([]) | sort == firewall_admin_cidrs | sort
+        fail_msg: >-
+          Input chain policy {{ verify_nft_chain | map(attribute='policy') | list }}, accepted ports {{ verify_nft_ports }},
+          sources {{ verify_nft_sources }}.
+        success_msg: "Default drop; 22 from {{ verify_nft_sources['22'] }}, 9200 from {{ verify_nft_sources['9200'] }} only."
       vars:
         verify_nft_items: "{{ (verify_nft.stdout | from_json).nftables }}"
         verify_nft_chain: "{{ verify_nft_items | selectattr('chain', 'defined') | map(attribute='chain') | list }}"
@@ -190,6 +194,27 @@
           {%-   endif -%}
           {%- endfor -%}
           {{ ports | map('int') | unique | sort }}
+        # Port -> source addresses of its accepting rules (prefixes as addr/len), from the live ruleset.
+        verify_nft_sources: >-
+          {%- set out = {} -%}
+          {%- for rule in verify_nft_items | selectattr('rule', 'defined') | map(attribute='rule') -%}
+          {%-   if rule.expr | selectattr('accept', 'defined') | list | length > 0 -%}
+          {%-     set m = rule.expr | selectattr('match', 'defined') | map(attribute='match') | list -%}
+          {%-     set port = m | selectattr('left.payload.field', 'defined') | selectattr('left.payload.field', 'equalto', 'dport')
+                     | map(attribute='right') | list -%}
+          {%-     set src = m | selectattr('left.payload.field', 'defined') | selectattr('left.payload.field', 'equalto', 'saddr')
+                     | map(attribute='right') | list -%}
+          {%-     if port | length == 1 and src | length == 1 -%}
+          {%-       set addrs = src[0].set if src[0] is mapping and src[0].set is defined else [src[0]] -%}
+          {%-       set names = [] -%}
+          {%-       for a in addrs -%}
+          {%-         set _ = names.append(a.prefix.addr ~ '/' ~ a.prefix.len if a is mapping and a.prefix is defined else a | string) -%}
+          {%-       endfor -%}
+          {%-       set _ = out.update({port[0] | string: names}) -%}
+          {%-     endif -%}
+          {%-   endif -%}
+          {%- endfor -%}
+          {{ out }}
 
     - name: Read the audit status and rules
       ansible.builtin.command:
@@ -236,6 +261,46 @@
           - verify_mounts.results[1].stdout is not search('^/dev/sda1 ')
         fail_msg: "/tmp is noexec or the snapshot path is not on its own disk: {{ verify_mounts.results | map(attribute='stdout') | list }}"
         success_msg: /tmp allows executables; snapshots go to their own disk.
+
+    - name: Read the label of the filesystem holding the snapshots
+      ansible.builtin.command:
+        cmd: findmnt --noheadings --output LABEL --mountpoint /var/lib/opensearch-snapshots
+      register: verify_snap_label
+      changed_when: false
+      failed_when: false
+
+    - name: Assert the snapshots are on the labelled data disk
+      ansible.builtin.assert:
+        that:
+          - verify_snap_label.stdout | trim == 'siem-snap'
+        fail_msg: "/var/lib/opensearch-snapshots is not the siem-snap filesystem ({{ verify_snap_label.stdout | trim }})."
+        success_msg: Snapshots are on the siem-snap filesystem.
+
+    # The k3s parts of the shared roles are off here: strict reverse-path filtering, no Cilium
+    # rp_filter drop-in, no k3s audit rules file.
+    - name: Read the effective reverse-path filtering and the k3s-only files
+      ansible.builtin.command:
+        cmd: >-
+          cat /proc/sys/net/ipv4/conf/all/rp_filter /proc/sys/net/ipv4/conf/{{ ansible_default_ipv4.interface }}/rp_filter
+          /proc/sys/net/ipv4/ip_forward
+      register: verify_rp
+      changed_when: false
+
+    - name: Look for the k3s-only files
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      loop: [/etc/sysctl.d/99-cilium-rp-filter.conf, /etc/audit/rules.d/50-k3s.rules]
+      register: verify_k3s_files
+
+    - name: Assert strict rp_filter, no forwarding and no k3s-only files
+      ansible.builtin.assert:
+        that:
+          - verify_rp.stdout_lines == ['1', '1', '0']
+          - verify_k3s_files.results | selectattr('stat.exists') | list | length == 0
+        fail_msg: >-
+          rp_filter all/{{ ansible_default_ipv4.interface }} and ip_forward = {{ verify_rp.stdout_lines | join('/') }};
+          k3s-only files present: {{ verify_k3s_files.results | selectattr('stat.exists') | map(attribute='item') | list }}.
+        success_msg: rp_filter strict, forwarding off, no Cilium or k3s files.
 
     # 9300 (transport) and 5601 (Dashboards) never leave the loopback; 9200 is on the loopback and
     # the VLAN address only.
@@ -289,6 +354,53 @@
           - not verify_pa.json.rcaEnabled
         fail_msg: "Performance Analyzer is on: {{ verify_pa.json }}"
         success_msg: Performance Analyzer and RCA are off.
+
+    - name: Read the ops monitors
+      ansible.builtin.uri:
+        url: "{{ verify_os_url }}/_plugins/_alerting/monitors/_search"
+        method: POST
+        body: {size: 50, query: {match_all: {}}}
+        body_format: json
+        ca_path: "{{ verify_os_ca }}"
+        client_cert: "{{ verify_os_cert }}"
+        client_key: "{{ verify_os_key }}"
+      register: verify_monitors
+
+    - name: Assert the P1 ops monitors exist once each and are enabled
+      ansible.builtin.assert:
+        that:
+          - verify_monitor_enabled | length == 4
+          - verify_monitor_enabled | unique | list == [true]
+        fail_msg: "P1 monitors (name -> enabled): {{ verify_monitor_state }}"
+        success_msg: "evidence rewritten, disk watermark, snapshot failing and ism stalled are enabled."
+      vars:
+        verify_monitor_state: >-
+          {{ verify_monitors.json.hits.hits | map(attribute='_source')
+             | selectattr('name', 'in', ['evidence rewritten', 'disk watermark', 'snapshot failing', 'ism stalled'])
+             | items2dict(key_name='name', value_name='enabled') }}
+        verify_monitor_enabled: >-
+          {{ verify_monitors.json.hits.hits | map(attribute='_source')
+             | selectattr('name', 'in', ['evidence rewritten', 'disk watermark', 'snapshot failing', 'ism stalled'])
+             | map(attribute='enabled') | list }}
+
+    - name: Read the ISM state of every sdp backing index
+      ansible.builtin.uri:
+        url: "{{ verify_os_url }}/_plugins/_ism/explain/.ds-sdp-*"
+        ca_path: "{{ verify_os_ca }}"
+        client_cert: "{{ verify_os_cert }}"
+        client_key: "{{ verify_os_key }}"
+      register: verify_ism
+
+    - name: Assert every sdp backing index is under sdp-30d and ISM has not failed on it
+      ansible.builtin.assert:
+        that:
+          - verify_ism_indices | length >= 7
+          - verify_ism_indices | map(attribute='value.policy_id', default='none') | unique | list == ['sdp-30d']
+          - verify_ism_indices | selectattr('value.retry_info.failed', 'defined') | selectattr('value.retry_info.failed') | list | length == 0
+        fail_msg: "ISM: {{ verify_ism_indices | items2dict | to_json }}"
+        success_msg: "{{ verify_ism_indices | length }} backing indices under sdp-30d, none failed."
+      vars:
+        verify_ism_indices: "{{ verify_ism.json | dict2items | selectattr('key', 'match', '^\\.ds-sdp-') | list }}"
 
     # M7: renewals happen at 45 days left; 30 days means renewal is not working.
     - name: Read the validity of every node and client certificate
