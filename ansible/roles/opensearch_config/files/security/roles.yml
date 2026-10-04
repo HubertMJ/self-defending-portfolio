@@ -1,6 +1,6 @@
 ---
-# Managed by Ansible (role: opensearch_config). The sdp roles EXACTLY as proven 108/108 in the S0
-# spike (siem contract S0-#5, .omc/artifacts/siem-s0-final/sdp-roles.final.yml). Nothing else is
+# Managed by Ansible (role: opensearch_config). The sdp roles as proven 108/108 in the S0 spike
+# (siem contract S0-#5), with one narrowing from the P1 review: sdp_api_read reads named streams only. Nothing else is
 # defined here, so the reserved roles of the package's default roles.yml (among them
 # security_analytics_full_access) do not exist. Never map anyone to the static kibana_server role:
 # like security_analytics_full_access it carries index-template rights, i.e. the power to drop
@@ -30,7 +30,10 @@ sdp_api_read:
     - "cluster:admin/opendistro/alerting/alerts/get"
     - "cluster:admin/opendistro/alerting/monitor/search"
   index_permissions:
-    - index_patterns: ["sdp-*", "siem-sync"]
+    # Review L6: the k3s01 streams and the sync record by name - not sdp-siem01 (the SIEM host's own
+    # logins and audit records are host data the page never shows, ADR 0034 "counts only"), and not
+    # any future sdp-* stream by accident. A search must name the streams; sdp-* is refused.
+    - index_patterns: ["sdp-falco", "sdp-talon", "sdp-hubble", "sdp-k8s-audit", "sdp-api", "sdp-host", "siem-sync"]
       allowed_actions: ["read"]
     - index_patterns: [".opensearch-sap-correlation-history*"]   # S0: correlations list searches it as the caller
       allowed_actions: ["read"]

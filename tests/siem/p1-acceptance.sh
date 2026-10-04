@@ -283,6 +283,26 @@ else bad "9 SA alias components exist: $(head -c 300 "$T/body")"; fi
 exit $fail
 REMOTE
 
+echo "### L6 (review): the same identity mapped to the API's read role reads the named k3s01 streams only"
+ansible_siem --tags opensearch_config -e opensearch_config_test_identity=true \
+  -e opensearch_config_test_identity_role=sdp_api_read >"$work/map-read.log" 2>&1 || { tail -n 30 "$work/map-read.log"; fail=1; }
+ssh_siem "sudo T=$remote_tmp bash -s" <<'REMOTE' || fail=1
+set -uo pipefail
+fail=0
+code() { # <want> <description> <METHOD> <path> [body]
+  local want=$1 desc=$2 m=$3 p=$4 b=${5-} got
+  got=$(curl -sS -m 30 -o "$T/body" -w '%{http_code}' --cacert /etc/opensearch/certs/ca.crt --cert "$T/shipper-test.crt" \
+    --key "$T/shipper-test.key" -X "$m" -H 'Content-Type: application/json' ${b:+--data-binary "$b"} "https://127.0.0.1:9200$p")
+  if [ "$got" = "$want" ]; then echo "ok   L6 $desc -> $got"; else echo "FAIL L6 $desc -> $got, want $want: $(head -c 200 "$T/body")"; fail=1; fi
+}
+code 200 "api read: search the six k3s01 streams by name" GET "/sdp-falco,sdp-talon,sdp-hubble,sdp-k8s-audit,sdp-api,sdp-host/_search?size=0"
+code 403 "api read: search sdp-siem01" GET "/sdp-siem01/_search?size=0"
+code 403 "api read: search sdp-* (a future stream is not readable by accident)" GET "/sdp-*/_search?size=0"
+code 403 "api read: write to sdp-falco" POST /sdp-falco/_doc '{"@timestamp":"2026-10-04T00:00:00Z"}'
+code 200 "api read: Alerting alerts" GET /_plugins/_alerting/monitors/alerts
+exit $fail
+REMOTE
+
 echo "### L8 from the operator machine"
 if curl -sS -m 5 -o /dev/null "http://$HOST:5601" 2>/dev/null; then echo "FAIL L8 http://$HOST:5601 answered"; fail=1
 else echo "ok   L8 http://$HOST:5601 is not reachable"; fi

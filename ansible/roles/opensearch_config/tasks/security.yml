@@ -14,7 +14,7 @@
       {%-       set _ = users.append(identity ~ '-g' ~ generation) -%}
       {%-     endfor -%}
       {%-   endfor -%}
-      {%-   if role == 'sdp_shipper_k3s01' and opensearch_config_test_identity | bool -%}
+      {%-   if role == opensearch_config_test_identity_role and opensearch_config_test_identity | bool -%}
       {%-     set _ = users.append('shipper-test-g1') -%}
       {%-   endif -%}
       {%-   set _ = mapping.update({role: users | sort}) -%}

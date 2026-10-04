@@ -26,6 +26,10 @@ argument_specs:
         description: Map shipper-test-g1 to the k3s01 shipper role (only while tests/siem/p1-acceptance.sh runs).
         type: bool
         default: false
+      opensearch_config_test_identity_role:
+        description: sdp role the test identity is mapped to.
+        type: str
+        default: sdp_shipper_k3s01
       opensearch_config_retention:
         description: Retention of findings, alerts and correlations.
         type: str

@@ -18,6 +18,8 @@ opensearch_config_extra_generations: {}
 # The temporary test identity of tests/siem/p1-acceptance.sh, mapped to the k3s01 shipper role only
 # while the test runs; the test fails if the mapping is still there afterwards.
 opensearch_config_test_identity: false
+# The role the test identity is mapped to (the acceptance test also checks the API's read role).
+opensearch_config_test_identity_role: sdp_shipper_k3s01
 
 # Retention of findings, alerts and correlations, equal to the ISM delete age of the documents they
 # point at (ADR 0034).
