@@ -70,6 +70,16 @@ const (
 // ErrNotAllowed is a request outside the allow-list: always a programming error.
 var ErrNotAllowed = errors.New("siem: request outside the read-only allow-list")
 
+// StatusError is an answer other than 200 (a redirect is one too: it is never followed).
+type StatusError struct {
+	Method, Path string
+	Code         int
+}
+
+func (e *StatusError) Error() string {
+	return fmt.Sprintf("siem: %s %s: HTTP %d", e.Method, e.Path, e.Code)
+}
+
 var logTypePattern = regexp.MustCompile(`^sdp_[a-z0-9_]{1,40}$`)
 
 // Config: URL is SIEM_URL (https://10.4.2.10:9200), CertDir holds tls.crt, tls.key and ca.crt.
@@ -192,7 +202,7 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 		return err
 	}
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("siem: %s %s: HTTP %d", method, path, resp.StatusCode)
+		return &StatusError{Method: method, Path: path, Code: resp.StatusCode}
 	}
 	if len(data) > maxBody {
 		return fmt.Errorf("siem: %s %s: response over %d bytes", method, path, maxBody)
