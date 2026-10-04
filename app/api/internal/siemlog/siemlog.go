@@ -33,6 +33,7 @@ import (
 	"log/slog"
 	"regexp"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -79,6 +80,10 @@ type Recorder struct {
 	cfg     Config
 	ch      chan events.Event
 	dropped atomic.Uint64
+	// mu orders Record against Run's close: once closed, nothing more is queued, so the final drain
+	// empties the queue for good and every later event is counted as dropped.
+	mu     sync.Mutex
+	closed bool
 	// runs is touched by Run's goroutine only.
 	runs map[string]runInfo
 }
@@ -106,9 +111,15 @@ func New(cfg Config) *Recorder {
 }
 
 // Record queues a run or command event and returns at once; other event types are ignored. A full
-// queue drops the event and counts it.
+// queue, or a recorder whose Run has ended, drops the event and counts it.
 func (r *Recorder) Record(ev events.Event) {
 	if ev.Type != "run" && ev.Type != "command" {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.closed {
+		r.dropped.Add(1)
 		return
 	}
 	select {
@@ -121,8 +132,9 @@ func (r *Recorder) Record(ev events.Event) {
 // Dropped is the number of events dropped since start.
 func (r *Recorder) Dropped() uint64 { return r.dropped.Load() }
 
-// Run writes the queued events until ctx ends, then writes what is still queued and returns. Give it
-// a context that ends after the runner's shutdown, so the runs' final states are written too.
+// Run writes the queued events until ctx ends, then closes the recorder (later events count as
+// dropped), writes what is still queued, reports every drop not yet reported, and returns. Give it a
+// context that ends after the runner's shutdown, so the runs' final states are written too.
 func (r *Recorder) Run(ctx context.Context) {
 	t := time.NewTicker(r.cfg.DropReport)
 	defer t.Stop()
@@ -140,6 +152,9 @@ func (r *Recorder) Run(ctx context.Context) {
 		case <-t.C:
 			report()
 		case <-ctx.Done():
+			r.mu.Lock()
+			r.closed = true
+			r.mu.Unlock()
 			for {
 				select {
 				case ev := <-r.ch:

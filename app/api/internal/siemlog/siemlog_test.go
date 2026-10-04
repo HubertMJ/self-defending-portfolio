@@ -380,6 +380,28 @@ func TestFullQueueDropsAndCountsInsteadOfBlocking(t *testing.T) {
 	}
 }
 
+// After Run has ended nothing is queued any more: a late event is counted as dropped, and the final
+// report covers the drops up to the close.
+func TestRecordAfterShutdownCountsAsDropped(t *testing.T) {
+	buf := &bytes.Buffer{}
+	rec := New(Config{Log: slog.New(slog.NewJSONHandler(buf, nil)), Buffer: 1, DropReport: time.Hour, Namespace: "sandbox"})
+	data, _ := json.Marshal(runner.RunEvent{RunID: "3755e65530aa11bb", Scenario: "terminal", State: runner.StateStarted, At: at(0)})
+	ev := events.Event{Type: "run", Data: data}
+	rec.Record(ev)
+	rec.Record(ev) // the queue holds one: dropped before the close
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	rec.Run(ctx) // returns after the final drain and report
+	out := buf.String()
+	if strings.Count(out, `"msg":"siem.run"`) != 1 || !strings.Contains(out, `"msg":"siem events dropped","dropped":1,"dropped_total":1`) {
+		t.Fatalf("final drain/report:\n%s", out)
+	}
+	rec.Record(ev)
+	if rec.Dropped() != 2 || len(rec.ch) != 0 {
+		t.Fatalf("after close: dropped %d, queued %d", rec.Dropped(), len(rec.ch))
+	}
+}
+
 func TestDropsAreReportedPeriodically(t *testing.T) {
 	var mu sync.Mutex
 	buf := &bytes.Buffer{}
