@@ -87,8 +87,10 @@ check "nftables caps 9200/tcp from 10.4.1.20/32 at 4 mbytes/second, ahead of the
   test "$(grep -nE 'dport 9200 limit rate over 4 mbytes/second counter drop|ct state established,related accept' "$s/nftables.conf" | cut -d: -f2 | tr -s ' ' | cut -c1-20 | tr '\n' '|')" = ' ip saddr { 10.4.1.2| ct state establishe|'
 check "nftables input and forward chains drop by default" \
   test "$(grep -c 'policy drop;' "$s/nftables.conf")" = 2
-check "sysctl has no rp_filter, forwarding or kubelet keys" \
-  absent 'rp_filter|forward|overcommit_memory|panic_on_oom|kernel\.panic|root_maxkeys' "$s/90-hardening.conf"
+check "sysctl has no forwarding or kubelet keys" \
+  absent 'forward|overcommit_memory|panic_on_oom|kernel\.panic|root_maxkeys' "$s/90-hardening.conf"
+check "sysctl sets strict rp_filter (all and default = 1)" \
+  test "$(grep -E 'rp_filter' "$s/90-hardening.conf" | tr '\n' ' ')" = 'net.ipv4.conf.all.rp_filter=1 net.ipv4.conf.default.rp_filter=1 '
 check "sysctl sets vm.max_map_count=262144" grep -qx 'vm.max_map_count=262144' "$s/90-hardening.conf"
 check "no rp_filter drop-in" test ! -e "$s/99-cilium-rp-filter.conf"
 check "no 50-k3s.rules" test ! -e "$s/50-k3s.rules"
