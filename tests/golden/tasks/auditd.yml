@@ -1,0 +1,13 @@
+# Copied into a scratch copy of the role as tasks/golden-render.yml by tests/golden/render.sh.
+# Every template the role ships, minus the files the role removes for this host.
+- name: Render the auditd configuration and rule files
+  ansible.builtin.template:
+    src: "{{ item | basename }}"
+    dest: "{{ golden_out }}/{{ item | basename | regex_replace('\\.j2$', '') }}"
+    mode: "0644"
+  loop: "{{ query('ansible.builtin.fileglob', role_path ~ '/templates/*.j2') | sort }}"
+  loop_control:
+    label: "{{ item | basename }}"
+  when:
+    - not (item is search('50-k3s') and not (auditd_k3s_enabled | default(true) | bool))
+    - not (item is search('60-extra') and auditd_extra_watches | default([]) | length == 0)

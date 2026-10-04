@@ -1,0 +1,22 @@
+# Copied into a scratch copy of the role as tasks/golden-render.yml by tests/golden/render.sh.
+# ansible.posix.sysctl appends one key=value line per loop item to a fresh drop-in, so the loop order
+# over sysctl_settings IS the file content on a new host.
+- name: Render the sysctl drop-in as the role's loop writes it
+  ansible.builtin.copy:
+    content: "{% for key, value in sysctl_settings.items() %}{{ key }}={{ value }}\n{% endfor %}"
+    dest: "{{ golden_out }}/90-hardening.conf"
+    mode: "0644"
+
+# The rp_filter drop-in is an inline copy task in the role; its content is taken from the role's own
+# task file so the comparison covers exactly what the role writes.
+- name: Render the rp_filter drop-in from the role's own task
+  ansible.builtin.copy:
+    content: "{{ item['ansible.builtin.copy']['content'] }}"
+    dest: "{{ golden_out }}/99-cilium-rp-filter.conf"
+    mode: "0644"
+  loop: "{{ lookup('ansible.builtin.file', role_path ~ '/tasks/main.yml') | from_yaml }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when:
+    - item.name == 'Disable reverse path filtering on every present and future interface'
+    - sysctl_k3s_enabled | default(true) | bool

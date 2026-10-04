@@ -1,0 +1,22 @@
+# Run by tests/golden/render.sh inside the tooling container against a scratch copy of ansible/,
+# with the real inventory, so every variable resolves exactly as it does on the host.
+- name: Render the host role outputs for the golden comparison
+  hosts: all
+  connection: local
+  gather_facts: false
+  vars:
+    golden_out: "{{ golden_out_root }}/{{ inventory_hostname }}"
+  tasks:
+    - name: Create the output directory
+      ansible.builtin.file:
+        path: "{{ golden_out }}"
+        state: directory
+        mode: "0755"
+
+    - name: Render each role
+      ansible.builtin.include_role:
+        name: "{{ golden_role }}"
+        tasks_from: golden-render
+      loop: [firewall, sysctl, auditd, ssh_hardening]
+      loop_control:
+        loop_var: golden_role
