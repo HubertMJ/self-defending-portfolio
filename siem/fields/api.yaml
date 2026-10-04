@@ -20,9 +20,9 @@ fields:
   event.kind: {type: keyword, value: event, note: "event | heartbeat"}
   event.dataset: {type: keyword, value: api}
   event.action: {type: keyword, from: msg, note: "siem.run | siem.command"}
-  api.run_id: {type: keyword, from: run_id, note: 16 hex; the visitor's only identity (ADR 0017)}
+  api.run_id: {type: keyword, from: run_id, note: "16 hex: a random per-run id, public via /api/runs (ADR 0017, 0035)"}
   api.scenario: {type: keyword, from: scenario, note: "siem.run only: scenario id (terminal, shell-in-container, ...)"}
-  api.state: {type: keyword, from: state, note: "siem.run: queued | started | pod_ready | detected | responded | finished | failed | timeout; siem.command: started | exited | killed"}
+  api.state: {type: keyword, from: state, note: "holds run and command states, so always pair it with event.action (started is both); siem.run: queued | started | pod_ready | detected | responded | finished | failed | timeout; siem.command: started | exited | killed"}
   api.arm: {type: keyword, from: arm, note: "siem.run only: guarded | unguarded on a compare run (ADR 0031), empty otherwise; unguarded only with started (created together with the guarded pod) and the final state"}
   api.command_seq: {type: integer, from: command_seq, note: "siem.run only: the command a terminal run's detected/responded is about; null otherwise"}
   api.seq: {type: integer, from: seq, note: "siem.command only: the command's sequence number in its run (1-30)"}

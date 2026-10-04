@@ -134,6 +134,8 @@ Note: until auditd restarts after its configuration got `name_format = HOSTNAME`
 Not captured live: the lines did not exist before this phase. The JSON bodies of the 21 siem lines are
 app/api/internal/siemlog/testdata/lines.golden (written by the package's golden test from real runner
 event types through a real hub) with slog's `time` key put back in front; the CRI timestamps are local
-time (+02:00) 180 us after it, as on k3s01. The three other lines are shaped like the API's own log calls.
+time (+02:00) 180 us after it, as on k3s01. The three other lines are synthetic, shaped like the API's own log calls: the
+`listening` line carries the live Deployment's attack limits (60 per IP / 600 global from its env, not the code
+defaults 3/30) and a made-up commit; `terminal command exec ended` and `siem events dropped` carry made-up values.
 The read-flag command's output (the flag) is in no line: output events are never written. Regenerate after
 a golden change: same bodies, same order. Field allow-list: siem/fields/api.yaml.
