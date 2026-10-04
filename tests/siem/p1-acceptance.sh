@@ -137,7 +137,12 @@ else bad "5 valid certificate + basic header -> $got user $user"; fi
 # --- 1: a data stream refuses op_type index ------------------------------------------------------
 if bulk_create shipper sdp-falco "$mark-1"; then
   ok "1 setup: shipper-style _bulk create into sdp-falco -> 201 ($CREATED_INDEX)"
-  expect 400 "1 PUT sdp-falco/_doc/<id>" shipper PUT "/sdp-falco/_doc/$CREATED_ID" "$(doc "$mark-1x")"
+  # Refused twice over: sdp-final rejects the client-supplied id first (500 fail_processor_exception);
+  # without it the data stream would answer 400 (create only).
+  got=$(req shipper PUT "/sdp-falco/_doc/$CREATED_ID" "$(doc "$mark-1x")")
+  if refused "$got" && [ -n "$(refusal_reason)" ] || grep -q 'only write ops with an op_type of create' "$T/body"; then
+    ok "1 PUT sdp-falco/_doc/<id> -> $got ($(refusal_reason))"
+  else bad "1 PUT sdp-falco/_doc/<id> -> $got: $(head -c 300 "$T/body")"; fi
 else
   bad "1 setup: shipper-style create into sdp-falco failed: $(head -c 300 "$T/body")"; exit 1
 fi
@@ -244,7 +249,7 @@ req admin GET "/$w/_doc/$wid" >/dev/null
 if [ "$(j "(d['_source']['falco']['rule'], d['_seq_no'])")" = "('$mark-4-original', $seq)" ]; then ok "4 the document is unchanged (same _source, same seq_no)"
 else bad "4 the document changed: $(head -c 300 "$T/body")"; fi
 req admin POST "/_plugins/_alerting/monitors/_search" '{"query":{"term":{"monitor.name.keyword":"evidence rewritten"}}}' >/dev/null
-[ "$(j "d['hits']['hits'][0]['_source']['monitor']['enabled']")" = True ] && ok "4 \"evidence rewritten\" stays enabled as defence in depth" \
+[ "$(j "d['hits']['hits'][0]['_source']['enabled']")" = True ] && ok "4 \"evidence rewritten\" stays enabled as defence in depth" \
   || bad "4 \"evidence rewritten\" is not enabled"
 
 # --- 8: restore the backing index from the snapshot under a new name: the original is there -----
