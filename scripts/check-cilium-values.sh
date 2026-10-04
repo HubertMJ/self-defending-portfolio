@@ -151,9 +151,13 @@ if export.get("enabled"):
         except ValueError:
             problems.append(f"hubble.export.static.allowList: {entry!r} is not JSON")
             continue
+        # An empty object or an empty value list is a filter that matches every flow.
+        if not isinstance(flt, dict) or not flt:
+            problems.append(f"hubble.export.static.allowList: {entry!r} is an empty filter (matches every flow)")
+            continue
         for key, values in flt.items():
-            if key not in ("source_pod", "destination_pod") or not all(
-                    isinstance(v, str) and v in ("sandbox/", "sandbox-unguarded/") for v in values):
+            if (key not in ("source_pod", "destination_pod") or not isinstance(values, list) or not values
+                    or not all(isinstance(v, str) and v in ("sandbox/", "sandbox-unguarded/") for v in values)):
                 problems.append(f"hubble.export.static.allowList: {entry!r} selects more than sandbox pods")
     if export.get("denyList"):
         problems.append("hubble.export.static.denyList is set; the allowList alone defines what is exported")

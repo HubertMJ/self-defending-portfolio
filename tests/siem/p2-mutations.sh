@@ -29,6 +29,7 @@ MUTATIONS=(
   "lua-loss|lua|ansible/roles/fluent_bit/files/sdp.lua|s.replace('throttled = throttled + counter_delta', 'throttled = 0 * counter_delta')|throttle drops not reported"
   "audit-order|audit|ansible/roles/k3s/templates/audit-policy.yaml.j2|s.replace('  - level: Metadata\\n    resources:\\n      - group: authentication.k8s.io\\n        resources: [\"*\"]\\n', '').replace('  # Everything else: who, what, when.', '  - level: Metadata\\n    resources:\\n      - group: authentication.k8s.io\\n        resources: [\"*\"]\\n\\n  # Everything else: who, what, when.')|the Metadata rule after the RequestResponse rule (TokenReviews keep their bodies)"
   "cilium-ip|cilium|ansible/roles/cilium/defaults/main.yml|s.replace('          - event_type\\n', '          - event_type\\n          - IP\\n')|addresses in the Hubble export (Ansible side)"
+  "cilium-empty|cilium|ansible/roles/cilium/defaults/main.yml|s.replace(\"          - '{\\\"destination_pod\\\":[\\\"sandbox-unguarded/\\\"]}'\\n\", \"          - '{\\\"destination_pod\\\":[\\\"sandbox-unguarded/\\\"]}'\\n          - '{}'\\n\")|an empty allow-list filter (matches every flow)"
   "e2e-sandbox|e2e|ansible/roles/fluent_bit/templates/sdp.conf.j2|s.replace('InaccessiblePaths=', '# InaccessiblePaths=')|no InaccessiblePaths in the role's drop-in (the start check must refuse the start)"
   "e2e-devices|e2e|ansible/roles/fluent_bit/templates/sdp.conf.j2|s.replace('PrivateDevices=yes', 'PrivateDevices=no')|raw block devices visible to the unit (the start check must refuse the start)"
   "e2e-ipdeny|e2e|ansible/roles/fluent_bit/templates/sdp.conf.j2|s.replace('IPAddressDeny=any', 'IPAddressDeny=')|the unit may connect anywhere"
@@ -36,8 +37,13 @@ MUTATIONS=(
   "e2e-hostname|e2e|ansible/roles/fluent_bit/templates/fluent-bit.conf.j2|s.replace('tls.verify_hostname      On', 'tls.verify_hostname      Off')|host name verification off on the outputs"
   "e2e-id|e2e|ansible/roles/fluent_bit/templates/fluent-bit.conf.j2|s.replace('    Write_Operation          create\\n', '    Write_Operation          create\\n    Generate_ID              On\\n')|an id on every write (sdp-final refuses it, nothing arrives)"
 )
-# The Cilium mutation needs both sides changed, or the equality check fails for the wrong reason.
-EXTRA_cilium_ip="cluster/apps/cilium.yaml|s.replace('                - event_type\\n', '                - event_type\\n                - IP\\n')"
+# The Cilium mutations need both sides changed, or the equality check fails for the wrong reason.
+extra_for() { # <id> -> "file|expression" for the Argo side, or nothing
+  case $1 in
+    cilium-ip) echo "cluster/apps/cilium.yaml|s.replace('                - event_type\\n', '                - event_type\\n                - IP\\n')" ;;
+    cilium-empty) echo "cluster/apps/cilium.yaml|s.replace(\"                - '{\\\"destination_pod\\\":[\\\"sandbox-unguarded/\\\"]}'\\n\", \"                - '{\\\"destination_pod\\\":[\\\"sandbox-unguarded/\\\"]}'\\n                - '{}'\\n\")" ;;
+  esac
+}
 
 run_test() { # <kind> <tree>
   case $1 in
@@ -75,7 +81,8 @@ for m in "${MUTATIONS[@]}"; do
   tree=$(mktemp -d)
   git ls-files -co --exclude-standard | tar -cf - -T - | tar -xf - -C "$tree"
   mutate "$tree" "$file" "$expr"
-  if [ "$id" = cilium-ip ]; then IFS='|' read -r f2 e2 <<<"$EXTRA_cilium_ip"; mutate "$tree" "$f2" "$e2"; fi
+  extra=$(extra_for "$id")
+  if [ -n "$extra" ]; then IFS='|' read -r f2 e2 <<<"$extra"; mutate "$tree" "$f2" "$e2"; fi
   if run_test "$kind" "$tree" >"$tree.log" 2>&1; then
     echo "SURVIVED $id ($what): the $kind test passed"; fail=1
   else
