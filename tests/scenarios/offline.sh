@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # The attack scenarios' detection chain, checked without a cluster (ADR 0018). Needs docker, python3
-# with PyYAML and `script` (util-linux, to give the terminal's `shell` command a real TTY); pulls the
-# pinned Falco and Falco Talon images and builds app/scenario locally.
+# with PyYAML and Jinja2 (to render the k3s role's CoreDNS template) and `script` (util-linux, to give
+# the terminal's `shell` command a real TTY); pulls the pinned Falco, Falco Talon and CoreDNS images and
+# builds app/scenario locally.
 #
 #   tests/scenarios/offline.sh                     (or: make scenario-offline)
 #   DOCKER="sudo -n docker" tests/scenarios/offline.sh
@@ -29,6 +30,17 @@
 #      A scenario's pre_exec (run before the exec, never with a TTY) must have no TTY, must not run
 #      anything a Talon rule acts on (a network tool, /etc/shadow, a binary from /tmp), must exit 0
 #      after its pause, and must already have changed the victim when the detected exec starts.
+#   6. The interactive terminal: each catalogue command's outcome under the terminal pod's security
+#      context (see its section).
+#   7. The `exfil.sdp.test` sinkhole (ADR 0034): the k3s role's CoreDNS template, rendered, run in the
+#      pinned CoreDNS image under the Deployment's security context, with a stand-in upstream resolver
+#      that logs every query it gets. A name outside the zone is forwarded (the forward counter moves,
+#      the upstream logs it - so "unchanged" below means something); a name in the zone gets NXDOMAIN
+#      from CoreDNS itself, coredns_dns_requests_total{zone="exfil.sdp.test."} goes up, the forward
+#      counter stays still and the upstream never sees it; the zone's server block runs exactly errors,
+#      prometheus and template. With dns-exfil in the catalogue, its argv runs against that CoreDNS from
+#      the terminal pod's security context (exit 0 on NXDOMAIN, D3) and against a resolver that drops
+#      every query, the stand-in for a quarantined pod (exit non-zero within `timeout 6`, N9).
 #
 # What it cannot prove: that Falco *emits* the alert. That needs the syscalls themselves - a live probe
 # (BPF, PERFMON and CAP_SYS_RESOURCE to lock its ring buffers, which a CI or build sandbox container
@@ -55,8 +67,10 @@ SCENARIOS=$REPO_ROOT/cluster/infra/sandbox/scenarios/scenarios.yaml
 
 WORK_DIR=$(mktemp -d)
 CONTAINERS=()
+NETWORKS=()
 cleanup() {
   for c in "${CONTAINERS[@]}"; do $DOCKER rm -f "$c" >/dev/null 2>&1 || true; done
+  for n in "${NETWORKS[@]}"; do $DOCKER network rm "$n" >/dev/null 2>&1 || true; done
   rm -rf "$WORK_DIR"
 }
 trap cleanup EXIT
@@ -451,6 +465,39 @@ while IFS=$'\t' read -r tag id outcome tty detection argv; do
   printf '  -- %s (%s)\n' "$id" "$outcome"
   case $outcome in
     allowed)
+      if [ "$id" = dns-exfil ]; then
+        # No resolver under --network none, so the lookup itself cannot succeed here (section 7 runs it
+        # against the rendered CoreDNS): what is proven is the argv - it reads the flag file, builds the
+        # one label the zone is for, prints what it queries, exits 1 without an NXDOMAIN (D3) and does
+        # not hang. Then the other side: a flag file that is not SDP{16 lowercase hex} makes no query.
+        t0=${EPOCHREALTIME/,/.}
+        out=$(eval "$DOCKER exec $tc $argv" 2>&1) && rc=0 || rc=$?
+        took=$(awk -v a="$t0" -v b="${EPOCHREALTIME/,/.}" 'BEGIN { printf "%.2f", b - a }')
+        if grep -qxF "query sdp-0123456789abcdef.x.exfil.sdp.test." <<<"$out"; then
+          pass "$id: prints the name it looks up (\"$(head -1 <<<"$out")\")"
+        else
+          fail "$id: expected 'query sdp-0123456789abcdef.x.exfil.sdp.test.' ('$(tr '\n' ' ' <<<"$out")')"
+        fi
+        if [ "$rc" = 1 ] && awk -v t="$took" 'BEGIN { exit !(t < 2) }'; then
+          pass "$id: without a resolver it exits 1 in ${took}s (no NXDOMAIN, so not achieved)"
+        else
+          fail "$id: without a resolver: rc=$rc after ${took}s, want 1 within 2 s"
+        fi
+        for bad in 'SDP{0123456789abcdeg}' 'SDP{0123456789ABCDEF}' 'SDP{0123456789abcde}' 'SDP{x;id}'; do
+          cb=$(start "terminal-badflag" "$TFLAGS -e SDP_FLAG=$(printf '%q' "$bad")" "$TCMD")
+          for _ in 1 2 3 4 5 6 7 8 9 10; do $DOCKER exec "$cb" test -e /srv/shop/.flag 2>/dev/null && break; sleep 0.5; done
+          out=$(eval "$DOCKER exec $cb $argv" 2>&1) && rc=0 || rc=$?
+          # Not hex at all: the command says so. Wrong length: it just stops. Either way no query.
+          case $bad in *[!0-9a-f{}SDP]*) want="no flag found" ;; *) want= ;; esac
+          if [ "$rc" != 0 ] && ! grep -q '^query ' <<<"$out" && { [ -z "$want" ] || grep -qF "$want" <<<"$out"; }; then
+            pass "$id: flag file '$bad' -> no lookup, rc=$rc${out:+ (\"$(head -1 <<<"$out")\")}"
+          else
+            fail "$id: flag file '$bad' -> rc=$rc, output '$(tr '\n' ' ' <<<"$out")'"
+          fi
+          $DOCKER rm -f "$cb" >/dev/null 2>&1 || true
+        done
+        continue
+      fi
       if out=$(eval "$DOCKER exec $tc $argv" 2>&1); then
         case $id in
           read-flag)
@@ -563,6 +610,183 @@ while IFS=$'\t' read -r tag id outcome tty detection argv; do
       fail "$id: unknown outcome '$outcome'" ;;
   esac
 done < "$WORK_DIR/terminal.tsv"
+
+# ------------------------------------------------- 7. the exfil.sdp.test sinkhole (ADR 0034, ADR 0026)
+#
+# The dns-exfil command is only harmless while CoreDNS answers `exfil.sdp.test` itself. make validate
+# checks the block's text (scripts/lib/check_coredns_sinkhole.py); this runs it. The template is
+# rendered as the k3s role renders it and the two ConfigMaps are mounted where the Deployment mounts
+# them. Its `kubernetes` plugin is pointed at an API server that refuses connections (it starts
+# unsynced after 5 s; nothing here is a cluster name), and its `forward . /etc/resolv.conf` at a
+# stand-in for the node's resolver: a CoreDNS that logs and answers every query (`whoami`). All on an
+# internal Docker network: nothing reaches a real resolver.
+
+step "the exfil.sdp.test sinkhole: the k3s role's CoreDNS, rendered and running, answers the zone itself"
+
+COREDNS_IMAGE=${COREDNS_IMAGE:-$(python3 -c 'import sys, yaml; print(yaml.safe_load(open(sys.argv[1]))["k3s_coredns_image"])' \
+  "$REPO_ROOT/ansible/roles/k3s/defaults/main.yml")}
+DNS_DIR=$WORK_DIR/dns
+mkdir -p "$DNS_DIR/etc/custom" "$DNS_DIR/custom" "$DNS_DIR/sa" "$DNS_DIR/up" "$DNS_DIR/drop"
+python3 - "$REPO_ROOT" "$DNS_DIR" <<'PY'
+import sys
+from pathlib import Path
+sys.path.insert(0, f"{sys.argv[1]}/scripts/lib")
+from check_coredns_sinkhole import render
+out = Path(sys.argv[2])
+for d in render(Path(sys.argv[1])):
+    if d.get("kind") != "ConfigMap":
+        continue
+    if d["metadata"]["name"] == "coredns":
+        for key in ("Corefile", "NodeHosts"):
+            (out / "etc" / key).write_text(d["data"][key])
+    elif d["metadata"]["name"] == "coredns-custom":
+        for key, value in d["data"].items():
+            (out / "custom" / key).write_text(value)
+PY
+printf '.:53 {\n    log\n    errors\n    whoami\n}\n' > "$DNS_DIR/up/Corefile"
+# A resolver that answers nothing: what a quarantined pod's lookup meets (Cilium drops the packet).
+printf '.:53 {\n    erratic {\n        drop 1\n    }\n}\n' > "$DNS_DIR/drop/Corefile"
+# What rest.InClusterConfig reads; an unparsable CA is only logged by it.
+echo offline > "$DNS_DIR/sa/token"; : > "$DNS_DIR/sa/ca.crt"; echo kube-system > "$DNS_DIR/sa/namespace"
+# CoreDNS runs as 65532 and the terminal as 10001: the render must be readable to them.
+chmod 711 "$WORK_DIR"; chmod -R a+rX "$DNS_DIR"
+
+DNS_NET=sdp-offline-dns-$RANDOM
+$DOCKER network create --internal "$DNS_NET" >/dev/null
+NETWORKS+=("$DNS_NET")
+# The Deployment's security context (templates/coredns-sdp.yaml.j2): uid 65532, read-only root, only
+# NET_BIND_SERVICE, no privilege escalation.
+COREDNS_SC=(--user 65532:65532 --read-only --cap-drop ALL --cap-add NET_BIND_SERVICE --security-opt no-new-privileges)
+dns_start() { # name, docker args... ; prints the container name
+  local name="sdp-offline-dns-$1-$RANDOM"; shift
+  $DOCKER run -d --name "$name" --network "$DNS_NET" "$@" >/dev/null
+  CONTAINERS+=("$name")
+  printf '%s' "$name"
+}
+ip_of() { $DOCKER inspect -f "{{(index .NetworkSettings.Networks \"$DNS_NET\").IPAddress}}" "$1"; }
+
+up=$(dns_start upstream "${COREDNS_SC[@]}" -v "$DNS_DIR/up:/etc/coredns:ro" "$COREDNS_IMAGE" -conf /etc/coredns/Corefile)
+up_ip=$(ip_of "$up")
+printf 'nameserver %s\n' "$up_ip" > "$DNS_DIR/node-resolv.conf"
+sink=$(dns_start coredns "${COREDNS_SC[@]}" \
+  -e KUBERNETES_SERVICE_HOST="$up_ip" -e KUBERNETES_SERVICE_PORT=443 \
+  -v "$DNS_DIR/etc:/etc/coredns:ro" -v "$DNS_DIR/custom:/etc/coredns/custom:ro" \
+  -v "$DNS_DIR/sa:/var/run/secrets/kubernetes.io/serviceaccount:ro" \
+  -v "$DNS_DIR/node-resolv.conf:/etc/resolv.conf:ro" \
+  "$COREDNS_IMAGE" -conf /etc/coredns/Corefile)
+sink_ip=$(ip_of "$sink")
+# A pod's resolv.conf (ClusterFirst), naming this CoreDNS: the search list is what the trailing dot
+# in the command's name keeps out of play.
+printf 'nameserver %s\nsearch sandbox.svc.cluster.local svc.cluster.local cluster.local\noptions ndots:5\n' \
+  "$sink_ip" > "$DNS_DIR/pod-resolv.conf"
+chmod a+r "$DNS_DIR"/*.conf
+# The terminal pod again, now with a resolver: its own flags with this network instead of none.
+NFLAGS=${TFLAGS/--network none/--network $DNS_NET -v $DNS_DIR/pod-resolv.conf:/etc/resolv.conf:ro}
+tn=$(start "terminal-dns" "$NFLAGS -e SDP_FLAG=$FLAG" "$TCMD")
+
+metrics() { $DOCKER exec "$tn" wget -q -T 2 -O- "http://$sink_ip:9153/metrics" 2>/dev/null; }
+# Upstream exchanges started by `forward`: every one takes a connection from the proxy's cache first,
+# a hit or a miss, whether or not an answer comes back. (CoreDNS 1.14 has no
+# coredns_forward_requests_total; forward's counters moved to coredns_proxy_* in 1.11.)
+forwards() { awk '/^coredns_proxy_conn_cache_(hits|misses)_total[{].*proxy_name="forward"/ { s += $NF } END { print s + 0 }' "$1"; }
+zone_requests() { awk '/^coredns_dns_requests_total[{].*zone="exfil[.]sdp[.]test[.]"/ { s += $NF } END { print s + 0 }' "$1"; }
+upstream_saw() { $DOCKER logs "$up" 2>&1 | grep -c -F "$1" || true; }
+
+# Up means answering on :53 - the metrics listener starts seconds before the DNS one, which waits for
+# the (here unreachable) Kubernetes API - and the `loop` plugin's one-off startup probe already
+# forwarded (a HINFO query the upstream logs), so it cannot land inside a measurement below. /ready is
+# no use: the kubernetes plugin never syncs here.
+ready=
+for _ in $(seq 1 60); do
+  # Any answer counts as up (an answer that is not NXDOMAIN fails the checks below, it is not "down").
+  # nslookup exits 1 on NXDOMAIN: its output is read first, as a pipe into grep would fail on pipefail.
+  out=$($DOCKER exec "$tn" nslookup -type=a ready.x.exfil.sdp.test. 2>&1) && rc=0 || rc=$?
+  if { [ "$rc" = 0 ] || grep -q NXDOMAIN <<<"$out"; } && [ "$(upstream_saw 'HINFO IN')" -gt 0 ] \
+     && metrics > "$WORK_DIR/m.txt" && grep -q '^coredns_plugin_enabled{.*zone="exfil.sdp.test."' "$WORK_DIR/m.txt"; then
+    ready=1; break
+  fi
+  sleep 0.5
+done
+if [ -n "$ready" ]; then
+  pass "sinkhole: CoreDNS ($COREDNS_IMAGE) serves the rendered Corefile with the exfil.sdp.test block"
+else
+  fail "sinkhole: CoreDNS did not come up with an exfil.sdp.test server block: $($DOCKER logs "$sink" 2>&1 | grep -v 'Failed to watch' | tail -5)"
+fi
+
+if [ -n "$ready" ]; then
+  # What the zone's block runs, from CoreDNS's own account of it.
+  plugins=$(sed -n 's/^coredns_plugin_enabled{name="\([^"]*\)".*zone="exfil.sdp.test."} 1$/\1/p' "$WORK_DIR/m.txt" | sort | xargs)
+  if [ "$plugins" = "errors prometheus template" ]; then
+    pass "sinkhole: the exfil.sdp.test block runs exactly: $plugins"
+  else
+    fail "sinkhole: the exfil.sdp.test block runs '$plugins', want 'errors prometheus template'"
+  fi
+
+  # A name outside the zone takes the forward path: the counter and the upstream log see it.
+  f0=$(forwards "$WORK_DIR/m.txt")
+  $DOCKER exec "$tn" nslookup -type=a offline-control.example. >/dev/null 2>&1 || true
+  metrics > "$WORK_DIR/m.txt" || true
+  f1=$(forwards "$WORK_DIR/m.txt")
+  if [ "$f1" -gt "$f0" ] && [ "$(upstream_saw offline-control.example.)" -gt 0 ]; then
+    pass "sinkhole: a name outside the zone is forwarded (forward counter $f0 -> $f1, the upstream logged it)"
+  else
+    fail "sinkhole: the control lookup did not show up as a forward (counter $f0 -> $f1, upstream lines: $(upstream_saw offline-control.example.)); the checks below would prove nothing"
+  fi
+
+  # A name in the zone: NXDOMAIN from CoreDNS itself, counted in the zone, never forwarded.
+  z0=$(zone_requests "$WORK_DIR/m.txt"); f0=$(forwards "$WORK_DIR/m.txt")
+  out=$($DOCKER exec "$tn" nslookup -type=a probe.x.exfil.sdp.test. 2>&1 || true)
+  metrics > "$WORK_DIR/m.txt" || true
+  z1=$(zone_requests "$WORK_DIR/m.txt"); f1=$(forwards "$WORK_DIR/m.txt")
+  if grep -q 'NXDOMAIN' <<<"$out"; then pass "sinkhole: probe.x.exfil.sdp.test. answers NXDOMAIN"
+  else fail "sinkhole: probe.x.exfil.sdp.test. did not answer NXDOMAIN: $(tr '\n' ' ' <<<"$out")"; fi
+  if [ "$z1" -gt "$z0" ]; then pass "sinkhole: coredns_dns_requests_total{zone=\"exfil.sdp.test.\"} $z0 -> $z1"
+  else fail "sinkhole: the zone counter did not move ($z0 -> $z1)"; fi
+  if [ "$f1" -eq "$f0" ] && [ "$(upstream_saw exfil.sdp.test)" -eq 0 ]; then
+    pass "sinkhole: nothing forwarded (forward counter $f0 -> $f1; the upstream never saw exfil.sdp.test)"
+  else
+    fail "sinkhole: the zone leaked upstream (forward counter $f0 -> $f1, upstream lines: $(upstream_saw exfil.sdp.test))"
+  fi
+
+  # The catalogue command itself, when the catalogue has it (P5 ships the sinkhole first, ADR 0034).
+  dargv=$(awk -F'\t' '$1 == "CMD" && $2 == "dns-exfil" { print $6 }' "$WORK_DIR/terminal.tsv")
+  if [ -n "$dargv" ]; then
+    label="sdp-${FLAG#SDP\{}"; label="${label%\}}.x.exfil.sdp.test."
+    z0=$z1; f0=$f1
+    out=$(eval "$DOCKER exec $tn $dargv" 2>&1) && rc=0 || rc=$?
+    metrics > "$WORK_DIR/m.txt" || true
+    z1=$(zone_requests "$WORK_DIR/m.txt"); f1=$(forwards "$WORK_DIR/m.txt")
+    if [ "$rc" = 0 ] && grep -qF "query $label" <<<"$out" && grep -q NXDOMAIN <<<"$out"; then
+      pass "dns-exfil: against the sinkhole it looks up $label, gets NXDOMAIN and exits 0"
+    else
+      fail "dns-exfil: against the sinkhole rc=$rc, output: $(tr '\n' ' ' <<<"$out")"
+    fi
+    if [ "$z1" -gt "$z0" ] && [ "$f1" -eq "$f0" ] && [ "$(upstream_saw "${label%%.*}")" -eq 0 ]; then
+      pass "dns-exfil: counted in the zone ($z0 -> $z1), not forwarded ($f0 -> $f1), the upstream never saw the label"
+    else
+      fail "dns-exfil: zone $z0 -> $z1, forward $f0 -> $f1, upstream lines with the label: $(upstream_saw "${label%%.*}")"
+    fi
+
+    # Quarantined: the lookup is dropped, so no NXDOMAIN, a non-zero exit, and within run.sh's
+    # `timeout 6` (busybox nslookup has no timeout option, N9; the API cuts a command at 5 s anyway).
+    drop=$(dns_start drop "${COREDNS_SC[@]}" -v "$DNS_DIR/drop:/etc/coredns:ro" "$COREDNS_IMAGE" -conf /etc/coredns/Corefile)
+    printf 'nameserver %s\noptions ndots:5\n' "$(ip_of "$drop")" > "$DNS_DIR/drop-resolv.conf"
+    chmod a+r "$DNS_DIR/drop-resolv.conf"
+    QFLAGS=${TFLAGS/--network none/--network $DNS_NET -v $DNS_DIR/drop-resolv.conf:/etc/resolv.conf:ro}
+    tq=$(start "terminal-dropped" "$QFLAGS -e SDP_FLAG=$FLAG" "$TCMD")
+    for _ in 1 2 3 4 5 6 7 8 9 10; do $DOCKER exec "$tq" test -e /srv/shop/.flag 2>/dev/null && break; sleep 0.5; done
+    t0=${EPOCHREALTIME/,/.}
+    out=$(eval "timeout 6 $DOCKER exec $tq $dargv" 2>&1) && rc=0 || rc=$?
+    took=$(awk -v a="$t0" -v b="${EPOCHREALTIME/,/.}" 'BEGIN { printf "%.1f", b - a }')
+    if [ "$rc" != 0 ] && ! grep -q NXDOMAIN <<<"$out"; then
+      pass "dns-exfil: with every query dropped it fails (rc=$rc after ${took}s: \"$(tail -1 <<<"$out")\")"
+    else
+      fail "dns-exfil: with every query dropped rc=$rc after ${took}s, output: $(tr '\n' ' ' <<<"$out")"
+    fi
+  else
+    printf '  INFO  the catalogue has no dns-exfil command yet; its argv is checked here once it does\n'
+  fi
+fi
 
 # ---------------------------------------------------------------------------- result
 
