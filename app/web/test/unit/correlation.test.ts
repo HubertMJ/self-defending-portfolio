@@ -95,6 +95,12 @@ describe("parseCorrelation", () => {
     expect(c.metrics.median_twin_dwell_ms).toBeNull();
   });
 
+  it("orders by first_at as the API does, not by last_at", () => {
+    // A long incident that began earlier but ended last stays below one that began later.
+    const c = parseCorrelation(answer({ incidents: [incident({ id: "000000000000000a", first_at: at(100), last_at: at(5) }), incident({ id: "000000000000000b", first_at: at(50), last_at: at(40) })] }));
+    expect(c.incidents.map((i) => i.id)).toEqual(["000000000000000b", "000000000000000a"]);
+  });
+
   it("is available only for a literal true, and an unavailable answer carries nothing else", () => {
     for (const v of [false, "true", 1, null, undefined]) {
       const c = parseCorrelation(answer({ available: v }));
