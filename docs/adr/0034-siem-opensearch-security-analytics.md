@@ -476,13 +476,25 @@ throwaway OpenSearch shaped like siem01) and on siem01 itself.
   siem01 uses its local `shipper-siem01` identity in place. Both keys reach the unit as systemd
   credentials (`LoadCredential`), readable only through `$CREDENTIALS_DIRECTORY`.
 - **The unit is the sandbox.** User `fluent-bit`, the single capability `CAP_DAC_READ_SEARCH`
-  (pod, audit and journal files are root-only), `ProtectSystem=strict`, `ProtectHome`, `PrivateTmp`,
-  `@system-service` syscalls, `AF_INET AF_UNIX`, `MemoryMax=192M`, and `InaccessiblePaths` for the k3s
-  kubeconfig, server TLS, credentials, token, agent and kubelet directories, shadow files, `/etc/ssh`
-  and `/root` - plus, because that capability reads any file, siem01's PKI directory and OpenSearch's
-  configuration and data. An `ExecStartPre` check, running inside the same sandbox, refuses the start
-  if it can read the k3s kubeconfig (k3s01) or the admin key (siem01): with `InaccessiblePaths`
-  removed the unit does not start ("sandbox broken", tested). Metrics listen on 127.0.0.1:2020 only.
+  (pod, audit and journal files are root-only). Because that capability reads any file, the unit
+  gets no device nodes at all (`PrivateDevices=yes`, `DevicePolicy=closed`: a raw block device would
+  read the disk past every hidden path) and `InaccessiblePaths` over the k3s kubeconfig, server TLS,
+  credentials, token, datastore, storage, agent, kubelet and `/run/k3s`, shadow files, `/etc/ssh`,
+  `/root`, its own key files (the keys arrive only through `$CREDENTIALS_DIRECTORY`) and OpenSearch's
+  configuration and data; on siem01 also the PKI directory (required to exist) and the snapshots.
+  `ProtectSystem=strict`, `ProtectHome`, `PrivateTmp`, `@system-service` syscalls, `AF_INET AF_UNIX`,
+  `IPAddressDeny=any` with `IPAddressAllow` siem01 + loopback (k3s01) or loopback only (siem01),
+  `RestrictNamespaces`, `ProtectKernelTunables/Modules/Logs`, `ProtectControlGroups`,
+  `ProtectProc=invisible`, `ProcSubset=pid`, `LockPersonality`, `RestrictSUIDSGID`, `ProtectClock`,
+  `ProtectHostname`, `MemoryMax=192M`. An `ExecStartPre` check inside the same sandbox refuses the
+  start if it sees a block device or can read the k3s kubeconfig (k3s01) or the admin key (siem01);
+  each of `InaccessiblePaths` and `PrivateDevices` removed makes the unit refuse to start, a process in
+  the unit's cgroup cannot reach any address but OpenSearch, and every input still reads with all of
+  it on (tests/siem/ingest-it.sh). Metrics listen on 127.0.0.1:2020 only. Not done (review L5): an
+  nftables output rule on k3s01 limiting 10.4.2.10:9200 to the `fluent-bit` user; the unit's IP
+  filter covers the shipper, and hostNetwork pods (which share the host's network namespace and are
+  not selected by `siem-egress-deny`) are limited to Cilium's and Falco's own, which hold node-level
+  rights anyway; without a client certificate they cannot pass the handshake.
 - **One filter decides what leaves a host.** `sdp.lua` builds every record from
   `siem/fields/<source>.yaml` field by field (nothing else is forwarded, so client-sent
   `event.overwrite`/`event.ingested` are gone by construction, F1), pseudonymises with HMAC-SHA256 in
@@ -490,7 +502,9 @@ throwaway OpenSearch shaped like siem01) and on siem01 itself.
   `sandbox*` objects or by Talon's or the API's ServiceAccount, any code >= 400, any
   exec/attach/portforward), keeps Hubble's `.flow` records only (F13), the API's `siem.run`/
   `siem.command` lines only and keyed auditd records only, and sets each record's time from the
-  event. It refuses to start on a missing or short key, on an unknown transform and when the
+  event. Falco's `fd.name` has every IPv4 address pseudonymised and its `user.name` is kept only for
+  a sandbox* pod (stock rules name host processes and other namespaces' users). The ssh patterns take
+  the (attacker-chosen) user name greedily and anchor the real address to the end of the line. It refuses to start on a missing or short key, on an unknown transform and when the
   RFC 4231 known-answer test fails; an error on one record drops that record. CI runs it under the
   pinned Fluent Bit against RFC 4231 cases 2, 6 and 7 and Python's `hmac` (`tests/siem/lua-hmac.sh`).
 - **Audit policy.** `authentication.k8s.io` has its own `Metadata` rule ahead of the
@@ -512,8 +526,15 @@ throwaway OpenSearch shaped like siem01) and on siem01 itself.
   Secret `portfolio-api-siem`, made by `scripts/siem-api-cert.sh` (key generated on the operator host,
   CSR signed on siem01, `sops`-encrypted before it lands in the tree), mounted read-only 0440 to the
   pod's `fsGroup`, optional.
-- **Buffering and caps.** Chunks on disk, 1 GB per stream, retries backing off to 5 minutes and given
-  up after 120 (longer than the lag monitor's 6 hours); throttle 50 records/s for the audit log and
+- **Losses are visible, critical events are not throttled.** Throttles see the data inputs only;
+  heartbeats, Falco's metrics snapshot and Falco alerts of priority Warning and above (re-tagged
+  before the throttle) never queue behind them. Once a minute the shipper reads its own metrics
+  endpoint and reports the increase of throttle drops, records given up, output errors and filter
+  errors into the host's own stream (`event.kind: metric`, `host.log: fluent-bit`); the ops monitor
+  "shipper dropping" fires on any value above 0 (on from P2).
+- **Buffering and caps.** Chunks on disk, 1 GB per stream, retried without limit backing off to 5
+  minutes (the 1 GB, not a retry count, bounds the disk; when it is full the oldest chunks go, counted
+  as `fluentbit.output_dropped`); throttle 50 records/s for the audit log and
   20/s for the others, averaged over 5 minutes (a 5-second window dropped 1 217 records of one
   `make siem` run on siem01), drops counted in the metrics endpoint. A retried chunk re-sends the items that
   had succeeded: without ids (refused by design) a retry can duplicate documents; duplicates are
@@ -522,6 +543,8 @@ throwaway OpenSearch shaped like siem01) and on siem01 itself.
   silent` monitors and `falco metrics silent` go on in the window, once their sources are live.
 
 **Consequences.**
+- siem01's profile is idempotent: a full `make siem` after the shipper's apply reported changed=0
+  (and again after the review changes).
 - A Fluent Bit 5.1.3 defect surfaced in the offline test: a heartbeat input with `Flush_On_Startup`
   crashed the engine (its first chunk was picked up as backlog). Heartbeats therefore start one
   minute after a (re)start; the ingest-silent window is 10 minutes.
