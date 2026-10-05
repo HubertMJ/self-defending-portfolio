@@ -23,8 +23,9 @@ Argo CD decrypts via the KSOPS plugin (Kustomize generator).
 uses the same mechanism and recipient. It is never written by hand: `scripts/siem-api-cert.sh`
 generates the key in a private scratch directory (`.siem-tmp/`, git-ignored, shredded on exit), has
 siem01 sign the CSR, and writes the file through `sops --encrypt`; the plaintext never lands in the
-tree. Until the file exists, `make validate` renders the directory without the generator, as for the
-other Secrets.
+tree. A generator naming a file that is not committed now fails `make validate` and CI, with or
+without the age key (Argo builds from git; without the key only the decryption is skipped), so the
+encrypted file lands with, or before, the generator that names it.
 
 **Consequences.** Losing the age key now also means re-issuing the API's SIEM certificate (a new
 generation, mapped on siem01 first).
