@@ -349,6 +349,17 @@ describe("the section's parts", () => {
     expect(kindLabel("dns-exfil")).toBe("DNS exfiltration");
   });
 
+  it("a severity the page does not know reads as unknown on a neutral chip, never good, in full and as an older line", () => {
+    const many = Array.from({ length: BOARD_INCIDENTS + 1 }, (_, n) => incident({ id: n.toString(16).padStart(16, "0"), first_at: at(600 + n), severity: "apocalyptic" }));
+    const c = parseCorrelation(answer({ incidents: many }));
+    const full = renderIncident(c.incidents[0], ctx(c)).querySelector(".chip");
+    expect(full?.className).toBe("chip chip--neutral");
+    expect(full?.textContent).toContain("unknown");
+    const older = renderBoard(c, ctx(c)).querySelector(".corr-older__item .chip");
+    expect(older?.className).toBe("chip chip--neutral");
+    expect(older?.textContent).toContain("unknown");
+  });
+
   it("the board: the newest in full, the rest one line each; an empty board says since when it looks", () => {
     const many = Array.from({ length: BOARD_INCIDENTS + 3 }, (_, n) => incident({ id: n.toString(16).padStart(16, "0"), last_at: at(100 + n) }));
     const c = parseCorrelation(answer({ incidents: many }));
