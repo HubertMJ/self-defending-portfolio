@@ -1132,6 +1132,11 @@ export interface CorrelationMetrics {
   median_tti_ms: number | null;
   median_twin_dwell_ms: number | null;
   host_findings: number;
+  /**
+   * How far behind each source's newest document is when the API reads it, by source; null when the
+   * source has sent nothing to measure. Absent from an API that does not publish it.
+   */
+  ingest_lag_ms?: [source: string, ms: number | null][];
 }
 
 export interface Correlation {
@@ -1288,6 +1293,15 @@ function parseIncident(v: unknown): CorrelationIncident | null {
   };
 }
 
+/** metrics.ingest_lag_ms: source -> ms or null; a bad key or value is dropped, an empty or absent map is undefined. */
+function ingestLag(v: unknown): CorrelationMetrics["ingest_lag_ms"] {
+  if (!isObj(v)) return undefined;
+  const rows = Object.entries(v)
+    .filter((e): e is [string, number | null] => /^[a-z0-9-]{1,30}$/.test(e[0]) && (e[1] === null || isCount(e[1])))
+    .slice(0, 12);
+  return rows.length ? rows : undefined;
+}
+
 const EMPTY_METRICS: CorrelationMetrics = { since: "", incidents: 0, median_ttd_ms: null, median_tti_ms: null, median_twin_dwell_ms: null, host_findings: 0 };
 
 /**
@@ -1329,6 +1343,7 @@ export function parseCorrelation(v: unknown): Correlation {
       median_tti_ms: optMs(m.median_tti_ms),
       median_twin_dwell_ms: optMs(m.median_twin_dwell_ms),
       host_findings: isCount(m.host_findings) ? m.host_findings : 0,
+      ...definedOnly({ ingest_lag_ms: ingestLag(m.ingest_lag_ms) }),
     },
     incidents,
   };

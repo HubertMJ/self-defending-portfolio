@@ -20,7 +20,15 @@
    "median_ttd_ms": 840,
    "median_tti_ms": 212,
    "median_twin_dwell_ms": 61000,
-   "host_findings": 2
+   "host_findings": 2,
+   "ingest_lag_ms": {
+    "falco": 1240,
+    "talon": 860,
+    "k8s-audit": 2100,
+    "hubble": 3400,
+    "api": 610,
+    "host": null
+   }
   },
   "incidents": [
    {

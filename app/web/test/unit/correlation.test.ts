@@ -386,6 +386,16 @@ describe("the section's parts", () => {
     expect(percentile([], 95)).toBeUndefined();
   });
 
+  it("ingest lag per source: parsed leniently, one small line in source order, omitted when absent", () => {
+    const c = parseCorrelation(answer({ metrics: { since: at(86_400), incidents: 1, median_ttd_ms: 840, median_tti_ms: 212, median_twin_dwell_ms: null, host_findings: 0, ingest_lag_ms: { hubble: 3400, falco: 1240, host: null, "Bad Key": 5, api: -1, talon: "860" } } }));
+    expect(c.metrics.ingest_lag_ms).toEqual([["hubble", 3400], ["falco", 1240], ["host", null]]);
+    const line = renderMetrics(c, NOW).querySelector(".corr-lag");
+    expect(line?.textContent).toBe("Ingest lag, per source (how far behind its newest record was when the API last read it): falco 1.2 s · hubble 3.4 s · host –");
+    expect(renderMetrics(parseCorrelation(answer()), NOW).querySelector(".corr-lag")).toBeNull();
+    expect(parseCorrelation(answer({ metrics: { ingest_lag_ms: {} } })).metrics.ingest_lag_ms).toBeUndefined();
+    expect(parseCorrelation(answer({ metrics: { ingest_lag_ms: [1, 2] } })).metrics.ingest_lag_ms).toBeUndefined();
+  });
+
   it("coverage: rules per technique and source, incidents per technique, a seen technique without a rule is a gap", () => {
     const c = parseCorrelation(answer({ incidents: [incident({ attack: ["T1003.008", "T1059.004"] })] }));
     const cov = coverage(index(), c.incidents);
@@ -484,6 +494,20 @@ describe("mountCorrelation", () => {
     expect(section.querySelector(".incident")).toBe(incident);
     expect(section.querySelector(".corr-since")).toBe(since);
     expect(since?.getAttribute("datetime")).toBe(at(86_400 - 40));
+  });
+
+  it("ingest lags moving between polls are rewritten in place, nothing is redrawn", async () => {
+    vi.useFakeTimers();
+    const lagged = (falco: number) => ok({ metrics: { since: at(86_400), incidents: 1, median_ttd_ms: 840, median_tti_ms: 212, median_twin_dwell_ms: null, host_findings: 0, ingest_lag_ms: { falco, api: null } } });
+    const { section } = setup([lagged(1240), lagged(2500)]);
+    await vi.advanceTimersByTimeAsync(0);
+    const incident = section.querySelector(".incident");
+    const falco = section.querySelector('.corr-lag__ms[data-source="falco"]');
+    expect(falco?.textContent).toBe("1.2 s");
+    await vi.advanceTimersByTimeAsync(POLL_MS);
+    expect(section.querySelector(".incident")).toBe(incident);
+    expect(section.querySelector('.corr-lag__ms[data-source="falco"]')).toBe(falco);
+    expect(falco?.textContent).toBe("2.5 s");
   });
 
   it("the rule index is asked again when the applied commit moves; a new answer redraws", async () => {

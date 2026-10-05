@@ -964,6 +964,7 @@ test.describe("correlation (ADR 0036; serve.mjs --terminal-api --siem / --no-sie
     await expect(tiles.nth(2)).toContainText("p95 1.8 s over the 3 contained intrusions listed");
     await expect(tiles.nth(3).locator(".tile__value")).toHaveText("1 min 1 s");
     await expect(tiles.nth(4).locator(".tile__value")).toHaveText("2");
+    await expect(s.locator(".corr-lag")).toContainText("falco 1.2 s · talon 860 ms · k8s-audit 2.1 s · hubble 3.4 s · api 610 ms · host –");
 
     // The board, newest first: the dns-exfil incident with no Falco event and the flag matched.
     const incidents = s.locator(".incident");

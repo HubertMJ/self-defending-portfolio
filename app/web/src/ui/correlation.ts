@@ -110,7 +110,7 @@ export function renderMetrics(c: Correlation, now: number): HTMLElement {
   const ttd = contained.map((i) => i.ttd_ms).filter((x): x is number => x !== null);
   const tti = contained.map((i) => i.tti_ms).filter((x): x is number => x !== null);
   const median = (v: number | null) => (v === null ? "–" : formatDuration(v));
-  return h(
+  const tiles = h(
     "div",
     { class: "tiles corr-metrics" },
     metricTile("Incidents", String(m.incidents), m.incidents > 0 ? "warning" : "good", m.incidents > 0 ? "correlated" : "none", m.since ? ["last 24 h, since ", whenEl(m.since, now, { class: "corr-since" })] : ["last 24 h"]),
@@ -126,6 +126,22 @@ export function renderMetrics(c: Correlation, now: number): HTMLElement {
       "how long the unguarded twin lived, from its audited create to its delete",
     ]),
     metricTile("Host findings", String(m.host_findings), m.host_findings > 0 ? "warning" : "good", m.host_findings > 0 ? "on the VM hosts" : "none", ["counted only: a host finding names users and addresses, which this page never shows"]),
+  );
+  return h("div", {}, tiles, lagLine(m));
+}
+
+const lagText = (ms: number | null) => (ms === null ? "–" : formatDuration(ms));
+
+/** "Ingest lag, per source: falco 1.2 s · talon 900 ms · hubble –", in the sources' usual order; null when the API sends none. */
+function lagLine(m: Correlation["metrics"]): HTMLElement | null {
+  if (!m.ingest_lag_ms) return null;
+  const rank = (s: string) => (SOURCE_ORDER.includes(s) ? SOURCE_ORDER.indexOf(s) : SOURCE_ORDER.length);
+  const rows = [...m.ingest_lag_ms].sort((a, b) => rank(a[0]) - rank(b[0]) || a[0].localeCompare(b[0]));
+  return h(
+    "p",
+    { class: "small corr-lag" },
+    "Ingest lag, per source (how far behind its newest record was when the API last read it): ",
+    rows.flatMap(([src, ms], n) => [n ? " · " : "", h("span", { class: "corr-lag__src" }, src), " ", h("span", { class: "corr-lag__ms", "data-source": src }, lagText(ms))]),
   );
 }
 
@@ -423,7 +439,9 @@ export function mountCorrelation(
     if (!data) return;
     // Redrawn only when what it shows changes. The API moves checked_at and metrics.since on every
     // poll: those two are rewritten in place, so an open <details> or a focused link survives a poll.
-    const k = JSON.stringify({ d: { ...data, checked_at: !!data.checked_at, metrics: { ...data.metrics, since: !!data.metrics.since } }, i: index === undefined ? "u" : index, c: linkCommit() });
+    // The ingest lags move on every poll too: only which sources are listed is part of the key.
+    const lag = data.metrics.ingest_lag_ms;
+    const k = JSON.stringify({ d: { ...data, checked_at: !!data.checked_at, metrics: { ...data.metrics, since: !!data.metrics.since, ingest_lag_ms: lag?.map(([src]) => src) } }, i: index === undefined ? "u" : index, c: linkCommit() });
     const now = Date.now();
     if (!force && k === key) {
       const moveTo = (el: HTMLTimeElement | null, t: string) => {
@@ -434,6 +452,10 @@ export function mountCorrelation(
       };
       moveTo(mounts.health.querySelector<HTMLTimeElement>(".corr-health__at"), data.checked_at);
       moveTo(mounts.metrics.querySelector<HTMLTimeElement>(".corr-since"), data.metrics.since);
+      for (const [src, ms] of lag ?? []) {
+        const el = [...mounts.metrics.querySelectorAll<HTMLElement>(".corr-lag__ms")].find((e) => e.dataset.source === src);
+        if (el) setText(el, lagText(ms));
+      }
       refreshRelative(section, now);
       return;
     }

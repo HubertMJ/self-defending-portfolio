@@ -4055,3 +4055,13 @@ html[data-terminal="off"] .needs-terminal {
   margin: 1rem 0 0;
   font-size: 0.92rem;
 }
+
+.corr-lag {
+  margin: 0.75rem 0 0;
+  overflow-wrap: anywhere;
+}
+
+.corr-lag__ms {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+}
