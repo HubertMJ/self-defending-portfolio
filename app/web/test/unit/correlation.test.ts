@@ -428,6 +428,18 @@ describe("the section's parts", () => {
     expect(parseCorrelation(answer({ metrics: { ingest_lag_ms: [1, 2] } })).metrics.ingest_lag_ms).toBeUndefined();
   });
 
+  it("ingest lag display: over an hour reads \"> 1 h\", a negative lag as it is (review L-2)", () => {
+    const shown = (ms: number) =>
+      renderMetrics(parseCorrelation(answer({ metrics: { ingest_lag_ms: { falco: ms } } })), NOW).querySelector('.corr-lag__ms[data-source="falco"]')?.textContent;
+    expect(shown(3_600_000)).toBe("60 min 0 s");
+    expect(shown(3_600_001)).toBe("> 1 h");
+    expect(shown(86_400_000 * 400)).toBe("> 1 h");
+    expect(shown(-120)).toBe("-120 ms");
+    expect(shown(-5000)).toBe("-5000 ms");
+    expect(shown(-7_200_000)).toBe("-7200000 ms");
+    expect(shown(0)).toBe("0 ms");
+  });
+
   it("coverage: rules per technique and source, incidents per technique, a seen technique without a rule is a gap", () => {
     const c = parseCorrelation(answer({ incidents: [incident({ attack: ["T1003.008", "T1059.004"] })] }));
     const cov = coverage(index(), c.incidents);

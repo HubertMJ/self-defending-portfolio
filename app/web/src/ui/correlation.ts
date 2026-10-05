@@ -130,7 +130,8 @@ export function renderMetrics(c: Correlation, now: number): HTMLElement {
   return h("div", {}, tiles, lagLine(m));
 }
 
-const lagText = (ms: number | null) => (ms === null ? "–" : formatDuration(ms));
+/** A lag over an hour reads "> 1 h" (an absurd value is not spelled out); a negative one (clock skew) as it is, in ms (formatDuration). */
+const lagText = (ms: number | null) => (ms === null ? "–" : ms > 3_600_000 ? "> 1 h" : formatDuration(ms));
 
 /** "Ingest lag, per source: falco 1.2 s · talon 900 ms · hubble –", in the sources' usual order; null when the API sends none. */
 function lagLine(m: Correlation["metrics"]): HTMLElement | null {
