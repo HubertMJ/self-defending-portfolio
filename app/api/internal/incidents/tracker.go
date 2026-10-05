@@ -94,12 +94,17 @@ type Tracker struct {
 	alerts  []siem.Alert
 	active  []siem.Alert // the ACTIVE alerts, for the health line
 	rules   RulesView
-	rewrite bool
-	lastOK  time.Time // start of the last fully successful poll: the next window starts 2 min before it
-	lastEnd time.Time // end of that poll: the staleness of the view is measured from here
-	lastTry time.Time
-	failing bool
-	view    View
+	// recordAt is the newest sync record's applied_at; hb the sync's heartbeat, hbRead once it has
+	// been read (found or not) at least once.
+	recordAt time.Time
+	hb       heartbeat
+	hbRead   bool
+	rewrite  bool
+	lastOK   time.Time // start of the last fully successful poll: the next window starts 2 min before it
+	lastEnd  time.Time // end of that poll: the staleness of the view is measured from here
+	lastTry  time.Time
+	failing  bool
+	view     View
 	// viewJSON is view marshalled once per poll; every request is served these bytes.
 	viewJSON []byte
 	// logged: notes already logged (a full page per read, a 404 per log type); Poll's goroutine only.
@@ -280,7 +285,8 @@ func (t *Tracker) Poll(ctx context.Context) {
 	}
 	// The health reads are optional: a missing sync record or one failed count does not hide the
 	// section; the previous value stands (rules: unknown until read once).
-	rules, rulesOK := t.readRules(ctx, now)
+	rules, recordAt, rulesOK := t.readRules(ctx, now)
+	hb, hbOK := t.readHeartbeat(ctx, now)
 	rewrite, rewriteOK := t.readRewrite(ctx, now)
 
 	t.mu.Lock()
@@ -316,7 +322,10 @@ func (t *Tracker) Poll(ctx context.Context) {
 		if rules.Commit == "" {
 			rules.Commit, rules.AppliedAt = t.rules.Commit, t.rules.AppliedAt
 		}
-		t.rules = rules
+		t.rules, t.recordAt = rules, recordAt
+	}
+	if hbOK {
+		t.hb, t.hbRead = hb, true
 	}
 	if rewriteOK {
 		t.rewrite = rewrite
@@ -386,12 +395,15 @@ var commitPat = regexp.MustCompile(`^[0-9a-f]{40}$`)
 // and time. The sync writes a record only when it has something to do, so a quiet repository leaves
 // the last record weeks old: the search looks back as far as a search may (31 d), and finding no
 // record, or no applied one, keeps what was read before (ok false / the previous commit).
-func (t *Tracker) readRules(ctx context.Context, now time.Time) (RulesView, bool) {
+func (t *Tracker) readRules(ctx context.Context, now time.Time) (RulesView, time.Time, bool) {
 	res, err := t.cfg.Source.Search(ctx, []string{siem.SyncIndex}, siem.Query{TimeField: "applied_at",
 		Since: now.Add(-siem.MaxRange), Until: now, Size: 50, SortField: "applied_at",
-		Source: []string{"commit", "applied_at", "status"}})
+		// The heartbeat document has no applied_at, so the range already leaves it out; the filter
+		// and the check below say so twice.
+		Filters: []map[string]any{{"bool": map[string]any{"must_not": []any{map[string]any{"term": map[string]any{"kind": "heartbeat"}}}}}},
+		Source:  []string{"kind", "commit", "applied_at", "status"}})
 	if err != nil {
-		return RulesView{}, false
+		return RulesView{}, time.Time{}, false
 	}
 	type rec struct {
 		at             time.Time
@@ -400,13 +412,13 @@ func (t *Tracker) readRules(ctx context.Context, now time.Time) (RulesView, bool
 	var recs []rec
 	for _, h := range res.Hits {
 		at := timeOf(h.Source, "applied_at")
-		if at.IsZero() {
+		if at.IsZero() || h.ID == heartbeatID || str(h.Source, "kind") == "heartbeat" {
 			continue
 		}
 		recs = append(recs, rec{at, str(h.Source, "commit"), str(h.Source, "status")})
 	}
 	if len(recs) == 0 {
-		return RulesView{}, false
+		return RulesView{}, time.Time{}, false
 	}
 	sort.SliceStable(recs, func(i, j int) bool { return recs[i].at.After(recs[j].at) })
 	out := RulesView{Status: "unknown"}
@@ -423,7 +435,73 @@ func (t *Tracker) readRules(ctx context.Context, now time.Time) (RulesView, bool
 			break
 		}
 	}
-	return out, true
+	return out, recs[0].at, true
+}
+
+// heartbeatID is the sync's one heartbeat document in siem-sync, overwritten by every run.
+const heartbeatID = "heartbeat"
+
+// staleAfterSync: the sync runs every 5 minutes; no heartbeat for 30 minutes means it is not running
+// (or cannot reach the SIEM), whatever the last record says.
+const staleAfterSync = 30 * time.Minute
+
+// heartbeat is the sync's liveness: when it last ran to an end, and how that run ended.
+type heartbeat struct {
+	found     bool
+	checkedAt time.Time
+	outcome   string // applied | unchanged | refused | failed, "" when unknown
+}
+
+// readHeartbeat reads the heartbeat document by a term query (the read-only allow-list has no GET on
+// a document). A heartbeat whose checked_at is not an RFC 3339 time, or whose commit is neither empty
+// nor 40 hex, is treated as missing; an unknown outcome is ignored.
+func (t *Tracker) readHeartbeat(ctx context.Context, now time.Time) (heartbeat, bool) {
+	res, err := t.cfg.Source.Search(ctx, []string{siem.SyncIndex}, siem.Query{TimeField: "checked_at",
+		// Up to an hour ahead: siem01's clock may run ahead of this node's.
+		Since: now.Add(-siem.MaxRange + time.Hour), Until: now.Add(time.Hour), Size: 1, SortField: "checked_at",
+		Filters: []map[string]any{{"term": map[string]any{"kind": "heartbeat"}}},
+		Source:  []string{"kind", "checked_at", "commit", "outcome"}})
+	if err != nil {
+		return heartbeat{}, false
+	}
+	for _, h := range res.Hits {
+		if str(h.Source, "kind") != "heartbeat" {
+			continue
+		}
+		at, err := time.Parse(time.RFC3339Nano, str(h.Source, "checked_at"))
+		if c := str(h.Source, "commit"); err != nil || (c != "" && !commitPat.MatchString(c)) {
+			return heartbeat{}, true
+		}
+		hb := heartbeat{found: true, checkedAt: at.UTC()}
+		switch o := str(h.Source, "outcome"); o {
+		case "applied", "unchanged", "refused", "failed":
+			hb.outcome = o
+		}
+		return hb, true
+	}
+	return heartbeat{}, true
+}
+
+// rulesView is the published rules line: the records' status and last applied commit, then
+//   - "stale" when the heartbeat is older than 30 minutes, or missing while records exist;
+//   - otherwise the heartbeat's "refused" or "failed" when it is newer than the newest record: the
+//     latest run's verdict (a run that refuses the same commit again writes no new record);
+//
+// the commit and applied_at stay the last applied ones either way. t.mu held.
+func (t *Tracker) rulesView(now time.Time) RulesView {
+	r := t.rules
+	if !t.hbRead {
+		return r
+	}
+	records := r.Status != "unknown" || r.Commit != ""
+	hb := t.hb
+	switch {
+	case hb.found && now.Sub(hb.checkedAt) > staleAfterSync, !hb.found && records:
+		r.Status = "stale"
+	case hb.found && (hb.outcome == "refused" || hb.outcome == "failed") && hb.checkedAt.After(t.recordAt):
+		r.Status = hb.outcome
+	}
+	return r
 }
 
 // readRewrite counts documents the sdp-final pipeline marked as written with a client id in the
@@ -571,7 +649,7 @@ func (t *Tracker) buildView(now time.Time) View {
 	metrics.HostFindings = len(t.hosts)
 	metrics.IngestLagMs = t.ingestLag()
 	checked := now
-	return View{Available: true, CheckedAt: &checked, Rules: t.rules, Health: t.health(), Metrics: metrics, Incidents: incs}
+	return View{Available: true, CheckedAt: &checked, Rules: t.rulesView(now), Health: t.health(), Metrics: metrics, Incidents: incs}
 }
 
 // health: ingest silent / disk high from the ops monitors' active alerts, evidence_rewritten from the

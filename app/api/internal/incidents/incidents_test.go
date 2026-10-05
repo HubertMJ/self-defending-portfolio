@@ -450,6 +450,7 @@ func TestMonitorIncidentsAndHealth(t *testing.T) {
 		{ID: "s1", Source: map[string]any{"commit": strings.Repeat("a", 40), "applied_at": t0.Add(-time.Hour).Format(time.RFC3339), "status": "applied"}},
 		{ID: "s2", Source: map[string]any{"commit": strings.Repeat("b", 40), "applied_at": t0.Format(time.RFC3339), "status": "refused"}},
 	}
+	f.sync = append(f.sync, hbHit(t0.Add(time.Minute), "unchanged", strings.Repeat("a", 40)))
 	f.rewrite = 1
 	tr := newTracker(t, f, &clock{t: t0.Add(2 * time.Minute)})
 	tr.Poll(context.Background())
@@ -738,7 +739,8 @@ func TestFlagMatchIsKept(t *testing.T) {
 func TestRulesHealthSurvivesQuietWeeks(t *testing.T) {
 	f := newFake()
 	commit := strings.Repeat("c", 40)
-	f.sync = []siem.Hit{{ID: "s1", Source: map[string]any{"commit": commit, "applied_at": t0.Add(-8 * 24 * time.Hour).Format(time.RFC3339), "status": "applied"}}}
+	f.sync = []siem.Hit{{ID: "s1", Source: map[string]any{"commit": commit, "applied_at": t0.Add(-8 * 24 * time.Hour).Format(time.RFC3339), "status": "applied"}},
+		hbHit(t0.Add(-time.Minute), "unchanged", commit)}
 	clk := &clock{t: t0}
 	tr := newTracker(t, f, clk)
 	tr.Poll(context.Background())
@@ -747,6 +749,7 @@ func TestRulesHealthSurvivesQuietWeeks(t *testing.T) {
 	}
 	// 40 days later the record is past any search range: the last known state stands.
 	clk.Set(t0.Add(40 * 24 * time.Hour))
+	f.sync[1] = hbHit(clk.Now().Add(-time.Minute), "unchanged", commit)
 	tr.Poll(context.Background())
 	if r := tr.View().Rules; r.Status != "applied" || r.Commit != commit {
 		t.Fatalf("no record in range: %+v", r)
@@ -1262,4 +1265,67 @@ func TestSyntheticMarkerAnchored(t *testing.T) {
 	}
 	one(t, v, KindPolicyProbing)
 	one(t, v, KindPreventedNotDetected)
+}
+
+// hbHit is the sync's heartbeat document as P3 writes it (siem-sync, _id heartbeat).
+func hbHit(checked time.Time, outcome, commit string) siem.Hit {
+	return siem.Hit{ID: "heartbeat", Index: "siem-sync", Source: map[string]any{"kind": "heartbeat",
+		"checked_at": checked.Format("2006-01-02T15:04:05.000Z07:00"), "commit": commit, "outcome": outcome,
+		"lint_sha256": strings.Repeat("e", 64)}}
+}
+
+// The sync's liveness: "stale" when its heartbeat is older than 30 min or missing while records
+// exist; a newer refused/failed heartbeat is the latest run's verdict; the applied commit stays.
+func TestRulesStaleFromHeartbeat(t *testing.T) {
+	commit := strings.Repeat("c", 40)
+	applied := siem.Hit{ID: "s1", Source: map[string]any{"commit": commit, "applied_at": t0.Add(-2 * time.Hour).Format(time.RFC3339),
+		"status": "applied", "reason": "free text k3s01 10.4.2.10 never published", "changed": map[string]any{"rules": 1}, "lint_sha256": "x"}}
+	rules := func(t *testing.T, hits ...siem.Hit) RulesView {
+		t.Helper()
+		f := newFake()
+		f.sync = hits
+		tr := newTracker(t, f, &clock{t: t0})
+		tr.Poll(context.Background())
+		v := tr.View()
+		if b, _ := json.Marshal(v); strings.Contains(string(b), "free text") {
+			t.Fatalf("a record's reason was published: %s", b)
+		}
+		return v.Rules
+	}
+	check := func(name string, got RulesView, status string) {
+		t.Helper()
+		if got.Status != status || got.Commit != commit || got.AppliedAt == nil {
+			t.Errorf("%s: %+v, want status %s with commit %s", name, got, status, commit)
+		}
+	}
+	check("fresh heartbeat", rules(t, applied, hbHit(t0.Add(-5*time.Minute), "unchanged", commit)), "applied")
+	check("heartbeat 29:59 old", rules(t, applied, hbHit(t0.Add(-30*time.Minute+time.Second), "unchanged", commit)), "applied")
+	check("heartbeat 30:01 old", rules(t, applied, hbHit(t0.Add(-30*time.Minute-time.Second), "unchanged", commit)), "stale")
+	check("heartbeat missing", rules(t, applied), "stale")
+	check("checked_at not RFC 3339", rules(t, applied, siem.Hit{ID: "heartbeat", Source: map[string]any{"kind": "heartbeat",
+		"checked_at": "04/10/2026 10:00", "outcome": "unchanged"}}), "stale")
+	check("heartbeat commit not 40 hex", rules(t, applied, hbHit(t0.Add(-time.Minute), "unchanged", "abc")), "stale")
+	check("newer refused run", rules(t, applied, hbHit(t0.Add(-time.Minute), "refused", commit)), "refused")
+	check("newer failed run", rules(t, applied, hbHit(t0.Add(-time.Minute), "failed", commit)), "failed")
+	check("unknown outcome", rules(t, applied, hbHit(t0.Add(-time.Minute), "exploded", commit)), "applied")
+	refusedRec := siem.Hit{ID: "s2", Source: map[string]any{"commit": strings.Repeat("d", 40), "applied_at": t0.Add(-time.Minute).Format(time.RFC3339), "status": "refused"}}
+	check("heartbeat older than the newest record", rules(t, applied, refusedRec, hbHit(t0.Add(-2*time.Minute), "failed", commit)), "refused")
+	// No records and no heartbeat: nothing known yet.
+	f := newFake()
+	tr := newTracker(t, f, &clock{t: t0})
+	tr.Poll(context.Background())
+	if r := tr.View().Rules; r.Status != "unknown" {
+		t.Fatalf("empty siem-sync: %+v", r)
+	}
+	// A malformed heartbeat is a missing one: with no records, still nothing known.
+	f.sync = []siem.Hit{{ID: "heartbeat", Source: map[string]any{"kind": "heartbeat", "checked_at": "yesterday", "outcome": "refused"}}}
+	tr.Poll(context.Background())
+	if r := tr.View().Rules; r.Status != "unknown" {
+		t.Fatalf("malformed heartbeat, no records: %+v", r)
+	}
+	// The heartbeat is never counted as a record, even if a search returned it with an applied_at.
+	stray := hbHit(t0.Add(-time.Minute), "applied", commit)
+	stray.Source["applied_at"] = t0.Add(-time.Minute).Format(time.RFC3339)
+	stray.Source["status"] = "failed"
+	check("heartbeat in the records search", rules(t, applied, stray), "applied")
 }

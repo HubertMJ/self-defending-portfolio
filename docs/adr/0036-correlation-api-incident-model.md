@@ -59,11 +59,11 @@ The constraints are the project's:
   ones on their own for the health line, so an ops alarm older than a burst of incident alerts still
   shows); three bounded document searches (`sdp-api` run/command lines; `sdp-k8s-audit` pod
   patches/deletes by Talon and pod creates/deletes in the twin namespace; `sdp-hubble` drops); the newest
-  `siem-sync` records; one count of `event.overwrite: true` documents ingested in the last 24 h over the
-  six streams. Fourteen requests.
+  `siem-sync` records and the sync's heartbeat (section 7); one count of `event.overwrite: true`
+  documents ingested in the last 24 h over the six streams. Fifteen requests.
 - A detector log type that answers 404 (no detector of that type yet) is "no findings", not an outage,
   logged once per type; any other failure of the findings, alerts and document reads fails the poll. The
-  correlations, `siem-sync` and `event.overwrite` reads are soft: their failure keeps what was read
+  correlations, `siem-sync` (records and heartbeat) and `event.overwrite` reads are soft: their failure keeps what was read
   before and does not hide the section (an SA correlation is cited evidence, never a condition). A page
   that comes back full (500) is logged once until it no longer is.
 - The evidence is kept in memory for 24 h, at most 2 000 records per source; Hubble DNS findings and
@@ -176,10 +176,26 @@ an SA correlation, when one pairs two of the incident's findings, is cited as ev
 
 ### 7. Health on the page (D1)
 - `rules`: from the newest `siem-sync` records of the last 31 days: the newest one gives `status`
-  (`applied|refused|failed`, else `unknown`), the newest with status `applied` gives `commit` (40 hex)
+  (`applied|refused|failed`, else `unknown`; `stale` from the heartbeat below), the newest with status
+  `applied` gives `commit` (40 hex)
   and `applied_at`. The sync writes a record only when it has something to do, so a quiet repository
   leaves the last record old: when no record is found, or no applied one, the last known value stands
-  (`unknown` only until a record has been read once).
+  (`unknown` only until a record has been read once). Records are read by `applied_at` and never
+  include the heartbeat below; a record's `reason`, `changed` and `lint_sha256` are not read.
+- **Sync liveness.** Every sync run overwrites one document in `siem-sync`, `_id` `heartbeat`
+  (`{kind: heartbeat, checked_at, commit, outcome: applied|unchanged|refused|failed, lint_sha256}`); a
+  run with nothing to do writes only that. The API reads it with a term query on `kind: heartbeat` through
+  the existing `_search` path (no new path on the allow-list). A `checked_at` that is not an RFC 3339
+  time, or a `commit` that is neither empty nor 40 hex, makes the heartbeat count as missing; an unknown
+  `outcome` is ignored. Then:
+  - `status` = `stale` when `checked_at` is more than 30 minutes old (the sync runs every 5), or when
+    the heartbeat is missing while records exist;
+  - otherwise a heartbeat `outcome` of `refused` or `failed` newer than the newest record replaces the
+    records' status: it is the latest run's verdict (a run that refuses the same commit again writes no
+    new record, and a run that fails before writing one still says so). `applied` and `unchanged` change
+    nothing - the records already say what is in effect;
+  - `commit` and `applied_at` stay the last applied ones in every case.
+  The heartbeat read is soft like the record read: a failure keeps the last value read.
 - `health.ingest` = `silent` when an ACTIVE Alerting alert belongs to a monitor named
   `ingest silent <source>`, else `ok`; `health.disk` = `high` likewise for `disk watermark`. Both read
   the ACTIVE alerts on their own. When the alerts cannot be read the poll fails, and after 45 s the whole
@@ -341,7 +357,7 @@ or not the SIEM is reachable:
 ## Consequences
 - The section shows incidents 1-3 minutes after the event (detector interval 1 min, Fluent Bit flush,
   refresh, the 15 s poll); the page says so.
-- Fourteen bounded read requests every 15 s from one client certificate; at most 24 h of evidence
+- Fifteen bounded read requests every 15 s from one client certificate; at most 24 h of evidence
   in memory (capped per source), at most 200 incidents of at most 50 steps.
 - Incidents are detection code in the API: versioned, unit- and mutation-tested (`internal/incidents`,
   `internal/siem`), each kind with a canary; a leak test runs the JSON through ADR 0021's never-publish
