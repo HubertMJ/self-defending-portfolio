@@ -53,7 +53,7 @@ SINKHOLE_BLOCK = [
     "errors",
     "prometheus :9153",
     "template IN A exfil.sdp.test {",
-    "match ^ok[.]exfil[.]sdp[.]test[.]$",
+    "match ^ok[.]x[.]exfil[.]sdp[.]test[.]$",
     'answer "{{ .Name }} 60 IN A 192.0.2.53"',
     "fallthrough",
     "}",

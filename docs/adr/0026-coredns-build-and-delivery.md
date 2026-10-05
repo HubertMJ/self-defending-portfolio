@@ -252,7 +252,7 @@ exfil.sdp.test:53 {
     errors
     prometheus :9153
     template IN A exfil.sdp.test {
-      match "^ok[.]exfil[.]sdp[.]test[.]$"
+      match "^ok[.]x[.]exfil[.]sdp[.]test[.]$"
       answer "{{ .Name }} 60 IN A 192.0.2.53"
       fallthrough
     }
@@ -263,10 +263,13 @@ exfil.sdp.test:53 {
 ```
 The terminal's `dns-exfil` command (ADR 0034; ADR 0017 and 0032 amendments) looks up
 `sdp-<16 hex>.x.exfil.sdp.test.`, a label made from the run's flag. The flag must not leave the homelab,
-so CoreDNS answers the zone itself: `ok.exfil.sdp.test` A 192.0.2.53 (TEST-NET-1, RFC 5737) is a canary,
+so CoreDNS answers the zone itself: `ok.x.exfil.sdp.test` A 192.0.2.53 (TEST-NET-1, RFC 5737) is a canary,
 and every other name in the zone - the flagged one included - gets NXDOMAIN. The command looks up the
 canary first and sends the flagged name only if 192.0.2.53 comes back, i.e. only if this block is what
-answers (an NXDOMAIN alone proves nothing: any resolver, the real `.test` root included, says it).
+answers (an NXDOMAIN alone proves nothing: any resolver, the real `.test` root included, says it). The
+canary sits under `x.exfil.sdp.test`, the flagged name's own parent: a block that took that subtree
+over (a child zone, or `} x.exfil.sdp.test:53 {` closing `.:53` early) would serve the canary too and
+fail it, where a canary directly under `exfil.sdp.test` would still answer and let the flag through.
 
 **Why it cannot forward.** A query is served by the server block of the most specific zone that
 contains it, and only by that block: a name under `exfil.sdp.test` never reaches `.:53` and its
@@ -295,8 +298,11 @@ is sinkholed; the import of `/etc/coredns/custom/*.server` stays as in k3s, and 
   zone is forwarded (the forward counter moves, the upstream logs it); the canary answers 192.0.2.53 and
   a name in the zone NXDOMAIN, `coredns_dns_requests_total{zone="exfil.sdp.test."}` rises, the forward
   counter does not move and the upstream never sees the zone; `coredns_plugin_enabled` lists exactly
-  errors, prometheus and template for it. Replacing `template` with `forward` in a scratch copy fails
-  those assertions; without the block the same lookups reach the upstream.
+  errors, prometheus and template for it. A copy with the one-line `} x.exfil.sdp.test:53 {` in
+  `.:53` - a block for the flagged name's parent that gets `.:53`'s `forward` - forwards the canary,
+  which then does not answer 192.0.2.53 (and the command, once in the catalogue, sends nothing).
+  Replacing `template` with `forward` in a scratch copy fails those assertions; without the block the
+  same lookups reach the upstream.
 - `tests/scenarios/run.sh` asserts the same counters live, from a sandbox pod, over
   `kubectl port-forward` to :9153 of every CoreDNS pod (`SINKHOLE_ONLY=1` runs only that), and runs
   the dns-exfil command only after that check has passed.

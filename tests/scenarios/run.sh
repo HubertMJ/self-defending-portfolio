@@ -35,7 +35,7 @@
 # expected refusal, all on one pod, with no Falco alert after any of them; every `detected` command, on a
 # fresh pod each, raises its Falco rule and Talon's action, as the one-click scenarios do.
 # The `exfil.sdp.test` sinkhole (ADR 0034), from a sandbox pod with the terminal's spec: CoreDNS answers
-# a lookup in the zone with NXDOMAIN and the canary ok.exfil.sdp.test with 192.0.2.53 itself -
+# a lookup in the zone with NXDOMAIN and the canary ok.x.exfil.sdp.test with 192.0.2.53 itself -
 # coredns_dns_requests_total{zone="exfil.sdp.test."} goes up while forward's upstream counter stays
 # still, and the zone's server block runs exactly errors, prometheus and template - read from :9153 of
 # every CoreDNS pod over `kubectl port-forward`. Falco logs nothing for that pod. The catalogue's
@@ -850,8 +850,8 @@ if [ -s "$WORK_DIR/term.tsv" ]; then
       if grep -q NXDOMAIN <<<"$DNS_OUT"; then pass "sinkhole: $name answers NXDOMAIN"
       else fail "sinkhole: $name did not answer NXDOMAIN (rc=$DNS_RC): $(tr '\n' ' ' <<<"$DNS_OUT" | head -c 300)"; fi
     fi
-    if dns_check "sinkhole canary" "$spod" "nslookup -type=a ok.exfil.sdp.test."; then
-      if grep -q '^Address: 192\.0\.2\.53' <<<"${DNS_OUT//$'\r'/}"; then pass "sinkhole: the canary ok.exfil.sdp.test. answers 192.0.2.53"
+    if dns_check "sinkhole canary" "$spod" "nslookup -type=a ok.x.exfil.sdp.test."; then
+      if grep -q '^Address: 192\.0\.2\.53' <<<"${DNS_OUT//$'\r'/}"; then pass "sinkhole: the canary ok.x.exfil.sdp.test. answers 192.0.2.53"
       else fail "sinkhole: the canary did not answer 192.0.2.53 (rc=$DNS_RC): $(tr '\n' ' ' <<<"$DNS_OUT" | head -c 300)"; fi
     fi
     sleep "$QUIET_WAIT"

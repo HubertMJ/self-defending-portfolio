@@ -36,14 +36,16 @@
 #      pinned CoreDNS image under the Deployment's security context, with a stand-in upstream resolver
 #      that logs every query it gets. A name outside the zone is forwarded (the forward counter moves,
 #      the upstream logs it - so "unchanged" below means something); in the zone, the canary
-#      ok.exfil.sdp.test answers 192.0.2.53 and any other name NXDOMAIN, both from CoreDNS itself:
+#      ok.x.exfil.sdp.test answers 192.0.2.53 and any other name NXDOMAIN, both from CoreDNS itself:
 #      coredns_dns_requests_total{zone="exfil.sdp.test."} goes up, the forward counter stays still and
 #      the upstream never sees the zone; the zone's server block runs exactly errors, prometheus and
-#      template. With dns-exfil in the catalogue, its argv runs from the terminal pod's security
-#      context against that CoreDNS (exit 0 on NXDOMAIN, D3), against the bare upstream - a resolver
-#      without the sinkhole, where the canary fails and the flagged name is never sent - and against a
-#      resolver that drops every query, the stand-in for a quarantined pod (the client is bounded by
-#      `timeout 6`, the command by nslookup's own ~5 s, N9).
+#      template. A copy of the Corefile with a block for x.exfil.sdp.test that forwards (the one-line
+#      `} x.exfil.sdp.test:53 {` make validate refuses) forwards the canary, so it fails. With
+#      dns-exfil in the catalogue, its argv runs from the terminal pod's security context against that
+#      CoreDNS (exit 0 on NXDOMAIN, D3), against the bare upstream - a resolver without the sinkhole,
+#      where the canary fails and the flagged name is never sent - against the copy with the child
+#      block (the same), and against a resolver that drops every query, the stand-in for a quarantined
+#      pod (the client is bounded by `timeout 6`, the command by nslookup's own ~5 s, N9).
 #
 # What it cannot prove: that Falco *emits* the alert. That needs the syscalls themselves - a live probe
 # (BPF, PERFMON and CAP_SYS_RESOURCE to lock its ring buffers, which a CI or build sandbox container
@@ -762,20 +764,67 @@ if [ -n "$ready" ]; then
 
   # The canary the command checks before it sends anything: answered by the sinkhole, not forwarded.
   z0=$z1; f0=$f1
-  out=$($DOCKER exec "$tn" nslookup -type=a ok.exfil.sdp.test. 2>&1 || true)
+  out=$($DOCKER exec "$tn" nslookup -type=a ok.x.exfil.sdp.test. 2>&1 || true)
   metrics > "$WORK_DIR/m.txt" || true
   z1=$(zone_requests "$WORK_DIR/m.txt"); f1=$(forwards "$WORK_DIR/m.txt")
   if grep -q '^Address: 192\.0\.2\.53$' <<<"$out" && [ "$z1" -gt "$z0" ] && [ "$f1" -eq "$f0" ] \
-     && [ "$(upstream_saw ok.exfil.sdp.test)" -eq 0 ]; then
-    pass "sinkhole: the canary ok.exfil.sdp.test. answers 192.0.2.53 from CoreDNS itself (zone $z0 -> $z1, forward $f0 -> $f1)"
+     && [ "$(upstream_saw ok.x.exfil.sdp.test)" -eq 0 ]; then
+    pass "sinkhole: the canary ok.x.exfil.sdp.test. answers 192.0.2.53 from CoreDNS itself (zone $z0 -> $z1, forward $f0 -> $f1)"
   else
     fail "sinkhole: the canary: zone $z0 -> $z1, forward $f0 -> $f1, output: $(tr '\n' ' ' <<<"$out")"
   fi
 
-  # The catalogue command itself, when the catalogue has it (P5 ships the sinkhole first, ADR 0034).
   dargv=$(awk -F'\t' '$1 == "CMD" && $2 == "dns-exfil" { print $6 }' "$WORK_DIR/terminal.tsv")
+  label="sdp-${FLAG#SDP\{}"; label="${label%\}}.x.exfil.sdp.test."
+
+  # A block that takes x.exfil.sdp.test - the flagged name's parent - and forwards: here the one-line
+  # `} x.exfil.sdp.test:53 {` in .:53, which CoreDNS reads as the end of .:53 and a new block that
+  # gets its `forward` (make validate refuses the layout; this is what it would do). The canary sits
+  # under the same parent, so it is forwarded too and does not answer 192.0.2.53: the command would
+  # stop before the flagged name.
+  mkdir -p "$DNS_DIR/child/custom"
+  sed 's|^\(    import /etc/coredns/custom/\*\.override\)$|\1\n} x.exfil.sdp.test:53 {|' \
+    "$DNS_DIR/etc/Corefile" > "$DNS_DIR/child/Corefile"
+  cp "$DNS_DIR/etc/NodeHosts" "$DNS_DIR/child/"
+  chmod -R a+rX "$DNS_DIR/child"
+  if ! grep -qx '} x.exfil.sdp.test:53 {' "$DNS_DIR/child/Corefile"; then
+    fail "sinkhole: the child-block copy of the Corefile was not made (the .override import moved?)"
+  else
+    child=$(dns_start child "${COREDNS_SC[@]}" \
+      -e KUBERNETES_SERVICE_HOST="$up_ip" -e KUBERNETES_SERVICE_PORT=443 \
+      -v "$DNS_DIR/child:/etc/coredns:ro" -v "$DNS_DIR/custom:/etc/coredns/custom:ro" \
+      -v "$DNS_DIR/sa:/var/run/secrets/kubernetes.io/serviceaccount:ro" \
+      -v "$DNS_DIR/node-resolv.conf:/etc/resolv.conf:ro" \
+      "$COREDNS_IMAGE" -conf /etc/coredns/Corefile)
+    child_ip=$(ip_of "$child")
+    c0=$(upstream_saw ok.x.exfil.sdp.test)
+    for _ in $(seq 1 60); do
+      out=$($DOCKER exec "$tn" nslookup -type=a ok.x.exfil.sdp.test. "$child_ip" 2>&1 || true)
+      grep -qE 'timed out|no servers|refused' <<<"$out" || break
+      sleep 0.5
+    done
+    if ! grep -q '^Address: 192\.0\.2\.53$' <<<"$out" && [ "$(upstream_saw ok.x.exfil.sdp.test)" -gt "$c0" ]; then
+      pass "sinkhole: with a forwarding block for x.exfil.sdp.test the canary is forwarded and does not answer 192.0.2.53"
+    else
+      fail "sinkhole: with a forwarding block for x.exfil.sdp.test the canary: upstream lines $c0 -> $(upstream_saw ok.x.exfil.sdp.test), output: $(tr '\n' ' ' <<<"$out")"
+    fi
+    if [ -n "$dargv" ]; then
+      printf 'nameserver %s\noptions ndots:5\n' "$child_ip" > "$DNS_DIR/child-resolv.conf"
+      chmod a+r "$DNS_DIR/child-resolv.conf"
+      CFLAGS=${TFLAGS/--network none/--network $DNS_NET -v $DNS_DIR/child-resolv.conf:/etc/resolv.conf:ro}
+      tc=$(start "terminal-childblock" "$CFLAGS -e SDP_FLAG=$FLAG" "$TCMD")
+      for _ in 1 2 3 4 5 6 7 8 9 10; do $DOCKER exec "$tc" test -e /srv/shop/.flag 2>/dev/null && break; sleep 0.5; done
+      out=$(eval "timeout 6 $DOCKER exec $tc $dargv" 2>&1) && rc=0 || rc=$?
+      if [ "$rc" != 0 ] && ! grep -q '^query ' <<<"$out" && [ "$(upstream_saw "${label%%.*}")" -eq 0 ]; then
+        pass "dns-exfil: with a forwarding block for x.exfil.sdp.test the canary fails and the label is never sent (rc=$rc: \"$(tail -1 <<<"$out")\")"
+      else
+        fail "dns-exfil: with a forwarding block for x.exfil.sdp.test rc=$rc, upstream lines with the label: $(upstream_saw "${label%%.*}"), output: $(tr '\n' ' ' <<<"$out")"
+      fi
+    fi
+  fi
+
+  # The catalogue command itself, when the catalogue has it (P5 ships the sinkhole first, ADR 0034).
   if [ -n "$dargv" ]; then
-    label="sdp-${FLAG#SDP\{}"; label="${label%\}}.x.exfil.sdp.test."
     z0=$z1; f0=$f1
     out=$(eval "$DOCKER exec $tn $dargv" 2>&1) && rc=0 || rc=$?
     metrics > "$WORK_DIR/m.txt" || true
@@ -798,9 +847,10 @@ if [ -n "$ready" ]; then
     BFLAGS=${TFLAGS/--network none/--network $DNS_NET -v $DNS_DIR/bare-resolv.conf:/etc/resolv.conf:ro}
     tb=$(start "terminal-nosinkhole" "$BFLAGS -e SDP_FLAG=$FLAG" "$TCMD")
     for _ in 1 2 3 4 5 6 7 8 9 10; do $DOCKER exec "$tb" test -e /srv/shop/.flag 2>/dev/null && break; sleep 0.5; done
+    c0=$(upstream_saw ok.x.exfil.sdp.test)
     out=$(eval "timeout 6 $DOCKER exec $tb $dargv" 2>&1) && rc=0 || rc=$?
     if [ "$rc" != 0 ] && ! grep -q '^query ' <<<"$out" && [ "$(upstream_saw "${label%%.*}")" -eq 0 ] \
-       && [ "$(upstream_saw ok.exfil.sdp.test)" -gt 0 ]; then
+       && [ "$(upstream_saw ok.x.exfil.sdp.test)" -gt "$c0" ]; then
       pass "dns-exfil: without the sinkhole the canary fails and the label is never sent (rc=$rc: \"$(tail -1 <<<"$out")\")"
     else
       fail "dns-exfil: without the sinkhole rc=$rc, upstream lines with the label: $(upstream_saw "${label%%.*}"), output: $(tr '\n' ' ' <<<"$out")"
