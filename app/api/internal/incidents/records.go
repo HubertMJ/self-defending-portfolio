@@ -187,6 +187,9 @@ func (t *Tracker) fill(r *record, m map[string]any) (dnsQuery string) {
 		if !runIDPat.MatchString(r.runID) {
 			r.runID = ""
 		}
+		if r.arm != "guarded" && r.arm != "unguarded" {
+			r.arm = ""
+		}
 	}
 	return dnsQuery
 }

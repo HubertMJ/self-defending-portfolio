@@ -95,9 +95,9 @@ func unavailable(checkedAt *time.Time) View {
 // What webhook.Scrub does not know about, redacted from every published string as a backstop: the
 // allow-lists below never put any of it there (ADR 0021, siem contract M9).
 var redactions = []*regexp.Regexp{
-	regexp.MustCompile(`(?i)\b(k3s01|siem01)\b`),
+	regexp.MustCompile(`(?i)k3s01|siem01`), // no word boundary: "node_k3s01" is a node name too
 	regexp.MustCompile(`(?i)system:serviceaccount:\S*`),
-	regexp.MustCompile(`(?i)service\s?account`),
+	regexp.MustCompile(`(?i)service[\s_-]?account`),
 	regexp.MustCompile(`(?i)hm1:[0-9a-f]*`),
 	regexp.MustCompile(`(?i)SDP\{[^}\s]*\}?`),
 	regexp.MustCompile(`(?i)sdp-[0-9a-f]{16}`),

@@ -653,7 +653,7 @@ func TestViewLeaksNothing(t *testing.T) {
 	terminalRun(f, "sdp-"+flagHex)
 	poison := "k3s01 siem01 10.4.2.10 10.42.0.77 fd00::1 coredns.kube-system.svc.cluster.local kubernetes.default.svc " +
 		"SDP{" + flagHex + "} sdp-" + flagHex + " hm1:0011223344556677 system:serviceaccount:portfolio-api:portfolio-api ServiceAccount " +
-		"https://10.43.0.1:443/api"
+		"https://10.43.0.1:443/api node_k3s01 siem01-data service-account service_account"
 	f.findings["sdp_falco"] = append(f.findings["sdp_falco"], finding("f-poison", t0.Add(25*time.Second), "Falco "+poison, []string{"attack.t1059"},
 		map[string]any{"falco.rule": poison, "proc.name": poison, "k8s.pod.ref": termRef, "user.name": "operator", "source.ip": "10.1.1.250",
 			"hostname": "k3s01", "dns.query": "sdp-" + flagHex + ".x.exfil.sdp.test."}))
@@ -699,7 +699,7 @@ var leakPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`cluster\.local`),
 	regexp.MustCompile(`(?i)k3s01|siem01`),
 	regexp.MustCompile(`(?i)system:serviceaccount`),
-	regexp.MustCompile(`(?i)serviceaccount`),
+	regexp.MustCompile(`(?i)service[\s_-]?account`),
 	regexp.MustCompile(`(?i)hm1:`),
 	regexp.MustCompile(`(?i)sdp-[0-9a-f]{16}`),
 	regexp.MustCompile(`SDP\{`),
@@ -1112,5 +1112,19 @@ func TestCorrelationsReadFailureIsSoft(t *testing.T) {
 	tr.prune(clk.Now())
 	if len(tr.hosts) != maxPerSource {
 		t.Fatalf("%d host findings kept", len(tr.hosts))
+	}
+}
+
+// An arm is published only as guarded or unguarded, whatever the document says.
+func TestArmValidated(t *testing.T) {
+	f := newFake()
+	f.hits["sdp-api"] = []siem.Hit{apiRun("r1", t0, termRun, termRef, "started", "k3s01-arm")}
+	st := t0.Add(time.Minute).UnixMilli()
+	f.alerts = []siem.Alert{{ID: "al-prev", MonitorName: "sdp-git: prevented-not-detected", State: "ACTIVE", StartTime: &st,
+		Agg: &siem.AlertAgg{BucketKeys: []any{termRef}}}}
+	tr := newTracker(t, f, &clock{t: t0.Add(2 * time.Minute)})
+	tr.Poll(context.Background())
+	if inc := one(t, tr.View(), KindPreventedNotDetected); inc.RunID != termRun || inc.Arm != "" {
+		t.Fatalf("run %q arm %q", inc.RunID, inc.Arm)
 	}
 }
