@@ -167,6 +167,7 @@ func TestInvalidEntriesAreSkipped(t *testing.T) {
 		{"foreign init image", `- {id: a, title: A, response: terminate, pod: {initContainers: [{name: i, image: "busybox"}], containers: [{name: c, image: "` + img + `"}]}}`},
 		{"bad response", `- {id: a, title: A, response: explode, pod: {containers: [{name: c, image: "` + img + `"}]}}`},
 		{"bad id", `- {id: "A_B", title: A, response: terminate, pod: {containers: [{name: c, image: "` + img + `"}]}}`},
+		{"canary marker id", `- {id: p3c-x, title: A, response: terminate, pod: {containers: [{name: c, image: "` + img + `"}]}}`},
 		{"no pod", `- {id: a, title: A, response: terminate}`},
 		{"no containers", `- {id: a, title: A, response: terminate, pod: {containers: []}}`},
 		{"unknown field", `- {id: a, title: A, response: terminate, pod: {containers: [{name: c, image: "` + img + `"}], hostPID2: true}}`},
