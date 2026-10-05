@@ -663,7 +663,7 @@ export class MockBackend {
     let ms = 30;
     for (const [stream, text] of [["stdout", out.stdout], ["stderr", out.stderr]] as const) {
       for (const line of text ?? []) {
-        const chunk = (line === "${FLAG}" ? t.flag : line) + "\n";
+        const chunk = (line === "${FLAG}" ? t.flag : line.replaceAll("${LABEL}", `sdp-${t.flag.slice(4, -1)}`)) + "\n";
         at(ms, () => cmdEv("output", { stream, chunk }));
         ms += 15;
       }

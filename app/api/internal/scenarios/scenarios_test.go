@@ -563,7 +563,7 @@ func TestCatalogueBounds(t *testing.T) {
 // app/api alone, so it cannot read that file); refresh it with
 // `cp cluster/infra/sandbox/scenarios/scenarios.yaml app/api/internal/scenarios/testdata/scenarios-real.yaml`
 // whenever that catalogue changes, or this test checks a file production no longer serves. Every
-// entry must validate, and the terminal must load with its 14 commands and 5 objectives and the
+// entry must validate, and the terminal must load with its 15 commands and 5 objectives and the
 // session bounds GET /api/scenarios/terminal/details sends (300 s, idle 90 s; ADR 0032 amendment).
 func TestRealCatalogue(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join("testdata", "scenarios-real.yaml"))
@@ -583,8 +583,8 @@ func TestRealCatalogue(t *testing.T) {
 	if terminal == nil || !terminal.Interactive {
 		t.Fatalf("no interactive terminal among %d scenarios", len(list))
 	}
-	if len(terminal.Commands) != 14 || len(terminal.Objectives) != 5 {
-		t.Fatalf("terminal: %d commands and %d objectives, want 14 and 5", len(terminal.Commands), len(terminal.Objectives))
+	if len(terminal.Commands) != 15 || len(terminal.Objectives) != 5 {
+		t.Fatalf("terminal: %d commands and %d objectives, want 15 and 5", len(terminal.Commands), len(terminal.Objectives))
 	}
 	if terminal.Timeout() != 300*time.Second || terminal.Idle() != 90*time.Second {
 		t.Fatalf("terminal: timeout %s, idle %s; want 300s and 1m30s", terminal.Timeout(), terminal.Idle())
