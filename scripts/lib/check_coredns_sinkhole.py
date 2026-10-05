@@ -18,6 +18,11 @@ is checked:
   - k3s_coredns_own is true (otherwise k3s's own CoreDNS runs, without the sinkhole);
   - exactly one ConfigMap kube-system/coredns and one Deployment kube-system/coredns, at most one
     ConfigMap kube-system/coredns-custom; no binaryData in either ConfigMap;
+  - the Corefile and every coredns-custom file is laid out so that reading it line by line gives what
+    CoreDNS's tokeniser gives: a `}` alone on its line, a `{` only as the last token after a header or
+    directive, no brace inside a token, no `{$VAR}` / `{%VAR%}` placeholder, no quoted token over two
+    lines (`} x.exfil.sdp.test:53 {` on one line is a new server block to CoreDNS); an *.override
+    file (imported into `.:53`) never closes more than it opens;
   - the Corefile's top level is server blocks plus exactly one `import /etc/coredns/custom/*.server`;
     exactly one block is the sinkhole, byte for byte after whitespace (SINKHOLE_BLOCK), and no other
     block - in the Corefile or in any coredns-custom *.server file - serves `exfil.sdp.test` or a
@@ -40,14 +45,15 @@ import jinja2
 import yaml
 
 ZONE = "exfil.sdp.test."
-# The block, one directive per line, whitespace-normalised. Exact: anything added, removed or changed
-# is a failure.
+# The block, one directive per line, as directives() renders it (CoreDNS's tokens, quoted only where a
+# token has whitespace, a quote, `#` or a brace in it). Exact: anything added, removed or changed is a
+# failure.
 SINKHOLE_BLOCK = [
     "exfil.sdp.test:53 {",
     "errors",
     "prometheus :9153",
     "template IN A exfil.sdp.test {",
-    'match "^ok[.]exfil[.]sdp[.]test[.]$"',
+    "match ^ok[.]exfil[.]sdp[.]test[.]$",
     'answer "{{ .Name }} 60 IN A 192.0.2.53"',
     "fallthrough",
     "}",
@@ -91,20 +97,104 @@ def render(root: Path, template: str = None, overrides: dict = None):
     return [d for d in yaml.safe_load_all(text) if d], context
 
 
-def directives(text: str) -> list:
-    """The lines, comments dropped, whitespace collapsed, blank lines skipped."""
+def lex(text: str) -> list:
+    """(text, line, quoted) tokens, as CoreDNS's Caddyfile lexer reads them (coredns/caddy lexer.go):
+    whitespace separates tokens; `"` opens a quoted token only at a token's start and the next
+    unescaped `"` ends it (`\\"` is the only escape; a quoted token may run over several lines); `#`
+    anywhere outside quotes comments out the rest of the line. quoted is None for a quote never closed."""
+    tokens, val, line, start, quoted, escaped, comment = [], [], 1, 1, False, False, False
+    for ch in text:
+        if quoted:
+            if not escaped and ch == "\\":
+                escaped = True
+                continue
+            if not escaped and ch == '"':
+                tokens.append(("".join(val), start, True))
+                val, quoted = [], False
+                continue
+            if ch == "\n":
+                line += 1
+            if escaped and ch != '"':
+                val.append("\\")
+            val.append(ch)
+            escaped = False
+            continue
+        if ch in " \t\n":
+            if ch == "\n":
+                line, comment = line + 1, False
+            if val:
+                tokens.append(("".join(val), start, False))
+                val = []
+            continue
+        if ch == "#":
+            comment = True
+        if comment:
+            continue
+        if not val:
+            start = line
+            if ch == '"':
+                quoted = True
+                continue
+        val.append(ch)
+    if val or quoted:
+        tokens.append(("".join(val), start, None if quoted else False))
+    return tokens
+
+
+def canonical(text: str, quoted) -> str:
+    """A token as one word of a directive line: quoted only where it has to be (whitespace, a quote,
+    `#` or a brace in it, or empty), so `"bind"` and `bind` read the same. A brace token stays bare, a
+    quoted brace does not."""
+    if (not quoted and text in ("{", "}")) or (text and not any(c in text for c in ' \t\n"#{}')):
+        return text
+    return '"' + text.replace('"', '\\"') + '"'
+
+
+def directives(text: str, where: str = "", problems: list = None) -> list:
+    """The directive lines of a Corefile as CoreDNS tokenises it: each line its tokens in canonical
+    form, joined by one space; comments and blank lines dropped.
+
+    CoreDNS reads braces as tokens, not as lines: `} x.exfil.sdp.test:53 {` on one line closes the
+    block it is in and opens a new one, and a `{$VAR}` / `{%VAR%}` placeholder is replaced from the
+    environment before the line is parsed. Counting braces per line, the way the checks here read
+    blocks, would see neither. So with problems given, every layout that a per-line reading could get
+    wrong is reported: anything outside printable ASCII, tab and newline; a quoted token over several
+    lines or never closed; an environment placeholder anywhere; a brace that is not a token of its own,
+    or a quoted `{` / `}` (a brace to CoreDNS all the same); a `}` that is not alone on its line; a `{`
+    that is not the last token of a line that has something before it."""
+    def report(msg):
+        if problems is not None:
+            problems.append(f"{where}: {msg}")
+
+    bad = sorted({c for c in text if not (" " <= c <= "~" or c in "\t\n")})
+    if bad:
+        report(f"characters outside printable ASCII, tab and newline: {bad}")
+    lines = {}
+    for tok, line, quoted in lex(text):
+        if quoted is None:
+            report(f"a quote that is never closed, from line {line}")
+        elif quoted and "\n" in tok:
+            report(f"a quoted token runs over several lines, from line {line}: {tok!r}")
+        if "{$" in tok or "{%" in tok:
+            report(f"line {line}: `{tok}` holds an environment placeholder, replaced before CoreDNS parses the line")
+        if (quoted and tok in ("{", "}")) or (not quoted and tok not in ("{", "}") and ("{" in tok or "}" in tok)):
+            report(f"line {line}: `{tok}` is a brace that is not a token of its own")
+        lines.setdefault(line, []).append((tok, quoted))
     out = []
-    for line in text.splitlines():
-        line = " ".join(line.split("#", 1)[0].split())
-        if line:
-            out.append(line)
+    for line, toks in sorted(lines.items()):
+        words = [t for t, q in toks if not q]
+        if "}" in words and len(toks) != 1:
+            report(f"line {line}: `}}` is not alone on its line: {[t for t, _ in toks]}")
+        if "{" in words and (words.count("{") != 1 or toks[-1] != ("{", False) or len(toks) < 2):
+            report(f"line {line}: `{{` is not the last token after something: {[t for t, _ in toks]}")
+        out.append(" ".join(canonical(t, q) for t, q in toks))
     return out
 
 
 def parse_top(text: str, where: str, problems: list):
     """(blocks, imports) of a Corefile: blocks as (header keys, body lines incl. header and braces)."""
     blocks, imports = [], []
-    lines = directives(text)
+    lines = directives(text, where, problems)
     i = 0
     while i < len(lines):
         line = lines[i]
@@ -112,22 +202,24 @@ def parse_top(text: str, where: str, problems: list):
             imports.append(line)
             i += 1
             continue
-        if not line.endswith("{") or line.startswith("("):
+        if not line.endswith(" {") or line.startswith("("):
             # A header split from its brace, a snippet, a stray directive: not a layout this
             # repository writes, so not one this check can vouch for.
             problems.append(f"{where}: unexpected top-level line `{line}`")
             i += 1
             continue
+        # directives() has reported every line where a brace is anything but a lone `}` or a
+        # trailing ` {`, so these two are the only ways a line changes the depth.
         depth, body = 0, []
         while i < len(lines):
             body.append(lines[i])
-            depth += lines[i].count("{") - lines[i].count("}")
+            depth += lines[i].endswith(" {") - (lines[i] == "}")
             i += 1
             if depth == 0:
                 break
         if depth != 0:
             problems.append(f"{where}: unbalanced braces in the block starting `{line}`")
-        keys = [k for k in re.split(r"[\s,]+", line[:-1].strip()) if k]
+        keys = [k.strip('"') for k in re.split(r"[\s,]+", line[:-1].strip()) if k]
         blocks.append((keys, body))
     return blocks, imports
 
@@ -203,8 +295,19 @@ def check(docs: list, context: dict) -> list:
                 if cimports:
                     problems.append(f"coredns-custom {key} imports {cimports}")
                 check_blocks(cblocks, f"coredns-custom {key}", problems, allow_sinkhole=False)
-            elif any(line.split()[0] == "bind" for line in directives(value)):
-                problems.append(f"coredns-custom {key}: `bind` ({NAMED['bind']})")
+            else:
+                # *.override is imported into `.:53`, and an import splices its tokens in place: a
+                # `}` that closes more than the file opened ends `.:53` there and starts a block of
+                # its own.
+                lines = directives(value, f"coredns-custom {key}", problems)
+                depth = 0
+                for line in lines:
+                    depth += line.endswith(" {") - (line == "}")
+                    if depth < 0:
+                        problems.append(f"coredns-custom {key}: a `}}` closes the block it is imported into")
+                        break
+                if any(line.split()[0] == "bind" for line in lines):
+                    problems.append(f"coredns-custom {key}: `bind` ({NAMED['bind']})")
 
     spec = (((deploys[0] if deploys else {}).get("spec") or {}).get("template") or {}).get("spec") or {}
     volumes = {v.get("name"): v for v in spec.get("volumes", [])}

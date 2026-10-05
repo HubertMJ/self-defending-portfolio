@@ -19,6 +19,7 @@ from check_coredns_sinkhole import check, render  # noqa: E402
 
 SINKHOLE_HEAD = "    exfil.sdp.test:53 {\n"
 TOP_IMPORT = "    import /etc/coredns/custom/*.server\n"
+OVERRIDE_IMPORT = "        import /etc/coredns/custom/*.override\n"
 CUSTOM_VOLUME = """          configMap:
             name: coredns-custom
             optional: true
@@ -68,6 +69,17 @@ CASES = [
      (EXTRA_CUSTOM % "exfil.sdp.test:53").lstrip("-\n").join(["---\n", "---\napiVersion: apps/v1\nkind: Deployment\n"])),
     ("coredns-custom serving a child zone", "---\napiVersion: apps/v1\nkind: Deployment\n",
      (EXTRA_CUSTOM % "a.exfil.sdp.test").lstrip("-\n").join(["---\n", "---\napiVersion: apps/v1\nkind: Deployment\n"])),
+    # CoreDNS reads braces as tokens: this one line closes `.:53` and opens a block for the flagged
+    # name's parent, which gets `.:53`'s forward. Counting braces per line misses it.
+    ("one-line } x.exfil.sdp.test:53 { in .:53", OVERRIDE_IMPORT, OVERRIDE_IMPORT + "    } x.exfil.sdp.test:53 {\n"),
+    ("header { not the last token", TOP_IMPORT, "    x.exfil.sdp.test:53 { forward . 1.1.1.1\n    }\n" + TOP_IMPORT),
+    # Replaced from CoreDNS's environment before the header is read ({% written for Jinja).
+    ("{$VAR} placeholder header", TOP_IMPORT, "    {$SDP_ZONE}:53 {\n        forward . 1.1.1.1\n    }\n" + TOP_IMPORT),
+    ("{%VAR%} placeholder header", TOP_IMPORT, "    {{ '{%' }}SDP_ZONE%}:53 {\n        forward . 1.1.1.1\n    }\n" + TOP_IMPORT),
+    # An import splices its tokens into `.:53`: a `}` in an *.override ends `.:53` there.
+    ("coredns-custom override closing .:53", "---\napiVersion: apps/v1\nkind: Deployment\n",
+     "---\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: coredns-custom\n  namespace: kube-system\ndata:\n"
+     "  x.override: |\n    }\n    x.exfil.sdp.test:53 {\n---\napiVersion: apps/v1\nkind: Deployment\n"),
     ("items on the custom volume", CUSTOM_VOLUME, CUSTOM_VOLUME + "            items:\n              - key: x.server\n                path: x.server\n"),
     ("subPath on the Corefile mount", CORE_MOUNT, CORE_MOUNT + "              subPath: Corefile\n"),
     ("Corefile item renamed", "              - key: Corefile\n                path: Corefile\n",

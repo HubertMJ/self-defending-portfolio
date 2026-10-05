@@ -279,7 +279,10 @@ fall through to `forward` without any error (fail open). Now, if CoreDNS runs th
 is sinkholed; the import of `/etc/coredns/custom/*.server` stays as in k3s, and the role ships no
 `coredns-custom`. Guards:
 - `make validate` renders the template and checks the effective configuration
-  (scripts/lib/check_coredns_sinkhole.py): exactly one exact sinkhole block; no other block, in the
+  (scripts/lib/check_coredns_sinkhole.py), reading the Corefile as CoreDNS tokenises it - braces are
+  tokens, so `} x.exfil.sdp.test:53 {` on one line closes `.:53` and opens a block that inherits its
+  `forward`; the check refuses any brace that is not a lone `}` or a trailing `{`, any `{$VAR}` /
+  `{%VAR%}` placeholder and any quoted token over two lines, then requires: exactly one exact sinkhole block; no other block, in the
   Corefile or in any `coredns-custom` `*.server`, that serves the zone or a name under it (headers
   compared case-insensitively, with or without trailing dot, scheme and port, several zones per header);
   no `bind`; exactly the one top-level import; one `coredns` ConfigMap, at most one `coredns-custom`, no
