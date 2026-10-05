@@ -538,7 +538,8 @@ canary land with the rules (P3), the incident with the section (P4).
 **Decision, as built.**
 - **Sinkhole** - a server block in CoreDNS's own Corefile, delivered by the k3s role (ADR 0026
   amendment of 2026-10-04): `exfil.sdp.test:53` with `errors`, `prometheus` and two `template`s - the
-  canary `ok.exfil.sdp.test` A 192.0.2.53, NXDOMAIN for every other name - no `forward`, no `log`. Not an
+  canary `ok.x.exfil.sdp.test` A 192.0.2.53 (under the flagged name's own parent), NXDOMAIN for every
+  other name - no `forward`, no `log`. Not an
   imported `coredns-custom` file: a missing file would let the zone fall through to `forward`.
   `make validate` checks the effective configuration (no other block or imported file serves the zone,
   mounts, args) and proves each check against its mutation.
