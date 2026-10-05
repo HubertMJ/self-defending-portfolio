@@ -11,6 +11,9 @@
 #     remote CSR entry point, mapped to the k3s01 shipper role for the run and unmapped at the end (the
 #     run FAILS if it still has a role afterwards). The documents carry this pass's markers
 #     (sandbox_p3c-<tag>-*, system:p3c-<tag>) and stay in the streams, like every document.
+# It maps and unmaps shipper-test with the opensearch_config role, so run it only from the checkout
+# that is allowed to apply that role to siem01 (one checkout at a time: each apply writes its own
+# roles.yml and templates).
 # Every remote step goes through one SSH control master (bursts of new connections into the Siem zone
 # have been dropped), except the two SSH canaries, which must be logins of their own.
 # Environment: SIEM_HOST (default 10.4.2.10), DOCKER (default docker).
