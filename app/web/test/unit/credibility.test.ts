@@ -538,6 +538,23 @@ describe("code review (REQUEST_CHANGES) fixes", () => {
       obs.disconnect();
     });
 
+    it("folded (#evidence collapsed): the card is drawn, the ticker is not; unfolded, the ticker catches up and announces nothing", () => {
+      const { card, section, ev: e } = mount();
+      e.setConnection("open");
+      e.update(buildTimeline(scripted(1), Date.now()));
+      e.tick({ at: new Date().toISOString() });
+      e.setActive(false);
+      const obs = new MutationObserver(() => {});
+      obs.observe(section.ticker, { childList: true, subtree: true });
+      e.update(buildTimeline(scripted(2), Date.now()));
+      expect(obs.takeRecords()).toEqual([]);
+      expect(card.querySelectorAll(".evlist__item")).toHaveLength(3);
+      e.setActive(true);
+      expect(section.ticker.textContent).toContain("Rule 1");
+      expect(section.announce.textContent).toBe("");
+      obs.disconnect();
+    });
+
     it("the 30 s refresh keeps the card and a focused link in it, and updates the relative text", () => {
       vi.useFakeTimers();
       try {

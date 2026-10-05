@@ -148,6 +148,97 @@ test.describe("layout (ADR 0035, amended 2026-10-05; ?mock=1)", () => {
     await expect(page.locator('a[href="#verify"]')).toHaveCount(1);
     await expect(page.locator('footer.site-footer a[href="#verify"]')).toHaveCount(1);
   });
+
+  test("a section's heading folds it: the body hides, aria-expanded flips, the choice survives a reload; by keyboard too", async ({ page }) => {
+    const problems = guardConsole(page);
+    await page.goto("/?mock=1");
+    const btn = page.locator("#posture-title > button.section__toggle");
+    await expect(btn).toHaveAttribute("aria-expanded", "true");
+    await expect(btn).toHaveAttribute("aria-controls", "posture-body");
+    await expect(page.locator("#posture-panel .tile").first()).toBeVisible();
+    await btn.click();
+    await expect(btn).toHaveAttribute("aria-expanded", "false");
+    await expect(page.locator("#posture-body")).toBeHidden();
+    await expect(page.locator("#posture .section__lead")).toBeHidden();
+    // Folded keeps the eyebrow (the section's number) and the title.
+    await expect(page.locator("#posture .eyebrow")).toBeVisible();
+    await expect(btn).toBeVisible();
+    await page.reload();
+    await expect(btn).toHaveAttribute("aria-expanded", "false");
+    await expect(page.locator("#posture-body")).toBeHidden();
+    await expect(page.locator("#how-body")).toBeVisible();
+    // Unfolded, the posture that was fetched while folded is drawn.
+    await btn.focus();
+    await page.keyboard.press("Enter");
+    await expect(btn).toHaveAttribute("aria-expanded", "true");
+    await expect(page.locator("#posture-panel .tile").first()).toBeVisible();
+    await page.keyboard.press("Space");
+    await expect(btn).toHaveAttribute("aria-expanded", "false");
+    await page.reload();
+    await expect(page.locator("#posture-body")).toBeHidden();
+    // The attack section folds and unfolds with its terminal intact.
+    const attack = page.locator("#attack-title > button");
+    await attack.click();
+    await expect(page.locator("#terminal")).toBeHidden();
+    await attack.click();
+    await expect(page.locator("#terminal .term-start__btn")).toBeVisible();
+    expect(problems).toEqual([]);
+  });
+
+  test("a link to a folded section opens it: the footer's #verify, the hero's #attack, a typed hash, a page opened at one", async ({ page }) => {
+    const problems = guardConsole(page);
+    await page.goto("/?mock=1");
+    for (const id of ["verify", "attack", "evidence", "posture"]) await page.locator(`#${id}-title > button`).click();
+    await page.reload();
+    for (const id of ["verify", "attack", "evidence", "posture"]) await expect(page.locator(`#${id}-body`)).toBeHidden();
+    // The page has its full height first: a smooth scroll does not follow the correlation appearing above it.
+    await expect(page.locator("#correlation .corr-matrix")).toBeVisible();
+    await expect(page.locator("#hero-stats .herostats__tile").first()).toBeVisible();
+    await page.locator('footer.site-footer a[href="#verify"]').click();
+    await expect(page.locator("#verify-title > button")).toHaveAttribute("aria-expanded", "true");
+    await expect(page.locator("#verify-panel")).toBeVisible();
+    await expect(page.locator("#verify-title")).toBeInViewport();
+    await page.locator("#hero-cta").click();
+    await expect(page.locator("#attack-body")).toBeVisible();
+    await expect(page.locator("#attack-title")).toBeInViewport();
+    await page.evaluate(() => (location.hash = "#evidence"));
+    await expect(page.locator("#evidence-body")).toBeVisible();
+    await expect(page.locator("#evidence-title")).toBeInViewport();
+    await page.goto("/?mock=1#posture");
+    await expect(page.locator("#posture-body")).toBeVisible();
+    await expect(page.locator("#posture-title")).toBeInViewport();
+    expect(problems).toEqual([]);
+  });
+
+  for (const wide of [false, true]) {
+    const fonts = wide ? " (a wide font forced in)" : "";
+
+    test(`the section toggles fit 360 and 320 px, open and folded${fonts}`, async ({ page }) => {
+      if (wide) await wideFonts(page);
+      const past = () =>
+        page.evaluate(() =>
+          [...document.querySelectorAll(".section__toggle, .section__toggle *")]
+            .filter((e) => {
+              const r = e.getBoundingClientRect();
+              return r.width > 0 && (r.left < -1 || r.right > document.documentElement.clientWidth + 1);
+            })
+            .map((e) => e.closest("section")?.id),
+        );
+      for (const width of [360, 320]) {
+        await page.setViewportSize({ width, height: 780 });
+        await page.goto("/?mock=1");
+        if (wide) expect(await page.evaluate(() => getComputedStyle(document.body).fontFamily)).toContain("DejaVu Sans");
+        await expect(page.locator("#correlation")).toBeVisible();
+        const toggles = page.locator(".section__toggle");
+        await expect(toggles).toHaveCount(8);
+        expect(await past()).toEqual([]);
+        await noHorizontalScroll(page);
+        for (const t of await toggles.all()) await t.click();
+        expect(await past()).toEqual([]);
+        await noHorizontalScroll(page);
+      }
+    });
+  }
 });
 
 test.describe("mock mode", () => {

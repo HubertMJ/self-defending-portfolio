@@ -413,6 +413,12 @@ export function renderRuleLibrary(idx: RuleIndex | null | undefined, commit: str
 export interface CorrelationHandle {
   /** The API's commit (GET /api/provenance): the rule index is generated from it, so its files and lines are linked there. */
   setCommit(commit: string): void;
+  /**
+   * Whether the section's content can be seen (it is not folded away; folded is not hidden, which
+   * says the SIEM is unavailable). While it cannot, the polls go on (they decide shown or hidden) but
+   * nothing is drawn; the latest answer is drawn on the way back.
+   */
+  setActive(active: boolean): void;
 }
 
 /**
@@ -433,11 +439,12 @@ export function mountCorrelation(
   let shown = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let due = false;
+  let active = true;
 
   const linkCommit = () => apiCommit || data?.rules.commit || "";
 
   const draw = (force = false) => {
-    if (!data) return;
+    if (!data || !active) return;
     // Redrawn only when what it shows changes. The API moves checked_at and metrics.since on every
     // poll: those two are rewritten in place, so an open <details> or a focused link survives a poll.
     // The ingest lags move on every poll too: only which sources are listed is part of the key.
@@ -520,6 +527,10 @@ export function mountCorrelation(
     setCommit(c) {
       if (c === apiCommit) return;
       apiCommit = c;
+      draw();
+    },
+    setActive(on) {
+      active = on;
       draw();
     },
   };

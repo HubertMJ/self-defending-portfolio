@@ -104,7 +104,7 @@ describe("stripTodoContent on src/index.html (review 2, item 9)", () => {
 
   it("keeps a project card's written lines and drops its unwritten tag line", () => {
     const out = stripTodoContent(
-      page.replace("<h3>[TODO-CONTENT: project name]</h3>\n          <p>[TODO-CONTENT: what it does and what you did]</p>", "<h3>edge-proxy</h3>\n          <p>A proxy I wrote.</p>"),
+      page.replace("<h3>[TODO-CONTENT: project name]</h3>\n            <p>[TODO-CONTENT: what it does and what you did]</p>", "<h3>edge-proxy</h3>\n            <p>A proxy I wrote.</p>"),
     );
     expect(out).toContain("<h3>edge-proxy</h3>");
     expect(out).toContain("<p>A proxy I wrote.</p>");
