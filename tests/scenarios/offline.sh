@@ -35,12 +35,15 @@
 #   7. The `exfil.sdp.test` sinkhole (ADR 0034): the k3s role's CoreDNS template, rendered, run in the
 #      pinned CoreDNS image under the Deployment's security context, with a stand-in upstream resolver
 #      that logs every query it gets. A name outside the zone is forwarded (the forward counter moves,
-#      the upstream logs it - so "unchanged" below means something); a name in the zone gets NXDOMAIN
-#      from CoreDNS itself, coredns_dns_requests_total{zone="exfil.sdp.test."} goes up, the forward
-#      counter stays still and the upstream never sees it; the zone's server block runs exactly errors,
-#      prometheus and template. With dns-exfil in the catalogue, its argv runs against that CoreDNS from
-#      the terminal pod's security context (exit 0 on NXDOMAIN, D3) and against a resolver that drops
-#      every query, the stand-in for a quarantined pod (exit non-zero within `timeout 6`, N9).
+#      the upstream logs it - so "unchanged" below means something); in the zone, the canary
+#      ok.exfil.sdp.test answers 192.0.2.53 and any other name NXDOMAIN, both from CoreDNS itself:
+#      coredns_dns_requests_total{zone="exfil.sdp.test."} goes up, the forward counter stays still and
+#      the upstream never sees the zone; the zone's server block runs exactly errors, prometheus and
+#      template. With dns-exfil in the catalogue, its argv runs from the terminal pod's security
+#      context against that CoreDNS (exit 0 on NXDOMAIN, D3), against the bare upstream - a resolver
+#      without the sinkhole, where the canary fails and the flagged name is never sent - and against a
+#      resolver that drops every query, the stand-in for a quarantined pod (the client is bounded by
+#      `timeout 6`, the command by nslookup's own ~5 s, N9).
 #
 # What it cannot prove: that Falco *emits* the alert. That needs the syscalls themselves - a live probe
 # (BPF, PERFMON and CAP_SYS_RESOURCE to lock its ring buffers, which a CI or build sandbox container
@@ -471,17 +474,16 @@ while IFS=$'\t' read -r tag id outcome tty detection argv; do
   case $outcome in
     allowed)
       if [ "$id" = dns-exfil ]; then
-        # No resolver under --network none, so the lookup itself cannot succeed here (section 7 runs it
-        # against the rendered CoreDNS): what is proven is the argv - it reads the flag file, builds the
-        # one label the zone is for, prints what it queries, exits 1 without an NXDOMAIN (D3) and does
-        # not hang. Then the other side: a flag file that is not SDP{16 lowercase hex} makes no query.
+        # No resolver under --network none (section 7 runs it against the rendered CoreDNS): the
+        # canary lookup fails, so the command sends nothing, says so, exits 1 (D3) and does not hang.
+        # Then the other side: a flag file that is not SDP{16 lowercase hex} makes no query either.
         t0=${EPOCHREALTIME/,/.}
         out=$(eval "$DOCKER exec $tc $argv" 2>&1) && rc=0 || rc=$?
         took=$(awk -v a="$t0" -v b="${EPOCHREALTIME/,/.}" 'BEGIN { printf "%.2f", b - a }')
-        if grep -qxF "query sdp-0123456789abcdef.x.exfil.sdp.test." <<<"$out"; then
-          pass "$id: prints the name it looks up (\"$(head -1 <<<"$out")\")"
+        if grep -q 'sinkhole not answering' <<<"$out" && ! grep -q '^query ' <<<"$out"; then
+          pass "$id: without the cluster resolver's canary it sends nothing (\"$(tail -1 <<<"$out")\")"
         else
-          fail "$id: expected 'query sdp-0123456789abcdef.x.exfil.sdp.test.' ('$(tr '\n' ' ' <<<"$out")')"
+          fail "$id: expected 'sinkhole not answering' and no query ('$(tr '\n' ' ' <<<"$out")')"
         fi
         if [ "$rc" = 1 ] && awk -v t="$took" 'BEGIN { exit !(t < 2) }'; then
           pass "$id: without a resolver it exits 1 in ${took}s (no NXDOMAIN, so not achieved)"
@@ -619,9 +621,10 @@ done < "$WORK_DIR/terminal.tsv"
 # ------------------------------------------------- 7. the exfil.sdp.test sinkhole (ADR 0034, ADR 0026)
 #
 # The dns-exfil command is only harmless while CoreDNS answers `exfil.sdp.test` itself. make validate
-# checks the block's text (scripts/lib/check_coredns_sinkhole.py); this runs it. The template is
-# rendered as the k3s role renders it and the two ConfigMaps are mounted where the Deployment mounts
-# them. Its `kubernetes` plugin is pointed at an API server that refuses connections (it starts
+# checks the effective configuration's text (scripts/lib/check_coredns_sinkhole.py); this runs it. The
+# template is rendered as the k3s role renders it; ConfigMap coredns is mounted where the Deployment
+# mounts it, and the coredns-custom directory (the role ships no such ConfigMap) is mounted empty, as
+# the optional volume is in the cluster. Its `kubernetes` plugin is pointed at an API server that refuses connections (it starts
 # unsynced after 5 s; nothing here is a cluster name), and its `forward . /etc/resolv.conf` at a
 # stand-in for the node's resolver: a CoreDNS that logs and answers every query (`whoami`). All on an
 # internal Docker network: nothing reaches a real resolver.
@@ -638,7 +641,7 @@ from pathlib import Path
 sys.path.insert(0, f"{sys.argv[1]}/scripts/lib")
 from check_coredns_sinkhole import render
 out = Path(sys.argv[2])
-for d in render(Path(sys.argv[1])):
+for d in render(Path(sys.argv[1]))[0]:
     if d.get("kind") != "ConfigMap":
         continue
     if d["metadata"]["name"] == "coredns":
@@ -753,6 +756,18 @@ if [ -n "$ready" ]; then
     fail "sinkhole: the zone leaked upstream (forward counter $f0 -> $f1, upstream lines: $(upstream_saw exfil.sdp.test))"
   fi
 
+  # The canary the command checks before it sends anything: answered by the sinkhole, not forwarded.
+  z0=$z1; f0=$f1
+  out=$($DOCKER exec "$tn" nslookup -type=a ok.exfil.sdp.test. 2>&1 || true)
+  metrics > "$WORK_DIR/m.txt" || true
+  z1=$(zone_requests "$WORK_DIR/m.txt"); f1=$(forwards "$WORK_DIR/m.txt")
+  if grep -q '^Address: 192\.0\.2\.53$' <<<"$out" && [ "$z1" -gt "$z0" ] && [ "$f1" -eq "$f0" ] \
+     && [ "$(upstream_saw ok.exfil.sdp.test)" -eq 0 ]; then
+    pass "sinkhole: the canary ok.exfil.sdp.test. answers 192.0.2.53 from CoreDNS itself (zone $z0 -> $z1, forward $f0 -> $f1)"
+  else
+    fail "sinkhole: the canary: zone $z0 -> $z1, forward $f0 -> $f1, output: $(tr '\n' ' ' <<<"$out")"
+  fi
+
   # The catalogue command itself, when the catalogue has it (P5 ships the sinkhole first, ADR 0034).
   dargv=$(awk -F'\t' '$1 == "CMD" && $2 == "dns-exfil" { print $6 }' "$WORK_DIR/terminal.tsv")
   if [ -n "$dargv" ]; then
@@ -772,8 +787,24 @@ if [ -n "$ready" ]; then
       fail "dns-exfil: zone $z0 -> $z1, forward $f0 -> $f1, upstream lines with the label: $(upstream_saw "${label%%.*}")"
     fi
 
-    # Quarantined: the lookup is dropped, so no NXDOMAIN, a non-zero exit, and within run.sh's
-    # `timeout 6` (busybox nslookup has no timeout option, N9; the API cuts a command at 5 s anyway).
+    # A resolver without the sinkhole (the bare stand-in upstream): the canary does not come back as
+    # 192.0.2.53, so the command stops before the flagged name is ever sent - fail closed.
+    printf 'nameserver %s\noptions ndots:5\n' "$up_ip" > "$DNS_DIR/bare-resolv.conf"
+    chmod a+r "$DNS_DIR/bare-resolv.conf"
+    BFLAGS=${TFLAGS/--network none/--network $DNS_NET -v $DNS_DIR/bare-resolv.conf:/etc/resolv.conf:ro}
+    tb=$(start "terminal-nosinkhole" "$BFLAGS -e SDP_FLAG=$FLAG" "$TCMD")
+    for _ in 1 2 3 4 5 6 7 8 9 10; do $DOCKER exec "$tb" test -e /srv/shop/.flag 2>/dev/null && break; sleep 0.5; done
+    out=$(eval "timeout 6 $DOCKER exec $tb $dargv" 2>&1) && rc=0 || rc=$?
+    if [ "$rc" != 0 ] && ! grep -q '^query ' <<<"$out" && [ "$(upstream_saw "${label%%.*}")" -eq 0 ] \
+       && [ "$(upstream_saw ok.exfil.sdp.test)" -gt 0 ]; then
+      pass "dns-exfil: without the sinkhole the canary fails and the label is never sent (rc=$rc: \"$(tail -1 <<<"$out")\")"
+    else
+      fail "dns-exfil: without the sinkhole rc=$rc, upstream lines with the label: $(upstream_saw "${label%%.*}"), output: $(tr '\n' ' ' <<<"$out")"
+    fi
+
+    # Quarantined: every lookup is dropped, so no NXDOMAIN and a non-zero exit; run.sh bounds the
+    # client with `timeout 6`, the command ends on nslookup's own ~5 s (no timeout option, N9; the API
+    # cuts a command at 5 s anyway).
     drop=$(dns_start drop "${COREDNS_SC[@]}" -v "$DNS_DIR/drop:/etc/coredns:ro" "$COREDNS_IMAGE" -conf /etc/coredns/Corefile)
     printf 'nameserver %s\noptions ndots:5\n' "$(ip_of "$drop")" > "$DNS_DIR/drop-resolv.conf"
     chmod a+r "$DNS_DIR/drop-resolv.conf"
