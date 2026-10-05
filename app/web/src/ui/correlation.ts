@@ -112,7 +112,7 @@ export function renderMetrics(c: Correlation, now: number): HTMLElement {
   return h(
     "div",
     { class: "tiles corr-metrics" },
-    metricTile("Incidents", String(m.incidents), m.incidents > 0 ? "warning" : "good", m.incidents > 0 ? "correlated" : "none", m.since ? ["last 24 h, since ", whenEl(m.since, now)] : ["last 24 h"]),
+    metricTile("Incidents", String(m.incidents), m.incidents > 0 ? "warning" : "good", m.incidents > 0 ? "correlated" : "none", m.since ? ["last 24 h, since ", whenEl(m.since, now, { class: "corr-since" })] : ["last 24 h"]),
     metricTile("Time to detect", median(m.median_ttd_ms), m.median_ttd_ms === null ? "neutral" : "good", m.median_ttd_ms === null ? "no sample yet" : "median", [
       "Falco's alert after the command started",
       p95Foot(ttd) ? ` · ${p95Foot(ttd)}` : null,
@@ -420,17 +420,19 @@ export function mountCorrelation(
 
   const draw = (force = false) => {
     if (!data) return;
-    // Redrawn only when what it shows changes; the API's checked_at alone is rewritten in place, so
-    // an open <details> or a focused link survives a poll.
-    const k = JSON.stringify({ d: { ...data, checked_at: "" }, i: index === undefined ? "u" : index, c: linkCommit() });
+    // Redrawn only when what it shows changes. The API moves checked_at and metrics.since on every
+    // poll: those two are rewritten in place, so an open <details> or a focused link survives a poll.
+    const k = JSON.stringify({ d: { ...data, checked_at: !!data.checked_at, metrics: { ...data.metrics, since: !!data.metrics.since } }, i: index === undefined ? "u" : index, c: linkCommit() });
     const now = Date.now();
     if (!force && k === key) {
-      const at = mounts.health.querySelector<HTMLTimeElement>(".corr-health__at");
-      if (at && data.checked_at) {
-        at.dataset.when = String(Date.parse(data.checked_at));
-        at.dateTime = new Date(data.checked_at).toISOString();
-        setText(at, when(data.checked_at, now));
-      }
+      const moveTo = (el: HTMLTimeElement | null, t: string) => {
+        if (!el || !t) return;
+        el.dataset.when = String(Date.parse(t));
+        el.dateTime = new Date(t).toISOString();
+        setText(el, when(t, now));
+      };
+      moveTo(mounts.health.querySelector<HTMLTimeElement>(".corr-health__at"), data.checked_at);
+      moveTo(mounts.metrics.querySelector<HTMLTimeElement>(".corr-since"), data.metrics.since);
       refreshRelative(section, now);
       return;
     }

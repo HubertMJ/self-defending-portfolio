@@ -376,6 +376,21 @@ describe("mountCorrelation", () => {
     expect(calls.rules).toBe(1);
   });
 
+  it("metrics.since moving on every poll redraws nothing; its time is rewritten in place", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    const moved = (ago: number) => ok({ checked_at: at(ago), metrics: { since: at(86_400 + ago), incidents: 1, median_ttd_ms: 840, median_tti_ms: 212, median_twin_dwell_ms: null, host_findings: 0 } });
+    const { section, calls } = setup([moved(20), moved(-40)]);
+    await vi.advanceTimersByTimeAsync(0);
+    const incident = section.querySelector(".incident");
+    const since = section.querySelector(".corr-since");
+    await vi.advanceTimersByTimeAsync(POLL_MS);
+    expect(calls.correlation).toBe(2);
+    expect(section.querySelector(".incident")).toBe(incident);
+    expect(section.querySelector(".corr-since")).toBe(since);
+    expect(since?.getAttribute("datetime")).toBe(at(86_400 - 40));
+  });
+
   it("the rule index is asked again when the applied commit moves; a new answer redraws", async () => {
     vi.useFakeTimers();
     const { section, calls } = setup([ok(), ok({ rules: { commit: "b".repeat(40), applied_at: at(10), status: "applied" } })]);
