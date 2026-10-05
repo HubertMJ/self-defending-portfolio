@@ -990,3 +990,51 @@ func TestHealthReadsActiveAlertsApart(t *testing.T) {
 		t.Fatalf("health %+v", h)
 	}
 }
+
+// One document is one event: two rules on one Falco document make one step citing both findings; a
+// DNS finding on a document the Hubble search also read keeps its flag match; a correlation is cited
+// first, so the evidence cap never cuts it.
+func TestOneDocumentOneEvent(t *testing.T) {
+	f := newFake()
+	compareRun(f)
+	second := falcoFinding("f-falco-g2", t0.Add(time.Hour+1800*time.Millisecond), cmpRef, "Terminal shell in container")
+	second.Documents = f.findings["sdp_falco"][0].Documents
+	second.Queries[0].Name = "Falco shell second rule"
+	f.findings["sdp_falco"] = append(f.findings["sdp_falco"], second)
+	for i := 0; i < 60; i++ {
+		f.findings["sdp_falco"] = append(f.findings["sdp_falco"], falcoFinding(fmt.Sprintf("fz-%02d", i), t0.Add(time.Hour+3*time.Second+time.Duration(i)*time.Second), cmpRef, "Terminal shell in container"))
+	}
+	f.corr = []siem.Correlation{{Finding1: "fz-59", Finding2: "f-talon-g", Rules: []string{"corr-late"}}}
+	terminalRun(f, "sdp-"+flagHex)
+	dns := f.findings["sdp_hubble"][0]
+	f.hits["sdp-hubble"] = append(f.hits["sdp-hubble"], hit("sdp-hubble", dns.Documents[0].ID, t0.Add(20101*time.Millisecond),
+		map[string]any{"hubble.verdict": "FORWARDED", "k8s.pod.ref": termRef}))
+	clk := &clock{t: t0}
+	tr := newTracker(t, f, clk)
+	registerTerminalFlag(tr, flagHex)
+	clk.Set(t0.Add(2 * time.Hour))
+	tr.Poll(context.Background())
+	v := tr.View()
+	ci := one(t, v, KindContainedIntrusion)
+	if ci.Evidence[0] != (Evidence{Type: "correlation", ID: "corr-late"}) {
+		t.Fatalf("correlation not first: %v", ci.Evidence[:3])
+	}
+	steps, cites := 0, 0
+	for _, st := range ci.Steps {
+		if st.At.Equal(t0.Add(time.Hour+1800*time.Millisecond)) && st.Source == "falco" {
+			steps++
+		}
+	}
+	for _, e := range ci.Evidence {
+		if e.ID == "f-falco-g" || e.ID == "f-falco-g2" {
+			cites++
+		}
+	}
+	if steps != 1 || cites != 2 {
+		t.Fatalf("one document: %d steps, %d citations", steps, cites)
+	}
+	dx := one(t, v, KindDNSExfil)
+	if dx.FlagMatch == nil || !*dx.FlagMatch || dx.Evidence[len(dx.Evidence)-1].ID != "f-dns-1" {
+		t.Fatalf("dns on a searched document: %+v", dx)
+	}
+}

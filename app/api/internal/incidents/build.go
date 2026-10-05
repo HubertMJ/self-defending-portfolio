@@ -29,6 +29,8 @@ const (
 	maxIncidents = 200
 	maxSteps     = 50
 	maxEvidence  = 50
+	// maxExtraFindings: more finding ids kept for one document beyond its first.
+	maxExtraFindings = 4
 )
 
 // Windows of the checks.
@@ -70,25 +72,47 @@ type index struct {
 
 func (t *Tracker) newIndex(ev evidence) *index {
 	ix := &index{t: t, now: ev.now, byRef: map[string][]*record{}, runs: map[string][]*record{}, refRun: map[string]*record{}, pairs: map[string]string{}}
-	// A finding on a document the searches also read (an sdp-api command line, a Hubble drop) is one
-	// event: the document's record carries the finding's rule and id.
-	docs := map[string]*record{}
-	for _, r := range ev.records {
-		if r.isDoc() {
-			docs[r.docID] = r
-		}
-	}
+	// One document is one event: a finding on a document the searches also read (an sdp-api command
+	// line, a Hubble drop), or several findings on one document (two rules matched it), make one
+	// record - the document's, or else the finding with the lowest id - carrying the first finding's
+	// rule, the flag match, and up to maxExtraFindings more finding ids as evidence.
+	byDoc := map[string][]*record{}
 	var recs []*record
 	for _, r := range ev.records {
-		if !r.isDoc() {
-			if d, ok := docs[r.docID]; ok {
-				if d.findingID == "" || r.findingID < d.findingID {
-					d.findingID, d.rule, d.attack = r.findingID, r.rule, r.attack
-				}
+		if r.docID == "" {
+			recs = append(recs, r)
+			continue
+		}
+		byDoc[r.docID] = append(byDoc[r.docID], r)
+	}
+	for _, group := range byDoc {
+		sort.Slice(group, func(i, j int) bool {
+			if group[i].isDoc() != group[j].isDoc() {
+				return group[i].isDoc()
+			}
+			return group[i].key < group[j].key
+		})
+		base := group[0]
+		for _, r := range group[1:] {
+			if r.isDoc() || r.findingID == "" {
 				continue
 			}
+			if base.findingID == "" {
+				base.findingID, base.rule, base.attack = r.findingID, r.rule, r.attack
+			} else if len(base.extraFindings) < maxExtraFindings {
+				base.extraFindings = append(base.extraFindings, r.findingID)
+				for _, a := range r.attack {
+					base.attack = appendUnique(base.attack, a)
+				}
+			}
+			if r.dns {
+				base.dns = true
+			}
+			if r.flag != nil && (base.flag == nil || *r.flag) {
+				base.flag = r.flag
+			}
 		}
-		recs = append(recs, r)
+		recs = append(recs, base)
 	}
 	sort.SliceStable(recs, func(i, j int) bool {
 		if !recs[i].at.Equal(recs[j].at) {
@@ -633,7 +657,11 @@ func (ix *index) finish(d *draft) Incident {
 		if r.findingID != "" {
 			findings = append(findings, r.findingID)
 		}
+		findings = append(findings, r.extraFindings...)
 		inc.Evidence = append(inc.Evidence, evidenceOf(r))
+		for _, id := range r.extraFindings {
+			inc.Evidence = append(inc.Evidence, Evidence{Type: "finding", ID: id})
+		}
 		if r.source == "falco" && d.Kind != KindDNSExfil {
 			inc.FalcoEvents++
 		}
@@ -644,16 +672,24 @@ func (ix *index) finish(d *draft) Incident {
 		inc.Steps = append(inc.Steps, st)
 	}
 	inc.Evidence = append(inc.Evidence, d.ev...)
-	// An SA correlation that paired two of this incident's findings is cited; it is never required.
+	for _, e := range d.ev {
+		if e.Type == "finding" {
+			findings = append(findings, e.ID)
+		}
+	}
+	// An SA correlation that paired two of this incident's findings is cited first, so the evidence
+	// cap never cuts it; it is never required.
 	cited := map[string]bool{}
+	var corr []Evidence
 	for i := range findings {
 		for j := i + 1; j < len(findings); j++ {
 			if rule, ok := ix.pairs[findings[i]+"|"+findings[j]]; ok && !cited[rule] {
 				cited[rule] = true
-				inc.Evidence = append(inc.Evidence, Evidence{Type: "correlation", ID: rule})
+				corr = append(corr, Evidence{Type: "correlation", ID: rule})
 			}
 		}
 	}
+	inc.Evidence = append(corr, inc.Evidence...)
 	if len(inc.Evidence) > maxEvidence {
 		inc.Evidence = inc.Evidence[:maxEvidence]
 	}

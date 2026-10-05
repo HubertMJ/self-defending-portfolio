@@ -411,17 +411,22 @@ func (t *Tracker) note(key string, cond bool, msg string, args ...any) {
 	}
 }
 
-// prune drops evidence older than the retention, settled Hubble drops no check uses, and keeps at
-// most maxPerSource records per source (Hubble DNS findings and drops counted apart).
+// prune drops evidence older than the retention, settled Hubble documents no check uses and no
+// finding names, and keeps at most maxPerSource records per source (Hubble DNS findings and drops
+// counted apart).
 func (t *Tracker) prune(now time.Time) {
 	cut := now.Add(-retention)
 	byRef := map[string][]*record{}
+	cited := map[string]bool{} // documents a finding names
 	for k, r := range t.records {
 		if r.at.Before(cut) {
 			delete(t.records, k)
 			continue
 		}
 		byRef[r.ref] = append(byRef[r.ref], r)
+		if !r.isDoc() {
+			cited[r.docID] = true
+		}
 	}
 	per := map[string][]*record{}
 	for _, list := range byRef {
@@ -430,7 +435,7 @@ func (t *Tracker) prune(now time.Time) {
 		for _, r := range list {
 			bucket := r.source
 			if r.source == "hubble" && !r.dns {
-				if r.at.Before(now.Add(-dropSettle)) && !used[r] {
+				if r.at.Before(now.Add(-dropSettle)) && !used[r] && !cited[r.docID] {
 					delete(t.records, r.key)
 					continue
 				}

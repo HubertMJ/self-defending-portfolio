@@ -38,10 +38,12 @@ var logTypes = []struct{ logType, source string }{
 type record struct {
 	key       string // de-duplication key: "finding:<id>" or "doc:<index>/<id>"
 	findingID string // SA finding id, "" for a document without a finding
-	docID     string // the document's _id (a finding's first matched document)
-	source    string // falco | talon | hubble | k8s-audit | api
-	at        time.Time
-	ref       string // "<ns>_<pod>", only for the two sandbox namespaces
+	// extraFindings: further findings on the same document (another rule matched it)
+	extraFindings []string
+	docID         string // the document's _id (a finding's first matched document)
+	source        string // falco | talon | hubble | k8s-audit | api
+	at            time.Time
+	ref           string // "<ns>_<pod>", only for the two sandbox namespaces
 
 	rule   string   // the finding's Sigma rule title
 	attack []string // ATT&CK ids from the finding's tags
