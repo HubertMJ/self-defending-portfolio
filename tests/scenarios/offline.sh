@@ -628,8 +628,8 @@ done < "$WORK_DIR/terminal.tsv"
 #
 # The dns-exfil command is only harmless while CoreDNS answers `exfil.sdp.test` itself. make validate
 # checks the effective configuration's text (scripts/lib/check_coredns_sinkhole.py); this runs it. The
-# template is rendered as the k3s role renders it; ConfigMap coredns is mounted where the Deployment
-# mounts it, and the coredns-custom directory (the role ships no such ConfigMap) is mounted empty, as
+# template is rendered as the k3s role renders it (render(), with trim_blocks as in
+# ansible.builtin.template); ConfigMap coredns is mounted where the Deployment mounts it, and the coredns-custom directory (the role ships no such ConfigMap) is mounted empty, as
 # the optional volume is in the cluster. Its `kubernetes` plugin is pointed at an API server that refuses connections (it starts
 # unsynced after 5 s; nothing here is a cluster name), and its `forward . /etc/resolv.conf` at a
 # stand-in for the node's resolver: a CoreDNS that logs and answers every query (`whoami`). All on an

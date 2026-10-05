@@ -125,6 +125,17 @@ CASES = [
     ("k3s_coredns_own false in playbook group_vars/k3s_nodes/", FILE,
      ("ansible/playbooks/group_vars/k3s_nodes/dns.yml", "k3s_coredns_own: false\n")),
     ("k3s_coredns_own false in the role's vars", FILE, ("ansible/roles/k3s/vars/main.yml", "k3s_coredns_own: false\n")),
+    # Rendered with trim_blocks, as Ansible does: the comment tag takes the newline, and the sinkhole's
+    # header joins the `#` comment after `.:53`'s brace.
+    ("comment tag ending .:53", "        forward . /etc/resolv.conf\n    }\n",
+     "        forward . /etc/resolv.conf\n    } # end of .:53{# #}\n"),
+    # Jinja beyond the known expressions: what k3s01 renders, the stubbed facts here do not.
+    ("Jinja conditional in the sinkhole", "        prometheus :9153\n        template IN A",
+     "        prometheus :9153\n{% if ansible_facts.get('distribution') == 'Debian' %}\n"
+     "        forward . /etc/resolv.conf\n{% endif %}\n        template IN A"),
+    ("unknown variable with a default in the sinkhole", "        prometheus :9153\n        template IN A",
+     "        prometheus :9153\n        {{ k3s_sinkhole_extra | default('') }}\n        template IN A"),
+    ("#jinja2: settings line", "# {{ ansible_managed }}\n", "#jinja2: trim_blocks: False\n# {{ ansible_managed }}\n"),
     # Set anywhere but the role's defaults - Ansible would read every one of these, the emulated
     # precedence did not (role params, a role entry's vars, vars_files; all.yml over all.yaml).
     ("k3s_coredns_own false as a role param", FILE,

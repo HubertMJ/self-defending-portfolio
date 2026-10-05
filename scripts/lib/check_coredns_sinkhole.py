@@ -16,9 +16,11 @@ been applied. So the template is rendered here with every variable source Ansibl
 in Ansible's order (role defaults; group_vars of `all` and of the host's groups, from the inventory
 file, the inventory directory and the playbook directory; host_vars, the same three - each the first
 of <name>, .yml, .yaml, .json that exists, as Ansible reads them; cluster.yml's play vars; the role's
-vars), through Jinja2 as Ansible would - facts only a running play has are stubbed -
+vars), through Jinja2 as Ansible would (trim_blocks) - facts only a running play has are stubbed -
 and the effective configuration is checked. The check is strict about shape: what is not exactly the
 layout this repository writes is refused, not interpreted the way CoreDNS or Kubernetes might.
+  - the template's Jinja is only the expressions in EXPRESSIONS: no `{% %}` statement, no other
+    variable, filter or default, no `#jinja2:` settings line;
   - k3s_coredns_own is true in the role's defaults and set nowhere else under ansible/ - in no file's
     text and in no parsed YAML key or `key=value` string, other than its spec in argument_specs - so
     no role param, role entry vars, vars_files, set_fact or inventory can turn it off (otherwise k3s's
@@ -124,6 +126,12 @@ OWN_SET = re.compile(r"\bk3s_coredns_own\b['\"]?\s*(:|=(?!=))")
 OWN_AT = {"roles/k3s/defaults/main.yml": [(OWN,)],
           "roles/k3s/meta/argument_specs.yml": [("argument_specs", "main", "options", OWN)]}
 VARS_EXT = ("", ".yml", ".yaml", ".json")
+# The only Jinja in the template: these expressions, as Jinja's lexer reads them (whitespace dropped),
+# and no statement (`{% %}`). A branch, a filter or a default that k3s01 takes and this render's stubbed
+# facts do not would put text in the Corefile this check never sees. `{# #}` comments are allowed:
+# rendered with trim_blocks, as ansible.builtin.template does, they take what they take here too.
+EXPRESSIONS = {"{{ansible_managed}}", "{{k3s_version}}", "{{'{{'}}", "{{'}}'}}", "{{k3s_node_ip}}",
+               "{{ansible_facts['hostname']}}", "{{k3s_coredns_image}}", "{{k3s_cluster_dns}}"}
 
 
 class TolerantLoader(yaml.SafeLoader):
@@ -246,9 +254,30 @@ def host_layers(root: Path) -> list:
     return layers
 
 
+def template_problems(template: str) -> list:
+    """Problems for Jinja in the template beyond EXPRESSIONS, and for a `#jinja2:` first line (with it,
+    ansible.builtin.template changes trim_blocks, the delimiters and more for this file)."""
+    problems = []
+    if template.startswith("#jinja2:"):
+        problems.append(f"template starts with `{template.splitlines()[0]}`: Ansible would render it with other settings")
+    expr = None
+    for line, kind, value in jinja2.Environment().lex(template):
+        if kind in ("block_begin", "linestatement_begin"):
+            problems.append(f"template line {line}: a Jinja statement `{value}`: only {sorted(EXPRESSIONS)} are rendered")
+        elif kind == "variable_begin":
+            expr = [value]
+        elif expr is not None and kind != "whitespace":
+            expr.append(value)
+            if kind == "variable_end":
+                if "".join(expr) not in EXPRESSIONS:
+                    problems.append(f"template line {line}: `{''.join(expr)}` is not one of {sorted(EXPRESSIONS)}")
+                expr = None
+    return problems
+
+
 def render(root: Path, template: str = None, overrides: dict = None):
     """(documents, context, problems) of the k3s role's CoreDNS template, rendered as the role would on
-    HOST; problems are those of the sources it is rendered from (own_sources)."""
+    HOST; problems are those of the sources it is rendered from (own_sources, template_problems)."""
     role = root / "ansible/roles/k3s"
     context = {}
     for layer in host_layers(root):
@@ -262,9 +291,11 @@ def render(root: Path, template: str = None, overrides: dict = None):
     context.update(overrides or {})
     if template is None:
         template = (role / "templates/coredns-sdp.yaml.j2").read_text()
-    env = jinja2.Environment(undefined=jinja2.StrictUndefined, keep_trailing_newline=True)
+    # ansible.builtin.template's defaults: trim_blocks on (the newline after a block or comment tag is
+    # dropped), lstrip_blocks off.
+    env = jinja2.Environment(undefined=jinja2.StrictUndefined, keep_trailing_newline=True, trim_blocks=True)
     text = env.from_string(template).render(context)
-    return [d for d in yaml.safe_load_all(text) if d], context, own_sources(root)
+    return [d for d in yaml.safe_load_all(text) if d], context, own_sources(root) + template_problems(template)
 
 
 def lex(text: str) -> list:
