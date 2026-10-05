@@ -1185,3 +1185,35 @@ func ptr64(p *int64) any {
 	}
 	return *p
 }
+
+// P3's acceptance canaries (pod refs sandbox_p3c-<tag>-*, principals system:p3c-<tag>) never become
+// an incident, whatever rule they fire.
+func TestSyntheticCanariesDropped(t *testing.T) {
+	f := newFake()
+	ref := "sandbox_p3c-a1b2-shell"
+	f.findings["sdp_falco"] = []siem.Finding{falcoFinding("f-c1", t0, ref, "Terminal shell in container")}
+	f.findings["sdp_talon"] = []siem.Finding{talonFinding("f-c2", t0.Add(time.Second), ref, "Terminate Pod", "kubernetes:terminate")}
+	f.findings["sdp_hubble"] = []siem.Finding{dnsFinding("f-c3", t0, "sandbox_p3c-a1b2-dns", "sdp-"+flagHex)}
+	f.findings["sdp_k8s_audit"] = []siem.Finding{finding("f-c4", t0, "Exec", nil, map[string]any{"audit.object.subresource": "exec",
+		"audit.object.resource": "pods", "k8s.pod.ref": quarRef, "user.name": "system:p3c-a1b2"})}
+	f.hits["sdp-api"] = []siem.Hit{
+		apiCommand("c1", t0, termRun, "sandbox_p3c-a1b2-term", 1, "whoami", "T1033", "recon", "started"),
+		apiCommand("c2", t0.Add(time.Second), termRun, "sandbox_p3c-a1b2-term", 2, "read-flag", "T1552.001", "credentials", "started"),
+		apiCommand("c3", t0.Add(2*time.Second), termRun, "sandbox_p3c-a1b2-term", 3, "dns-exfil", "T1048.003", "exfiltration", "started")}
+	st := t0.UnixMilli()
+	f.alerts = []siem.Alert{
+		{ID: "al-c1", MonitorName: "sdp-git: prevented-not-detected", State: "ACTIVE", StartTime: &st, Agg: &siem.AlertAgg{BucketKeys: []any{"sandbox_p3c-a1b2-x"}}},
+		{ID: "al-c2", MonitorName: "sdp-git: policy-probing", State: "ACTIVE", StartTime: &st, Agg: &siem.AlertAgg{BucketKeys: []any{"system:p3c-a1b2"}}},
+		{ID: "al-real", MonitorName: "sdp-git: policy-probing", State: "ACTIVE", StartTime: &st, Agg: &siem.AlertAgg{BucketKeys: []any{"hm1:0011223344556677"}}},
+	}
+	tr := newTracker(t, f, &clock{t: t0.Add(time.Minute)})
+	tr.Poll(context.Background())
+	v := tr.View()
+	if len(v.Incidents) != 1 || v.Incidents[0].Evidence[0].ID != "al-real" {
+		b, _ := json.Marshal(v.Incidents)
+		t.Fatalf("synthetic canaries became incidents: %s", b)
+	}
+	if b, _ := json.Marshal(v); strings.Contains(string(b), "p3c-") {
+		t.Fatalf("the marker was published: %s", b)
+	}
+}

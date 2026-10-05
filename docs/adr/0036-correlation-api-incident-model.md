@@ -94,6 +94,10 @@ The constraints are the project's:
   - api: command id, technique, objective, state, exit code, the pod.
   - Alerting alerts: the monitor name without its `sdp-git: ` prefix; a bucket key only when it is a
     publishable pod ref (policy probing's key is a principal and is never published).
+- Test data never becomes an incident: the rules acceptance test (P3) writes synthetic canary documents
+  into the real streams, with pod refs `sandbox_p3c-<tag>-*` and principals `system:p3c-<tag>`. Any
+  finding or document whose pod ref or principal (`user.name`) contains `p3c-`, and any Alerting alert
+  with such a bucket key, is dropped before the incidents are built.
 - Host findings (`sdp_host`) are counted, nothing else. `sdp-siem01` is not read at all (the API's role
   has no access to it), so `host_findings` counts k3s01's own findings only.
 

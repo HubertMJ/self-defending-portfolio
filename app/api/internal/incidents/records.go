@@ -45,6 +45,7 @@ type record struct {
 	at            time.Time
 	ingested      time.Time // event.ingested, set by the sdp-final pipeline (for the ingest lag only)
 	ref           string    // "<ns>_<pod>", only for the two sandbox namespaces
+	synthetic     bool      // a P3 acceptance canary (pod ref or principal carries p3c-): never an incident
 
 	rule   string   // the finding's Sigma rule title
 	attack []string // ATT&CK ids from the finding's tags
@@ -150,6 +151,7 @@ func (t *Tracker) fill(r *record, m map[string]any) (dnsQuery string) {
 		r.at = at
 	}
 	r.ingested = timeOf(m, "event.ingested")
+	r.synthetic = synthetic(str(m, "k8s.pod.ref")) || synthetic(str(m, "user.name"))
 	if ref := str(m, "k8s.pod.ref"); ref != "" {
 		if _, _, ok := t.splitRef(ref); ok {
 			r.ref = ref
@@ -222,7 +224,7 @@ func (t *Tracker) fromFinding(f siem.Finding, source string) (r record, dnsQuery
 		dnsQuery = t.fill(&r, m)
 		break
 	}
-	return r, dnsQuery, r.ref != "" && r.docID != ""
+	return r, dnsQuery, r.ref != "" && r.docID != "" && !r.synthetic
 }
 
 // fromHit turns a search hit into a record.
@@ -232,8 +234,15 @@ func (t *Tracker) fromHit(h siem.Hit, source string) (record, bool) {
 	}
 	r := record{key: "doc:" + h.Index + "/" + h.ID, docID: h.ID, source: source}
 	t.fill(&r, h.Source)
-	return r, r.ref != "" && !r.at.IsZero()
+	return r, r.ref != "" && !r.at.IsZero() && !r.synthetic
 }
+
+// syntheticMarker marks the rules acceptance test's canary documents (P3: pod refs
+// `sandbox_p3c-<tag>-*`, principals `system:p3c-<tag>`). They are written into the real streams to
+// prove a rule fires; they are test data and must never become a public incident (ADR 0036).
+const syntheticMarker = "p3c-"
+
+func synthetic(v string) bool { return strings.Contains(v, syntheticMarker) }
 
 // isDoc: the record came from a search (it may carry a finding's rule once merged).
 func (r *record) isDoc() bool { return strings.HasPrefix(r.key, "doc:") }

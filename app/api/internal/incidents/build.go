@@ -542,7 +542,7 @@ func (ix *index) monitorIncidents(alerts []siem.Alert, now time.Time) []*draft {
 	var out []*draft
 	for _, a := range alerts {
 		name, ok := strings.CutPrefix(a.MonitorName, monitorPrefix)
-		if !ok || a.StartTime == nil || a.State == "ERROR" || a.State == "DELETED" || !idPat.MatchString(a.ID) {
+		if !ok || a.StartTime == nil || a.State == "ERROR" || a.State == "DELETED" || !idPat.MatchString(a.ID) || syntheticAlert(a) {
 			continue
 		}
 		start := time.UnixMilli(*a.StartTime).UTC()
@@ -599,6 +599,19 @@ func (ix *index) monitorIncidents(alerts []siem.Alert, now time.Time) []*draft {
 		out = append(out, d)
 	}
 	return out
+}
+
+// syntheticAlert: an alert on a P3 acceptance canary (a bucket key with the p3c- marker).
+func syntheticAlert(a siem.Alert) bool {
+	if a.Agg == nil {
+		return false
+	}
+	for _, k := range a.Agg.BucketKeys {
+		if s, ok := k.(string); ok && synthetic(s) {
+			return true
+		}
+	}
+	return false
 }
 
 // finish turns a draft into the published incident: steps in time order with their command
