@@ -42,6 +42,9 @@ data:
     }
 """
 
+NODEHOSTS_KEY = "  NodeHosts: |\n"
+NODEHOSTS_ITEM = "              - key: NodeHosts\n                path: NodeHosts\n"
+
 FILE = "file"  # (name, FILE, (path under the repo, text appended to it - the file is created if missing))
 DEPLOYMENT_HEAD = "---\napiVersion: apps/v1\nkind: Deployment\n"
 SHADOW = """---
@@ -64,8 +67,9 @@ spec:
           image: example.invalid/dns
 """
 
-# (name, text to find, replacement) - or (name, None, role-variable overrides), or a FILE case: every
-# place Ansible reads a variable for k3s01 from, from group `all` to the role's own vars.
+# (name, text to find, replacement[, further (find, replacement) pairs]) - or (name, None, role-variable
+# overrides), or a FILE case: every place Ansible reads a variable for k3s01 from, from group `all` to
+# the role's own vars.
 CASES = [
     ("forward in the sinkhole", "        prometheus :9153\n        template IN A",
      "        prometheus :9153\n        forward . /etc/resolv.conf\n        template IN A"),
@@ -125,6 +129,30 @@ CASES = [
     ("Service targetPort named metrics", "    - name: dns-tcp\n      port: 53\n      protocol: TCP\n",
      "    - name: dns-tcp\n      port: 53\n      protocol: TCP\n      targetPort: metrics\n"),
     ("another workload labelled k8s-app: kube-dns", DEPLOYMENT_HEAD, SHADOW + DEPLOYMENT_HEAD),
+    # Server block keys outside `[dns://]name[:port]`: CoreDNS's strconv.Atoi reads `+53` as 53.
+    ("child zone on port +53", TOP_IMPORT, "    x.exfil.sdp.test:+53 {\n        forward . 1.1.1.1\n    }\n" + TOP_IMPORT),
+    ("child zone on port +0053", TOP_IMPORT, "    x.exfil.sdp.test:+0053 {\n        forward . 1.1.1.1\n    }\n" + TOP_IMPORT),
+    ("dns:// child zone on port +53", TOP_IMPORT,
+     "    dns://x.exfil.sdp.test:+53 {\n        forward . 1.1.1.1\n    }\n" + TOP_IMPORT),
+    # Imports other than the two known ones, at any depth; ConfigMap keys and volume items exactly.
+    ("import of another file in .:53", OVERRIDE_IMPORT, OVERRIDE_IMPORT + "        import /etc/coredns/extra.conf\n"),
+    ("extra data key in coredns", NODEHOSTS_KEY, "  extra.conf: |\n    x.exfil.sdp.test:53 {\n    }\n" + NODEHOSTS_KEY),
+    ("extra item onto the Corefile path", NODEHOSTS_ITEM, NODEHOSTS_ITEM + "              - key: Leak\n                path: Corefile\n"),
+    ("import, data key and item together", OVERRIDE_IMPORT,
+     OVERRIDE_IMPORT + "        import /etc/coredns/extra.conf\n", [
+         (NODEHOSTS_KEY, "  extra.conf: |\n    forward . 1.1.1.1\n" + NODEHOSTS_KEY),
+         (NODEHOSTS_ITEM, NODEHOSTS_ITEM + "              - key: extra.conf\n                path: extra.conf\n")]),
+    ("import in a coredns-custom override", DEPLOYMENT_HEAD,
+     "---\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: coredns-custom\n  namespace: kube-system\ndata:\n"
+     "  x.override: |\n    import /etc/coredns/NodeHosts\n" + DEPLOYMENT_HEAD),
+    # Objects this check reads only in kube-system; no Endpoints or EndpointSlice of the role's own.
+    ("coredns ConfigMap without a namespace", DEPLOYMENT_HEAD,
+     "---\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: coredns\ndata:\n"
+     "  Corefile: |\n    .:53 {\n        forward . 1.1.1.1\n    }\n" + DEPLOYMENT_HEAD),
+    ("EndpointSlice for kube-dns", DEPLOYMENT_HEAD,
+     "---\napiVersion: discovery.k8s.io/v1\nkind: EndpointSlice\nmetadata:\n  name: kube-dns-extra\n"
+     "  namespace: kube-system\n  labels:\n    kubernetes.io/service-name: kube-dns\naddressType: IPv4\n"
+     "endpoints:\n  - addresses: [192.0.2.1]\nports:\n  - name: dns\n    port: 53\n    protocol: UDP\n" + DEPLOYMENT_HEAD),
 ]
 
 
@@ -136,7 +164,8 @@ def main() -> int:
     if base:
         print(f"  FAIL  the unedited template does not pass: {base}", file=sys.stderr)
         failures += 1
-    for name, find, replace in CASES:
+    for name, find, replace, *more in CASES:
+        edits = [(find, replace)] + (more[0] if more else [])
         if find is None:
             problems = check(*render(root, template, replace))
         elif find == FILE:
@@ -147,13 +176,16 @@ def main() -> int:
                 with target.open("a") as f:
                     f.write(replace[1])
                 problems = check(*render(Path(tmp), template))
-        elif find not in template:
+        elif any(f not in template for f, _ in edits):
             print(f"  FAIL  mutation '{name}': its text is no longer in the template", file=sys.stderr)
             failures += 1
             continue
         else:
+            mutated = template
+            for f, r in edits:
+                mutated = mutated.replace(f, r, 1)
             try:
-                problems = check(*render(root, template.replace(find, replace, 1)))
+                problems = check(*render(root, mutated))
             except Exception as err:  # a render or YAML error also stops the edit from shipping
                 problems = [f"render error: {err}"]
         if problems:

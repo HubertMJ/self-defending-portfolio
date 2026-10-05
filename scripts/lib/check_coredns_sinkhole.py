@@ -16,25 +16,30 @@ been applied. So the template is rendered here with every variable source Ansibl
 in Ansible's order (role defaults; group_vars of `all` and of the host's groups, from the inventory
 file, the inventory directory and the playbook directory; host_vars, the same three; cluster.yml's play
 vars; the role's vars), through Jinja2 as Ansible would - facts only a running play has are stubbed -
-and the effective configuration is checked:
+and the effective configuration is checked. The check is strict about shape: what is not exactly the
+layout this repository writes is refused, not interpreted the way CoreDNS or Kubernetes might.
   - k3s_coredns_own is true (otherwise k3s's own CoreDNS runs, without the sinkhole);
-  - exactly one ConfigMap kube-system/coredns and one Deployment kube-system/coredns, at most one
-    ConfigMap kube-system/coredns-custom; no binaryData in either ConfigMap;
+  - exactly one ConfigMap kube-system/coredns, with exactly the data keys Corefile and NodeHosts, and
+    one Deployment kube-system/coredns, at most one ConfigMap kube-system/coredns-custom; no binaryData
+    in either ConfigMap; none of these objects (nor Service kube-dns) without a namespace or in another;
+    no Endpoints or EndpointSlice at all;
   - the Corefile and every coredns-custom file is laid out so that reading it line by line gives what
     CoreDNS's tokeniser gives: a `}` alone on its line, a `{` only as the last token after a header or
     directive, no brace inside a token, no `{$VAR}` / `{%VAR%}` placeholder, no quoted token over two
     lines (`} x.exfil.sdp.test:53 {` on one line is a new server block to CoreDNS); an *.override
     file (imported into `.:53`) never closes more than it opens;
   - the Corefile's top level is server blocks plus exactly one `import /etc/coredns/custom/*.server`;
-    exactly one block is the sinkhole, byte for byte after whitespace (SINKHOLE_BLOCK), and no other
-    block - in the Corefile or in any coredns-custom *.server file - serves `exfil.sdp.test` or a
-    name under it, on any port or transport (zones compared case-insensitively, trailing dot, scheme
+    the only import inside a block is `.:53`'s `import /etc/coredns/custom/*.override`, and no
+    coredns-custom file imports anything; every server block key is `[dns://]name[:port]` in lower case
+    with a decimal port (CoreDNS reads `:+53` as port 53); exactly one block is the sinkhole, byte
+    for byte after whitespace (SINKHOLE_BLOCK), and no other block - in the Corefile or in any
+    coredns-custom *.server file - serves `exfil.sdp.test` or a name under it, on any port or transport (zones compared case-insensitively, trailing dot, scheme
     and port stripped, several zones per header);
   - no `bind` in any block (a sinkhole bound elsewhere leaves the pod's address to `.:53`);
-  - the Deployment runs `-conf /etc/coredns/Corefile`, with no command override; it mounts ConfigMap
-    coredns at /etc/coredns with the Corefile item, and coredns-custom at /etc/coredns/custom without
-    `items`; no `subPath` (a subPath mount is never updated, so a changed Corefile would not load) and
-    no other mount under /etc/coredns.
+  - the Deployment runs `-conf /etc/coredns/Corefile`, with no command override; its volumes and its
+    container's mounts are exactly the template's (VOLUMES, MOUNTS): ConfigMap coredns with exactly the
+    items Corefile and NodeHosts at /etc/coredns, coredns-custom without `items` at /etc/coredns/custom,
+    no `subPath` (a subPath mount is never updated, so a changed Corefile would not load), nothing else;
   - Service kube-system/kube-dns, the address in every pod's resolv.conf, selects exactly
     `k8s-app: kube-dns` and sends port 53 to the CoreDNS container's port 53 (by number or name, per
     protocol); the Deployment's pods carry that label and no other workload in the render does.
@@ -79,9 +84,31 @@ NAMED = {
     "bind": "moves the block off the address pods query",
 }
 TOP_IMPORTS = ["import /etc/coredns/custom/*.server"]
+# Every import inside a block, as (block header, line): the one `.:53` has, and nothing else - an import
+# splices a file's tokens in place, and only these files are known to be checked here.
+BLOCK_IMPORTS = [(".:53 {", "import /etc/coredns/custom/*.override")]
+# A server block key as this repository writes one: lower case, an optional dns:// and an optional
+# decimal port. Anything else is refused rather than interpreted: CoreDNS reads the port with
+# strconv.Atoi, so `x.exfil.sdp.test:+53` serves port 53 while a `:\d+$` match would not strip it.
+KEY = re.compile(r"^(dns://)?[a-z0-9.-]+\.?(:[0-9]{1,5})?$")
 CONF_ARGS = ["-conf", "/etc/coredns/Corefile"]
-CORE_DIR = "/etc/coredns"
-CUSTOM_DIR = "/etc/coredns/custom"
+# The ConfigMap's keys, the Deployment's volumes and the container's mounts, exactly: an extra key and
+# item (a file CoreDNS could be pointed at), a second item onto the same path, an item renamed, a
+# subPath (never updated), a mount moved or added - each is refused, not interpreted.
+DATA_KEYS = ["Corefile", "NodeHosts"]
+VOLUMES = [
+    {"name": "config-volume", "configMap": {"name": "coredns", "items": [
+        {"key": "Corefile", "path": "Corefile"}, {"key": "NodeHosts", "path": "NodeHosts"}]}},
+    {"name": "custom-config-volume", "configMap": {"name": "coredns-custom", "optional": True}},
+]
+MOUNTS = [
+    {"name": "config-volume", "mountPath": "/etc/coredns", "readOnly": True},
+    {"name": "custom-config-volume", "mountPath": "/etc/coredns/custom", "readOnly": True},
+]
+# The objects this check reads, which must all be in kube-system (an object with no namespace is
+# applied by k3s's deploy controller wherever it defaults to, and is not the one read here).
+NAMESPACED = {("ConfigMap", "coredns"), ("ConfigMap", "coredns-custom"), ("Deployment", "coredns"),
+              ("Service", "kube-dns")}
 SCHEME = re.compile(r"^([a-z0-9+.-]+)://", re.IGNORECASE)
 
 
@@ -281,7 +308,7 @@ def parse_top(text: str, where: str, problems: list):
                 break
         if depth != 0:
             problems.append(f"{where}: unbalanced braces in the block starting `{line}`")
-        keys = [k.strip('"') for k in re.split(r"[\s,]+", line[:-1].strip()) if k]
+        keys = [k for k in re.split(r"[\s,]+", line[:-1].strip()) if k]
         blocks.append((keys, body))
     return blocks, imports
 
@@ -299,12 +326,19 @@ def serves_zone(keys: list) -> bool:
 
 
 def check_blocks(blocks: list, where: str, problems: list, allow_sinkhole: bool) -> int:
-    """Problems for blocks that serve the zone or bind; returns how many exact sinkhole blocks."""
+    """Problems for blocks with a key not in KEY's shape, that serve the zone or bind; returns how many
+    exact sinkhole blocks. Imports inside blocks are refused unless BLOCK_IMPORTS has them (Corefile)."""
     exact = 0
+    imports = []
     for keys, body in blocks:
+        for key in keys:
+            if not KEY.match(key):
+                problems.append(f"{where}: server block key `{key}` is not `[dns://]name[:port]` (lower case, decimal port)")
         for line in body[1:]:
             if line.split()[0] == "bind":
                 problems.append(f"{where}: `{line}` in the block for {' '.join(keys)} ({NAMED['bind']})")
+            if line.split()[0] == "import":
+                imports.append((body[0], line))
         if not serves_zone(keys):
             continue
         if allow_sinkhole and body == SINKHOLE_BLOCK:
@@ -315,6 +349,8 @@ def check_blocks(blocks: list, where: str, problems: list, allow_sinkhole: bool)
             if word in NAMED and word != "bind":
                 problems.append(f"{where}: `{line}` in the block for {' '.join(keys)}: {NAMED[word]}")
         problems.append(f"{where}: a block other than the exact sinkhole serves {ZONE} or a name under it: {body}")
+    if imports != (BLOCK_IMPORTS if allow_sinkhole else []):
+        problems.append(f"{where}: imports inside blocks are {imports}, want exactly {BLOCK_IMPORTS if allow_sinkhole else []}")
     return exact
 
 
@@ -329,6 +365,13 @@ def check(docs: list, context: dict) -> list:
     if context.get("k3s_coredns_own") is not True:
         problems.append(f"k3s_coredns_own is {context.get('k3s_coredns_own')!r}: k3s's own CoreDNS (no sinkhole) would run")
 
+    for d in docs:
+        meta = d.get("metadata") or {}
+        if (d.get("kind"), meta.get("name")) in NAMESPACED and meta.get("namespace") != "kube-system":
+            problems.append(f"{d.get('kind')} {meta.get('name')} in namespace {meta.get('namespace')!r}, want kube-system")
+        if d.get("kind") in ("Endpoints", "EndpointSlice"):
+            problems.append(f"{d.get('kind')} {meta.get('name')} in the render: it could route kube-dns's address past the Deployment")
+
     cores = find_all(docs, "ConfigMap", "coredns")
     customs = find_all(docs, "ConfigMap", "coredns-custom")
     deploys = find_all(docs, "Deployment", "coredns")
@@ -342,7 +385,10 @@ def check(docs: list, context: dict) -> list:
         if cm.get("binaryData"):
             problems.append(f"ConfigMap {cm['metadata']['name']} has binaryData {sorted(cm['binaryData'])}: not checked here, may shadow a key")
 
-    corefile = ((cores[0] if cores else {}).get("data") or {}).get("Corefile", "")
+    data = (cores[0] if cores else {}).get("data") or {}
+    if cores and sorted(data) != DATA_KEYS:
+        problems.append(f"ConfigMap coredns has data keys {sorted(data)}, want exactly {DATA_KEYS}")
+    corefile = data.get("Corefile", "")
     blocks, imports = parse_top(corefile, "Corefile", problems)
     if imports != TOP_IMPORTS:
         problems.append(f"Corefile top-level imports are {imports}, want exactly {TOP_IMPORTS}")
@@ -370,9 +416,12 @@ def check(docs: list, context: dict) -> list:
                         break
                 if any(line.split()[0] == "bind" for line in lines):
                     problems.append(f"coredns-custom {key}: `bind` ({NAMED['bind']})")
+                if any(line.split()[0] == "import" for line in lines):
+                    problems.append(f"coredns-custom {key}: `import` ({NAMED['import']})")
 
     spec = (((deploys[0] if deploys else {}).get("spec") or {}).get("template") or {}).get("spec") or {}
-    volumes = {v.get("name"): v for v in spec.get("volumes", [])}
+    if deploys and spec.get("volumes") != VOLUMES:
+        problems.append(f"Deployment coredns has volumes {spec.get('volumes')}, want exactly {VOLUMES}")
     containers = spec.get("containers", [])
     if len(containers) != 1:
         problems.append(f"Deployment coredns has {len(containers)} containers, want 1")
@@ -381,29 +430,8 @@ def check(docs: list, context: dict) -> list:
             problems.append(f"Deployment coredns overrides the command: {c['command']}")
         if c.get("args") != CONF_ARGS:
             problems.append(f"Deployment coredns runs with args {c.get('args')}, want {CONF_ARGS}")
-        core_ok = custom_ok = False
-        for m in c.get("volumeMounts", []):
-            path = str(m.get("mountPath", "")).rstrip("/")
-            cm = (volumes.get(m.get("name")) or {}).get("configMap") or {}
-            if not (path == CORE_DIR or path.startswith(CORE_DIR + "/")):
-                continue
-            if "subPath" in m or "subPathExpr" in m:
-                problems.append(f"mount {path} uses subPath: a subPath mount never sees a ConfigMap update")
-            if path == CORE_DIR and cm.get("name") == "coredns":
-                items = {i.get("key"): i.get("path") for i in cm.get("items", [])}
-                if cm.get("items") is not None and items.get("Corefile") != "Corefile":
-                    problems.append(f"ConfigMap coredns is mounted without the Corefile item at Corefile: {cm.get('items')}")
-                core_ok = True
-            elif path == CUSTOM_DIR and cm.get("name") == "coredns-custom":
-                if "items" in cm:
-                    problems.append(f"coredns-custom is mounted with items {cm['items']}: the import must see every key or none")
-                custom_ok = True
-            else:
-                problems.append(f"unexpected mount at {path} (volume {m.get('name')}): it would change what CoreDNS reads")
-        if not core_ok:
-            problems.append(f"Deployment coredns does not mount ConfigMap coredns at {CORE_DIR}")
-        if not custom_ok:
-            problems.append(f"Deployment coredns does not mount ConfigMap coredns-custom at {CUSTOM_DIR}")
+        if c.get("volumeMounts") != MOUNTS:
+            problems.append(f"Deployment coredns mounts {c.get('volumeMounts')}, want exactly {MOUNTS}")
 
     # The address pods query is Service kube-dns: it must send port 53 to this Deployment's port 53,
     # and nothing else in the role's manifests may carry the label it selects on.
