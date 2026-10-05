@@ -16,8 +16,12 @@
 #               cluster/infra/sandbox/ciliumnetworkpolicy-victim.yaml and its twin; that port and
 #               nothing else. The selector is the stable managed-by label, not the run-id, since the
 #               run-id is no longer identity-relevant (ADR 0032).
+#   out  :9200  the SIEM, siem01 10.4.2.10 (ADR 0034, read-only client with its own certificate, F9:
+#               this CNP is the API's only allow list; networkpolicy.yaml is a bare default-deny). No
+#               other pod may reach it (cluster/infra/siem-egress), and siem01's firewall accepts 9200
+#               from k3s01 only, which is where the API's connection comes from after masquerading.
 #
-# Nothing to the internet. The scenario pods' execs still go through the API server; the one direct
+# Nothing else outside the cluster. The scenario pods' execs still go through the API server; the one direct
 # flow into `sandbox` is the read-only state poll above, and it cannot bypass the quarantine: the
 # quarantine policy's ingressDeny on the pod beats this allow, so a quarantined shop stops answering,
 # which is exactly what the visitor is shown.
@@ -85,4 +89,10 @@ spec:
       toPorts:
         - ports:
             - port: "8080"
+              protocol: TCP
+    - toCIDR:
+        - 10.4.2.10/32
+      toPorts:
+        - ports:
+            - port: "9200"
               protocol: TCP

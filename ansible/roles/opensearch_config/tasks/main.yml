@@ -20,6 +20,7 @@
     client_cert: "{{ opensearch_config_admin_cert }}"
     client_key: "{{ opensearch_config_admin_key }}"
   register: opensearch_config_health
+  check_mode: false
   until: opensearch_config_health.status == 200
   retries: 12
   delay: 5
@@ -32,6 +33,7 @@
     client_cert: "{{ opensearch_config_admin_cert }}"
     client_key: "{{ opensearch_config_admin_key }}"
   register: opensearch_config_settings_live
+  check_mode: false
 
 - name: Compare the cluster settings with the wanted ones
   ansible.builtin.set_fact:
@@ -65,6 +67,7 @@
     client_cert: "{{ opensearch_config_admin_cert }}"
     client_key: "{{ opensearch_config_admin_key }}"
   register: opensearch_config_indices
+  check_mode: false
 
 - name: Drop the replica of those indices
   ansible.builtin.uri:
@@ -102,6 +105,7 @@
     client_cert: "{{ opensearch_config_admin_cert }}"
     client_key: "{{ opensearch_config_admin_key }}"
   register: opensearch_config_pipeline_live
+  check_mode: false
 
 # The pipeline is the rewrite alarm's foundation: if anything changed it, put it back now.
 - name: Restore the sdp-final pipeline if it drifted
@@ -169,6 +173,7 @@
     client_key: "{{ opensearch_config_admin_key }}"
     status_code: [200, 404]
   register: opensearch_config_repo_live
+  check_mode: false
 
 - name: Register the snapshot repository
   ansible.builtin.uri:
@@ -222,6 +227,7 @@
     - {name: disk watermark, template: disk_watermark.json.j2}
     - {name: snapshot failing, template: snapshot_failing.json.j2}
     - {name: ism stalled, template: ism_stalled.json.j2}
+    - {name: shipper dropping, template: shipper_dropping.json.j2}
   loop_control:
     loop_var: opensearch_config_monitor
     label: "{{ opensearch_config_monitor.name }}"

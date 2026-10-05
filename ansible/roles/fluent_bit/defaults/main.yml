@@ -1,0 +1,124 @@
+---
+# Fluent Bit, the SIEM shipper (ADR 0034 "Ingest from k3s01: files only, no push input", siem
+# contract P2). The pins (fluent_bit_version, fluent_bit_deb_sha256, fluent_bit_apt_key_fingerprint)
+# live in group_vars/all.yml with the other pins (ADR 0008).
+
+fluent_bit_apt_key_url: https://packages.fluentbit.io/fluentbit.key
+fluent_bit_apt_keyring: /etc/apt/keyrings/fluentbit.asc
+fluent_bit_apt_repo_url: https://packages.fluentbit.io/debian/trixie
+fluent_bit_apt_suite: trixie
+
+# Which shape this host ships in: k3s01 sends six streams over the VLAN with a certificate signed on
+# siem01; siem01 sends its own logs to its loopback with its local shipper-siem01 identity (F4).
+fluent_bit_profile: "{{ 'siem01' if 'siem_nodes' in group_names else 'k3s01' }}"
+
+# The SIEM host: it signs k3s01's CSR (through the remote entry point only) and holds the CA.
+fluent_bit_signer: "{{ groups['siem_nodes'][0] }}"
+
+fluent_bit_profiles:
+  k3s01:
+    sources: [falco, talon, api, k8s-audit, hubble, host]
+    identity: shipper-k3s01
+    opensearch_host: "{{ hostvars[fluent_bit_signer].siem_node_ip }}"
+    # Read by the unit's own start check: if the sandbox ever stops hiding these, Fluent Bit refuses
+    # to start (MJ8). The kubeconfig is cluster-admin.
+    sandbox_sentinels: [/etc/rancher/k3s/k3s.yaml]
+    inaccessible_paths: []
+    # The only addresses the unit may talk to (IPAddressDeny=any): siem01 and its own loopback.
+    ip_allow: ["{{ hostvars[fluent_bit_signer].siem_node_ip }}/32", 127.0.0.0/8]
+    # The host's own stream, which also carries the shipper's loss reports.
+    own_stream: host
+  siem01:
+    sources: [siem01]
+    identity: shipper-siem01
+    opensearch_host: 127.0.0.1
+    # The CA key and the admin key sit here; CAP_DAC_READ_SEARCH would read them otherwise.
+    sandbox_sentinels: [/etc/sdp-siem/pki/admin.key]
+    # On top of the common list below: siem01's CA and identity keys (no "-": they must exist here)
+    # and the snapshots, a full copy of the evidence.
+    inaccessible_paths: [/etc/sdp-siem/pki, -/var/lib/opensearch-snapshots]
+    ip_allow: [127.0.0.0/8]
+    own_stream: siem01
+
+# N5 fallback (siem contract M5): verify the node certificate against its DNS SAN `siem01` instead
+# of the IP SAN. Empty = verify against the address in opensearch_host.
+fluent_bit_tls_vhost: ""
+
+# Field allow-lists, read on the controller from the repository checkout (siem/fields/README.md).
+fluent_bit_fields_dir: "{{ playbook_dir }}/../../siem/fields"
+
+# Files read, per source. Tag sdp.<source>.<name>; format cri (Kubernetes pod log, JSON body),
+# json (one JSON object per line), raw (the line as is) or osaudit (OpenSearch's security audit log).
+fluent_bit_tail_inputs:
+  - {source: falco, name: log, path: "/var/log/pods/falco_falco-*/falco/*.log", format: cri}
+  - {source: talon, name: log, path: "/var/log/pods/falco-response_falco-talon-*/falco-talon/*.log", format: cri}
+  - {source: api, name: log, path: "/var/log/pods/portfolio-api_portfolio-api-*/api/*.log", format: cri}
+  - {source: k8s-audit, name: log, path: /var/lib/rancher/k3s/server/logs/audit.log, format: json}
+  - {source: hubble, name: log, path: /var/run/cilium/hubble/events.log, format: json}
+  - {source: host, name: auditd, path: /var/log/audit/audit.log, format: raw}
+  - {source: siem01, name: auditd, path: /var/log/audit/audit.log, format: raw}
+  - {source: siem01, name: osaudit, path: /var/log/opensearch/sdp-security-audit.log, format: osaudit}
+
+# Sources fed from journald (ssh as unit and as sshd-session, sudo, kernel lines; sdp.lua keeps the
+# nft-drop ones).
+fluent_bit_journal_sources: [host, siem01]
+
+# Records per second per stream, averaged over 5 minutes, before the throttle drops. Only the data
+# inputs are throttled (log, journal, auditd, osaudit): heartbeats, Falco's metrics snapshot and Falco
+# alerts of priority Warning and above never are. Drops are reported once a minute into the host's
+# own stream (fluentbit.throttle_dropped) and alarmed by the ops monitor "shipper dropping".
+fluent_bit_throttle_rate:
+  k8s-audit: 50
+fluent_bit_throttle_rate_default: 20
+
+# Buffering: chunks on disk, at most this much per stream (what bounds the disk, not the retries);
+# a chunk is retried until it is delivered, backing off up to 5 minutes (review M1): an outage of any
+# length loses nothing until a stream's buffer is full, then its oldest chunks are dropped - reported
+# as fluentbit.output_dropped and alarmed by "shipper dropping".
+fluent_bit_storage_limit: 1G
+fluent_bit_retry_limit: no_limits
+fluent_bit_mem_buf_limit: 16M
+
+# The kill limit of the unit (L13 expects RSS <= 128 MB in normal operation).
+fluent_bit_memory_max: 192M
+
+# Metrics (throttle drops, retries, buffer) on the loopback only.
+fluent_bit_metrics_port: 2020
+
+# Paths the unit never sees, on top of what ProtectSystem/ProtectHome hide. The "-" prefix tolerates
+# paths a host does not have (siem contract P2, B8).
+fluent_bit_inaccessible_paths:
+  - -/etc/rancher
+  - -/var/lib/rancher/k3s/server/tls
+  - -/var/lib/rancher/k3s/server/cred
+  - -/var/lib/rancher/k3s/server/token
+  - -/var/lib/rancher/k3s/server/db
+  - -/var/lib/rancher/k3s/storage
+  - -/var/lib/rancher/k3s/agent
+  - -/var/lib/kubelet
+  - -/run/k3s
+  - /etc/shadow
+  - /etc/gshadow
+  - /etc/ssh
+  - /root
+  # The keys reach the unit only as credentials ($CREDENTIALS_DIRECTORY, loaded by systemd itself).
+  - /etc/fluent-bit/keys
+  - -/etc/opensearch
+  - -/etc/opensearch-dashboards
+  - -/var/lib/opensearch
+  - -/var/lib/sdp-siem
+
+# The k3s01 client certificate is re-requested when fewer than this many days are left (verify
+# fails at 30, as for siem01's own certificates).
+fluent_bit_cert_renew_before: +45d
+
+# The client identity: CN=<identity>-g<N>,OU=siem,O=sdp, N from the signer's
+# opensearch_cert_generations (group_vars/siem_nodes.yml), the one place generations are bumped.
+fluent_bit_cert_generation: >-
+  {{ hostvars[fluent_bit_signer].opensearch_cert_generations[fluent_bit_profiles[fluent_bit_profile].identity] }}
+fluent_bit_cert_cn: "{{ fluent_bit_profiles[fluent_bit_profile].identity }}-g{{ fluent_bit_cert_generation | trim }}"
+fluent_bit_cert_subject: [{O: sdp}, {OU: siem}, {CN: "{{ fluent_bit_cert_cn }}"}]
+# Where systemd reads the client key from (LoadCredential): siem01's local identity stays in its
+# PKI directory, k3s01's key is the one made by this role.
+fluent_bit_client_key_path: >-
+  {{ '/etc/sdp-siem/pki/shipper-siem01.key' if fluent_bit_profile == 'siem01' else '/etc/fluent-bit/keys/client.key' }}

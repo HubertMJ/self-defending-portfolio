@@ -74,6 +74,37 @@ spec:
               override: ghcr.io/hubertmj/self-defending-portfolio/hubble-relay:main@sha256:23fb1c3769503fd2a322e386d65df2fe0402c3ba4185f338d6de53ae4d5bbf3e
           ui:
             enabled: false
+          # Flow export to a file on the node for the SIEM (ADR 0034, siem contract P2): only flows
+          # with a pod in sandbox/ or sandbox-unguarded/ on either side, and a field mask that keeps
+          # verdicts, drop reasons, pods, ports and DNS query names but drops addresses, node names
+          # and labels. k3s01's Fluent Bit tails the file. A change here rolls the agent (maintenance
+          # window), after which run.sh re-measures ADR 0032's quarantine latency.
+          export:
+            static:
+              enabled: true
+              filePath: /var/run/cilium/hubble/events.log
+              fileMaxSizeMb: 10
+              fileMaxBackups: 5
+              allowList:
+                - '{"source_pod":["sandbox/"]}'
+                - '{"destination_pod":["sandbox/"]}'
+                - '{"source_pod":["sandbox-unguarded/"]}'
+                - '{"destination_pod":["sandbox-unguarded/"]}'
+              fieldMask:
+                - time
+                - verdict
+                - drop_reason_desc
+                - traffic_direction
+                - is_reply
+                - source.namespace
+                - source.pod_name
+                - destination.namespace
+                - destination.pod_name
+                - l4
+                - l7.type
+                - l7.dns.query
+                - l7.dns.rcode
+                - event_type
         policyEnforcementMode: default
         # Which pod labels count towards a Cilium security identity (ADR 0032). The default list is
         # kept (these are appended ignore rules, so the whitelist flag stays off and every other

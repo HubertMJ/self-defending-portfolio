@@ -1,0 +1,19 @@
+# Inventory of tests/siem/ingest-it.sh: the shipper and the signer are systemd containers on the
+# test network 172.31.250.0/24, the throwaway OpenSearch is 172.31.250.10 (its node certificate's IP
+# SAN), as siem01 is 10.4.2.10 in the real inventory.
+all:
+  children:
+    k3s_nodes:
+      hosts:
+        sdp-ingest-k3s:
+          ansible_connection: community.docker.docker_api
+          ansible_user: root
+          ansible_python_interpreter: /usr/bin/python3
+    siem_nodes:
+      hosts:
+        sdp-ingest-signer:
+          ansible_connection: community.docker.docker_api
+          ansible_user: root
+          ansible_python_interpreter: /usr/bin/python3
+          siem_node_ip: 172.31.250.10
+          opensearch_cert_generations: {admin: 1, rules-sync: 1, dashboards: 1, shipper-siem01: 1, shipper-k3s01: 1, portfolio-api: 1}

@@ -56,6 +56,19 @@ opensearch_dashboards_deb_sha256: af7324cbfc46ff99760ce1138d1fb242087487e62eef02
 # The install docs still print the old 2021 fingerprint (C5B7...D3FC); it is not this key.
 opensearch_apt_key_fingerprint: A8B2D9E04CD51FEF6AA2DB53BA81D99981191457
 
+# --- ops monitors switched on (M13: each source's "ingest silent" goes on when the source goes live) ---
+# siem01's own shipper is live with P2 (sdp-siem01); "evidence lag" watches what was just ingested, so
+# it is on as soon as any stream is fed. The six k3s01 streams and "falco metrics silent" are added in
+# the P2 maintenance window, after ingest.yml and the Falco roll (.omc runbook, step "monitors").
+opensearch_config_ops_monitors_enabled:
+  - evidence rewritten
+  - disk watermark
+  - snapshot failing
+  - ism stalled
+  - evidence lag
+  - ingest silent siem01
+  - shipper dropping
+
 # --- certificate generations (ADR 0034 amendment: rotation = next generation, map it, deploy it,
 # then remove the old generation from roles_mapping) ---
 opensearch_cert_generations:

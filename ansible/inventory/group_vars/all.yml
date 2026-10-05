@@ -1,2 +1,9 @@
 ansible_user: ansible
 ansible_python_interpreter: /usr/bin/python3
+
+# --- pinned versions shared by both groups (bump deliberately, see docs/adr/0008) ---
+# Fluent Bit ships the SIEM sources from k3s01 and siem01 (ADR 0034, roles/fluent_bit).
+fluent_bit_version: "5.1.3"
+fluent_bit_deb_sha256: c18beb98e864b24d9ea2740a3effa79530ef1ee1b57f578b7591ad9102f54011
+# Primary key of https://packages.fluentbit.io/fluentbit.key (no expiry; it signs the trixie index).
+fluent_bit_apt_key_fingerprint: C3C0A28534B9293EAF51FABD9F9DDC083888C1CD

@@ -143,3 +143,16 @@ host, and are allowed.
 
 **Consequences.** The posture names which policies and CIS checks fail; that is public in the repository
 and in k3s's defaults already. The run history is still in memory (above); listing it adds no state.
+
+## Amendment 2026-10-04: Hubble flows reach the SIEM (ADR 0034)
+
+**Context.** "Not done: Hubble flow events" stood for a Relay client in the API being too heavy.
+
+**Decision.** For the SIEM path it is done without a Relay client: Cilium's static exporter writes the
+flows of sandbox pods (either side) to a file on the node with a field mask that keeps verdicts, drop
+reasons, pods, ports and DNS query names and drops addresses, node names and labels; Fluent Bit ships
+only the flow records, and only allow-listed fields (ADR 0034). The API still publishes no flow
+events of its own; what it publishes from the SIEM (ADR 0036) passes this ADR's per-field allow-list.
+
+**Consequences.** A query name never leaves the SIEM (not published); the open item stays open for
+the API's own live feed.

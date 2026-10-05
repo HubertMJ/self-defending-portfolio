@@ -1,0 +1,22 @@
+---
+# k3s01's SIEM shipper (ADR 0034 "Ingest from k3s01", siem contract P2): Fluent Bit reads Falco,
+# Talon, the API, the audit log, Hubble's flow export and the host's own logs and appends them to
+# siem01. Its own playbook, not part of hardening.yml or cluster.yml: it needs siem01 up (the
+# client CSR is signed there, through the remote entry point) and it is applied in a maintenance
+# window of its own. siem01's shipper is part of siem.yml.
+- name: Ship k3s01's logs to the SIEM
+  hosts: k3s_nodes
+  become: true
+  pre_tasks:
+    - name: Assert the target runs Debian 13
+      ansible.builtin.assert:
+        that:
+          - ansible_distribution == 'Debian'
+          - ansible_distribution_major_version is version('13', '==')
+        fail_msg: >-
+          These roles target Debian 13 (trixie); this host reports
+          {{ ansible_distribution }} {{ ansible_distribution_major_version }}.
+        success_msg: Target is Debian 13.
+  roles:
+    - role: fluent_bit
+      tags: [fluent_bit]

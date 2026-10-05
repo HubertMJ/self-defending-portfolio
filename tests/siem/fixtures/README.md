@@ -139,3 +139,17 @@ time (+02:00) 180 us after it, as on k3s01. The three other lines are synthetic,
 defaults 3/30) and a made-up commit; `terminal command exec ended` and `siem events dropped` carry made-up values.
 The read-flag command's output (the flag) is in no line: output events are never written. Regenerate after
 a golden change: same bodies, same order. Field allow-list: siem/fields/api.yaml.
+
+## hubble, falco metrics, siem01 security audit (P2 `ingest`, 2026-10-04)
+
+| file | lines | what each line is |
+|---|---|---|
+| hubble.log | 6 | SYNTHETIC export records in the shape of Cilium 1.19's static exporter (`{"flow":{...},"node_name":"k3s01","time":...}`, protojson field names) with the field mask of cluster/apps/cilium.yaml: a DNS request (query in mixed case, the dns-exfil label shape) and its NXDOMAIN response between a sandbox pod and CoreDNS, a policy drop of a quarantined pod's DNS packet (with an `IP` block the mask would have removed, to prove the projection drops it anyway), an ingress flow from the API to a twin pod, and two non-flow records (`lost_events`, `agent_event`) that must be dropped (F13) |
+| falco-metrics.log | 1 | the pinned Falco 0.45.0's `Falco internal: metrics snapshot` (priority Informational), captured from the image in nodriver mode with every counter family off, wrapped as a CRI line; hostname and the interface address set to k3s01's to prove they are dropped (F12, N7) |
+| falco-ips.log | 2 | SYNTHETIC alerts shaped like stock-rule output with addresses: "Redirect STDOUT/STDIN to Network Connection in Container" from a pod in `default` (fd.name `10.42.0.12:40000->203.0.113.7:4444`, user root) and a host process (no pod, user `operator`, fd.name with k3s01's and an admin address) - the shipper must pseudonymise every address in fd.name and every user outside sandbox* (review L2) |
+| siem01-osaudit.log | 3 | /var/log/opensearch/sdp-security-audit.log on siem01 as written (`[<time>] <JSON>`): an SSL_EXCEPTION (a client without certificate, P1 acceptance item 5), a MISSING_PRIVILEGES (dashboards-g1 refused a DELETE on sdp-falco, P1 L8) and an INDEX_EVENT of the admin |
+
+hubble.log is replaced by a live capture from /var/run/cilium/hubble/events.log on k3s01 after the
+exporter is rolled out in the P2 maintenance window (L9); until then it is the shape the exporter is
+documented to write, not a capture. The address-free projection does not depend on it: sdp.lua reads
+only the listed paths of `.flow`.

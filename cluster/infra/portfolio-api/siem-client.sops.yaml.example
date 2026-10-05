@@ -1,0 +1,14 @@
+# TEMPLATE - not consumed by kustomize. scripts/siem-api-cert.sh writes the real file and encrypts it
+# (ADR 0034, ADR 0006): the key is generated on the operator's host, only the CSR goes to siem01, which
+# signs it for CN=portfolio-api-g<N>,OU=siem,O=sdp through the remote entry point
+# (ansible/roles/opensearch/tasks/sign_client_csr.yml). Do not fill this in by hand.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: portfolio-api-siem
+  namespace: portfolio-api
+type: Opaque
+stringData:
+  tls.crt: REPLACE-ME
+  tls.key: REPLACE-ME
+  ca.crt: REPLACE-ME

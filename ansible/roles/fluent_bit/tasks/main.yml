@@ -1,0 +1,187 @@
+---
+# Fluent Bit as the SIEM shipper (ADR 0034, siem contract P2). Order: package, user and directories,
+# secrets, configuration and allow-lists, the unit's sandbox - and only then enable and start, so
+# the service never runs unsandboxed or with the package's sample configuration.
+- name: Assert the profile is known and its sources have allow-lists
+  ansible.builtin.assert:
+    that:
+      - fluent_bit_profile in fluent_bit_profiles
+      - fluent_bit_signer in groups['siem_nodes']
+    fail_msg: Unknown Fluent Bit profile {{ fluent_bit_profile }} or no SIEM host to sign for it.
+    success_msg: "Profile {{ fluent_bit_profile }}: {{ fluent_bit_profiles[fluent_bit_profile].sources | join(', ') }}."
+
+- name: Look for an installed Fluent Bit
+  ansible.builtin.stat:
+    path: /opt/fluent-bit/bin/fluent-bit
+  register: fluent_bit_binary
+
+# A check run on a host without the package cannot evaluate the rest (no user, no key to build a
+# request from); it says so instead of failing halfway.
+- name: Report what the first run would do
+  ansible.builtin.debug:
+    msg: >-
+      Check mode and Fluent Bit {{ fluent_bit_version }} is not installed yet: the first run would trust the
+      repository key, install the pinned package, make the keys{{ ' and request a certificate from '
+      ~ fluent_bit_signer if fluent_bit_profile == 'k3s01' else '' }}, write the configuration and start the unit.
+  when: ansible_check_mode and not fluent_bit_binary.stat.exists
+
+- name: Install and configure the shipper
+  when: not (ansible_check_mode and not fluent_bit_binary.stat.exists)
+  block:
+    - name: Install the pinned package
+      ansible.builtin.include_tasks: apt.yml
+
+    - name: Create the system group the shipper runs as
+      ansible.builtin.group:
+        name: fluent-bit
+        system: true
+
+    - name: Create the system user the shipper runs as
+      ansible.builtin.user:
+        name: fluent-bit
+        group: fluent-bit
+        system: true
+        shell: /usr/sbin/nologin
+        home: /var/lib/fluent-bit
+        create_home: false
+
+    - name: Create the configuration and state directories
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: directory
+        owner: "{{ item.owner }}"
+        group: fluent-bit
+        mode: "{{ item.mode }}"
+      loop:
+        - {path: /etc/fluent-bit/sdp, owner: root, mode: "0750"}
+        - {path: /var/lib/fluent-bit, owner: fluent-bit, mode: "0750"}
+        - {path: /var/lib/fluent-bit/buffer, owner: fluent-bit, mode: "0750"}
+      loop_control:
+        label: "{{ item.path }}"
+
+    - name: Make the keys and get the certificate
+      ansible.builtin.include_tasks: credentials.yml
+
+    - name: Load the allow-lists of this host's sources
+      ansible.builtin.set_fact:
+        fluent_bit_field_sets: >-
+          {%- set sets = {} -%}
+          {%- for source in fluent_bit_profiles[fluent_bit_profile].sources -%}
+          {%-   set path = fluent_bit_fields_dir ~ '/' ~ source ~ '.yaml' -%}
+          {%-   set _ = sets.update({source: lookup('ansible.builtin.file', path) | from_yaml}) -%}
+          {%- endfor -%}
+          {{ sets }}
+
+    - name: Assert each allow-list belongs to its stream
+      ansible.builtin.assert:
+        that:
+          - fluent_bit_field_sets[item].stream == 'sdp-' ~ item
+          - fluent_bit_field_sets[item].fields is mapping
+          - fluent_bit_field_sets[item].fields['event.dataset'].value is defined
+          # sdp_fields.lua.j2 writes every string inside [==[ ]==]; "]==" in one would end it early.
+          - (fluent_bit_field_sets[item].fields | to_json) is not search('\]==')
+        fail_msg: siem/fields/{{ item }}.yaml does not describe sdp-{{ item }}.
+        success_msg: "sdp-{{ item }}: {{ fluent_bit_field_sets[item].fields | length }} fields."
+      loop: "{{ fluent_bit_profiles[fluent_bit_profile].sources }}"
+
+    - name: Render the allow-lists and the configuration
+      ansible.builtin.template:
+        src: "{{ item.src }}"
+        dest: /etc/fluent-bit/sdp/{{ item.dest }}
+        owner: root
+        group: fluent-bit
+        mode: "0640"
+      loop:
+        - {src: sdp_fields.lua.j2, dest: sdp_fields.lua}
+        - {src: fluent-bit.conf.j2, dest: fluent-bit.conf}
+      loop_control:
+        label: "{{ item.dest }}"
+      notify: Restart fluent-bit
+
+    - name: Install the filter script and the parsers
+      ansible.builtin.copy:
+        src: "{{ item }}"
+        dest: /etc/fluent-bit/sdp/{{ item }}
+        owner: root
+        group: fluent-bit
+        mode: "0640"
+      loop: [sdp.lua, parsers.conf]
+      notify: Restart fluent-bit
+
+    - name: Install the sandbox start check
+      ansible.builtin.copy:
+        src: sandbox-check.sh
+        dest: /usr/local/libexec/sdp-fluent-bit-sandbox-check
+        owner: root
+        group: root
+        mode: "0755"
+      notify: Restart fluent-bit
+
+    - name: Create the unit's drop-in directory
+      ansible.builtin.file:
+        path: /etc/systemd/system/fluent-bit.service.d
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Sandbox the unit
+      ansible.builtin.template:
+        src: sdp.conf.j2
+        dest: /etc/systemd/system/fluent-bit.service.d/sdp.conf
+        owner: root
+        group: root
+        mode: "0644"
+      notify: Restart fluent-bit
+
+    - name: Apply the configuration before the first start
+      ansible.builtin.meta: flush_handlers
+
+    - name: Enable and start Fluent Bit
+      ansible.builtin.systemd_service:
+        name: fluent-bit
+        enabled: true
+        state: started
+        daemon_reload: true
+
+    # The unit restarts on failure, so "running" alone would also be true for a shipper that dies a
+    # few seconds into every start (a broken sandbox, a missing key): it must have stayed up for 15 s
+    # with its restart count unchanged.
+    - name: Wait until the shipper runs
+      ansible.builtin.systemd_service:
+        name: fluent-bit
+      register: fluent_bit_state
+      until: fluent_bit_state.status.ActiveState == 'active' and fluent_bit_state.status.SubState == 'running'
+      retries: 6
+      delay: 5
+
+    - name: Read the host's uptime
+      ansible.builtin.slurp:
+        src: /proc/uptime
+      register: fluent_bit_uptime
+
+    - name: Give a fresh start 15 seconds
+      ansible.builtin.pause:
+        seconds: "{{ fluent_bit_wait | int }}"
+      when: fluent_bit_wait | int > 0
+      vars:
+        fluent_bit_wait: >-
+          {{ (15 - ((fluent_bit_uptime.content | b64decode).split()[0] | float
+                    - fluent_bit_state.status.ActiveEnterTimestampMonotonic | int / 1000000)) | round(0, 'ceil') }}
+
+    - name: Read the shipper's state again
+      ansible.builtin.systemd_service:
+        name: fluent-bit
+      register: fluent_bit_state_after
+
+    - name: Assert the shipper stayed up
+      ansible.builtin.assert:
+        that:
+          - fluent_bit_state_after.status.ActiveState == 'active'
+          - fluent_bit_state_after.status.SubState == 'running'
+          - fluent_bit_state_after.status.NRestarts == fluent_bit_state.status.NRestarts
+        fail_msg: >-
+          fluent-bit did not stay up (now {{ fluent_bit_state_after.status.ActiveState }}/{{
+          fluent_bit_state_after.status.SubState }}, restarts {{ fluent_bit_state.status.NRestarts }} ->
+          {{ fluent_bit_state_after.status.NRestarts }}); see journalctl -u fluent-bit.
+        success_msg: fluent-bit is up and stayed up.

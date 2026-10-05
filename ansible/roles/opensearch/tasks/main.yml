@@ -118,6 +118,7 @@
     client_key: "{{ opensearch_pki_dir }}/admin.key"
     status_code: [200, 503]
   register: opensearch_up
+  check_mode: false
   until: opensearch_up.status in [200, 503]
   retries: "{{ opensearch_start_retries }}"
   delay: 5
@@ -132,6 +133,7 @@
     client_cert: "{{ opensearch_pki_dir }}/admin.crt"
     client_key: "{{ opensearch_pki_dir }}/admin.key"
   register: opensearch_pa_state
+  check_mode: false
 
 - name: Switch Performance Analyzer and its RCA off
   ansible.builtin.uri:

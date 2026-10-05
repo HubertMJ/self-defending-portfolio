@@ -1,9 +1,12 @@
 ---
+# The lsblk/findmnt reads run in check mode too (check_mode: false; they change nothing), so
+# `make siem ARGS="--check --diff"` evaluates the disk selection instead of failing on empty output.
 - name: List whole disks with their serials
   ansible.builtin.command:
     cmd: lsblk --nodeps --noheadings --raw --output NAME,SERIAL
   register: siem_disk_list
   changed_when: false
+  check_mode: false
 
 - name: Find the disk that holds the root filesystem
   ansible.builtin.shell:
@@ -11,6 +14,7 @@
     executable: /bin/bash
   register: siem_disk_root
   changed_when: false
+  check_mode: false
 
 - name: Select the disk by serial
   ansible.builtin.set_fact:
@@ -34,6 +38,7 @@
     cmd: lsblk --noheadings --raw --output NAME,FSTYPE,LABEL /dev/{{ siem_disk_matches[0] }}
   register: siem_disk_layout
   changed_when: false
+  check_mode: false
 
 # A disk that is partitioned or carries another filesystem is not ours to format.
 - name: Assert the disk is unpartitioned and empty or already ours

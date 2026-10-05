@@ -1,0 +1,29 @@
+# Wave 6, with the portfolio API: no pod but the API may connect to siem01 (ADR 0034). One
+# CiliumClusterwideNetworkPolicy; see cluster/infra/siem-egress/ccnp.yaml.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: siem-egress
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "6"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/HubertMJ/self-defending-portfolio.git
+    targetRevision: main
+    path: cluster/infra/siem-egress
+  destination:
+    server: https://kubernetes.default.svc
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    retry:
+      limit: 5
+      backoff:
+        duration: 10s
+        factor: 2
+        maxDuration: 3m
