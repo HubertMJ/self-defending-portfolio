@@ -12,7 +12,10 @@ import (
 
 type stubCorrelation struct{ v incidents.View }
 
-func (s stubCorrelation) View() incidents.View { return s.v }
+func (s stubCorrelation) JSON() []byte {
+	b, _ := json.Marshal(s.v)
+	return b
+}
 
 func TestCorrelationWithoutSIEM(t *testing.T) {
 	ts := httptest.NewServer(New(Config{}).Public())

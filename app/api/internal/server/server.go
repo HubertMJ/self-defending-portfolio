@@ -51,9 +51,10 @@ type Runner interface {
 	ObserveTalon(namespace, pod, status, actionner string)
 }
 
-// CorrelationReader is what GET /api/correlation needs from internal/incidents.
+// CorrelationReader is what GET /api/correlation needs from internal/incidents: the view as JSON,
+// marshalled once per poll by the tracker.
 type CorrelationReader interface {
-	View() incidents.View
+	JSON() []byte
 }
 
 // Poster is what the server needs from internal/posture.
@@ -341,7 +342,9 @@ func (s *Server) correlation(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, incidents.Unavailable())
 		return
 	}
-	writeJSON(w, http.StatusOK, s.cfg.Correlation.View())
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(append(s.cfg.Correlation.JSON(), '\n'))
 }
 
 // correlationRules is the SIEM's detection content from git (the embedded index), served whether or

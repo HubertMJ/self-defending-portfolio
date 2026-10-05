@@ -1128,3 +1128,24 @@ func TestArmValidated(t *testing.T) {
 		t.Fatalf("run %q arm %q", inc.RunID, inc.Arm)
 	}
 }
+
+// The view is marshalled once per poll and served as those bytes.
+func TestJSONMarshalledOncePerPoll(t *testing.T) {
+	f := newFake()
+	terminalRun(f, "sdp-"+flagHex)
+	clk := &clock{t: t0.Add(time.Minute)}
+	tr := newTracker(t, f, clk)
+	tr.Poll(context.Background())
+	a, b := tr.JSON(), tr.JSON()
+	want, _ := json.Marshal(tr.View())
+	if string(a) != string(want) || &a[0] != &b[0] {
+		t.Fatal("JSON is not the poll's one marshalled view")
+	}
+	clk.Set(clk.Now().Add(time.Minute))
+	if got := string(tr.JSON()); !strings.HasPrefix(got, `{"available":false`) {
+		t.Fatalf("stale JSON %s", got)
+	}
+	if got := string(New(Config{}).JSON()); !strings.HasPrefix(got, `{"available":false,"checked_at":null`) {
+		t.Fatalf("unconfigured JSON %s", got)
+	}
+}

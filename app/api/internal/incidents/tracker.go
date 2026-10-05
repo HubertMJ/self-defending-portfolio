@@ -15,6 +15,7 @@ package incidents
 import (
 	"context"
 	"crypto/hmac"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"regexp"
@@ -94,6 +95,8 @@ type Tracker struct {
 	lastTry time.Time
 	failing bool
 	view    View
+	// viewJSON is view marshalled once per poll; every request is served these bytes.
+	viewJSON []byte
 	// logged: notes already logged (a full page per read, a 404 per log type); Poll's goroutine only.
 	logged map[string]bool
 
@@ -157,19 +160,37 @@ func (t *Tracker) Run(ctx context.Context) {
 func (t *Tracker) View() View {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if t.cfg.Source == nil {
-		return unavailable(nil)
+	if v, down := t.down(); down {
+		return v
 	}
-	now := t.cfg.Now()
-	if t.lastEnd.IsZero() || now.Sub(t.lastEnd) > staleAfter {
+	return t.view
+}
+
+// JSON is View marshalled: the bytes made once per poll, or the small unavailable answer.
+func (t *Tracker) JSON() []byte {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if v, down := t.down(); down {
+		b, _ := json.Marshal(v)
+		return b
+	}
+	return t.viewJSON
+}
+
+// down is the unavailable answer when the SIEM is off or the last good poll is stale. t.mu held.
+func (t *Tracker) down() (View, bool) {
+	if t.cfg.Source == nil {
+		return unavailable(nil), true
+	}
+	if t.lastEnd.IsZero() || t.cfg.Now().Sub(t.lastEnd) > staleAfter {
 		var checked *time.Time
 		if !t.lastTry.IsZero() {
 			c := t.lastTry
 			checked = &c
 		}
-		return unavailable(checked)
+		return unavailable(checked), true
 	}
-	return t.view
+	return View{}, false
 }
 
 // Poll reads one window from the SIEM and rebuilds the incidents. Exported for tests; Run calls it.
@@ -299,6 +320,7 @@ func (t *Tracker) Poll(ctx context.Context) {
 	t.failing = false
 	t.lastOK, t.lastEnd = now, t.cfg.Now().UTC()
 	t.view = t.buildView(now)
+	t.viewJSON, _ = json.Marshal(t.view)
 }
 
 type search struct {
