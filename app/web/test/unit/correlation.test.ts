@@ -109,6 +109,36 @@ describe("publishable: review M2 probes", () => {
   });
 });
 
+describe("publishable: review L3, aligned with the API's redactions", () => {
+  it("withholds ServiceAccounts in any spelling, the flag in any case, tokens, IPv6 and API paths into other namespaces", () => {
+    for (const bad of [
+      "the service account of the pod",
+      "service_account token",
+      "Service-Account",
+      "sdp{abc}",
+      "Authorization: Bearer abcdefghijklmnop1234",
+      "jwt eyJhbGciOiJSUzI1NiIs.eyJzdWIiOiJ4In0",
+      "to fd00:10:42::5",
+      "from 2001:db8:0:0:0:0:0:1",
+      "GET /api/v1/namespaces/kube-system/pods/coredns-1/exec",
+      "/api/v1/namespaces/default/pods/x",
+    ]) {
+      expect(publishable(bad), bad).toBe(false);
+    }
+  });
+
+  it("normalises compatibility characters before testing", () => {
+    expect(publishable("on ｋ３ｓ０１")).toBe(false);
+    expect(publishable("ＳＤＰ｛x｝")).toBe(false);
+  });
+
+  it("keeps what only looks close: clock times, loopback, a MAC, short bearer words, sandbox API paths", () => {
+    for (const ok of ["at 12:00:00 UTC", "::1 only", "mac aa:bb:cc:dd:ee:ff", "bearer token missing", "/api/v1/namespaces/sandbox/pods/terminal-7e57000001/exec", "/api/v1/namespaces/sandbox-unguarded/pods/x-u", "Talon: Terminate Pod (kubernetes:terminate) success"]) {
+      expect(publishable(ok), ok).toBe(true);
+    }
+  });
+});
+
 describe("parseCorrelation", () => {
   it("parses a full answer, newest first", () => {
     const c = parseCorrelation(answer({ incidents: [incident(), incident({ id: "d15e0f17a1b2c3d4", kind: "dns-exfil", last_at: at(10), first_at: at(12), flag_match: true, falco_events: 0 })] }));

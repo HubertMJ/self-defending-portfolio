@@ -1184,19 +1184,26 @@ const MAX_RULES = 300;
 const SANDBOX_NS: ReadonlySet<string> = new Set(["sandbox", "sandbox-unguarded"]);
 
 /**
- * Patterns ADR 0021 never publishes, as the API's leak test lists them (P4 tests): an IPv4 address
- * other than loopback, a cluster-internal DNS name, the node names, a ServiceAccount, a user
- * pseudonym, a dns-exfil query label, the flag.
+ * Patterns ADR 0021 never publishes, as the API's leak test and redactions list them (P4 tests,
+ * app/api/internal/incidents publish.go): an IPv4 address other than loopback, an IPv6 address, a
+ * cluster-internal DNS name, the node names, a ServiceAccount, a token, a user pseudonym, a dns-exfil
+ * query label, the flag, and a Kubernetes API path into a pod outside the sandbox namespaces.
  */
 const NEVER_PUBLISHED: readonly RegExp[] = [
   // An address at the end of a sentence ("to 10.43.0.10.") is still one.
   /(?<![\d.])(?!127\.)(?:\d{1,3}\.){3}\d{1,3}(?!\.?\d)/,
+  // IPv6, conservatively: eight groups, or a "::" with a group on its left (so "12:00:00" and "::1" are not).
+  /(?<![\w:])(?:[0-9a-f]{1,4}:){7}[0-9a-f]{1,4}(?![\w:])/i,
+  /(?<![\w:])(?:[0-9a-f]{1,4}:){1,6}:(?:[0-9a-f]{1,4}(?::[0-9a-f]{1,4}){0,5})?(?![\w:])/i,
   /\.svc\b|cluster\.local/i,
   /k3s01|siem01/i,
-  /serviceaccount/i,
+  /service[\s_-]?account/i,
+  /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]+/,
+  /bearer\s+\S{16,}/i,
   /hm1:/i,
   /sdp-[0-9a-f]{16}/i,
-  /SDP\{/,
+  /sdp\{/i,
+  /namespaces\/(?!sandbox(?:-unguarded)?\/)[a-z0-9-]+\/pods\//i,
 ];
 
 /**
@@ -1215,7 +1222,9 @@ const CLUSTER_NS: ReadonlySet<string> = new Set(["argocd", "cert-manager", "clou
  * a controller's pod name (it has a hyphen); "pods/exec" and "UDP/53", which the API's details carry,
  * are not.
  */
-export function publishable(s: string): boolean {
+export function publishable(text: string): boolean {
+  // Compatibility forms first: a fullwidth "ｋ３ｓ０１" or a ligature must not slip past an ASCII pattern.
+  const s = text.normalize("NFKC");
   if (NEVER_PUBLISHED.some((re) => re.test(s))) return false;
   for (const [, ns, sep, pod] of s.matchAll(SLASHED)) {
     if (SANDBOX_NS.has(ns)) continue;
