@@ -807,9 +807,10 @@ sinkhole_plugins() {
 # CoreDNS pod's exfil.sdp.test block runs exactly errors, prometheus and template (and nothing serves a
 # name under the zone). Leaves the output and status in DNS_OUT and DNS_RC for the caller's own
 # assertions. The forward counter is the whole cluster's, so another pod resolving an outside name in
-# the same seconds also moves it. A moved reading is retried, up to three runs, but only while the
-# counters just read show the exact sinkhole on every pod - so a retried run, the flagged command
-# included, cannot have been the one forwarded; a leak moves it on every run.
+# the same seconds also moves it. A moved reading is retried, up to three runs, but only if the zone
+# counter rose too (some lookup reached the sinkhole block) and the counters just read show the exact
+# sinkhole on every pod. A lookup that never reached the block - the zone counter still, the forward
+# counter moved: the one way a leak shows - is not retried, the flagged command least of all.
 dns_check() {
   local who=$1 pod=$2 argv=$3 try z0 z1 f0 f1
   for try in 1 2 3; do
@@ -819,10 +820,11 @@ dns_check() {
     z0=$(zone_requests "$WORK_DIR/m0.txt"); z1=$(zone_requests "$WORK_DIR/m1.txt")
     f0=$(forwards "$WORK_DIR/m0.txt"); f1=$(forwards "$WORK_DIR/m1.txt")
     [ "$f1" -ne "$f0" ] || break
+    [ "$z1" -gt "$z0" ] || break
     sinkhole_plugins "$WORK_DIR/m1.txt" || break
     [ "$try" -lt 3 ] || break
-    printf '  ....  %s: the forward counter moved %s -> %s during the lookup, the sinkhole is in place on every pod: run %s of 3\n' \
-      "$who" "$f0" "$f1" "$((try + 1))"
+    printf '  ....  %s: the forward counter moved %s -> %s during the lookup, the zone counter %s -> %s, the sinkhole is in place on every pod: run %s of 3\n' \
+      "$who" "$f0" "$f1" "$z0" "$z1" "$((try + 1))"
   done
   if sinkhole_plugins "$WORK_DIR/m1.txt"; then pass "$who: the exfil.sdp.test block runs exactly errors prometheus template ($SINKHOLE_PLUGINS)"
   else fail "$who: the exfil.sdp.test block runs $SINKHOLE_PLUGINS; want 'errors prometheus template' on every pod and no block under the zone"; fi

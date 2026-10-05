@@ -316,9 +316,12 @@ ADR 0021); it never reaches a resolver outside it.
 the forward plugin's request metrics are `coredns_proxy_*{proxy_name="forward"}`. The tests use
 `coredns_proxy_conn_cache_hits_total + coredns_proxy_conn_cache_misses_total`, which count every
 upstream exchange as it starts, answered or not. That counter is the whole cluster's, so another pod
-resolving an outside name in the same seconds also moves it; run.sh retries a moved reading only while
-`coredns_plugin_enabled` shows the exact sinkhole plugins on every pod (so no retried query can have
-been forwarded) and also reads `coredns_plugin_enabled` itself, which has no background noise.
+resolving an outside name in the same seconds also moves it; run.sh retries a moved reading only if the
+zone counter rose in the same reading and `coredns_plugin_enabled` shows the exact sinkhole plugins on
+every pod. That makes a retry unlikely to repeat a leak, not impossible: the zone counter is
+cluster-wide too. What a retry never repeats is the one shape a leak takes - the forward counter moved,
+the zone counter still - and the run fails there. run.sh also asserts `coredns_plugin_enabled` itself,
+which has no background noise.
 
 **Delivery.** As with the image: `cluster.yml --tags k3s` after `--check --diff` shows only the
 Corefile change in ConfigMap `coredns`. The manifest changed, so the role's handover runs, but the
