@@ -6,6 +6,7 @@
 
 import type { BuildInfo, CatalogueCommand, Objective, Posture, Provenance, Scenario, ScenarioDetails, SourceRef, Stats, VictimStatus } from "./contract";
 import catalogue from "./terminal-catalogue.json";
+import correlationFixture from "./correlation-fixture.json";
 
 /** Names this module's data in the mock's responses; a marker the production bundle must not contain (ADR 0035). */
 export const FIXTURE_MARKER = "sdp-fixture-data-not-from-the-cluster";
@@ -338,3 +339,27 @@ export function postureAdditions(now: number = Date.now()): Posture {
     falco: { ...p.falco, counted_since: new Date(now - 3 * 3600_000).toISOString() },
   };
 }
+
+// ---- Correlation (ADR 0036) ----
+//
+// GET /api/correlation and /api/correlation/rules in `?mock=1`: correlation-fixture.json, which
+// scripts/serve.mjs --siem serves too, its times moved so that its anchor is the moment of the answer.
+
+const CORRELATION_TIME_KEYS = new Set(["at", "first_at", "last_at", "since", "checked_at", "applied_at"]);
+
+/** A copy of `v` with every time field moved by `deltaMs` (the fixture's times are relative to its anchor). */
+export function shiftTimes(v: unknown, deltaMs: number): unknown {
+  if (Array.isArray(v)) return v.map((x) => shiftTimes(x, deltaMs));
+  if (typeof v !== "object" || v === null) return v;
+  return Object.fromEntries(
+    Object.entries(v).map(([k, x]) => [k, CORRELATION_TIME_KEYS.has(k) && typeof x === "string" && !Number.isNaN(Date.parse(x)) ? new Date(Date.parse(x) + deltaMs).toISOString() : shiftTimes(x, deltaMs)]),
+  );
+}
+
+/** The mock's GET /api/correlation; `available: false` (and nothing else) with `&mock-siem=0`. */
+export function correlation(now: number = Date.now(), available = true): unknown {
+  if (!available) return { available: false, checked_at: new Date(now).toISOString() };
+  return shiftTimes(correlationFixture.correlation, now - Date.parse(correlationFixture.anchor));
+}
+
+export const RULE_INDEX: unknown = correlationFixture.rules;

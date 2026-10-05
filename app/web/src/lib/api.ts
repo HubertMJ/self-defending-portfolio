@@ -7,9 +7,11 @@
 import {
   type AttackAccepted,
   type BuildInfo,
+  type Correlation,
   type Limits,
   type Posture,
   type Provenance,
+  type RuleIndex,
   type RunSummary,
   type Scenario,
   type ScenarioDetails,
@@ -22,9 +24,11 @@ import {
   isRunId,
   isTerminalAccepted,
   parseBuildInfo,
+  parseCorrelation,
   parsePosture,
   parseProvenance,
   parseRunList,
+  parseRuleIndex,
   parseRunHistory,
   parseScenarioDetails,
   parseScenarios,
@@ -213,6 +217,16 @@ export class ApiClient {
   /** Extension endpoint (ADR 0035): the runs the store keeps, newest first. */
   runs(): Promise<Result<RunSummary[]>> {
     return this.getJson("/runs", parseRunList);
+  }
+
+  /** Extension endpoint (ADR 0036): incidents, SOC metrics and the SIEM's health; 404 on an API without it. */
+  correlation(): Promise<Result<Correlation>> {
+    return this.getJson("/correlation", parseCorrelation);
+  }
+
+  /** Extension endpoint (ADR 0036): the Sigma rules, monitors and correlation rules the SIEM runs, from git. */
+  correlationRules(): Promise<Result<RuleIndex>> {
+    return this.getJson("/correlation/rules", parseRuleIndex);
   }
 
   /** GET /build.json: the web image's own commit and CI run, served by nginx next to the page (ADR 0035). */

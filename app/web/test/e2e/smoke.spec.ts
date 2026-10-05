@@ -776,7 +776,7 @@ test.describe("credibility on the production bundle (ADR 0035; serve.mjs --termi
     }
     // The order the owner asked for (ADR 0035, amended 2026-10-04): the proof first, the verify panel the
     // last section of the page (About is stripped in production while unwritten).
-    expect(await page.evaluate(() => [...document.querySelectorAll("main > section")].map((el) => el.id))).toEqual(["top", "evidence", "posture", "attack", "how", "skills", "projects", "verify"]);
+    expect(await page.evaluate(() => [...document.querySelectorAll("main > section")].map((el) => el.id))).toEqual(["top", "evidence", "posture", "attack", "correlation", "how", "skills", "projects", "verify"]);
     // The one way to it is a footer link.
     await expect(page.locator('a[href="#verify"]')).toHaveCount(1);
     const link = page.locator('footer.site-footer a[href="#verify"]');
@@ -917,5 +917,198 @@ test.describe("a side-by-side run, contained with the twin still held (serve.mjs
     await expect(page.locator("#console .card--pod dd").first()).toHaveText(pod);
     await noHorizontalScroll(page);
     expect(problems).toEqual([]);
+  });
+});
+
+test.describe("correlation (ADR 0036; serve.mjs --terminal-api --siem / --no-siem, the production bundle)", () => {
+  const SIEM = "http://127.0.0.1:4180/";
+  const NO_SIEM = "http://127.0.0.1:4181/";
+  const section = (page: Page) => page.locator("#correlation");
+  /**
+   * The sections the stylesheet numbers, in order: its counter counts the eyebrows that are rendered
+   * (a hidden section's is not), and a pseudo-element's counter value cannot be read from a script.
+   */
+  const numbered = (page: Page) =>
+    page.evaluate(() => [...document.querySelectorAll("main > .section > .wrap > .section__head > .eyebrow")].filter((e) => e.getClientRects().length > 0).map((e) => e.closest("section")?.id));
+
+  test("the section after the attack: health, SOC metrics, the incident board with its evidence timeline, the rule library; GETs only", async ({ page }) => {
+    test.setTimeout(45_000);
+    const problems = guardConsole(page);
+    const nonGet: string[] = [];
+    page.on("request", (r) => {
+      if (r.url().includes("/api/") && r.method() !== "GET") nonGet.push(`${r.method()} ${r.url()}`);
+    });
+    await page.goto(SIEM);
+    const s = section(page);
+    await expect(s).toBeVisible();
+    expect(await page.evaluate(() => [...document.querySelectorAll("main > section")].map((el) => el.id))).toEqual(["top", "evidence", "posture", "attack", "correlation", "how", "skills", "projects", "verify"]);
+    // "04 · Correlation", and How it works becomes 05.
+    expect((await numbered(page)).slice(0, 5)).toEqual(["evidence", "posture", "attack", "correlation", "how"]);
+    await expect(s.locator(".section__head .eyebrow")).toHaveText("Correlation");
+
+    // The health line (decision D1): the applied commit linked, each check named.
+    const health = s.locator(".corr-health");
+    await expect(health.locator(".corr-health__rules")).toContainText("rules applied at commit a7cc041");
+    await expect(health.locator('.corr-health__rules a[href="https://github.com/HubertMJ/self-defending-portfolio/commit/a7cc041e5d2b9f30c1a4e6b8d0f2a3c5e7f9b1d3"]')).toHaveCount(1);
+    await expect(health).toContainText("ingest ok");
+    await expect(health).toContainText("evidence not rewritten");
+    await expect(health).toContainText("disk ok");
+    await expect(health.locator(".corr-health__checked time")).toHaveText(/\d\d:\d\d:\d\d UTC \(.+ ago\)/);
+
+    // SOC metrics: the API's medians, the page's p95 saying what it is over.
+    const tiles = s.locator(".corr-metrics .tile");
+    await expect(tiles).toHaveCount(5);
+    await expect(tiles.nth(1)).toContainText("Time to detect");
+    await expect(tiles.nth(1).locator(".tile__value")).toHaveText("840 ms");
+    await expect(tiles.nth(2).locator(".tile__value")).toHaveText("212 ms");
+    await expect(tiles.nth(2)).toContainText("p95 1.8 s over the 3 contained intrusions listed");
+    await expect(tiles.nth(3).locator(".tile__value")).toHaveText("1 min 1 s");
+    await expect(tiles.nth(4).locator(".tile__value")).toHaveText("2");
+    await expect(s.locator(".corr-lag")).toContainText("falco 1.2 s · talon 860 ms · k8s-audit 2.1 s · hubble 3.4 s · api 610 ms · host –");
+
+    // The board, newest first: the dns-exfil incident with no Falco event and the flag matched.
+    const incidents = s.locator(".incident");
+    await expect(incidents).toHaveCount(6);
+    const dns = incidents.first();
+    await expect(dns).toHaveAttribute("data-kind", "dns-exfil");
+    await expect(dns.locator(".incident__facts")).toContainText("Falcono event");
+    await expect(dns.locator(".incident__facts")).toContainText("matched the run's flag");
+    await expect(dns.locator('a[href="https://attack.mitre.org/techniques/T1048/003/"]')).toHaveCount(1);
+    await expect(dns.locator('a[href="/api/runs/7e57000000000001"]')).toHaveCount(1);
+    const steps = dns.locator(".corr-step");
+    await expect(steps).toHaveCount(3);
+    await expect(steps.first().locator("time")).toHaveText(/^\d\d:\d\d:\d\d\.\d{3} UTC$/);
+    // A command line without a finding has no rule; the hubble finding's rule links to its Sigma file at
+    // the API's commit (serve.mjs's provenance: 0448cff…).
+    await expect(steps.first()).toContainText("command read-flag (T1552.001, credentials) started on sandbox/terminal-7e57000001");
+    await expect(steps.first().locator("strong")).toHaveCount(0);
+    await expect(steps.nth(2).locator(".tag--src")).toHaveText("hubble");
+    await expect(steps.nth(2).locator('a[href="https://github.com/HubertMJ/self-defending-portfolio/blob/0448cff5a1b2c3d4e5f60718293a4b5c6d7e8f90/siem/rules/dns-exfil-label.yml#L1"]')).toHaveCount(1);
+    const contained = s.locator('[data-incident="c0a1b2c3d4e5f607"]');
+    await expect(contained.locator(".incident__facts")).toContainText("Time to detect840 ms");
+    await expect(contained.locator(".incident__facts")).toContainText("Time to isolate212 ms");
+    await expect(contained.locator(".corr-step").last()).toContainText("policy enforced +148 ms");
+    await expect(contained.locator(".incident__evidence")).toContainText("correlation contained-intrusion");
+    await expect(contained.locator(".incident__evidence")).toContainText("document aB3dE5fG7hJ9kL1mN3pQ");
+    // Nine valid incidents: six in full, the older three one line each; the two malformed ones are dropped.
+    await expect(s.locator(".corr-older__item")).toHaveCount(3);
+
+    // What the page withholds although the API sent it (ADR 0021): the title and two details of the leaky incident.
+    const leaky = s.locator('[data-incident="e8ec0a7e1de0b0b0"]');
+    await s.locator(".corr-older summary").click();
+    await expect(leaky).toContainText("Exec outside the API");
+    await expect(leaky.locator(".corr-step__detail--withheld")).toHaveCount(2);
+    await expect(leaky).toContainText("get pods/exec on sandbox/terminal-7e57000005 not by the API, response 101");
+    await expect(s).not.toContainText(/kube-system|coredns|10\.43\.|serviceaccount|k3s01|siem01/i);
+
+    // The rule library: the coverage matrix and every rule's YAML at the commit.
+    const matrix = s.locator(".corr-matrix");
+    await expect(matrix.locator("thead th")).toHaveText(["Technique", "falco", "talon", "k8s-audit", "hubble", "api", "Incidents"]);
+    await expect(matrix.locator('tr[data-technique="T1048.003"] td[data-n="1"]')).toHaveCount(2);
+    await expect(matrix.locator('tr[data-technique="T1552.001"] .corr-cell--gap')).toHaveText("1, no rule");
+    await s.locator(".corr-rulelist summary").click();
+    await expect(s.locator(".corr-rule")).toHaveCount(8);
+    await expect(s.locator('.corr-rule a', { hasText: "Sigma YAML" }).first()).toHaveAttribute("href", /^https:\/\/github\.com\/HubertMJ\/self-defending-portfolio\/blob\/0448cff5a1b2c3d4e5f60718293a4b5c6d7e8f90\/siem\/rules\/[a-z-]+\.yml#L1$/);
+
+    // Links only from validated values: the repository, MITRE, the API's own JSON.
+    const hrefs = await s.locator("a").evaluateAll((as) => as.map((a) => a.getAttribute("href") ?? ""));
+    for (const href of hrefs) expect(href).toMatch(/^(https:\/\/github\.com\/HubertMJ\/self-defending-portfolio\/(blob|commit)\/[0-9a-f]{40}[\w./#-]*|https:\/\/attack\.mitre\.org\/techniques\/T\d{4}\/(\d{3}\/)?|\/api\/runs\/[0-9a-f]{16}|\/api\/correlation)$/);
+
+    // The verify panel lists the two endpoints while they answer.
+    await expect(page.locator("#verify-panel .vraw")).toContainText("curl -s https://hubertjablon.ski/api/correlation/rules");
+    await page.waitForTimeout(10_000);
+    expect(nonGet).toEqual([]);
+    expect(problems).toEqual([]);
+  });
+
+  for (const wide of [false, true]) {
+    const fonts = wide ? " (a wide font forced in)" : "";
+
+    test(`with the section shown, the evidence card stays above the fold at 1280x720${fonts}`, async ({ page, isMobile }) => {
+      test.skip(isMobile, "a desktop viewport");
+      if (wide) await wideFonts(page);
+      await page.setViewportSize({ width: 1280, height: 720 });
+      await page.goto(SIEM);
+      await expect(section(page)).toBeVisible();
+      await expect(page.locator("#evidence-card .evcard")).toBeVisible();
+      await hasNoProvenance(page);
+      const m = await page.evaluate(() => ({ scrollY: window.scrollY, card: (document.getElementById("evidence-card") as HTMLElement).getBoundingClientRect().top }));
+      expect(m.scrollY).toBe(0);
+      expect(m.card).toBeLessThan(720);
+    });
+
+    test(`no horizontal scroll at 360 and 320 px with the section open${fonts}`, async ({ page }) => {
+      if (wide) await wideFonts(page);
+      for (const width of [360, 320]) {
+        await page.setViewportSize({ width, height: 780 });
+        await page.goto(SIEM);
+        if (wide) expect(await page.evaluate(() => getComputedStyle(document.body).fontFamily)).toContain("DejaVu Sans");
+        const s = section(page);
+        await expect(s.locator(".corr-matrix")).toBeVisible();
+        await s.locator(".corr-older summary").click();
+        await s.locator(".corr-rulelist summary").click();
+        await expect(s.locator(".corr-rule").first()).toBeVisible();
+        await noHorizontalScroll(page);
+        await nothingPastEdge(page, "#correlation .corr-incidents");
+        await nothingPastEdge(page, "#correlation .corr-health");
+        await nothingPastEdge(page, "#correlation .corr-rulelist");
+        await expect(s.locator(".corr-lag")).toBeVisible();
+        await nothingPastEdge(page, "#correlation .corr-metrics");
+        await nothingPastEdge(page, "#correlation .corr-lag");
+      }
+    });
+  }
+
+  test("hidden while the SIEM says available:false; nothing else is shown, the numbering has no gap", async ({ page }) => {
+    const problems = guardConsole(page);
+    const asked: string[] = [];
+    page.on("response", (r) => {
+      if (r.url().endsWith("/api/correlation")) asked.push(String(r.status()));
+    });
+    await page.goto(NO_SIEM);
+    await expect.poll(() => asked).toEqual(["200"]);
+    await expect(page.locator("#verify-panel [data-image=\"api\"]")).toContainText("0448cff");
+    await expect(section(page)).toBeHidden();
+    await expect(section(page).locator(".incident, .tile")).toHaveCount(0);
+    expect((await numbered(page)).slice(0, 4)).toEqual(["evidence", "posture", "attack", "how"]);
+    await expect(page.locator("#verify-panel")).not.toContainText("/api/correlation");
+    expect(problems).toEqual([]);
+  });
+
+  test("hidden on an API without the endpoint (a JSON 404)", async ({ page }) => {
+    const problems = guardConsole(page);
+    const asked = page.waitForResponse((r) => r.url().endsWith("/api/correlation"));
+    await page.goto("http://127.0.0.1:4176/");
+    expect((await asked).status()).toBe(404);
+    await expect(page.locator("#evidence-card .evcard")).toBeVisible();
+    await expect(section(page)).toBeHidden();
+    expect(problems).toEqual([]);
+  });
+
+  for (const [label, body, type] of [
+    ["not JSON", "<!doctype html><p>not the API</p>", "text/html"],
+    ["not an object", "[1, 2, 3]", "application/json"],
+    ["available as a string", JSON.stringify({ available: "true", incidents: [] }), "application/json"],
+    ["truncated JSON", '{"available": true, "incidents": [', "application/json"],
+  ] as const) {
+    test(`hidden on a malformed answer (${label})`, async ({ page }) => {
+      const problems = guardConsole(page);
+      await page.route(/\/api\/correlation$/, (route) => route.fulfill({ status: 200, contentType: type, body }));
+      const asked = page.waitForResponse((r) => r.url().endsWith("/api/correlation"));
+      await page.goto(SIEM);
+      await asked;
+      await expect(page.locator("#evidence-card .evcard")).toBeVisible();
+      await expect(section(page)).toBeHidden();
+      expect(problems).toEqual([]);
+    });
+  }
+
+  test("?mock=1: the section from the fixtures, hidden with &mock-siem=0", async ({ page }) => {
+    await page.goto("/?mock=1");
+    await expect(section(page).locator(".incident").first()).toBeVisible();
+    expect(await mockCalls(page)).toContain("GET /api/correlation/rules");
+    await page.goto("/?mock=1&mock-siem=0");
+    await expect.poll(async () => (await mockCalls(page)).includes("GET /api/correlation")).toBe(true);
+    await expect(section(page)).toBeHidden();
   });
 });
