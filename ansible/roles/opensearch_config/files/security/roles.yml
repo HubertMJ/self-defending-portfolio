@@ -64,8 +64,9 @@ sdp_rules_sync:
       allowed_actions: ["read"]
     - index_patterns: ["sdp-*"]
       allowed_actions: ["read", "indices:admin/mappings/get", "indices:admin/mapping/put", "indices:admin/aliases/get", "indices_monitor"]
+    # P3: the sync reads its own last applied commit back (fast-forward check, managed set).
     - index_patterns: ["siem-sync"]
-      allowed_actions: ["write", "create_index"]
+      allowed_actions: ["read", "write", "create_index"]
 sdp_analyst:
   cluster_permissions:
     - "cluster:admin/opensearch/securityanalytics/alerts/get"
