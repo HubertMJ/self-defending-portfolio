@@ -29,6 +29,7 @@ Proven in the S0 spike (siem contract S0-b, S0-k); the lint enforces what it can
 - **`|re` is a Lucene regular expression over the whole value**: implicitly anchored, `^` and `$`
   are not operators and backslashes are doubled by SA, so `\.` never means a dot - use `[.]`. The lint
   refuses `^`, `$` and `\` inside a `|re` value.
+- YAML is read without explicit tags and, outside `fields/`, without aliases.
 - Modifiers in use: `startswith`, `endswith`, `contains`, `re`, `all`. No aggregation (`| count()`,
   `near`): counting is an Alerting monitor's job.
 - Every field a rule names must be in its source's allow-list; a field outside it is never indexed
@@ -45,6 +46,26 @@ Proven in the S0 spike (siem contract S0-b, S0-k); the lint enforces what it can
 - Sigma `id`s are UUIDs, unique across the tree (SA accepts duplicates, S0-#12).
 - Tags are `attack.tNNNN[.NNN]` and ATT&CK tactic names; every rule above `informational` names at
   least one technique.
+
+## What the sync owns, and what it records
+
+- An object is the sync's when it carries its marker: a rule whose SA id is in a sync record, a
+  detector whose description starts `sdp-git `, a log type or correlation named in the last applied
+  tree (or a failed attempt since), a monitor named `sdp-git: ...`. A live object with a git name but
+  without the marker is never adopted: the run is refused and says which object to remove.
+- Another SA rule carrying a git rule's Sigma id (made by hand, or left over) is a duplicate and is
+  deleted by design: the Sigma id belongs to git.
+- More than five deletions, or more than five rule/monitor updates, in one run are refused until the
+  operator creates `/etc/sdp-siem/allow-mass-delete` or `/etc/sdp-siem/allow-mass-change` (removed
+  after the next successful run). Every monitor is enabled in git: switching one off is a deletion.
+- `siem-sync` holds one record per applied, refused or failed run (`commit`, `applied_at`, `status`,
+  `reason` - at most 512 characters, a lint refusal names files and checks only - `counts`,
+  `changed`, `rules`, `monitors`, `lint_sha256`) and one document `heartbeat` that every run
+  overwrites (`kind: heartbeat`, `checked_at`, `commit`, `outcome`: applied | unchanged | refused |
+  failed). A run with nothing to do writes only the heartbeat, so an old `applied_at` with a fresh
+  `checked_at` is an idle sync and a stale `checked_at` a dead one.
+- Monitors may read only the six k3s01 streams (the API reads their alerts) and only fields in those
+  streams' allow-lists; sources are the seven of ADR 0034. Both are pinned in `siem_lint.py`.
 
 ## Canaries
 
