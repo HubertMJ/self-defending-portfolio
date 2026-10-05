@@ -68,6 +68,13 @@ opensearch_config_ops_monitors_enabled:
   - evidence lag
   - ingest silent siem01
   - shipper dropping
+  - ingest silent falco
+  - ingest silent talon
+  - ingest silent api
+  - ingest silent k8s-audit
+  - ingest silent hubble
+  - ingest silent host
+  - falco metrics silent
 
 # --- certificate generations (ADR 0034 amendment: rotation = next generation, map it, deploy it,
 # then remove the old generation from roles_mapping) ---
