@@ -82,6 +82,9 @@ cleanup() {
   rm -rf "$WORK_DIR"
 }
 trap cleanup EXIT
+# Ctrl-C and SIGTERM end the script through exit, so the EXIT trap removes the containers (as run.sh).
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 failures=0
 step() { printf '\n==> %s\n' "$*"; }
@@ -252,8 +255,9 @@ PY
 start() {
   local name="sdp-offline-$1-$RANDOM"; shift
   local flags=$1 cmd=$2
-  eval "$DOCKER run -d --name $name $flags $SCENARIO_TAG $cmd" >/dev/null
+  # Named before it exists: an interrupt between the two would otherwise leave it behind.
   printf '%s\n' "$name" >>"$CONTAINERS"
+  eval "$DOCKER run -d --name $name $flags $SCENARIO_TAG $cmd" >/dev/null
   printf '%s' "$name"
 }
 
@@ -667,8 +671,8 @@ NETWORKS+=("$DNS_NET")
 COREDNS_SC=(--user 65532:65532 --read-only --cap-drop ALL --cap-add NET_BIND_SERVICE --security-opt no-new-privileges)
 dns_start() { # name, docker args... ; prints the container name
   local name="sdp-offline-dns-$1-$RANDOM"; shift
-  $DOCKER run -d --name "$name" --network "$DNS_NET" "$@" >/dev/null
   printf '%s\n' "$name" >>"$CONTAINERS"
+  $DOCKER run -d --name "$name" --network "$DNS_NET" "$@" >/dev/null
   printf '%s' "$name"
 }
 ip_of() { $DOCKER inspect -f "{{(index .NetworkSettings.Networks \"$DNS_NET\").IPAddress}}" "$1"; }
