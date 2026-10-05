@@ -281,21 +281,27 @@ optional `coredns-custom` ConfigMap, and a missing or not-yet-projected file wou
 fall through to `forward` without any error (fail open). Now, if CoreDNS runs this Corefile, the zone
 is sinkholed; the import of `/etc/coredns/custom/*.server` stays as in k3s, and the role ships no
 `coredns-custom`. Guards:
-- `make validate` renders the template and checks the effective configuration
-  (scripts/lib/check_coredns_sinkhole.py), reading the Corefile as CoreDNS tokenises it - braces are
-  tokens, so `} x.exfil.sdp.test:53 {` on one line closes `.:53` and opens a block that inherits its
-  `forward`; the check refuses any brace that is not a lone `}` or a trailing `{`, any `{$VAR}` /
-  `{%VAR%}` placeholder and any quoted token over two lines, then requires: exactly one exact sinkhole block; no other block, in the
-  Corefile or in any `coredns-custom` `*.server`, that serves the zone or a name under it (headers
-  compared case-insensitively, with or without trailing dot, scheme and port, several zones per header);
-  no `bind`; exactly the one top-level import; one `coredns` ConfigMap, at most one `coredns-custom`, no
-  `binaryData`; the Deployment runs `-conf /etc/coredns/Corefile`, mounts the Corefile item without
-  `subPath` (a subPath mount never sees an update) and `coredns-custom` without `items`;
-  `k3s_coredns_own` is true, read through every variable source Ansible applies to k3s01 (group_vars
-  `all` and `k3s_nodes`, host_vars, play and role vars, in Ansible's order); Service `kube-dns` selects
-  exactly `k8s-app: kube-dns` and sends 53 to the container's 53, and no other workload in the
-  manifest carries that label. scripts/lib/test_check_coredns_sinkhole.py applies a mutation per check
-  (in memory) and requires each to fail.
+- `make validate` renders the template (with trim_blocks, as `ansible.builtin.template` does) and
+  checks the effective configuration (scripts/lib/check_coredns_sinkhole.py). The check is
+  strict-shape: it does not emulate how CoreDNS, Kubernetes or Ansible would read something unusual,
+  it refuses anything that is not exactly the layout this repository writes. It reads the Corefile as
+  CoreDNS tokenises it - braces are tokens, so `} x.exfil.sdp.test:53 {` on one line closes `.:53` and
+  opens a block that inherits its `forward`; it refuses any brace that is not a lone `}` or a trailing
+  `{`, any `{$VAR}` / `{%VAR%}` placeholder and any quoted token over two lines; any server block key
+  that is not `[dns://]name[:port]` in lower case with a decimal port (CoreDNS reads `:+53` as port
+  53); any import but the top-level `*.server` one and `.:53`'s `*.override` one, at any depth; in the
+  template, any Jinja statement, any expression outside a short allowlist and a `#jinja2:` settings
+  line. It then requires: exactly one exact sinkhole block; no other block, in the Corefile or in any
+  `coredns-custom` `*.server`, that serves the zone or a name under it; no `bind`; one `coredns`
+  ConfigMap with exactly the keys `Corefile` and `NodeHosts`, at most one `coredns-custom`, no
+  `binaryData`, all of them (and Service `kube-dns`) in kube-system, no Endpoints or EndpointSlice;
+  the Deployment runs `-conf /etc/coredns/Corefile` with exactly the template's volumes (the two items,
+  nothing onto another path) and mounts (no `subPath` - a subPath mount never sees an update);
+  `k3s_coredns_own` is true in the role's defaults and set nowhere else under `ansible/` (any file's
+  text, YAML keys and `key=value` strings) - not emulated through Ansible's precedence; Service
+  `kube-dns` selects exactly `k8s-app: kube-dns` and sends 53 to the container's 53, and no other
+  workload in the manifest carries that label. scripts/lib/test_check_coredns_sinkhole.py applies a
+  mutation per rule (in memory, or to a scratch copy of `ansible/`) and requires each to fail.
 - `make scenario-offline` runs the rendered Corefile in the pinned image under the Deployment's
   security context against a stand-in upstream that logs every query it receives: a name outside the
   zone is forwarded (the forward counter moves, the upstream logs it); the canary answers 192.0.2.53 and
