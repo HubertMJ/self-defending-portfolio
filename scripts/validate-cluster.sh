@@ -175,6 +175,14 @@ with open(sys.argv[2], "w") as out:
 print(f"  {len(pods)} scenario Pods rendered in sandbox-unguarded (twin, ADR 0031)")
 PY
 
+step "the exfil.sdp.test sinkhole never forwards (k3s role's CoreDNS template, ADR 0034)"
+# Not under cluster/: the k3s role delivers CoreDNS (ADR 0026). Checked here because the dns-exfil
+# command in the scenarios above is only safe while that block answers the zone itself; the script's
+# docstring lists what the effective configuration must hold.
+python3 scripts/lib/check_coredns_sinkhole.py "$REPO_ROOT"
+# ... and that the check can fail: one in-memory mutation per rule, each must be reported.
+python3 scripts/lib/test_check_coredns_sinkhole.py "$REPO_ROOT" | tail -1
+
 step "kubeconform (kubernetes $KUBERNETES_VERSION, strict)"
 # -strict rejects unknown and duplicated fields, which is where typos hide.
 #
