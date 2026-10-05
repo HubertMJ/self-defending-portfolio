@@ -11,7 +11,9 @@ The unedited template must pass. A case whose edit no longer applies (the text i
 fails too, so a template change cannot silently retire a mutation.
 """
 
+import shutil
 import sys
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -40,7 +42,30 @@ data:
     }
 """
 
-# (name, text to find, replacement) - or (name, None, role-variable overrides).
+FILE = "file"  # (name, FILE, (path under the repo, text appended to it - the file is created if missing))
+DEPLOYMENT_HEAD = "---\napiVersion: apps/v1\nkind: Deployment\n"
+SHADOW = """---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: dns-shadow
+  namespace: kube-system
+spec:
+  selector:
+    matchLabels:
+      k8s-app: kube-dns
+  template:
+    metadata:
+      labels:
+        k8s-app: kube-dns
+    spec:
+      containers:
+        - name: dns
+          image: example.invalid/dns
+"""
+
+# (name, text to find, replacement) - or (name, None, role-variable overrides), or a FILE case: every
+# place Ansible reads a variable for k3s01 from, from group `all` to the role's own vars.
 CASES = [
     ("forward in the sinkhole", "        prometheus :9153\n        template IN A",
      "        prometheus :9153\n        forward . /etc/resolv.conf\n        template IN A"),
@@ -89,6 +114,17 @@ CASES = [
      '          command: ["/coredns", "-conf", "/tmp/Corefile"]\n          args: ["-conf", "/etc/coredns/Corefile"]'),
     ("custom mount moved", "              mountPath: /etc/coredns/custom\n", "              mountPath: /etc/coredns/other\n"),
     ("k3s_coredns_own false", None, {"k3s_coredns_own": False}),
+    ("k3s_coredns_own false in group_vars/all", FILE, ("ansible/inventory/group_vars/all.yml", "k3s_coredns_own: false\n")),
+    ("k3s_coredns_own false in host_vars/k3s01", FILE, ("ansible/inventory/host_vars/k3s01.yml", "k3s_coredns_own: false\n")),
+    ("k3s_coredns_own false in playbook group_vars/k3s_nodes/", FILE,
+     ("ansible/playbooks/group_vars/k3s_nodes/dns.yml", "k3s_coredns_own: false\n")),
+    ("k3s_coredns_own false in the role's vars", FILE, ("ansible/roles/k3s/vars/main.yml", "k3s_coredns_own: false\n")),
+    ("Service selector changed", "spec:\n  selector:\n    k8s-app: kube-dns\n", "spec:\n  selector:\n    k8s-app: kube-dns-shadow\n"),
+    ("Service targetPort elsewhere", "    - name: dns\n      port: 53\n      protocol: UDP\n",
+     "    - name: dns\n      port: 53\n      protocol: UDP\n      targetPort: 5353\n"),
+    ("Service targetPort named metrics", "    - name: dns-tcp\n      port: 53\n      protocol: TCP\n",
+     "    - name: dns-tcp\n      port: 53\n      protocol: TCP\n      targetPort: metrics\n"),
+    ("another workload labelled k8s-app: kube-dns", DEPLOYMENT_HEAD, SHADOW + DEPLOYMENT_HEAD),
 ]
 
 
@@ -103,6 +139,14 @@ def main() -> int:
     for name, find, replace in CASES:
         if find is None:
             problems = check(*render(root, template, replace))
+        elif find == FILE:
+            with tempfile.TemporaryDirectory() as tmp:
+                shutil.copytree(root / "ansible", Path(tmp) / "ansible")
+                target = Path(tmp) / replace[0]
+                target.parent.mkdir(parents=True, exist_ok=True)
+                with target.open("a") as f:
+                    f.write(replace[1])
+                problems = check(*render(Path(tmp), template))
         elif find not in template:
             print(f"  FAIL  mutation '{name}': its text is no longer in the template", file=sys.stderr)
             failures += 1

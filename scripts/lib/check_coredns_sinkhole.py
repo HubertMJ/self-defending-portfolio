@@ -12,9 +12,11 @@ CoreDNS actually loads - a `forward` in the block, another block (or a block in 
 serves the zone or a name under it, a `bind` that takes the block off the pod's address, a Corefile the
 Deployment no longer mounts or reloads, or a role that no longer deploys this template. kubeconform
 does not see this template, and the live test (tests/scenarios/run.sh) runs only after the role has
-been applied. So the template is rendered here with the role's defaults and the k3s01 inventory
-(Jinja2, as Ansible would; facts only a running play has are stubbed) and the effective configuration
-is checked:
+been applied. So the template is rendered here with every variable source Ansible applies to k3s01,
+in Ansible's order (role defaults; group_vars of `all` and of the host's groups, from the inventory
+file, the inventory directory and the playbook directory; host_vars, the same three; cluster.yml's play
+vars; the role's vars), through Jinja2 as Ansible would - facts only a running play has are stubbed -
+and the effective configuration is checked:
   - k3s_coredns_own is true (otherwise k3s's own CoreDNS runs, without the sinkhole);
   - exactly one ConfigMap kube-system/coredns and one Deployment kube-system/coredns, at most one
     ConfigMap kube-system/coredns-custom; no binaryData in either ConfigMap;
@@ -33,6 +35,9 @@ is checked:
     coredns at /etc/coredns with the Corefile item, and coredns-custom at /etc/coredns/custom without
     `items`; no `subPath` (a subPath mount is never updated, so a changed Corefile would not load) and
     no other mount under /etc/coredns.
+  - Service kube-system/kube-dns, the address in every pod's resolv.conf, selects exactly
+    `k8s-app: kube-dns` and sends port 53 to the CoreDNS container's port 53 (by number or name, per
+    protocol); the Deployment's pods carry that label and no other workload in the render does.
 Exits non-zero with every problem listed. scripts/lib/test_check_coredns_sinkhole.py proves that each
 of these checks fails on its mutation.
 """
@@ -45,6 +50,9 @@ import jinja2
 import yaml
 
 ZONE = "exfil.sdp.test."
+HOST = "k3s01"
+DNS_LABELS = {"k8s-app": "kube-dns"}
+WORKLOADS = ("Pod", "Deployment", "DaemonSet", "StatefulSet", "ReplicaSet", "ReplicationController", "Job", "CronJob")
 # The block, one directive per line, as directives() renders it (CoreDNS's tokens, quoted only where a
 # token has whitespace, a quote, `#` or a brace in it). Exact: anything added, removed or changed is a
 # failure.
@@ -77,16 +85,70 @@ CUSTOM_DIR = "/etc/coredns/custom"
 SCHEME = re.compile(r"^([a-z0-9+.-]+)://", re.IGNORECASE)
 
 
+def load(path: Path, empty=None):
+    return yaml.safe_load(path.read_text()) or ({} if empty is None else empty)
+
+
+def var_files(path: Path) -> list:
+    """What Ansible's host_group_vars plugin reads for one group or host: <name>, <name>.yml, .yaml or
+    .json, or every such file in the directory <name>/ (in lexical order)."""
+    files = [path.with_name(path.name + ext) for ext in (".yml", ".yaml", ".json")]
+    if path.is_dir():
+        files += sorted(f for f in path.rglob("*") if f.is_file() and f.suffix in ("", ".yml", ".yaml", ".json"))
+    else:
+        files.append(path)
+    return [f for f in files if f.is_file()]
+
+
+def host_layers(root: Path) -> list:
+    """The variable sources that apply to HOST in the play that runs the k3s role (playbooks/cluster.yml),
+    lowest precedence first, as Ansible orders them: role defaults; group `all` (inventory file,
+    inventory group_vars, playbook group_vars); the host's other groups by depth, the same three
+    sources each; the host (inventory file, inventory host_vars, playbook host_vars); play vars; role
+    vars."""
+    ansible = root / "ansible"
+    inv = load(ansible / "inventory/hosts.yml")
+    groups, host_inline = [], {}
+
+    def walk(name, group, depth):
+        nonlocal host_inline
+        group = group or {}
+        hosts = group.get("hosts") or {}
+        inside = HOST in hosts
+        if inside:
+            host_inline = hosts[HOST] or {}
+        for child, sub in (group.get("children") or {}).items():
+            inside = walk(child, sub, depth + 1) or inside
+        if inside:
+            groups.append((depth, name, group.get("vars") or {}))
+        return inside
+
+    walk("all", inv.get("all"), 0)
+    groups.sort(key=lambda g: (g[0], g[1]))
+    var_dirs = (ansible / "inventory", ansible / "playbooks")
+    layers = [load(ansible / "roles/k3s/defaults/main.yml")]
+    for batch in (groups[:1], groups[1:]):  # `all` (depth 0), then the host's other groups
+        layers += [inline for _, _, inline in batch]
+        layers += [load(f) for d in var_dirs for _, name, _ in batch for f in var_files(d / "group_vars" / name)]
+    layers.append(host_inline)
+    layers += [load(f) for d in var_dirs for f in var_files(d / "host_vars" / HOST)]
+    for play in load(ansible / "playbooks/cluster.yml", []):
+        if any(r == "k3s" or (isinstance(r, dict) and r.get("role") == "k3s") for r in play.get("roles") or []):
+            layers.append(play.get("vars") or {})
+    layers += [load(f) for f in var_files(ansible / "roles/k3s/vars/main")]
+    return layers
+
+
 def render(root: Path, template: str = None, overrides: dict = None):
-    """(documents, context) of the k3s role's CoreDNS template, rendered as the role would."""
+    """(documents, context) of the k3s role's CoreDNS template, rendered as the role would on HOST."""
     role = root / "ansible/roles/k3s"
     context = {}
-    for source in (role / "defaults/main.yml", root / "ansible/inventory/group_vars/k3s_nodes.yml"):
-        context.update(yaml.safe_load(source.read_text()) or {})
+    for layer in host_layers(root):
+        context.update(layer)
     # What only a running play has; the values restate the single-node inventory.
     context.update({
         "ansible_managed": "Ansible managed",
-        "ansible_facts": {"hostname": "k3s01"},
+        "ansible_facts": {"hostname": HOST},
         "ansible_default_ipv4": {"address": context.get("k3s_node_ip", "10.4.1.20")},
     })
     context.update(overrides or {})
@@ -342,6 +404,37 @@ def check(docs: list, context: dict) -> list:
             problems.append(f"Deployment coredns does not mount ConfigMap coredns at {CORE_DIR}")
         if not custom_ok:
             problems.append(f"Deployment coredns does not mount ConfigMap coredns-custom at {CUSTOM_DIR}")
+
+    # The address pods query is Service kube-dns: it must send port 53 to this Deployment's port 53,
+    # and nothing else in the role's manifests may carry the label it selects on.
+    services = find_all(docs, "Service", "kube-dns")
+    if len(services) != 1:
+        problems.append(f"{len(services)} Service kube-system/kube-dns documents in the render, want exactly 1")
+    for svc in services:
+        sspec = svc.get("spec") or {}
+        if sspec.get("selector") != DNS_LABELS:
+            problems.append(f"Service kube-dns selects {sspec.get('selector')}, want {DNS_LABELS}")
+        for port in sspec.get("ports") or []:
+            if port.get("port") != 53:
+                continue
+            target, proto = port.get("targetPort", 53), port.get("protocol", "TCP")
+            names = {p.get("name"): p.get("containerPort") for c in containers for p in c.get("ports") or []
+                     if p.get("protocol", "TCP") == proto}
+            if (names.get(target) if isinstance(target, str) else target) != 53:
+                problems.append(f"Service kube-dns sends {proto} 53 to targetPort {target!r}, not the CoreDNS container's 53")
+    tmeta = (((deploys[0] if deploys else {}).get("spec") or {}).get("template") or {}).get("metadata") or {}
+    labels = tmeta.get("labels") or {}
+    if any(labels.get(k) != v for k, v in DNS_LABELS.items()):
+        problems.append(f"Deployment coredns's pods are labelled {labels}, the Service selects {DNS_LABELS}")
+    for d in docs:
+        if d.get("kind") not in WORKLOADS or (d.get("kind") == "Deployment" and d in deploys):
+            continue
+        tmpl = (d.get("spec") or {}).get("template") or {}
+        if d.get("kind") == "CronJob":
+            tmpl = (((d.get("spec") or {}).get("jobTemplate") or {}).get("spec") or {}).get("template") or {}
+        plabels = ((d.get("metadata") if d.get("kind") == "Pod" else tmpl.get("metadata")) or {}).get("labels") or {}
+        if all(plabels.get(k) == v for k, v in DNS_LABELS.items()):
+            problems.append(f"{d.get('kind')} {(d.get('metadata') or {}).get('name')} carries {DNS_LABELS}: Service kube-dns would send queries to it")
     return problems
 
 

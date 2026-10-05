@@ -291,7 +291,10 @@ is sinkholed; the import of `/etc/coredns/custom/*.server` stays as in k3s, and 
   no `bind`; exactly the one top-level import; one `coredns` ConfigMap, at most one `coredns-custom`, no
   `binaryData`; the Deployment runs `-conf /etc/coredns/Corefile`, mounts the Corefile item without
   `subPath` (a subPath mount never sees an update) and `coredns-custom` without `items`;
-  `k3s_coredns_own` is true. scripts/lib/test_check_coredns_sinkhole.py applies a mutation per check
+  `k3s_coredns_own` is true, read through every variable source Ansible applies to k3s01 (group_vars
+  `all` and `k3s_nodes`, host_vars, play and role vars, in Ansible's order); Service `kube-dns` selects
+  exactly `k8s-app: kube-dns` and sends 53 to the container's 53, and no other workload in the
+  manifest carries that label. scripts/lib/test_check_coredns_sinkhole.py applies a mutation per check
   (in memory) and requires each to fail.
 - `make scenario-offline` runs the rendered Corefile in the pinned image under the Deployment's
   security context against a stand-in upstream that logs every query it receives: a name outside the
