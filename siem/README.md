@@ -75,7 +75,9 @@ Proven in the S0 spike (siem contract S0-b, S0-k); the lint enforces what it can
   field the stream's template does not map is never indexed (`dynamic: false`), the templates are
   written only by the admin's `opensearch_config` from the operator's checkout, and the sync never
   touches them, so such a field matches nothing. Schedules are a plain period of 1-60 minutes;
-  trigger conditions only compare counts (`params.a > 0 && params.b == 0`).
+  trigger conditions only compare counts in the forms in use (`params.a > 0 && params.b == 0`). That
+  does not make a monitor impossible to blunt - a filter that matches nothing still lints - so the
+  change cap and the record of every change (`changed`) are what limit a commit that does so.
 
 ## Canaries
 

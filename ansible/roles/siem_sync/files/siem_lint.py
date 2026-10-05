@@ -38,15 +38,18 @@ COMMON_FIELDS = {"@timestamp", "event.kind", "event.dataset", "event.ingested", 
 # Published on the page (ADR 0036, gen-siem-index.sh): titles, file names, canaries. ADR 0021 never
 # publishes node names, addresses or cluster DNS names.
 UNPUBLISHABLE = re.compile(r"\b\d{1,3}(\.\d{1,3}){3}\b"                        # IPv4
-                           r"|(?<![0-9a-z:])(?=[0-9a-f:]*[0-9a-f])(?:[0-9a-f]{0,4}:){2,7}[0-9a-f]{0,4}(?![0-9a-z:])"  # IPv6
+                           r"|(?<![0-9a-z])(?=[0-9a-f:]*[0-9a-f])(?:[0-9a-f]{0,4}:){2,7}[0-9a-f]{0,4}(?![0-9a-z:])"  # IPv6
                            r"|k3s01|siem01|\.svc\b|cluster\.local", re.IGNORECASE)
 # Limits of a detection condition (no regex is built from it; the glob below is linear).
 MAX_CONDITION = 512
 MAX_TOKEN = 64
 # A monitor runs on a plain period; its triggers compare numbers (no script can switch it off).
 MONITOR_MINUTES = (1, 60)
-QUERY_TRIGGER_RE = re.compile(r"^ctx\.results\[0\]\.hits\.total\.value (==|!=|>=|<=|>|<) \d{1,6}$")
-_CMP = r"params\.[a-z_]{1,32} (==|!=|>=|<=|>|<) (\d{1,6}|params\.[a-z_]{1,32})"
+# Only the forms in use: a count at least / above / equal to a number, or one value against another.
+# "< 0" and friends are refused, though a monitor can still be blunted (a filter matching nothing);
+# the change cap and the records of every change are what limit that.
+QUERY_TRIGGER_RE = re.compile(r"^ctx\.results\[0\]\.hits\.total\.value (==|>=|>) \d{1,6}$")
+_CMP = r"params\.[a-z_]{1,32} ((==|>=|>) \d{1,6}|(==|!=|>=|<=|>|<) params\.[a-z_]{1,32})"
 BUCKET_TRIGGER_RE = re.compile(rf"^{_CMP}( && {_CMP}){{0,7}}$")
 # fields/ is the ingest area's and uses anchors for repeated paths; elsewhere an alias is refused.
 MAX_FIELDS_ALIASES = 8

@@ -63,6 +63,19 @@ def mon_agg(tree, node):
               lambda d: d["inputs"][0]["search"]["query"]["aggregations"]["composite_agg"]["aggregations"].update(extra=node))
 
 
+def trigger_source(tree, source):
+    edit_json(os.path.join(tree, "monitors/detection-missing.json"),
+              lambda d: d["triggers"][0]["bucket_level_trigger"]["condition"]["script"].update(source=source))
+
+
+def query_trigger(tree, source):
+    def change(d):
+        d["monitor_type"] = "query_level_monitor"
+        d["triggers"] = [{"query_level_trigger": {"name": "t", "severity": "1", "actions": [],
+                                                  "condition": {"script": {"source": source, "lang": "painless"}}}}]
+    edit_json(os.path.join(tree, "monitors/detection-missing.json"), change)
+
+
 def det(name):
     return lambda d: d["detection"][name]
 
@@ -242,6 +255,29 @@ CASES = [
                                                            lambda d: d["triggers"][0]["bucket_level_trigger"]["condition"]["script"]
                                                            .update(source="params.commands > 0 && params.falco == 0 && false")),
      r"painless condition only compares counts"),
+    ("query_string hidden in bool.should", lambda t: mon_filter(t, {"bool": {"should": [{"query_string": {"query": "x"}}]}}),
+     r"query type 'query_string' is not allowed"),
+    ("metric aggregation with a script", lambda t: edit_json(os.path.join(t, "monitors/policy-probing.json"),
+        lambda d: d["inputs"][0]["search"]["query"]["aggregations"]["composite_agg"]["aggregations"]["denied"]["aggregations"]["last"]["max"]
+        .update(script={"source": "1"})), r"max takes field only"),
+    ("exists with an extra key", lambda t: mon_filter(t, {"exists": {"field": "k8s.pod.ref", "boost": 1}}), r"exists takes field only"),
+    ("term with a script in its value", lambda t: mon_filter(t, {"term": {"k8s.pod.ref": {"value": "x", "script": "y"}}}),
+     r"term takes a value"),
+    ("range with an unknown key", lambda t: mon_filter(t, {"range": {"@timestamp": {"gte": "now-1m", "script": "x"}}}), r"range takes"),
+    ("search size not capped", lambda t: edit_json(os.path.join(t, "monitors/detection-missing.json"),
+                                                   lambda d: d["inputs"][0]["search"]["query"].update(size=1000)),
+     r"the search body takes size"),
+    ("schedule in hours", lambda t: edit_json(os.path.join(t, "monitors/detection-missing.json"),
+                                              lambda d: d["schedule"]["period"].update(unit="HOURS")),
+     r"schedule must be exactly"),
+    ("bucket trigger with or", lambda t: trigger_source(t, "params.commands > 0 || params.falco == 0"),
+     r"painless condition only compares counts"),
+    ("bucket trigger below zero", lambda t: trigger_source(t, "params.commands > 0 && params.falco < 0"),
+     r"painless condition only compares counts"),
+    ("query-level trigger with or", lambda t: query_trigger(t, "ctx.results[0].hits.total.value > 0 || true"),
+     r"painless condition only compares counts"),
+    ("query-level trigger below zero", lambda t: query_trigger(t, "ctx.results[0].hits.total.value < 0"),
+     r"painless condition only compares counts"),
     # check_rule_condition limits (no regex from a condition: ReDoS)
     ("condition that would backtrack", lambda t: sel(t, "talon-terminate", lambda d: (d.update({"a" * 40: d.pop("selection")}),
                                                                                        set_in(d, "condition", "*a" * 18 + "b"))),
@@ -257,6 +293,9 @@ CASES = [
     ("rule title names a node in capitals", lambda t: edit_yaml(rule(t, "host-ssh-accepted"), lambda d: set_in(d, "title", "K3S01 login")),
      r"host-ssh-accepted.yml: the rule's title or file name names"),
     ("rule title names an IPv6 address", lambda t: edit_yaml(rule(t, "host-ssh-accepted"), lambda d: set_in(d, "title", "login from fe80::1")),
+     r"host-ssh-accepted.yml: the rule's title or file name names"),
+    ("rule title names an IPv6 address after a colon", lambda t: edit_yaml(rule(t, "host-ssh-accepted"),
+                                                                           lambda d: set_in(d, "title", "login ip:fe80::1")),
      r"host-ssh-accepted.yml: the rule's title or file name names"),
     ("rule file names a node", lambda t: os.rename(rule(t, "siem-host-ssh-failed"), rule(t, "siem01-ssh-failed")),
      r"rules/siem01-ssh-failed.yml: the rule's title or file name names"),
