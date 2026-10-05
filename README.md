@@ -168,7 +168,7 @@ lives: [`cluster/bootstrap/README.md`](cluster/bootstrap/README.md) and
 | Security headers and HTTPS redirect are served | `curl -sI https://hubertjablon.ski`, `curl -sI http://hubertjablon.ski` | nothing |
 | Talon's permissions are limited to `sandbox` | `kubectl auth can-i delete pods -n hello --as=system:serviceaccount:falco-response:falco-talon` → `no` | cluster credentials |
 
-CI runs the first four on every push ([`.github/workflows/lint.yml`](.github/workflows/lint.yml)).
+They run locally before every push to main; CI runs the first four on pull requests and on demand ([`.github/workflows/lint.yml`](.github/workflows/lint.yml)).
 
 ### Phases and Definition of Done
 

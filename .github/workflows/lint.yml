@@ -1,6 +1,9 @@
 name: lint
+# Not on push (owner decision 2026-10-05: the runner minutes go to build-images, the only place that can
+# sign the images the cluster admits). The same checks - make lint, make validate, make gitleaks,
+# tests/smoke.sh - run locally before every push to main; run this workflow by hand to record them here.
 on:
-  push:
+  workflow_dispatch:
   pull_request:
 
 permissions:
