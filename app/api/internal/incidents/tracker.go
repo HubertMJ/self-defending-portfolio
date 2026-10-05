@@ -60,7 +60,7 @@ const (
 type Source interface {
 	Findings(ctx context.Context, logType string, from, to time.Time, size int) ([]siem.Finding, error)
 	Correlations(ctx context.Context, from, to time.Time) ([]siem.Correlation, error)
-	MonitorAlerts(ctx context.Context, size int) ([]siem.Alert, error)
+	MonitorAlerts(ctx context.Context, state string, size int) ([]siem.Alert, error)
 	Search(ctx context.Context, indices []string, q siem.Query) (siem.SearchResult, error)
 }
 
@@ -86,6 +86,7 @@ type Tracker struct {
 	hosts   map[string]time.Time // host finding id -> time (counted only)
 	corr    map[string]siem.Correlation
 	alerts  []siem.Alert
+	active  []siem.Alert // the ACTIVE alerts, for the health line
 	rules   RulesView
 	rewrite bool
 	lastOK  time.Time
@@ -221,9 +222,15 @@ func (t *Tracker) Poll(ctx context.Context) {
 	if err != nil {
 		errs = append(errs, err)
 	}
-	alerts, alertsErr := src.MonitorAlerts(ctx, pageSize)
+	alerts, alertsErr := src.MonitorAlerts(ctx, "ALL", pageSize)
 	if alertsErr != nil {
 		errs = append(errs, alertsErr)
+	}
+	// The health line reads the active alerts on their own: under a burst of incident alerts an ops
+	// alarm can be older than the newest 500 of every state.
+	active, activeErr := src.MonitorAlerts(ctx, "ACTIVE", pageSize)
+	if activeErr != nil {
+		errs = append(errs, activeErr)
 	}
 	for _, s := range t.searches(from, now) {
 		res, err := src.Search(ctx, []string{s.index}, s.q)
@@ -264,6 +271,9 @@ func (t *Tracker) Poll(ctx context.Context) {
 	}
 	if alertsErr == nil {
 		t.alerts = alerts
+	}
+	if activeErr == nil {
+		t.active = active
 	}
 	if rulesOK {
 		if rules.Commit == "" {
@@ -469,7 +479,7 @@ func (t *Tracker) buildView(now time.Time) View {
 // count. t.mu held.
 func (t *Tracker) health() HealthView {
 	h := HealthView{Ingest: "ok", Disk: "ok", EvidenceRewritten: t.rewrite}
-	for _, a := range t.alerts {
+	for _, a := range t.active {
 		if a.State != "ACTIVE" {
 			continue
 		}

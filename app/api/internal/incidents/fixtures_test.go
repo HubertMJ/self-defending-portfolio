@@ -89,14 +89,23 @@ func (f *fakeSource) Correlations(_ context.Context, from, to time.Time) ([]siem
 	return f.corr, nil
 }
 
-func (f *fakeSource) MonitorAlerts(_ context.Context, size int) ([]siem.Alert, error) {
+func (f *fakeSource) MonitorAlerts(_ context.Context, state string, size int) ([]siem.Alert, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.calls = append(f.calls, call{"alerts", time.Time{}, time.Time{}, size})
+	f.calls = append(f.calls, call{"alerts " + state, time.Time{}, time.Time{}, size})
 	if f.fail != nil {
 		return nil, f.fail
 	}
-	return f.alerts, nil
+	var out []siem.Alert
+	for _, a := range f.alerts {
+		if state == "ALL" || a.State == state {
+			out = append(out, a)
+		}
+	}
+	if len(out) > size {
+		out = out[:size]
+	}
+	return out, nil
 }
 
 func (f *fakeSource) Search(_ context.Context, indices []string, q siem.Query) (siem.SearchResult, error) {

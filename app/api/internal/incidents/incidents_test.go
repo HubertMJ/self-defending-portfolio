@@ -973,3 +973,20 @@ func hasStep(inc Incident, prefix string) bool {
 	}
 	return false
 }
+
+// The health line reads ACTIVE alerts on their own: an active ops alarm older than the newest 500
+// alerts of every state still shows.
+func TestHealthReadsActiveAlertsApart(t *testing.T) {
+	f := newFake()
+	for i := 0; i < pageSize; i++ {
+		st := t0.Add(time.Duration(i) * time.Second).UnixMilli()
+		f.alerts = append(f.alerts, siem.Alert{ID: fmt.Sprintf("al%d", i), MonitorName: "sdp-git: policy probing", State: "COMPLETED", StartTime: &st})
+	}
+	old := t0.Add(-time.Hour).UnixMilli()
+	f.alerts = append(f.alerts, siem.Alert{ID: "al-disk", MonitorName: "disk watermark", State: "ACTIVE", StartTime: &old})
+	tr := newTracker(t, f, &clock{t: t0.Add(time.Hour)})
+	tr.Poll(context.Background())
+	if h := tr.View().Health; h.Disk != "high" {
+		t.Fatalf("health %+v", h)
+	}
+}

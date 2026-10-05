@@ -309,15 +309,20 @@ type AlertAgg struct {
 	BucketKeys []any `json:"bucket_keys"`
 }
 
-// MonitorAlerts reads the newest Alerting alerts of every state. The Alerting API has no time filter;
-// callers drop what is older than they look.
-func (c *Client) MonitorAlerts(ctx context.Context, size int) ([]Alert, error) {
+// MonitorAlerts reads the newest Alerting alerts in state (ALL, ACTIVE, ...). The Alerting API has no
+// time filter; callers drop what is older than they look.
+func (c *Client) MonitorAlerts(ctx context.Context, state string, size int) ([]Alert, error) {
+	switch state {
+	case "ALL", "ACTIVE", "COMPLETED", "ACKNOWLEDGED", "ERROR", "DELETED":
+	default:
+		return nil, fmt.Errorf("siem: alert state %q", state)
+	}
 	q := url.Values{}
 	q.Set("size", strconv.Itoa(clampSize(size)))
 	q.Set("startIndex", "0")
 	q.Set("sortString", "start_time")
 	q.Set("sortOrder", "desc")
-	q.Set("alertState", "ALL")
+	q.Set("alertState", state)
 	var out struct {
 		Alerts []Alert `json:"alerts"`
 	}

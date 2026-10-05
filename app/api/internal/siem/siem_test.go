@@ -131,7 +131,7 @@ func TestAllowList(t *testing.T) {
 		{"POST", "/sdp-falco,sdp-talon,sdp-hubble,sdp-k8s-audit,sdp-api,sdp-host/_search"},
 	}
 	refused := []struct{ method, path string }{
-		{"PUT", "/sdp-falco/_doc/x"}, {"PUT", PathFindings}, {"POST", PathFindings}, {"DELETE", "/sdp-falco"},
+		{"PUT", "/sdp-falco/_doc/x"}, {"PUT", "/sdp-falco/_search"}, {"PUT", "/siem-sync/_search"}, {"PUT", PathFindings}, {"POST", PathFindings}, {"DELETE", "/sdp-falco"},
 		{"DELETE", PathMonitorAlerts}, {"PATCH", "/sdp-api/_search"}, {"HEAD", PathFindings},
 		{"POST", "/sdp-falco/_doc"}, {"POST", "/sdp-falco/_bulk"}, {"POST", "/_bulk"}, {"POST", "/sdp-falco/_update/x"},
 		{"POST", "/sdp-falco/_delete_by_query"}, {"POST", "/sdp-*/_search"}, {"POST", "/sdp-siem01/_search"},
@@ -213,7 +213,7 @@ func TestCorrelationsAndAlertsDecode(t *testing.T) {
 	if err != nil || len(cs) != 3 || cs[0].Finding1 != "a3a0d8f7-e7d3-46bc-a698-c543a27df248" || cs[0].Rules[0] != "P9KbBaEBGESM_NsHz4uZ" {
 		t.Fatalf("correlations: %v %+v", err, cs)
 	}
-	as, err := c.MonitorAlerts(context.Background(), 500)
+	as, err := c.MonitorAlerts(context.Background(), "ALL", 500)
 	if err != nil || len(as) != 1 {
 		t.Fatalf("alerts: %v %+v", err, as)
 	}
@@ -226,6 +226,9 @@ func TestCorrelationsAndAlertsDecode(t *testing.T) {
 	defer mu.Unlock()
 	if q := (*reqs)[1].query; !strings.Contains(q, "alertState=ALL") || !strings.Contains(q, "sortString=start_time") {
 		t.Fatalf("alerts query %q", q)
+	}
+	if _, err := c.MonitorAlerts(context.Background(), "ALL&x=1", 1); err == nil {
+		t.Fatal("a malformed alert state was sent")
 	}
 }
 
@@ -329,7 +332,7 @@ func TestNewRefusesBadConfig(t *testing.T) {
 // Without the client certificate the server refuses the handshake: the client presents it.
 func TestClientPresentsCertificate(t *testing.T) {
 	c, reqs, mu := siemServer(t, func(*http.Request) (int, string) { return 200, `{"alerts":[]}` })
-	if _, err := c.MonitorAlerts(context.Background(), 1); err != nil {
+	if _, err := c.MonitorAlerts(context.Background(), "ACTIVE", 1); err != nil {
 		t.Fatal(err)
 	}
 	mu.Lock()
