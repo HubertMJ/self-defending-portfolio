@@ -193,6 +193,11 @@ describe("parseCorrelation", () => {
     expect(c.rules).toEqual({ commit: "", applied_at: null, status: "unknown" });
   });
 
+  it("drops an evidence id that is not publishable or not an id (review L4)", () => {
+    const c = parseCorrelation(answer({ incidents: [incident({ evidence: [{ type: "document", id: "kube-system_coredns-5d78c9869d-x7k2p" }, { type: "finding", id: "a b" }, { type: "alert", id: "x".repeat(65) }, { type: "finding", id: "f-77ab01c2d3" }] })] }));
+    expect(c.incidents[0].evidence).toEqual([{ type: "finding", id: "f-77ab01c2d3" }]);
+  });
+
   it("withholds unpublishable titles and details, and says so per step", () => {
     const c = parseCorrelation(
       answer({
@@ -299,6 +304,16 @@ describe("the section's parts", () => {
     expect(el.querySelector(".incident__title")?.textContent).toBe(kindLabel("contained-intrusion"));
     expect(el.querySelector(".corr-step__detail--withheld")?.textContent).toContain("withheld");
     expect(el.textContent).not.toMatch(/k3s01|kube-system/);
+  });
+
+  it("an unknown kind reads as a plain Incident (review L4)", () => {
+    const c = parseCorrelation(answer({ incidents: [incident({ kind: "constructor", title: "" }), incident({ id: "0000000000000004", kind: "new-kind-from-a-newer-api", title: "" })] }));
+    for (const i of c.incidents) {
+      const el = renderIncident(i, ctx(c));
+      expect(el.querySelector(".incident__title")?.textContent).toBe("Incident");
+      expect(el.querySelector(".incident__kind")?.textContent).toMatch(/^Incident/);
+    }
+    expect(kindLabel("dns-exfil")).toBe("DNS exfiltration");
   });
 
   it("the board: the newest in full, the rest one line each; an empty board says since when it looks", () => {

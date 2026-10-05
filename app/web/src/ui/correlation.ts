@@ -37,7 +37,8 @@ const KINDS: ReadonlyMap<string, string> = new Map([
   ["exec-outside-api", "Exec outside the API"],
   ["twin-dwell", "Unguarded twin: dwell time"],
 ]);
-export const kindLabel = (kind: string): string => KINDS.get(kind) ?? kind;
+/** An unknown kind (a newer API) reads as a plain "Incident": the page names only kinds it knows. */
+export const kindLabel = (kind: string): string => KINDS.get(kind) ?? "Incident";
 
 const SEVERITY_TONE: Record<CorrelationIncident["severity"], Tone> = { critical: "critical", high: "critical", medium: "warning", low: "neutral", unknown: "neutral" };
 

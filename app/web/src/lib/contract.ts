@@ -1281,7 +1281,7 @@ function parseIncident(v: unknown): CorrelationIncident | null {
     steps: steps.sort((a, b) => Date.parse(a.at) - Date.parse(b.at)),
     evidence: Array.isArray(v.evidence)
       ? v.evidence
-          .filter((e): e is Obj => isObj(e) && (EVIDENCE_TYPES as readonly unknown[]).includes(e.type) && isStr(e.id) && /^[A-Za-z0-9_-]{1,64}$/.test(e.id))
+          .filter((e): e is Obj => isObj(e) && (EVIDENCE_TYPES as readonly unknown[]).includes(e.type) && isStr(e.id) && /^[A-Za-z0-9_-]{1,64}$/.test(e.id) && publishable(e.id))
           .slice(0, 20)
           .map((e) => ({ type: e.type as EvidenceType, id: e.id as string }))
       : [],
