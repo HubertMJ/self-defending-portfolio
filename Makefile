@@ -1,6 +1,6 @@
 .PHONY: lint gitleaks validate smoke runtime-test abuse-test scenario-offline scenario-test vm hardening cluster verify bootstrap \
 	siem siem-verify golden siem-csr-test siem-acceptance siem-mutations ingest siem-lua-test siem-ingest-test \
-	siem-ingest-mutations
+	siem-ingest-mutations siem-sync-test siem-rules-mutations siem-rules-acceptance siem-canaries
 DOCKER ?= docker
 
 # Ansible in the tooling container (scripts/Dockerfile.tooling); Ansible is not installed on the
@@ -89,3 +89,15 @@ siem-ingest-test: ## the fluent_bit role end to end in containers: sandbox start
 
 siem-ingest-mutations: ## mutation proof of the P2 ingest tests on scratch copies
 	@DOCKER="$(DOCKER)" tests/siem/p2-mutations.sh
+
+siem-sync-test:  ## the rules sync end to end in containers: baseline, canaries, idempotency, S0-#12, lint refusal, delete cap, force-push, MJ5
+	@DOCKER="$(DOCKER)" tests/siem/sync-it.sh
+
+siem-rules-mutations: ## mutation proof of the P3 tests (SYNC=1 adds the sync program's mutations, ~6 min each)
+	@DOCKER="$(DOCKER)" tests/siem/p3-mutations.sh
+
+siem-rules-acceptance: ## P3 live acceptance on siem01: L5, the sync's record, SSH canaries, synthetic canaries via shipper-test
+	@DOCKER="$(DOCKER)" tests/siem/p3-acceptance.sh
+
+siem-canaries:   ## live canaries through the public API and the exec steps (announce first; ROLLOVER=1 repeats after a rollover)
+	@tests/siem/canaries.sh $(ARGS)
