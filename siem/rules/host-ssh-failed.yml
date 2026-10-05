@@ -1,11 +1,11 @@
 # A login record of the host's own journal. User names and addresses are pseudonymised before they leave the
 # host and host findings are published as counts only (ADR 0034).
-title: k3s01 - SSH login refused
+title: Cluster node - SSH login refused
 id: 0a66d582-41d5-41ed-9c45-074725c6f640
 status: experimental
 level: low
 description: >-
-  An SSH login to k3s01 was refused: a wrong key, or a user that may not log in. A user
+  An SSH login to the cluster node was refused: a wrong key, or a user that may not log in. A user
   outside AllowUsers leaves only "Connection closed by ... [preauth]" (closed-preauth); only the admin
   networks reach port 22, so a connection closed before authentication is a refused attempt.
 author: Hubert Jabłoński

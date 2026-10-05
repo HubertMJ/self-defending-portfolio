@@ -139,7 +139,7 @@ python3 - "$work/found.json" <<'PY' || fail=1
 import json, sys, yaml
 found = json.load(open(sys.argv[1]))["rules"]
 bad = 0
-for slug in ("siem01-ssh-accepted", "siem01-ssh-failed"):
+for slug in ("siem-host-ssh-accepted", "siem-host-ssh-failed"):
     rid = yaml.safe_load(open(f"siem/rules/{slug}.yml"))["id"]
     n = found.get(rid, 0)
     print(f"{'ok  ' if n else 'FAIL'} {slug}: {n} finding(s) since the logins")

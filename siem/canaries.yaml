@@ -78,11 +78,11 @@ rules:
     kind: exec
     run: "tests/scenarios/run.sh"
     step: "kubectl exec into each scenario pod (ONLY=shell-in-container is enough)"
-  be0a7f61-9416-4b12-a6bb-e597485e9538:  # siem01-ssh-accepted
+  be0a7f61-9416-4b12-a6bb-e597485e9538:  # siem-host-ssh-accepted
     kind: exec
     run: "ssh to the SIEM host"
     step: "an operator login with the ansible key"
-  073abeb3-92b1-48b5-bad5-040b71030364:  # siem01-ssh-failed
+  073abeb3-92b1-48b5-bad5-040b71030364:  # siem-host-ssh-failed
     kind: exec
     run: "ssh to the SIEM host with a key it does not know"
     step: "one refused login (ssh -o IdentitiesOnly=yes -i <that key>)"

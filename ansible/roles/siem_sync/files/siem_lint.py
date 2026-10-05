@@ -2,8 +2,10 @@
 """Lint of the siem/ tree (ADR 0034 "Rules from git", siem contract P3).
 
 One program for CI (scripts/check-siem.sh, make validate) and for the rules sync on siem01, which
-runs it on every fetched commit before anything is applied. It reads the tree as data only
-(yaml.safe_load, json) and never executes or imports anything from it.
+runs it on every fetched commit before anything is applied. It reads the tree as data only (a
+safe YAML loader without explicit tags and, outside siem/fields, without aliases; json) and never
+executes or imports anything from it. What the tree may name is pinned here, not in the tree: the
+known sources and the streams monitors may read (siem contract P3 review, M1).
 
 Usage: siem_lint.py <siem dir>            lint; exit 0 clean, 1 findings, 2 usage
        siem_lint.py --index <siem dir>    lint, then print the rule/monitor/correlation index as JSON
@@ -24,6 +26,19 @@ import sys
 import yaml
 
 MONITOR_PREFIX = "sdp-git: "
+# The seven sources of ADR 0034. A fields file or log type for anything else is refused, so a commit
+# cannot point a detector or a correlation at an index of its own choosing.
+KNOWN_SOURCES = {"falco", "talon", "hubble", "k8s-audit", "api", "host", "siem01"}
+# Monitors' alerts are readable by the portfolio API, so a monitor may read only what the API may read
+# (sdp_api_read): the six k3s01 streams, never sdp-siem01, never a pattern.
+MONITOR_STREAMS = {"sdp-falco", "sdp-talon", "sdp-hubble", "sdp-k8s-audit", "sdp-api", "sdp-host"}
+# Mapped in every template besides the allow-list (opensearch_config, F1).
+COMMON_FIELDS = {"@timestamp", "event.kind", "event.dataset", "event.ingested", "event.overwrite"}
+# Published on the page (ADR 0036, gen-siem-index.sh): titles, file names, canaries. ADR 0021 never
+# publishes node names, addresses or cluster DNS names.
+UNPUBLISHABLE = re.compile(r"\b\d{1,3}(\.\d{1,3}){3}\b|k3s01|siem01|\.svc\b|cluster\.local")
+# fields/ is the ingest area's and uses anchors for repeated paths; elsewhere an alias is refused.
+MAX_FIELDS_ALIASES = 8
 SOURCE_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 LOG_TYPE_RE = re.compile(r"^sdp_[a-z0-9_]+$")
 SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
@@ -42,11 +57,11 @@ LEVELS = {"informational", "low", "medium", "high", "critical"}
 MODIFIERS = {"contains", "startswith", "endswith", "re", "all"}
 CONDITION_WORDS = {"and", "or", "not", "of", "them", "1", "all"}
 MONITOR_TYPES = {"query_level_monitor", "bucket_level_monitor"}
-# Keys of a monitor body in git. ui_metadata is the sync's (it records the body hash there); ids,
-# owner, timestamps and data sources are Alerting's.
+# Keys of a monitor body in git. ui_metadata is Dashboards' (Alerting never returns it); ids, owner,
+# timestamps and data sources are Alerting's.
 MONITOR_KEYS = {"type", "monitor_type", "name", "enabled", "schedule", "inputs", "triggers"}
 CANARY_KINDS = {
-    "api": ({"kind"}, {"terminal", "scenario", "compare"}),
+    "api": ({"kind"}, {"terminal", "scenario"}),
     "exec": ({"kind", "run", "step"}, set()),
     "synthetic": ({"kind", "docs"}, set()),
 }
@@ -54,6 +69,35 @@ CANARY_KINDS = {
 DIRS = {"log-types": ".yaml", "rules": ".yml", "detectors": ".yaml", "correlations": ".yaml", "monitors": ".json"}
 
 CHECKS = []
+
+
+class StrictLoader(yaml.SafeLoader):
+    """SafeLoader without explicit tags and with a cap on aliases (0 outside siem/fields): no
+    !!binary/!!set surprises and no alias fan-out ("billion laughs") from a commit."""
+
+    max_aliases = 0
+
+    def compose_node(self, parent, index):
+        event = self.peek_event()
+        if isinstance(event, yaml.AliasEvent):
+            self.aliases_seen = getattr(self, "aliases_seen", 0) + 1
+            if self.aliases_seen > self.max_aliases:
+                raise yaml.composer.ComposerError(None, None, "YAML aliases are not allowed here", event.start_mark)
+        elif getattr(event, "tag", None) not in (None, "!"):
+            raise yaml.composer.ComposerError(None, None, f"explicit YAML tag {event.tag} is not allowed", event.start_mark)
+        return super().compose_node(parent, index)
+
+
+class FieldsLoader(StrictLoader):
+    max_aliases = MAX_FIELDS_ALIASES
+
+
+def strict_yaml(text):
+    return yaml.load(text, Loader=StrictLoader)  # noqa: S506 - StrictLoader is a SafeLoader
+
+
+def fields_yaml(text):
+    return yaml.load(text, Loader=FieldsLoader)  # noqa: S506 - FieldsLoader is a SafeLoader
 
 
 def check(fn):
@@ -68,6 +112,7 @@ class Tree:
         self.root = root
         self.parse_errors = []
         self.stray = []
+        self.unknown_fields = []
         self.fields = {}  # source -> allow-list file (dict)
         self.log_types = {}  # rel path -> dict
         self.rules = {}  # rel path -> dict
@@ -80,9 +125,13 @@ class Tree:
         if os.path.isdir(fields_dir):
             for name in sorted(os.listdir(fields_dir)):
                 if name.endswith(".yaml"):
-                    data = self._load(os.path.join("fields", name), yaml.safe_load)
+                    src = name[: -len(".yaml")]
+                    if src not in KNOWN_SOURCES or not SOURCE_RE.match(src):
+                        self.unknown_fields.append(f"fields/{name}")
+                        continue
+                    data = self._load(os.path.join("fields", name), fields_yaml)
                     if isinstance(data, dict):
-                        self.fields[name[: -len(".yaml")]] = data
+                        self.fields[src] = data
         for d, suffix in DIRS.items():
             path = os.path.join(root, d)
             if not os.path.isdir(path):
@@ -92,7 +141,7 @@ class Tree:
                 if not name.endswith(suffix) or not os.path.isfile(os.path.join(path, name)):
                     self.stray.append(rel)
                     continue
-                loader = json.loads if suffix == ".json" else yaml.safe_load
+                loader = json.loads if suffix == ".json" else strict_yaml
                 data = self._load(rel, loader)
                 if data is None:
                     continue
@@ -102,14 +151,17 @@ class Tree:
                 {"log-types": self.log_types, "rules": self.rules, "detectors": self.detectors,
                  "correlations": self.correlations, "monitors": self.monitors}[d][rel] = data
         if os.path.isfile(os.path.join(root, "canaries.yaml")):
-            self.canaries = self._load("canaries.yaml", yaml.safe_load)
+            self.canaries = self._load("canaries.yaml", strict_yaml)
 
     def _load(self, rel, loader):
         try:
             with open(os.path.join(self.root, rel), encoding="utf-8") as fh:
                 data = loader(fh.read())
         except (OSError, ValueError, yaml.YAMLError) as exc:
-            self.parse_errors.append((rel, f"does not parse: {str(exc).splitlines()[0]}"))
+            self.parse_errors.append((rel, f"does not parse: {(str(exc).splitlines() or [type(exc).__name__])[0]}"))
+            return None
+        except RecursionError:
+            self.parse_errors.append((rel, "does not parse: nested too deeply"))
             return None
         if not isinstance(data, dict):
             self.parse_errors.append((rel, "is not a mapping"))
@@ -163,6 +215,7 @@ def _values(value):
 @check
 def check_parse(t):
     errs = list(t.parse_errors)
+    errs += [(rel, f"not a known source ({', '.join(sorted(KNOWN_SOURCES))})") for rel in t.unknown_fields]
     errs += [(rel, f"unexpected file (this directory holds *{DIRS[rel.split('/')[0]]} only)") for rel in t.stray]
     if t.canaries is None:
         errs.append(("canaries.yaml", "missing"))
@@ -178,6 +231,8 @@ def check_log_types(t):
         name, source = d.get("name"), d.get("source")
         if not isinstance(name, str) or not LOG_TYPE_RE.match(name):
             errs.append((rel, f"name {name!r} must match {LOG_TYPE_RE.pattern} (no hyphen, S0-#2)"))
+        if source not in KNOWN_SOURCES:
+            errs.append((rel, f"source {source!r} is not one of {', '.join(sorted(KNOWN_SOURCES))}"))
         if rel != f"log-types/{source}.yaml":
             errs.append((rel, f"file name must be the source ({source}.yaml)"))
         if source not in t.fields:
@@ -453,7 +508,6 @@ def _walk(node):
 @check
 def check_monitors(t):
     errs, names = [], {}
-    streams = {f"sdp-{s}" for s in t.fields}
     for rel, d in t.monitors.items():
         extra = set(d) - MONITOR_KEYS
         if extra:
@@ -469,8 +523,9 @@ def check_monitors(t):
         names[name] = rel
         if d.get("type") != "monitor" or d.get("monitor_type") not in MONITOR_TYPES:
             errs.append((rel, f"type must be monitor and monitor_type one of {', '.join(sorted(MONITOR_TYPES))}"))
-        if not isinstance(d.get("enabled"), bool) or not isinstance(d.get("schedule"), dict):
-            errs.append((rel, "enabled (boolean) and schedule are required"))
+        if d.get("enabled") is not True or not isinstance(d.get("schedule"), dict):
+            # A monitor switched off in git is a detection removed without the delete cap noticing.
+            errs.append((rel, "enabled must be true and schedule is required"))
         inputs = d.get("inputs")
         if not isinstance(inputs, list) or not inputs:
             errs.append((rel, "inputs must be a non-empty list"))
@@ -481,8 +536,9 @@ def check_monitors(t):
                     errs.append((rel, "every input is a search with a non-empty indices list"))
                     continue
                 for idx in indices:
-                    if idx not in streams:
-                        errs.append((rel, f"index {idx!r} is not an sdp-<source> data stream"))
+                    if idx not in MONITOR_STREAMS:
+                        errs.append((rel, f"index {idx!r} is not one of the streams a monitor may read"
+                                          f" ({', '.join(sorted(MONITOR_STREAMS))})"))
         triggers = d.get("triggers")
         if not isinstance(triggers, list) or not triggers:
             errs.append((rel, "triggers must be a non-empty list"))
@@ -513,7 +569,7 @@ def check_canaries(t):
             if kind not in CANARY_KINDS:
                 errs.append(("canaries.yaml", f"{section}: {oid}: kind must be one of {', '.join(sorted(CANARY_KINDS))}"))
                 continue
-            if re.search(r"\b\d{1,3}(\.\d{1,3}){3}\b|k3s01|siem01|\.svc\b|cluster\.local", json.dumps(can)):
+            if UNPUBLISHABLE.search(json.dumps(can)):
                 # The page publishes canaries (ADR 0036); ADR 0021 never publishes addresses or node names.
                 errs.append(("canaries.yaml", f"{section}: {oid}: names an address or a node; canaries are published"))
             required, optional = CANARY_KINDS[kind]
@@ -530,13 +586,68 @@ def check_canaries(t):
     return errs
 
 
-def lint(root):
-    """Returns (findings, tree); findings are 'path: message' strings."""
+def _query_fields(node):
+    """Field names a monitor query or aggregation reads: term/terms/range/exists/match keys, and the
+    "field" of an aggregation."""
+    out = set()
+    for d in _walk(node):
+        for key in ("term", "terms", "range", "match", "match_phrase", "prefix", "wildcard"):
+            v = d.get(key)
+            if isinstance(v, dict):
+                if "field" in v and isinstance(v["field"], str):
+                    out.add(v["field"])
+                else:
+                    out |= {k for k in v if k not in ("boost", "_name")}
+        for key in ("exists", "min", "max", "avg", "sum", "value_count", "cardinality"):
+            v = d.get(key)
+            if isinstance(v, dict) and isinstance(v.get("field"), str):
+                out.add(v["field"])
+    return out
+
+
+@check
+def check_monitor_fields(t):
+    errs = []
+    for rel, d in t.monitors.items():
+        for inp in d.get("inputs") or []:
+            search = (inp or {}).get("search") if isinstance(inp, dict) else None
+            if not isinstance(search, dict):
+                continue
+            allowed = set(COMMON_FIELDS)
+            for idx in search.get("indices") or []:
+                if isinstance(idx, str) and idx.startswith("sdp-"):
+                    allowed |= t.allowed_fields(idx[len("sdp-"):])
+            for f in sorted(_query_fields(search.get("query"))):
+                if f not in allowed:
+                    errs.append((rel, f"query field {f!r} is in no allow-list of the monitor's indices"))
+    return errs
+
+
+@check
+def check_published(t):
+    """What the page publishes (titles and file names of rules, monitors and correlations)."""
+    errs = []
+    for kind, objs, key in (("rule", t.rules, "title"), ("monitor", t.monitors, "name"),
+                            ("correlation", t.correlations, "name")):
+        for rel, d in objs.items():
+            if UNPUBLISHABLE.search(rel) or UNPUBLISHABLE.search(str(d.get(key, ""))):
+                errs.append((rel, f"the {kind}'s {key} or file name names an address or a node; both are published"))
+    return errs
+
+
+def lint_detailed(root):
+    """Returns ([(path, check name, message)], tree)."""
     tree = Tree(root)
     findings = []
     for fn in CHECKS:
-        findings += [f"siem/{rel}: {msg}" for rel, msg in fn(tree)]
+        findings += [(f"siem/{rel}", fn.__name__, msg) for rel, msg in fn(tree)]
     return findings, tree
+
+
+def lint(root):
+    """Returns (findings, tree); findings are 'path: message' strings."""
+    findings, tree = lint_detailed(root)
+    return [f"{path}: {msg}" for path, _, msg in findings], tree
 
 
 def index(tree):

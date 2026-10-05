@@ -15,7 +15,7 @@ OUT=app/api/internal/siemindex/index.json
 
 generate() {
   python3 ansible/roles/siem_sync/files/siem_lint.py --index siem | python3 -c '
-import json, sys
+import json, re, sys
 ix = json.load(sys.stdin)
 
 def canary(c):
@@ -26,13 +26,18 @@ def canary(c):
         return "exec:" + c["run"]
     return "synthetic:" + c.get("docs", "")
 
+# The source is published: the SIEM host is not named by its node name (ADR 0021).
+PUBLIC_SOURCE = {"siem01": "siem-host"}
 out = {
-    "rules": [{k: r[k] for k in ("id", "title", "level", "status", "source", "attack", "file", "line")}
-              | {"canary": canary(r["canary"])} for r in ix["rules"]],
+    "rules": [{k: r[k] for k in ("id", "title", "level", "status", "attack", "file", "line")}
+              | {"source": PUBLIC_SOURCE.get(r["source"], r["source"]), "canary": canary(r["canary"])}
+              for r in ix["rules"]],
     "monitors": [{"name": m["name"], "file": m["file"], "canary": canary(m["canary"])} for m in ix["monitors"]],
     "correlations": [{"name": c["name"], "file": c["file"], "canary": canary(c["canary"])} for c in ix["correlations"]],
 }
-print(json.dumps(out, indent=2, ensure_ascii=False))
+text = json.dumps(out, indent=2, ensure_ascii=False)
+assert not re.search(r"k3s01|siem01|\\b\\d{1,3}(\\.\\d{1,3}){3}\\b", text), "the index would publish a node name or an address"
+print(text)
 '
 }
 

@@ -155,7 +155,7 @@ def build(tag, now):
             "hubble-dns-exfil": [ref("dnsexfil")], "k8s-exec-outside-api": [ref("exec")],
             "k8s-admission-denied": [ref("deny1"), ref("deny2"), ref("deny3")],
             "host-ssh-accepted": [hm("sdp-host-accepted")], "host-ssh-failed": [hm("sdp-host-refused")],
-            "siem01-ssh-accepted": [hm("sdp-siem01-accepted")], "siem01-ssh-failed": [hm("sdp-siem01-refused")],
+            "siem-host-ssh-accepted": [hm("sdp-siem01-accepted")], "siem-host-ssh-failed": [hm("sdp-siem01-refused")],
         },
         "not": {"hubble-dns-exfil": [ref("dnsneg1"), ref("dnsneg2")], "k8s-exec-outside-api": [ref("execapi")]},
         "correlations": {"contained-intrusion": [ref("shell"), ref("beacon")], "dns-exfil": [ref("dnsexfil")]},
