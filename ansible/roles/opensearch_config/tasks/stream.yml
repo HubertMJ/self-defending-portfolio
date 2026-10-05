@@ -30,6 +30,7 @@
     client_key: "{{ opensearch_config_admin_key }}"
     status_code: [200, 404]
   register: opensearch_config_template_live
+  check_mode: false
 
 # F11 / L5: the template must keep exactly its own pattern, no composed component (SA's alias
 # mappings would add "<stream>*" and a component) and the final pipeline. If anything rewrote it,
@@ -56,6 +57,7 @@
     client_key: "{{ opensearch_config_admin_key }}"
     status_code: [200, 404]
   register: opensearch_config_stream_live
+  check_mode: false
 
 # The ISM policy already exists at this point (main.yml order, S0-#6): it attaches only to backing
 # indices created after it.
@@ -76,6 +78,7 @@
     client_cert: "{{ opensearch_config_admin_cert }}"
     client_key: "{{ opensearch_config_admin_key }}"
   register: opensearch_config_stream_mapping
+  check_mode: false
 
 # Additive field changes reach the current write index at once; the template carries them into
 # every later backing index (S0-a: a mapping put without the template stops at the next rollover).

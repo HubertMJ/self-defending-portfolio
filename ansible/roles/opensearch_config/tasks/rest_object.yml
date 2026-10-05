@@ -15,6 +15,7 @@
     client_key: "{{ opensearch_config_admin_key }}"
     status_code: [200, 404]
   register: opensearch_config_obj_current
+  check_mode: false
 
 - name: Read the hash of the last written body of {{ opensearch_config_obj_key }}
   ansible.builtin.slurp:

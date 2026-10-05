@@ -7,6 +7,7 @@
     client_cert: "{{ opensearch_config_admin_cert }}"
     client_key: "{{ opensearch_config_admin_key }}"
   register: opensearch_config_effective
+  check_mode: false
 
 # ADR 0034: automatic correlation by shared ATT&CK tags stays off; only git-defined rules correlate.
 - name: Assert Security Analytics' automatic correlation is off
@@ -27,6 +28,7 @@
     client_cert: "{{ opensearch_config_admin_cert }}"
     client_key: "{{ opensearch_config_admin_key }}"
   register: opensearch_config_templates_live
+  check_mode: false
 
 # F11 (S0-a, S0-#11): Security Analytics rewrites a stream's template only through its mappings API
 # (adding "<stream>*" and its alias component). No role but the admin can call it; this proves it
@@ -53,6 +55,7 @@
     client_key: "{{ opensearch_config_admin_key }}"
     status_code: [200, 404]
   register: opensearch_config_sap_components
+  check_mode: false
 
 - name: Assert no alias component exists
   ansible.builtin.assert:
@@ -71,6 +74,7 @@
     client_cert: "{{ opensearch_config_admin_cert }}"
     client_key: "{{ opensearch_config_admin_key }}"
   register: opensearch_config_ism_explain
+  check_mode: false
 
 - name: Assert every sdp backing index is managed by sdp-30d and not failed
   ansible.builtin.assert:
@@ -93,4 +97,5 @@
     client_cert: "{{ opensearch_config_admin_cert }}"
     client_key: "{{ opensearch_config_admin_key }}"
   register: opensearch_config_green
+  check_mode: false
   failed_when: opensearch_config_green.json.status | default('') != 'green'
