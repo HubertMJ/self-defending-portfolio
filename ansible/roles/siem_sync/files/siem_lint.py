@@ -7,8 +7,9 @@ safe YAML loader without explicit tags and, outside siem/fields, without aliases
 executes or imports anything from it. What the tree may name is pinned here, not in the tree: the
 known sources and the streams monitors may read (siem contract P3 review, M1).
 
-Usage: siem_lint.py <siem dir>            lint; exit 0 clean, 1 findings, 2 usage
-       siem_lint.py --index <siem dir>    lint, then print the rule/monitor/correlation index as JSON
+Usage: siem_lint.py <siem dir>                 lint; exit 0 clean, 1 findings, 2 usage
+       siem_lint.py --index <siem dir>         lint, then print the rule/monitor/correlation index as JSON
+       siem_lint.py --findings-json <siem dir> print [[path, check, message], ...] (exit 0; for the sync)
 
 Security Analytics matches differently from the Sigma specification (S0-b, S0-k): values are
 case-sensitive, a value containing a space never matches, and `|re` is a Lucene regular expression
@@ -36,7 +37,17 @@ MONITOR_STREAMS = {"sdp-falco", "sdp-talon", "sdp-hubble", "sdp-k8s-audit", "sdp
 COMMON_FIELDS = {"@timestamp", "event.kind", "event.dataset", "event.ingested", "event.overwrite"}
 # Published on the page (ADR 0036, gen-siem-index.sh): titles, file names, canaries. ADR 0021 never
 # publishes node names, addresses or cluster DNS names.
-UNPUBLISHABLE = re.compile(r"\b\d{1,3}(\.\d{1,3}){3}\b|k3s01|siem01|\.svc\b|cluster\.local")
+UNPUBLISHABLE = re.compile(r"\b\d{1,3}(\.\d{1,3}){3}\b"                        # IPv4
+                           r"|(?<![0-9a-z:])(?=[0-9a-f:]*[0-9a-f])(?:[0-9a-f]{0,4}:){2,7}[0-9a-f]{0,4}(?![0-9a-z:])"  # IPv6
+                           r"|k3s01|siem01|\.svc\b|cluster\.local", re.IGNORECASE)
+# Limits of a detection condition (no regex is built from it; the glob below is linear).
+MAX_CONDITION = 512
+MAX_TOKEN = 64
+# A monitor runs on a plain period; its triggers compare numbers (no script can switch it off).
+MONITOR_MINUTES = (1, 60)
+QUERY_TRIGGER_RE = re.compile(r"^ctx\.results\[0\]\.hits\.total\.value (==|!=|>=|<=|>|<) \d{1,6}$")
+_CMP = r"params\.[a-z_]{1,32} (==|!=|>=|<=|>|<) (\d{1,6}|params\.[a-z_]{1,32})"
+BUCKET_TRIGGER_RE = re.compile(rf"^{_CMP}( && {_CMP}){{0,7}}$")
 # fields/ is the ingest area's and uses anchors for repeated paths; elsewhere an alias is refused.
 MAX_FIELDS_ALIASES = 8
 SOURCE_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
@@ -208,6 +219,27 @@ def _selections(detection):
     return out
 
 
+def glob_match(pattern, name):
+    """`*`-only glob without a regex: greedy with one backtrack point, O(len(pattern) * len(name)) -
+    a condition from a commit cannot make the lint backtrack exponentially (review: ReDoS)."""
+    p = n = 0
+    star, mark = -1, 0
+    while n < len(name):
+        if p < len(pattern) and pattern[p] != "*" and pattern[p] == name[n]:
+            p, n = p + 1, n + 1
+        elif p < len(pattern) and pattern[p] == "*":
+            star, mark = p, n
+            p += 1
+        elif star >= 0:
+            p, mark = star + 1, mark + 1
+            n = mark
+        else:
+            return False
+    while p < len(pattern) and pattern[p] == "*":
+        p += 1
+    return p == len(pattern)
+
+
 def _values(value):
     return value if isinstance(value, list) else [value]
 
@@ -361,11 +393,16 @@ def check_rule_condition(t):
         for name, maps in _selections(det):
             if maps is None:
                 errs.append((rel, f"selection {name}: must be a field map or a list of field maps (no keyword search)"))
+        if len(cond) > MAX_CONDITION:
+            errs.append((rel, f"condition longer than {MAX_CONDITION} characters"))
+            continue
         for token in re.findall(r"[A-Za-z0-9_*]+|\S", cond):
             if token in CONDITION_WORDS or token in "()":
                 continue
-            pattern = "^" + re.escape(token).replace(r"\*", ".*") + "$"
-            if not any(re.match(pattern, n) for n in names):
+            if len(token) > MAX_TOKEN or any(len(n) > MAX_TOKEN for n in names):
+                errs.append((rel, f"a condition token or selection name is longer than {MAX_TOKEN} characters"))
+                break
+            if not any(glob_match(token, n) for n in names):
                 errs.append((rel, f"condition names {token!r}, which is no selection"))
     return errs
 
@@ -523,9 +560,16 @@ def check_monitors(t):
         names[name] = rel
         if d.get("type") != "monitor" or d.get("monitor_type") not in MONITOR_TYPES:
             errs.append((rel, f"type must be monitor and monitor_type one of {', '.join(sorted(MONITOR_TYPES))}"))
-        if d.get("enabled") is not True or not isinstance(d.get("schedule"), dict):
+        if d.get("enabled") is not True:
             # A monitor switched off in git is a detection removed without the delete cap noticing.
-            errs.append((rel, "enabled must be true and schedule is required"))
+            errs.append((rel, "enabled must be true"))
+        period = (d.get("schedule") or {}).get("period") if isinstance(d.get("schedule"), dict) else None
+        if not (isinstance(d.get("schedule"), dict) and set(d["schedule"]) == {"period"} and isinstance(period, dict)
+                and set(period) == {"interval", "unit"} and period.get("unit") == "MINUTES"
+                and isinstance(period.get("interval"), int) and not isinstance(period.get("interval"), bool)
+                and MONITOR_MINUTES[0] <= period["interval"] <= MONITOR_MINUTES[1]):
+            errs.append((rel, f"schedule must be exactly {{period: {{interval: {MONITOR_MINUTES[0]}..{MONITOR_MINUTES[1]},"
+                              " unit: MINUTES}}"))
         inputs = d.get("inputs")
         if not isinstance(inputs, list) or not inputs:
             errs.append((rel, "inputs must be a non-empty list"))
@@ -546,6 +590,16 @@ def check_monitors(t):
         for node in _walk(triggers):
             if "actions" in node and node["actions"] != []:
                 errs.append((rel, "trigger actions must be empty (alarms stay in OpenSearch, decision D1)"))
+        for trig in triggers:
+            kind, body = next(iter(trig.items())) if isinstance(trig, dict) and len(trig) == 1 else (None, None)
+            cond = (body or {}).get("condition") if isinstance(body, dict) else None
+            script = (cond or {}).get("script") if isinstance(cond, dict) else None
+            source = (script or {}).get("source") if isinstance(script, dict) else None
+            want = {"query_level_trigger": QUERY_TRIGGER_RE, "bucket_level_trigger": BUCKET_TRIGGER_RE}.get(kind)
+            if want is None or not isinstance(source, str) or (script or {}).get("lang") != "painless" \
+                    or set(script) != {"source", "lang"} or not want.match(source):
+                errs.append((rel, "each trigger is a query- or bucket-level trigger whose painless condition only"
+                                  " compares counts (e.g. params.a > 0 && params.b == 0)"))
     return errs
 
 
@@ -586,40 +640,126 @@ def check_canaries(t):
     return errs
 
 
-def _query_fields(node):
-    """Field names a monitor query or aggregation reads: term/terms/range/exists/match keys, and the
-    "field" of an aggregation."""
-    out = set()
-    for d in _walk(node):
-        for key in ("term", "terms", "range", "match", "match_phrase", "prefix", "wildcard"):
-            v = d.get(key)
-            if isinstance(v, dict):
-                if "field" in v and isinstance(v["field"], str):
-                    out.add(v["field"])
+QUERY_LEAVES = {"term", "terms", "range", "exists", "match_all"}
+RANGE_KEYS = {"gte", "gt", "lte", "lt", "from", "to", "include_lower", "include_upper", "format", "boost"}
+METRIC_AGGS = {"min", "max", "avg", "sum", "value_count", "cardinality"}
+
+
+class QueryCheck:
+    """Walks a monitor's search body. Only these node types are allowed - term, terms (no lookup),
+    range, exists, match_all, bool; aggregations composite (terms sources), terms, filter and the
+    metrics above - and every field they name must be in an allow-list of the monitor's indices.
+    Everything else (script, query_string, top_hits, a terms lookup into another index, ...) is
+    refused: rules-sync can read every sdp-* stream, a monitor's alerts reach the API."""
+
+    def __init__(self, allowed):
+        self.allowed, self.errs = allowed, []
+
+    def field(self, name):
+        if not isinstance(name, str) or name not in self.allowed:
+            self.errs.append(f"field {name!r} is in no allow-list of the monitor's indices")
+
+    def query(self, q):
+        if not isinstance(q, dict) or len(q) != 1:
+            self.errs.append("a query node is a mapping with exactly one query type")
+            return
+        kind, body = next(iter(q.items()))
+        if kind == "bool":
+            if not isinstance(body, dict) or set(body) - {"filter", "must", "must_not", "should", "minimum_should_match", "boost"}:
+                self.errs.append("bool takes filter, must, must_not, should only")
+                return
+            for key in ("filter", "must", "must_not", "should"):
+                for sub in body.get(key, []) if isinstance(body.get(key, []), list) else [body[key]]:
+                    self.query(sub)
+        elif kind == "match_all":
+            if body not in ({}, None):
+                self.errs.append("match_all takes no arguments")
+        elif kind == "exists":
+            if not isinstance(body, dict) or set(body) != {"field"}:
+                self.errs.append("exists takes field only")
+            else:
+                self.field(body["field"])
+        elif kind in ("term", "terms", "range"):
+            fields = [k for k in body if k != "boost"] if isinstance(body, dict) else []
+            if len(fields) != 1:
+                self.errs.append(f"{kind} names exactly one field")
+                return
+            self.field(fields[0])
+            v = body[fields[0]]
+            if kind == "terms" and not (isinstance(v, list) and all(isinstance(x, (str, int, bool)) for x in v)):
+                self.errs.append("terms takes a list of values (no lookup into another index)")
+            elif kind == "term" and not (isinstance(v, (str, int, bool)) or (isinstance(v, dict) and set(v) <= {"value", "boost"}
+                                                                             and isinstance(v.get("value"), (str, int, bool)))):
+                self.errs.append("term takes a value")
+            elif kind == "range" and not (isinstance(v, dict) and set(v) <= RANGE_KEYS):
+                self.errs.append(f"range takes {', '.join(sorted(RANGE_KEYS))} only")
+        else:
+            self.errs.append(f"query type {kind!r} is not allowed (only {', '.join(sorted(QUERY_LEAVES | {'bool'}))})")
+
+    def aggs(self, aggs):
+        if not isinstance(aggs, dict):
+            self.errs.append("aggregations must be a mapping")
+            return
+        for name, a in aggs.items():
+            if not isinstance(a, dict):
+                self.errs.append(f"aggregation {name} must be a mapping")
+                continue
+            subs = {k: a[k] for k in ("aggregations", "aggs") if k in a}
+            types = [k for k in a if k not in subs]
+            if len(types) != 1:
+                self.errs.append(f"aggregation {name} has exactly one type")
+                continue
+            kind, body = types[0], a[types[0]]
+            if kind == "filter":
+                self.query(body)
+            elif kind in METRIC_AGGS or kind == "terms":
+                extra = {"size", "min_doc_count", "order"} if kind == "terms" else set()
+                if not isinstance(body, dict) or "field" not in body or set(body) - {"field"} - extra:
+                    self.errs.append(f"aggregation {name}: {kind} takes field{' and ' + ', '.join(sorted(extra)) if extra else ''} only")
                 else:
-                    out |= {k for k in v if k not in ("boost", "_name")}
-        for key in ("exists", "min", "max", "avg", "sum", "value_count", "cardinality"):
-            v = d.get(key)
-            if isinstance(v, dict) and isinstance(v.get("field"), str):
-                out.add(v["field"])
-    return out
+                    self.field(body["field"])
+            elif kind == "composite":
+                if not isinstance(body, dict) or set(body) - {"size", "sources"} or not isinstance(body.get("sources"), list):
+                    self.errs.append(f"aggregation {name}: composite takes size and sources only")
+                    continue
+                for src in body["sources"]:
+                    terms = next(iter(src.values())) if isinstance(src, dict) and len(src) == 1 else None
+                    t = terms.get("terms") if isinstance(terms, dict) and set(terms) == {"terms"} else None
+                    if not isinstance(t, dict) or set(t) - {"field", "missing_bucket", "order"} or "field" not in t:
+                        self.errs.append(f"aggregation {name}: a composite source is terms on a field")
+                    else:
+                        self.field(t["field"])
+            else:
+                self.errs.append(f"aggregation type {kind!r} is not allowed")
+                continue
+            for sub in subs.values():
+                self.aggs(sub)
 
 
 @check
-def check_monitor_fields(t):
+def check_monitor_query(t):
     errs = []
     for rel, d in t.monitors.items():
         for inp in d.get("inputs") or []:
             search = (inp or {}).get("search") if isinstance(inp, dict) else None
-            if not isinstance(search, dict):
+            if not isinstance(search, dict) or set(search) != {"indices", "query"} or not isinstance(search["query"], dict):
+                errs.append((rel, "an input is a search of exactly indices and query"))
                 continue
             allowed = set(COMMON_FIELDS)
             for idx in search.get("indices") or []:
-                if isinstance(idx, str) and idx.startswith("sdp-"):
+                if isinstance(idx, str) and idx in MONITOR_STREAMS:
                     allowed |= t.allowed_fields(idx[len("sdp-"):])
-            for f in sorted(_query_fields(search.get("query"))):
-                if f not in allowed:
-                    errs.append((rel, f"query field {f!r} is in no allow-list of the monitor's indices"))
+            body = search["query"]
+            qc = QueryCheck(allowed)
+            if set(body) - {"size", "query", "aggregations", "aggs"} or not (isinstance(body.get("size", 0), int)
+                                                                             and 0 <= body.get("size", 0) <= 100):
+                qc.errs.append("the search body takes size (0..100), query and aggregations only")
+            if "query" in body:
+                qc.query(body["query"])
+            for key in ("aggregations", "aggs"):
+                if key in body:
+                    qc.aggs(body[key])
+            errs += [(rel, e) for e in qc.errs]
     return errs
 
 
@@ -673,11 +813,16 @@ def index(tree):
 def main(argv):
     args = argv[1:]
     want_index = bool(args) and args[0] == "--index"
-    if want_index:
+    want_json = bool(args) and args[0] == "--findings-json"
+    if want_index or want_json:
         args = args[1:]
     if len(args) != 1 or not os.path.isdir(args[0]):
         print("usage: siem_lint.py [--index] <siem dir>", file=sys.stderr)
         return 2
+    if want_json:
+        # For the sync, which runs the lint in its own process with a time limit.
+        print(json.dumps(lint_detailed(args[0])[0]))
+        return 0
     findings, tree = lint(args[0])
     for f in findings:
         print(f, file=sys.stderr)

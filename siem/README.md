@@ -64,8 +64,16 @@ Proven in the S0 spike (siem contract S0-b, S0-k); the lint enforces what it can
   overwrites (`kind: heartbeat`, `checked_at`, `commit`, `outcome`: applied | unchanged | refused |
   failed). A run with nothing to do writes only the heartbeat, so an old `applied_at` with a fresh
   `checked_at` is an idle sync and a stale `checked_at` a dead one.
-- Monitors may read only the six k3s01 streams (the API reads their alerts) and only fields in those
-  streams' allow-lists; sources are the seven of ADR 0034. Both are pinned in `siem_lint.py`.
+- Monitors may read only the six k3s01 streams (the API reads their alerts); sources are the seven of
+  ADR 0034 - both pinned in `siem_lint.py`. A monitor's search may use only term, terms (no lookup),
+  range, exists, match_all and bool, and the aggregations composite (terms sources), terms, filter
+  and min/max/avg/sum/value_count/cardinality; no script, query_string or top_hits. Every field it
+  names must be in the allow-list of one of its streams. Those allow-lists come from `siem/fields` in
+  the same fetched tree (the ingest area's files), so a commit could list a new field there - but a
+  field the stream's template does not map is never indexed (`dynamic: false`), the templates are
+  written only by the admin's `opensearch_config` from the operator's checkout, and the sync never
+  touches them, so such a field matches nothing. Schedules are a plain period of 1-60 minutes;
+  trigger conditions only compare counts (`params.a > 0 && params.b == 0`).
 
 ## Canaries
 

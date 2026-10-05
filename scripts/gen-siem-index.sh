@@ -15,7 +15,9 @@ OUT=app/api/internal/siemindex/index.json
 
 generate() {
   python3 ansible/roles/siem_sync/files/siem_lint.py --index siem | python3 -c '
-import json, re, sys
+import json, sys
+sys.path.insert(0, "ansible/roles/siem_sync/files")
+from siem_lint import UNPUBLISHABLE  # one definition: IPv4, IPv6, node and cluster names, any case
 ix = json.load(sys.stdin)
 
 def canary(c):
@@ -36,7 +38,7 @@ out = {
     "correlations": [{"name": c["name"], "file": c["file"], "canary": canary(c["canary"])} for c in ix["correlations"]],
 }
 text = json.dumps(out, indent=2, ensure_ascii=False)
-assert not re.search(r"k3s01|siem01|\\b\\d{1,3}(\\.\\d{1,3}){3}\\b", text), "the index would publish a node name or an address"
+assert not UNPUBLISHABLE.search(text), "the index would publish a node name or an address"
 print(text)
 '
 }
