@@ -4,3 +4,12 @@
 # A unit test's placeholder bearer token for the terminal (32 hex, the format the page validates); a
 # later commit replaced it with an obviously fake value, but the earlier revision stays in history.
 e2bcbb833f0a8667dffb12d64f32fe69c82668a2:app/web/test/unit/terminal.test.ts:generic-api-key:14
+
+# Public OpenPGP fingerprints of the vendors' apt signing keys (Fluent Bit, OpenSearch), pinned so apt
+# trusts only that key; a fingerprint identifies a public key and is published by the vendor.
+ae6d61a66b64c056ec9e300efaefcaa7feccc126:ansible/inventory/group_vars/all.yml:generic-api-key:9
+8b6a961b5c5402047bdb3c02174f020026e04a2d:ansible/inventory/group_vars/siem_nodes.yml:generic-api-key:47
+
+# A synthetic terminal token (descending hex pattern) the siemlog unit test feeds in to prove it is
+# never logged.
+f54195e7e2197a5dc512ea88e34e77ada24b0b4d:app/api/internal/siemlog/siemlog_test.go:generic-api-key:44
