@@ -151,7 +151,7 @@ func (t *Tracker) fill(r *record, m map[string]any) (dnsQuery string) {
 		r.at = at
 	}
 	r.ingested = timeOf(m, "event.ingested")
-	r.synthetic = synthetic(str(m, "k8s.pod.ref")) || synthetic(str(m, "user.name"))
+	r.synthetic = syntheticRef.MatchString(str(m, "k8s.pod.ref")) || syntheticPrincipal.MatchString(str(m, "user.name"))
 	if ref := str(m, "k8s.pod.ref"); ref != "" {
 		if _, _, ok := t.splitRef(ref); ok {
 			r.ref = ref
@@ -237,12 +237,15 @@ func (t *Tracker) fromHit(h siem.Hit, source string) (record, bool) {
 	return r, r.ref != "" && !r.at.IsZero() && !r.synthetic
 }
 
-// syntheticMarker marks the rules acceptance test's canary documents (P3: pod refs
-// `sandbox_p3c-<tag>-*`, principals `system:p3c-<tag>`). They are written into the real streams to
-// prove a rule fires; they are test data and must never become a public incident (ADR 0036).
-const syntheticMarker = "p3c-"
-
-func synthetic(v string) bool { return strings.Contains(v, syntheticMarker) }
+// The rules acceptance test's canary documents (P3) carry pod refs `sandbox_p3c-<tag>-*` and
+// principals `system:p3c-<tag>`. They are written into the real streams to prove a rule fires; they are
+// test data and must never become a public incident (ADR 0036). Both forms are matched whole and
+// anchored, never as a substring: a ServiceAccount named p3c-y (system:serviceaccount:x:p3c-y) or a
+// pod whose name merely contains p3c- must not be able to hide an exec or a probe from the page.
+var (
+	syntheticRef       = regexp.MustCompile(`^(sandbox|sandbox-unguarded)_p3c-[0-9a-z]+-`)
+	syntheticPrincipal = regexp.MustCompile(`^system:p3c-[0-9a-z]+$`)
+)
 
 // isDoc: the record came from a search (it may carry a finding's rule once merged).
 func (r *record) isDoc() bool { return strings.HasPrefix(r.key, "doc:") }

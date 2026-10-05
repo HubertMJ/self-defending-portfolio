@@ -601,13 +601,14 @@ func (ix *index) monitorIncidents(alerts []siem.Alert, now time.Time) []*draft {
 	return out
 }
 
-// syntheticAlert: an alert on a P3 acceptance canary (a bucket key with the p3c- marker).
+// syntheticAlert: an alert on a P3 acceptance canary (a bucket key that is a canary pod ref or
+// principal, matched whole).
 func syntheticAlert(a siem.Alert) bool {
 	if a.Agg == nil {
 		return false
 	}
 	for _, k := range a.Agg.BucketKeys {
-		if s, ok := k.(string); ok && synthetic(s) {
+		if s, ok := k.(string); ok && (syntheticRef.MatchString(s) || syntheticPrincipal.MatchString(s)) {
 			return true
 		}
 	}

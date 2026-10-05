@@ -1194,8 +1194,9 @@ func TestSyntheticCanariesDropped(t *testing.T) {
 	f.findings["sdp_falco"] = []siem.Finding{falcoFinding("f-c1", t0, ref, "Terminal shell in container")}
 	f.findings["sdp_talon"] = []siem.Finding{talonFinding("f-c2", t0.Add(time.Second), ref, "Terminate Pod", "kubernetes:terminate")}
 	f.findings["sdp_hubble"] = []siem.Finding{dnsFinding("f-c3", t0, "sandbox_p3c-a1b2-dns", "sdp-"+flagHex)}
+	// P3's exec canary: its own canary pod, its own principal.
 	f.findings["sdp_k8s_audit"] = []siem.Finding{finding("f-c4", t0, "Exec", nil, map[string]any{"audit.object.subresource": "exec",
-		"audit.object.resource": "pods", "k8s.pod.ref": quarRef, "user.name": "system:p3c-a1b2"})}
+		"audit.object.resource": "pods", "k8s.pod.ref": "sandbox-unguarded_p3c-a1b2-exec", "user.name": "system:p3c-a1b2"})}
 	f.hits["sdp-api"] = []siem.Hit{
 		apiCommand("c1", t0, termRun, "sandbox_p3c-a1b2-term", 1, "whoami", "T1033", "recon", "started"),
 		apiCommand("c2", t0.Add(time.Second), termRun, "sandbox_p3c-a1b2-term", 2, "read-flag", "T1552.001", "credentials", "started"),
@@ -1216,4 +1217,49 @@ func TestSyntheticCanariesDropped(t *testing.T) {
 	if b, _ := json.Marshal(v); strings.Contains(string(b), "p3c-") {
 		t.Fatalf("the marker was published: %s", b)
 	}
+}
+
+// The canary marker is matched whole and anchored: a ServiceAccount named p3c-y, or a pod whose name
+// merely contains p3c-, cannot hide an exec or a probe from the page. Only P3's exact canary
+// principal (system:p3c-<tag>, a user only a cluster admin can mint) is dropped on a real pod.
+func TestSyntheticMarkerAnchored(t *testing.T) {
+	f := newFake()
+	exec := func(id, ref, user string) siem.Finding {
+		return finding(id, t0, "Exec", nil, map[string]any{"audit.object.subresource": "exec", "audit.object.resource": "pods",
+			"k8s.pod.ref": ref, "user.name": user})
+	}
+	f.findings["sdp_k8s_audit"] = []siem.Finding{
+		exec("f-sa", quarRef, "system:serviceaccount:x:p3c-y"), // a ServiceAccount named p3c-y
+		exec("f-pod", "sandbox_shop-p3c-1", "system:admin"),    // p3c- inside a pod name
+		exec("f-pod2", "sandbox_p3c-x", "system:admin"),        // a tag but no canary name after it
+		exec("f-user", cmpRef, "system:p3c-a1b2:extra"),        // not the whole principal
+		exec("f-canary", termRef, "system:p3c-a1b2"),           // P3's canary principal: dropped
+	}
+	st := t0.UnixMilli()
+	f.alerts = []siem.Alert{
+		{ID: "al-sa", MonitorName: "sdp-git: policy-probing", State: "ACTIVE", StartTime: &st, Agg: &siem.AlertAgg{BucketKeys: []any{"system:serviceaccount:x:p3c-y"}}},
+		{ID: "al-pod", MonitorName: "sdp-git: prevented-not-detected", State: "ACTIVE", StartTime: &st, Agg: &siem.AlertAgg{BucketKeys: []any{"sandbox_shop-p3c-1"}}},
+	}
+	tr := newTracker(t, f, &clock{t: t0.Add(time.Minute)})
+	tr.Poll(context.Background())
+	v := tr.View()
+	execs := map[string]bool{}
+	for _, inc := range incidentsOf(v, KindExecOutsideAPI) {
+		execs[inc.Title] = true
+	}
+	for _, want := range []string{
+		"Exec into sandbox/network-tool-b2c3d4e5f6 outside the API",
+		"Exec into sandbox/shop-p3c-1 outside the API",
+		"Exec into sandbox/p3c-x outside the API",
+		"Exec into sandbox/shell-in-container-a1b2c3d4e5 outside the API",
+	} {
+		if !execs[want] {
+			t.Errorf("missing %q in %v", want, execs)
+		}
+	}
+	if execs["Exec into sandbox/terminal-3755e65530 outside the API"] || len(execs) != 4 {
+		t.Errorf("exec incidents %v", execs)
+	}
+	one(t, v, KindPolicyProbing)
+	one(t, v, KindPreventedNotDetected)
 }
