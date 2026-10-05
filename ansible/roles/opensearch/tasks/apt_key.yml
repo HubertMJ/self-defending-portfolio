@@ -35,6 +35,8 @@
       /var/lib/sdp-siem/opensearch-release.pgp
   register: opensearch_apt_key_colons
   changed_when: false
+  # A read: in check mode too, or the fingerprint assert below sees nothing.
+  check_mode: false
 
 - name: Assert the file holds exactly the pinned primary key
   ansible.builtin.assert:

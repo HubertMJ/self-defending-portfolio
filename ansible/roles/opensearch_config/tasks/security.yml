@@ -62,6 +62,7 @@
     client_key: "{{ opensearch_config_admin_key }}"
     status_code: [200, 500, 503]
   register: opensearch_config_live_mapping
+  check_mode: false
 
 - name: Decide whether the security configuration must be applied
   ansible.builtin.set_fact:

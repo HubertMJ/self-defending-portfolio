@@ -62,6 +62,10 @@ jobs:
         run: scripts/check-image-digests.sh
       - name: kustomize build + kubeconform, helm template + kyverno apply
         run: scripts/validate-cluster.sh
+      - name: the SIEM shipper's filter under the pinned Fluent Bit (ADR 0034)
+        # HMAC-SHA256 against RFC 4231 and Python's hmac, allow-list projection, the F1/F2/F3/F13
+        # rules, on the F0 fixtures (debian:13 by digest + the pinned deb, SHA256-checked).
+        run: tests/siem/lua-hmac.sh
 
   secrets:
     runs-on: ubuntu-24.04

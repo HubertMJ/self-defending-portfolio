@@ -19,6 +19,7 @@
 #    5  sandbox                 restricted namespace for test victims, quarantine policy, Talon's Role
 #    5  sandbox-unguarded       the twin of sandbox with no Talon reach: Falco detects, nothing responds
 #    6  portfolio-api           /api: scenarios, attack runs in sandbox, live Falco/Talon feed, posture
+#    6  siem-egress             no pod but the API may connect to the SIEM host siem01 (ADR 0034)
 #
 # Waves only order the first sync of a fresh cluster loosely: the root Application has no health
 # check for its children, so it does not wait for one wave to be healthy before the next. Every
@@ -47,3 +48,4 @@ resources:
   - sandbox.yaml
   - sandbox-unguarded.yaml
   - portfolio-api.yaml
+  - siem-egress.yaml

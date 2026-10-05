@@ -39,3 +39,6 @@ all:
           opensearch_dashboards_deb_sha256: "0000000000000000000000000000000000000000000000000000000000000000"
           opensearch_apt_key_fingerprint: "0000000000000000000000000000000000000000"
           opensearch_cert_generations: {admin: 1, rules-sync: 1, dashboards: 1, shipper-siem01: 1, shipper-k3s01: 1, portfolio-api: 1}
+          fluent_bit_version: "5.1.3"
+          fluent_bit_deb_sha256: "0000000000000000000000000000000000000000000000000000000000000000"
+          fluent_bit_apt_key_fingerprint: "0000000000000000000000000000000000000000"

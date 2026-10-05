@@ -1,7 +1,8 @@
 ---
 # siem01: the SIEM host (ADR 0034). Same hardening roles as k3s01, switched by group (firewall,
-# sysctl and auditd carry no k3s rules here), then the snapshot disk, OpenSearch, Dashboards and
-# everything inside OpenSearch. Fluent Bit (P2) and the rules sync (P3) join this play with their roles.
+# sysctl and auditd carry no k3s rules here), then the snapshot disk, OpenSearch, Dashboards,
+# everything inside OpenSearch, and Fluent Bit shipping siem01's own logs into sdp-siem01 (P2, F4).
+# The rules sync (P3) joins this play with its role.
 - name: Build the SIEM host
   hosts: siem_nodes
   become: true
@@ -53,13 +54,18 @@
       tags: [opensearch_dashboards]
     - role: opensearch_config
       tags: [opensearch_config]
+    # After opensearch: it renews the shipper-siem01 certificate this role publishes to the unit.
+    - role: fluent_bit
+      tags: [fluent_bit]
 
 # The remote entry point for client CSRs (siem contract C1), run only when asked for by tag:
 #   --tags client-cert -e siem_client_csr=<abs path> -e siem_client_name=<name> -e siem_client_generation=<N>
 #   --tags api-cert -e siem_api_csr=<abs path> -e siem_api_generation=<N>        (portfolio-api)
 # The CSR is read on the controller, signed on siem01 (where the CA key is) and the certificate is
-# written next to the CSR as <path without .csr>.crt. The expected name comes from these variables,
-# never from the CSR, and sign_client_csr.yml refuses everything but the remote identities.
+# written next to the CSR as <path without .csr>.crt, the CA certificate as <path without .csr>.ca.crt
+# (the client needs it to verify siem01; scripts/siem-api-cert.sh puts both into the API's Secret).
+# The expected name comes from these variables, never from the CSR, and sign_client_csr.yml refuses
+# everything but the remote identities.
 - name: Sign a client CSR made elsewhere
   hosts: siem_nodes
   become: true
@@ -96,6 +102,19 @@
       ansible.builtin.copy:
         content: "{{ opensearch_csr_certificate }}"
         dest: "{{ siem_csr_path | regex_replace('\\.csr$', '.crt') }}"
+        mode: "0644"
+      delegate_to: localhost
+      become: false
+
+    - name: Read the CA certificate
+      ansible.builtin.slurp:
+        src: "{{ opensearch_pki_dir | default('/etc/sdp-siem/pki') }}/ca.crt"
+      register: siem_csr_ca
+
+    - name: Write the CA certificate next to the CSR on the controller
+      ansible.builtin.copy:
+        content: "{{ siem_csr_ca.content | b64decode }}"
+        dest: "{{ siem_csr_path | regex_replace('\\.csr$', '.ca.crt') }}"
         mode: "0644"
       delegate_to: localhost
       become: false

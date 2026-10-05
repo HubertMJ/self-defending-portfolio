@@ -13,10 +13,17 @@ input: >-
   addresses are dropped.
 fixture: tests/siem/fixtures/host-ssh.json
 fields:
-  "@timestamp": {type: date, from: __REALTIME_TIMESTAMP, transform: epoch_us, note: audit lines use msg=audit(<epoch>.<ms>:<serial>)}
-  event.kind: {type: keyword, value: event, note: "event | heartbeat"}
+  "@timestamp":
+    type: date
+    from: __REALTIME_TIMESTAMP
+    transform: epoch_us
+    note: >-
+      audit lines use msg=audit(<epoch>.<ms>:<serial>). Journal records: Fluent Bit's systemd input passes the
+      entry's realtime timestamp as the record time and no __REALTIME_TIMESTAMP key (the key is in the
+      journalctl -o json fixtures only), so the record time is used when the key is absent (review code L6)
+  event.kind: {type: keyword, value: event, note: "event | heartbeat | metric (the shipper's own losses)"}
   event.dataset: {type: keyword, value: host}
-  host.log: {type: keyword, note: "ssh | sudo | nft | auditd, from the input"}
+  host.log: {type: keyword, note: "ssh | sudo | nft | auditd | fluent-bit, from the input"}
   ssh.event: {type: keyword, from: MESSAGE, transform: ssh_event, note: "accepted | failed | invalid-user | closed-preauth"}
   ssh.method: {type: keyword, from: MESSAGE, transform: ssh_method, note: "publickey | password | keyboard-interactive"}
   sudo.result: {type: keyword, from: MESSAGE, transform: sudo_result, note: "command | incorrect-password | not-allowed"}
@@ -31,3 +38,9 @@ fields:
   user.name: {type: keyword, transform: hmac, note: "ssh/sudo: the login user; auditd: AUID=\"<name>\" (unset kept as unset)"}
   user.effective: {type: keyword, transform: hmac, note: "auditd: EUID=\"<name>\"; sudo: USER=<target>"}
   source.ip: {type: keyword, transform: hmac, note: "ssh: from <ip>; nft: SRC=<ip>"}
+  # The shipper's own losses since its previous report, one record a minute with event.kind metric
+  # (P2, review M4); the ops monitor "shipper dropping" fires on any value above 0.
+  fluentbit.throttle_dropped: {type: long, transform: fluentbit_counter, note: records the throttles dropped}
+  fluentbit.output_dropped: {type: long, transform: fluentbit_counter, note: records an output gave up on}
+  fluentbit.output_errors: {type: long, transform: fluentbit_counter, note: failed output attempts (retried)}
+  fluentbit.filter_errors: {type: long, transform: fluentbit_counter, note: records sdp.lua dropped after an error}

@@ -1,5 +1,6 @@
 .PHONY: lint gitleaks validate smoke runtime-test abuse-test scenario-offline scenario-test vm hardening cluster verify bootstrap \
-	siem siem-verify golden siem-csr-test siem-acceptance siem-mutations
+	siem siem-verify golden siem-csr-test siem-acceptance siem-mutations ingest siem-lua-test siem-ingest-test \
+	siem-ingest-mutations
 DOCKER ?= docker
 
 # Ansible in the tooling container (scripts/Dockerfile.tooling); Ansible is not installed on the
@@ -62,8 +63,12 @@ siem:            ## SIEM host siem01: hardening, snapshot disk, OpenSearch, Dash
 siem-verify:     ## read-only checks of siem01
 	@$(ANSIBLE_IN_TOOLING) playbooks/verify.yml --limit siem_nodes $(ARGS)
 
-golden:          ## the shared host roles render byte-identically for k3s01 (goldens from b374c0e) and siem01-shaped for siem01
+ingest:          ## k3s01's SIEM shipper: Fluent Bit, certificate signed on siem01 (ADR 0034; maintenance window; ARGS="--check --diff")
+	@$(ANSIBLE_IN_TOOLING) playbooks/ingest.yml $(ARGS)
+
+golden:          ## the shared host roles render byte-identically for k3s01 (goldens from b374c0e) and siem01-shaped for siem01; k3s01's audit policy
 	@DOCKER="$(DOCKER)" tests/golden/render.sh
+	@DOCKER="$(DOCKER)" tests/golden/audit-policy.sh
 
 siem-csr-test:   ## the remote CSR entry point signs exactly the expected client identity and nothing more (in container)
 	@DOCKER="$(DOCKER)" tests/siem/csr-signer.sh
@@ -73,3 +78,12 @@ siem-acceptance: ## P1 live acceptance on siem01: shipper refusals, rewrites ref
 
 siem-mutations:  ## mutation proof of the P1 tests: each mutation on a scratch copy must make its test fail
 	@DOCKER="$(DOCKER)" tests/siem/p1-mutations.sh
+
+siem-lua-test:   ## the shipper's filter under the pinned Fluent Bit: HMAC vectors, allow-lists, F1/F2/F3/F13 (in container)
+	@DOCKER="$(DOCKER)" tests/siem/lua-hmac.sh
+
+siem-ingest-test: ## the fluent_bit role end to end in containers: sandbox start check, CSR signing, mTLS into a throwaway OpenSearch
+	@DOCKER="$(DOCKER)" tests/siem/ingest-it.sh
+
+siem-ingest-mutations: ## mutation proof of the P2 ingest tests on scratch copies
+	@DOCKER="$(DOCKER)" tests/siem/p2-mutations.sh

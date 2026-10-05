@@ -8,6 +8,11 @@
 # owned with the scenarios themselves, in cluster/infra/sandbox/scenarios/, and deployed as the second
 # source of cluster/apps/portfolio-api.yaml. The Deployment's volume is optional, so the API starts
 # (and lists no scenarios) if that source is missing.
+#
+# The API's SIEM client certificate (ADR 0034, the one SIEM credential in git) is a KSOPS Secret,
+# siem-client.sops.yaml, made by scripts/siem-api-cert.sh: the key is generated on the operator's
+# host, only its CSR goes to siem01, which signs it for portfolio-api-g<N> through the remote entry
+# point. Its volume is optional too: without it the API runs with the SIEM part off.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
@@ -31,3 +36,6 @@ images:
   - name: ghcr.io/hubertmj/self-defending-portfolio/api
     newTag: main
     digest: sha256:a5eb9b5ee47a4125dd657d9d8cc72ca238bfcfa9baca83c9b243ba7c3b58d0ea
+
+generators:
+  - ksops.yaml

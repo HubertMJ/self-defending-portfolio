@@ -29,5 +29,13 @@ fields:
   proc.exepath: {type: keyword, from: [output_fields, proc.exepath]}
   proc.pname: {type: keyword, from: [output_fields, proc.pname]}
   proc.cmdline: {type: keyword, from: [output_fields, proc.cmdline], note: fixed argv of a sandbox command}
-  fd.name: {type: keyword, from: [output_fields, fd.name]}
-  user.name: {type: keyword, from: [output_fields, user.name], note: the container user (scenario), not a person}
+  fd.name:
+    type: keyword
+    from: [output_fields, fd.name]
+    transform: ip_pseudonyms
+    note: every IPv4 address in it pseudonymised (P2, review L2)
+  user.name:
+    type: keyword
+    from: [[output_fields, user.name], [output_fields, k8s.ns.name]]
+    transform: hmac_unless_sandbox
+    note: the container user of a sandbox* pod (a scenario's) verbatim; any other (another namespace, a host process) pseudonymised

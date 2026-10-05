@@ -337,3 +337,21 @@ The measured 22-36 s had two causes, both now addressed in ADR 0032 (the change 
   reservation written above ("not a trade worth making without measurements") is resolved by the measurements
   in the FIX 1 record: `tests/scenarios/run.sh` now asserts label-to-isolation under 3 s by polling the
   victim's :8080 the way the API does. The terminate path still does not depend on Cilium at all.
+
+## Amendment 2026-10-04: Falco's metrics snapshot as the SIEM's heartbeat (ADR 0034)
+
+**Context.** The SIEM (ADR 0034) must tell "Falco is down" from "nothing happened". Fluent Bit's own
+heartbeat keeps the sdp-falco stream alive while Falco itself is gone, so Falco has to speak for itself.
+
+**Decision.** Falco's `metrics` block is on with `output_rule: true` and a 5-minute interval, every
+counter family off (rules, resource utilisation, state, kernel, libbpf, plugin, jemalloc counters).
+The snapshot is an output like an alert: rule "Falco internal: metrics snapshot", priority
+**Informational** - measured with the pinned 0.45.0 and the chart's rendered falco.yaml, not taken
+from documentation. Falcosidekick forwards only `notice` and above to Talon and to the API, so the
+snapshot reaches neither; it reaches the SIEM through Falco's stdout, where the monitor "falco
+metrics silent" expects one every 5 minutes.
+
+**Consequences.** One extra stdout line per 5 minutes; nothing Falco detects or Talon does changes.
+The snapshot names the node and its address; the shipper drops both (ADR 0034). A Falco upgrade must
+re-check the snapshot's priority against Falcosidekick's cut-off, or the API's 24 h alert count would
+gain 288 entries a day.

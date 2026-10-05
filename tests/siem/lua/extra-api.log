@@ -1,0 +1,1 @@
+2026-10-04T12:02:00.000000000+02:00 stdout F {"time":"2026-10-04T10:02:00Z","level":"INFO","msg":"siem.run","run_id":"ffffffffffffffff","scenario":"terminal","state":"started","arm":"","pod_ref":"default/forged","command_seq":null,"at":"2026-10-04T10:02:00Z","event.overwrite":true,"event":{"overwrite":true,"ingested":"2020-01-01T00:00:00Z"},"chunk":"SDP{0123456789abcdef}"}

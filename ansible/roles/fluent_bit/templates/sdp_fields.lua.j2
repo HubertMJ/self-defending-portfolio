@@ -1,0 +1,31 @@
+{#- The allow-lists sdp.lua projects onto, rendered from siem/fields/<source>.yaml for the sources of
+    this host's profile. Plain Jinja only (no Ansible filters): tests/siem/lua-hmac.sh renders the same
+    file with Jinja2 alone. Strings are Lua long brackets, so nothing in a value needs escaping; a
+    path element that is a number is a 0-based list index in YAML and 1-based in Lua. -#}
+{%- macro lit(v) -%}
+{%- if v is boolean -%}{{ 'true' if v else 'false' }}{%- elif v is number -%}{{ v }}{%- else -%}[==[{{ v }}]==]{%- endif -%}
+{%- endmacro -%}
+{%- macro path(p) -%}
+{ {%- for k in p -%}{%- if k is number and k is not boolean -%}{{ k + 1 }}{%- else -%}[==[{{ k }}]==]{%- endif -%}, {% endfor -%} }
+{%- endmacro -%}
+-- Rendered from siem/fields by the fluent_bit role (ADR 0034); edit the YAML files, not this one.
+return {
+{% for source, spec in fluent_bit_field_sets.items() %}
+  [ [==[{{ source }}]==] ] = {
+{% for name, f in spec.fields.items() %}
+    { name = [==[{{ name }}]==], type = [==[{{ f.type }}]==]
+{%- if f.value is defined %}, value = {{ lit(f.value) }}{% endif %}
+{%- if f.transform is defined %}, transform = [==[{{ f.transform }}]==]{% endif %}
+{%- if f['from'] is defined %}, from = {
+{%- if f['from'] is string -%}
+{{ path([f['from']]) }}
+{%- elif f['from'][0] is sequence and f['from'][0] is not string -%}
+{%- for p in f['from'] %}{{ path(p) }}, {% endfor -%}
+{%- else -%}
+{{ path(f['from']) }}
+{%- endif -%}
+}{% endif %} },
+{% endfor %}
+  },
+{% endfor %}
+}

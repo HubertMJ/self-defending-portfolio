@@ -1,0 +1,33 @@
+{#- "shipper dropping" (P2, review M4): a Fluent Bit on k3s01 or siem01 reported a loss in the last
+    10 minutes - records its throttles dropped, records an output gave up on, output errors or records
+    its filter dropped after an error. The reports are deltas, so any value above 0 is new. -#}
+{{ {
+  'type': 'monitor',
+  'monitor_type': 'query_level_monitor',
+  'name': 'shipper dropping',
+  'enabled': opensearch_config_monitor_enabled | bool,
+  'schedule': {'period': {'interval': 1, 'unit': 'MINUTES'}},
+  'inputs': [{'search': {
+    'indices': ['sdp-host', 'sdp-siem01'],
+    'query': {'size': 0, 'query': {'bool': {
+      'filter': [
+        {'term': {'event.kind': 'metric'}},
+        {'term': {'host.log': 'fluent-bit'}},
+        {'range': {'event.ingested': {'gte': '{{period_end}}||-10m', 'lte': '{{period_end}}', 'format': 'epoch_millis'}}},
+      ],
+      'should': [
+        {'range': {'fluentbit.throttle_dropped': {'gt': 0}}},
+        {'range': {'fluentbit.output_dropped': {'gt': 0}}},
+        {'range': {'fluentbit.output_errors': {'gt': 0}}},
+        {'range': {'fluentbit.filter_errors': {'gt': 0}}},
+      ],
+      'minimum_should_match': 1,
+    }}},
+  }}],
+  'triggers': [{'query_level_trigger': {
+    'name': 'the shipper lost or failed to send records',
+    'severity': '2',
+    'condition': {'script': {'source': 'ctx.results[0].hits.total.value > 0', 'lang': 'painless'}},
+    'actions': [],
+  }}],
+} | to_nice_json(indent=2, sort_keys=true) }}

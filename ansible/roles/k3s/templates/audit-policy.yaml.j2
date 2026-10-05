@@ -53,12 +53,18 @@ rules:
         resources: ["jobs", "cronjobs"]
 {% endif %}
 
+  # TokenReviews carry bearer tokens in their request and response bodies, so this group is
+  # logged without them: who asked, for what, and the decision is enough (ADR 0034, siem contract F2).
+  # It must stay ahead of the RequestResponse rule below - the first matching rule wins.
+  - level: Metadata
+    resources:
+      - group: authentication.k8s.io
+        resources: ["*"]
+
   # Authorization and admission decisions.
   - level: RequestResponse
     resources:
       - group: rbac.authorization.k8s.io
-        resources: ["*"]
-      - group: authentication.k8s.io
         resources: ["*"]
       - group: authorization.k8s.io
         resources: ["*"]

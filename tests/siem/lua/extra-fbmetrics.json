@@ -1,0 +1,1 @@
+{"input":{"tail.0":{"records":23,"bytes":644}},"filter":{"lua.1":{"drop_records":40,"add_records":0},"throttle_k8s-audit":{"drop_records":17,"add_records":0},"throttle_host":{"drop_records":0,"add_records":0}},"output":{"out_host":{"proc_records":1,"errors":2,"retries":2,"retries_failed":1,"dropped_records":3,"retried_records":2}}}

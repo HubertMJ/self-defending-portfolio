@@ -1,5 +1,6 @@
 ---
-# Full bootstrap: harden the host first, then bring up the cluster on top of it, then the SIEM host.
+# Full bootstrap: harden the host first, then bring up the cluster on top of it, then the SIEM host,
+# then k3s01's shipper (it needs siem01 to sign its certificate).
 - name: Import host hardening
   ansible.builtin.import_playbook: hardening.yml
 
@@ -8,3 +9,6 @@
 
 - name: Import the SIEM host
   ansible.builtin.import_playbook: siem.yml
+
+- name: Import k3s01's SIEM shipper
+  ansible.builtin.import_playbook: ingest.yml

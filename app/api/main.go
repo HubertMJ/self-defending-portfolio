@@ -32,6 +32,7 @@ import (
 	"github.com/hubertmj/self-defending-portfolio/app/api/internal/runner"
 	"github.com/hubertmj/self-defending-portfolio/app/api/internal/scenarios"
 	"github.com/hubertmj/self-defending-portfolio/app/api/internal/server"
+	"github.com/hubertmj/self-defending-portfolio/app/api/internal/siemlog"
 	"github.com/hubertmj/self-defending-portfolio/app/api/internal/stats"
 )
 
@@ -100,9 +101,19 @@ func run(log *slog.Logger) error {
 	hub := events.NewHub(100)
 	runs := runlog.New(0, 0, 0, 0) // the defaults: 50 runs, 500 events and 256 KiB each, 8 MiB in all
 	statsCollector := stats.New(scenarioStore, nil)
+	// The run and command events as slog lines for the SIEM (ADR 0034): Fluent Bit on the host ships
+	// the `siem.run`/`siem.command` lines of this container's stdout. Record never blocks the hub; the
+	// writer has its own context, cancelled after the runner's shutdown, so the final states of the
+	// runs that shutdown ends are written too.
+	siemEvents := siemlog.New(siemlog.Config{Log: log, Catalogue: scenarioStore, Namespace: sandbox, UnguardedNamespace: unguarded})
+	siemCtx, siemStop := context.WithCancel(context.Background())
+	siemDone := make(chan struct{})
+	go func() { defer close(siemDone); siemEvents.Run(siemCtx) }()
+	defer func() { siemStop(); <-siemDone }()
 	hub.Tap(func(ev events.Event) {
 		runs.Record(ev)
 		statsCollector.Record(ev)
+		siemEvents.Record(ev)
 	})
 	rules, err := ruleindex.Load()
 	if err != nil {

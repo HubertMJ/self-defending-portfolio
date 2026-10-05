@@ -217,6 +217,30 @@ helmCharts:
           enabled: true
           listen_port: 8765
           prometheus_metrics_enabled: false
+        # Falco's own heartbeat for the SIEM (ADR 0034 F12, ADR 0013 amendment): every 5 minutes one
+        # "Falco internal: metrics snapshot" record on stdout, which Fluent Bit ships into sdp-falco
+        # and the monitor "falco metrics silent" watches (Fluent Bit's own heartbeat would keep the
+        # stream alive while Falco is down). The record's priority is Informational (measured with
+        # the pinned 0.45.0, siem contract N7), below Falcosidekick's `minimumpriority: notice`, so it
+        # never reaches Talon or the API's alert count. Only the snapshot itself is wanted: every
+        # counter family is off, and sdp.lua drops the counters, host name and host addresses the
+        # snapshot still carries. Keys as in the pinned image's /etc/falco/falco.yaml.
+        metrics:
+          enabled: true
+          interval: 5m
+          output_rule: true
+          output_file: ""
+          rules_counters_enabled: false
+          resource_utilization_enabled: false
+          state_counters_enabled: false
+          kernel_event_counters_enabled: false
+          kernel_event_counters_per_cpu_enabled: false
+          libbpf_stats_enabled: false
+          plugins_metrics_enabled: false
+          kernel_iter_event_counters_enabled: false
+          jemalloc_stats_enabled: false
+          convert_memory_to_mb: true
+          include_empty_values: false
 
 # Post-render. Strategic merge keyed on mountPath, so the patch follows the mount wherever the chart
 # puts it in the list, and a mount the chart stopped rendering would show up as an invalid object (a

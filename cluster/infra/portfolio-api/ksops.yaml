@@ -1,0 +1,12 @@
+# See cluster/infra/cert-manager-issuers/ksops.yaml for the pattern and the fail-loud rationale.
+# siem-client.sops.yaml is made and encrypted by scripts/siem-api-cert.sh (ADR 0034, ADR 0006).
+apiVersion: viaduct.ai/v1
+kind: ksops
+metadata:
+  name: portfolio-api-siem-generator
+  annotations:
+    config.kubernetes.io/function: |
+      exec:
+        path: ksops
+files:
+  - siem-client.sops.yaml

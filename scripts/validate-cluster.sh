@@ -97,18 +97,24 @@ for dir in "${KUSTOMIZATIONS[@]}"; do
   # A directory with a KSOPS generator needs both the encrypted files and the age private key. CI has
   # neither, by design (ADR 0006).
   #
+  #   a named file not committed -> fail: Argo CD builds from git, and that Application would not
+  #                   sync (the encrypted file must land with, or before, the generator naming it).
   #   both present -> render for real, with the plugin. A file that does not decrypt fails the run,
   #                   which is the check an operator wants before committing a rotation.
-  #   otherwise    -> render a throwaway copy with the generator removed, so the plaintext resources
+  #   no age key   -> render a throwaway copy with the generator removed, so the plaintext resources
   #                   next to the secret are still validated, and say so.
   if [ -f "$dir/ksops.yaml" ]; then
+    if ! missing=$(python3 scripts/lib/ksops_files_present.py --git "$dir" 2>&1); then
+      printf 'validate-cluster: %s/ksops.yaml names files that are not committed:\n%s\n' "$dir" "$missing" >&2
+      exit 1
+    fi
     if python3 scripts/lib/ksops_files_present.py "$dir" \
        && [ -n "${SOPS_AGE_KEY_FILE:-}" ] && [ -r "${SOPS_AGE_KEY_FILE:-}" ]; then
       kustomize_ksops "$source_root" "$build_target" > "$RENDER_DIR/$name.yaml"
       info "$dir -> $(grep -c '^kind:' "$RENDER_DIR/$name.yaml") objects (KSOPS decrypted)"
       continue
     fi
-    info "$dir: KSOPS generator skipped (no readable SOPS_AGE_KEY_FILE, or no *.sops.yaml committed yet)"
+    info "$dir: KSOPS generator skipped (no readable SOPS_AGE_KEY_FILE)"
     cp -r "$REPO_ROOT/." "$WORK_DIR/$name"
     python3 scripts/lib/strip_generators.py "$WORK_DIR/$name/$dir/kustomization.yaml"
     source_root=$WORK_DIR/$name
