@@ -243,6 +243,31 @@ describe("parseRuleIndex", () => {
   });
 });
 
+describe("review L5: what the parsers drop and sort", () => {
+  it("a rule whose title is not publishable is dropped, and so is a monitor or correlation rule whose name is not", () => {
+    const idx = parseRuleIndex({
+      rules: [
+        { id: UUID, title: "Exec on kube-system/coredns-5d78c9869d-x7k2p", source: "k8s-audit" },
+        { id: "7d3e4f50-6172-4c83-ad94-b5c6d7e8f901", title: "DNS query carries an exfil label", source: "hubble" },
+      ],
+      monitors: [{ name: "ingest silent on k3s01" }, { name: "sdp-git: policy-probing" }],
+      correlations: [{ name: "to 10.43.0.10" }, { name: "contained-intrusion" }],
+    });
+    expect(idx.rules.map((r) => r.title)).toEqual(["DNS query carries an exfil label"]);
+    expect(idx.monitors.map((m) => m.name)).toEqual(["sdp-git: policy-probing"]);
+    expect(idx.correlations.map((m) => m.name)).toEqual(["contained-intrusion"]);
+  });
+
+  it("steps that arrive out of order are drawn in time order", () => {
+    const steps = [
+      { at: at(1), source: "talon", rule: "third", rule_id: "", command_seq: null, detail: "" },
+      { at: at(3), source: "api", rule: "first", rule_id: "", command_seq: null, detail: "" },
+      { at: at(2), source: "falco", rule: "second", rule_id: "", command_seq: null, detail: "" },
+    ];
+    expect(parseCorrelation(answer({ incidents: [incident({ steps })] })).incidents[0].steps.map((x) => x.rule)).toEqual(["first", "second", "third"]);
+  });
+});
+
 describe("the section's parts", () => {
   const ctx = (c: Correlation) => ({ now: NOW, rules: new Map(index().rules.map((r) => [r.id, r])), commit: COMMIT, c });
 
