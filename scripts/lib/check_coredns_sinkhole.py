@@ -14,11 +14,15 @@ Deployment no longer mounts or reloads, or a role that no longer deploys this te
 does not see this template, and the live test (tests/scenarios/run.sh) runs only after the role has
 been applied. So the template is rendered here with every variable source Ansible applies to k3s01,
 in Ansible's order (role defaults; group_vars of `all` and of the host's groups, from the inventory
-file, the inventory directory and the playbook directory; host_vars, the same three; cluster.yml's play
-vars; the role's vars), through Jinja2 as Ansible would - facts only a running play has are stubbed -
+file, the inventory directory and the playbook directory; host_vars, the same three - each the first
+of <name>, .yml, .yaml, .json that exists, as Ansible reads them; cluster.yml's play vars; the role's
+vars), through Jinja2 as Ansible would - facts only a running play has are stubbed -
 and the effective configuration is checked. The check is strict about shape: what is not exactly the
 layout this repository writes is refused, not interpreted the way CoreDNS or Kubernetes might.
-  - k3s_coredns_own is true (otherwise k3s's own CoreDNS runs, without the sinkhole);
+  - k3s_coredns_own is true in the role's defaults and set nowhere else under ansible/ - in no file's
+    text and in no parsed YAML key or `key=value` string, other than its spec in argument_specs - so
+    no role param, role entry vars, vars_files, set_fact or inventory can turn it off (otherwise k3s's
+    own CoreDNS runs, without the sinkhole);
   - exactly one ConfigMap kube-system/coredns, with exactly the data keys Corefile and NodeHosts, and
     one Deployment kube-system/coredns, at most one ConfigMap kube-system/coredns-custom; no binaryData
     in either ConfigMap; none of these objects (nor Service kube-dns) without a namespace or in another;
@@ -110,6 +114,70 @@ MOUNTS = [
 NAMESPACED = {("ConfigMap", "coredns"), ("ConfigMap", "coredns-custom"), ("Deployment", "coredns"),
               ("Service", "kube-dns")}
 SCHEME = re.compile(r"^([a-z0-9+.-]+)://", re.IGNORECASE)
+# k3s_coredns_own is set in the role's defaults and nowhere else under ansible/: rather than emulate
+# where Ansible would read it from (role params, a role entry's vars, vars_files, set_fact, inventory
+# in any format...), any other place that sets it is refused. OWN_SET finds `k3s_coredns_own:` and
+# `k3s_coredns_own=` (not `==`) in any file's text; OWN_AT is where a parsed YAML file may have it as a
+# key - the defaults, and the option's spec in argument_specs (a spec's default is not applied).
+OWN = "k3s_coredns_own"
+OWN_SET = re.compile(r"\bk3s_coredns_own\b['\"]?\s*(:|=(?!=))")
+OWN_AT = {"roles/k3s/defaults/main.yml": [(OWN,)],
+          "roles/k3s/meta/argument_specs.yml": [("argument_specs", "main", "options", OWN)]}
+VARS_EXT = ("", ".yml", ".yaml", ".json")
+
+
+class TolerantLoader(yaml.SafeLoader):
+    """safe_load, with Ansible's tags (!vault, !unsafe...) read as their plain value."""
+
+
+TolerantLoader.add_multi_constructor("!", lambda loader, suffix, node: (
+    loader.construct_scalar(node) if isinstance(node, yaml.ScalarNode)
+    else loader.construct_sequence(node) if isinstance(node, yaml.SequenceNode)
+    else loader.construct_mapping(node)))
+
+
+def own_sources(root: Path) -> list:
+    """Problems for every place under ansible/ but OWN_AT that sets k3s_coredns_own: in the text, and in
+    the parsed YAML (where an escaped key or a `key=value` string would not show in the text)."""
+    problems = []
+    ansible = root / "ansible"
+
+    def walk(node, path, found):
+        if isinstance(node, dict):
+            for k, v in node.items():
+                if k == OWN:
+                    found.append(path + (k,))
+                walk(v, path + (str(k),), found)
+        elif isinstance(node, list):
+            for v in node:
+                walk(v, path, found)
+        elif isinstance(node, str) and OWN_SET.search(node):
+            found.append(path + (node,))
+
+    for f in sorted(ansible.rglob("*")):
+        # Not followed into (playbooks/roles -> ../roles): what a link points at is read where it is.
+        if f.is_symlink() and not f.resolve().is_relative_to(ansible.resolve()):
+            problems.append(f"ansible/{f.relative_to(ansible)} links outside ansible/, where {OWN} is not looked for")
+        if f.is_symlink() or not f.is_file():
+            continue
+        rel = f.relative_to(ansible).as_posix()
+        text = f.read_text(errors="replace")
+        allowed = OWN_AT.get(rel, [])
+        hits = len(OWN_SET.findall(text))
+        if hits != len(allowed):
+            problems.append(f"ansible/{rel} sets {OWN} {hits} times, want {len(allowed)}: only the role's defaults set it")
+        if f.suffix not in VARS_EXT or "templates" in f.parts or "files" in f.parts:
+            continue
+        found = []
+        try:
+            for doc in yaml.load_all(text, Loader=TolerantLoader):
+                walk(doc, (), found)
+        except yaml.YAMLError as err:
+            problems.append(f"ansible/{rel} is not YAML, so where it sets {OWN} cannot be read: {err}")
+            continue
+        if found != allowed:
+            problems.append(f"ansible/{rel} has {OWN} at {found}, want {allowed}: only the role's defaults set it")
+    return problems
 
 
 def load(path: Path, empty=None):
@@ -117,14 +185,26 @@ def load(path: Path, empty=None):
 
 
 def var_files(path: Path) -> list:
-    """What Ansible's host_group_vars plugin reads for one group or host: <name>, <name>.yml, .yaml or
-    .json, or every such file in the directory <name>/ (in lexical order)."""
-    files = [path.with_name(path.name + ext) for ext in (".yml", ".yaml", ".json")]
-    if path.is_dir():
-        files += sorted(f for f in path.rglob("*") if f.is_file() and f.suffix in ("", ".yml", ".yaml", ".json"))
-    else:
-        files.append(path)
-    return [f for f in files if f.is_file()]
+    """What Ansible reads for one group, host or role vars/main (DataLoader.find_vars_files): the first
+    of <name>, <name>.yml, .yaml, .json that exists - only that one - and if it is a directory, every
+    file in it with one of those extensions or none, lexically, recursing into directories without a
+    dot, skipping hidden files and backups."""
+    def in_dir(d):
+        out = []
+        for f in sorted(d.iterdir()):
+            if f.name.startswith(".") or f.name.endswith("~"):
+                continue
+            if f.is_dir() and not f.suffix:
+                out += in_dir(f)
+            elif f.is_file() and f.suffix in VARS_EXT:
+                out.append(f)
+        return out
+
+    for ext in VARS_EXT:
+        f = path.with_name(path.name + ext)
+        if f.exists():
+            return in_dir(f) if f.is_dir() else [f]
+    return []
 
 
 def host_layers(root: Path) -> list:
@@ -167,7 +247,8 @@ def host_layers(root: Path) -> list:
 
 
 def render(root: Path, template: str = None, overrides: dict = None):
-    """(documents, context) of the k3s role's CoreDNS template, rendered as the role would on HOST."""
+    """(documents, context, problems) of the k3s role's CoreDNS template, rendered as the role would on
+    HOST; problems are those of the sources it is rendered from (own_sources)."""
     role = root / "ansible/roles/k3s"
     context = {}
     for layer in host_layers(root):
@@ -183,7 +264,7 @@ def render(root: Path, template: str = None, overrides: dict = None):
         template = (role / "templates/coredns-sdp.yaml.j2").read_text()
     env = jinja2.Environment(undefined=jinja2.StrictUndefined, keep_trailing_newline=True)
     text = env.from_string(template).render(context)
-    return [d for d in yaml.safe_load_all(text) if d], context
+    return [d for d in yaml.safe_load_all(text) if d], context, own_sources(root)
 
 
 def lex(text: str) -> list:
@@ -360,8 +441,8 @@ def find_all(docs: list, kind: str, name: str) -> list:
             and (d.get("metadata") or {}).get("namespace") == "kube-system"]
 
 
-def check(docs: list, context: dict) -> list:
-    problems = []
+def check(docs: list, context: dict, problems: list = ()) -> list:
+    problems = list(problems)
     if context.get("k3s_coredns_own") is not True:
         problems.append(f"k3s_coredns_own is {context.get('k3s_coredns_own')!r}: k3s's own CoreDNS (no sinkhole) would run")
 

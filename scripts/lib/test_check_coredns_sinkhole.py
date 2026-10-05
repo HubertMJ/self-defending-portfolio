@@ -45,7 +45,9 @@ data:
 NODEHOSTS_KEY = "  NodeHosts: |\n"
 NODEHOSTS_ITEM = "              - key: NodeHosts\n                path: NodeHosts\n"
 
-FILE = "file"  # (name, FILE, (path under the repo, text appended to it - the file is created if missing))
+# (name, FILE, edits): each edit (path under the repo, text appended - the file is created if missing)
+# or (path, text to find, replacement); edits is one such tuple or a list of them.
+FILE = "file"
 DEPLOYMENT_HEAD = "---\napiVersion: apps/v1\nkind: Deployment\n"
 SHADOW = """---
 apiVersion: apps/v1
@@ -123,6 +125,27 @@ CASES = [
     ("k3s_coredns_own false in playbook group_vars/k3s_nodes/", FILE,
      ("ansible/playbooks/group_vars/k3s_nodes/dns.yml", "k3s_coredns_own: false\n")),
     ("k3s_coredns_own false in the role's vars", FILE, ("ansible/roles/k3s/vars/main.yml", "k3s_coredns_own: false\n")),
+    # Set anywhere but the role's defaults - Ansible would read every one of these, the emulated
+    # precedence did not (role params, a role entry's vars, vars_files; all.yml over all.yaml).
+    ("k3s_coredns_own false as a role param", FILE,
+     ("ansible/playbooks/cluster.yml", "    - role: k3s\n", "    - role: k3s\n      k3s_coredns_own: false\n")),
+    ("k3s_coredns_own false in the role entry's vars", FILE,
+     ("ansible/playbooks/cluster.yml", "    - role: k3s\n", "    - role: k3s\n      vars:\n        k3s_coredns_own: false\n")),
+    ("k3s_coredns_own false in the play's vars_files", FILE, [
+        ("ansible/playbooks/cluster.yml", "  become: true\n", "  become: true\n  vars_files: [dns.yml]\n"),
+        ("ansible/playbooks/dns.yml", "k3s_coredns_own: false\n")]),
+    ("k3s_coredns_own false in all.yml, true in all.yaml", FILE, [
+        ("ansible/inventory/group_vars/all.yml", "k3s_coredns_own: false\n"),
+        ("ansible/inventory/group_vars/all.yaml", "k3s_coredns_own: true\n")]),
+    ("k3s_coredns_own as an escaped YAML key", FILE,
+     ("ansible/inventory/group_vars/k3s_nodes.yml", '"k3s_coredns_\\x6fwn": false\n')),
+    ("k3s_coredns_own=false in an escaped set_fact", FILE,
+     ("ansible/roles/k3s/tasks/main.yml", '\n- ansible.builtin.set_fact: "k3s_coredns_\\x6fwn=false"\n')),
+    # Only the first of <name>, .yml, .yaml, .json is read: k3s_nodes.yaml does not mend k3s_nodes.yml.
+    ("k3s_nodes.yml read, not k3s_nodes.yaml", FILE, [
+        ("ansible/inventory/group_vars/k3s_nodes.yml", "k3s_node_ip: 10.4.1.20\n",
+         'k3s_node_ip: "10.4.1.20 k3s01\\n  extra.conf: |\\n    x"\n'),
+        ("ansible/inventory/group_vars/k3s_nodes.yaml", "k3s_node_ip: 10.4.1.20\n")]),
     ("Service selector changed", "spec:\n  selector:\n    k8s-app: kube-dns\n", "spec:\n  selector:\n    k8s-app: kube-dns-shadow\n"),
     ("Service targetPort elsewhere", "    - name: dns\n      port: 53\n      protocol: UDP\n",
      "    - name: dns\n      port: 53\n      protocol: UDP\n      targetPort: 5353\n"),
@@ -170,11 +193,22 @@ def main() -> int:
             problems = check(*render(root, template, replace))
         elif find == FILE:
             with tempfile.TemporaryDirectory() as tmp:
-                shutil.copytree(root / "ansible", Path(tmp) / "ansible")
-                target = Path(tmp) / replace[0]
-                target.parent.mkdir(parents=True, exist_ok=True)
-                with target.open("a") as f:
-                    f.write(replace[1])
+                shutil.copytree(root / "ansible", Path(tmp) / "ansible", symlinks=True)
+                missing = False
+                for edit in replace if isinstance(replace, list) else [replace]:
+                    target = Path(tmp) / edit[0]
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    if len(edit) == 2:
+                        with target.open("a") as f:
+                            f.write(edit[1])
+                    elif edit[1] in target.read_text():
+                        target.write_text(target.read_text().replace(edit[1], edit[2], 1))
+                    else:
+                        missing = True
+                if missing:
+                    print(f"  FAIL  mutation '{name}': its text is no longer in {edit[0]}", file=sys.stderr)
+                    failures += 1
+                    continue
                 problems = check(*render(Path(tmp), template))
         elif any(f not in template for f, _ in edits):
             print(f"  FAIL  mutation '{name}': its text is no longer in the template", file=sys.stderr)
