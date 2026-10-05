@@ -546,7 +546,8 @@ func (ix *index) monitorIncidents(alerts []siem.Alert, now time.Time) []*draft {
 		// is a principal and never is.
 		if a.Agg != nil && d.Kind != KindPolicyProbing {
 			var pods []string
-			for _, k := range a.Agg.BucketKeys {
+			for _, key := range a.Agg.BucketKeys {
+				k, _ := key.(string)
 				if p := ix.t.publicRef(k); p != "" {
 					pods = append(pods, p)
 					d.refs = append(d.refs, k)

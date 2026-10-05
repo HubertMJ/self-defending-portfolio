@@ -292,17 +292,21 @@ func (c *Client) Correlations(ctx context.Context, from, to time.Time) ([]Correl
 // Alert is one Alerting alert. StartTime/EndTime are epoch ms (EndTime nil while active); BucketKeys
 // are a bucket-level monitor's composite key values.
 type Alert struct {
-	ID          string `json:"id"`
-	MonitorID   string `json:"monitor_id"`
-	MonitorName string `json:"monitor_name"`
-	TriggerName string `json:"trigger_name"`
-	State       string `json:"state"`
-	Severity    string `json:"severity"`
-	StartTime   *int64 `json:"start_time"`
-	EndTime     *int64 `json:"end_time"`
-	Agg         *struct {
-		BucketKeys []string `json:"bucket_keys"`
-	} `json:"agg_alert_content"`
+	ID          string    `json:"id"`
+	MonitorID   string    `json:"monitor_id"`
+	MonitorName string    `json:"monitor_name"`
+	TriggerName string    `json:"trigger_name"`
+	State       string    `json:"state"`
+	Severity    string    `json:"severity"`
+	StartTime   *int64    `json:"start_time"`
+	EndTime     *int64    `json:"end_time"`
+	Agg         *AlertAgg `json:"agg_alert_content"`
+}
+
+// AlertAgg is a bucket-level alert's bucket: its composite key values, decoded as any JSON value so a
+// key that is not a string (a number term) does not fail the whole read; callers take strings only.
+type AlertAgg struct {
+	BucketKeys []any `json:"bucket_keys"`
 }
 
 // MonitorAlerts reads the newest Alerting alerts of every state. The Alerting API has no time filter;

@@ -438,13 +438,9 @@ func TestMonitorIncidentsAndHealth(t *testing.T) {
 	old := t0.Add(-25 * time.Hour).UnixMilli()
 	f.alerts = []siem.Alert{
 		{ID: "al-probe", MonitorName: "sdp-git: policy probing", State: "COMPLETED", StartTime: &st, EndTime: &end,
-			Agg: &struct {
-				BucketKeys []string `json:"bucket_keys"`
-			}{BucketKeys: []string{"hm1:0011223344556677"}}},
+			Agg: &siem.AlertAgg{BucketKeys: []any{"hm1:0011223344556677"}}},
 		{ID: "al-prev", MonitorName: "sdp-git: prevented-not-detected", State: "ACTIVE", StartTime: &st,
-			Agg: &struct {
-				BucketKeys []string `json:"bucket_keys"`
-			}{BucketKeys: []string{termRef, "kube-system_x"}}},
+			Agg: &siem.AlertAgg{BucketKeys: []any{termRef, "kube-system_x"}}},
 		{ID: "al-miss", MonitorName: "sdp-git: detection-missing", State: "ERROR", StartTime: &st},
 		{ID: "al-old", MonitorName: "sdp-git: detection-missing", State: "COMPLETED", StartTime: &old},
 		{ID: "al-other", MonitorName: "sdp-git: something else", State: "ACTIVE", StartTime: &st},
@@ -667,9 +663,7 @@ func TestViewLeaksNothing(t *testing.T) {
 	f.hits["sdp-hubble"] = append(f.hits["sdp-hubble"], hit("sdp-hubble", "h9", t0.Add(28*time.Second), map[string]any{
 		"hubble.verdict": "DROPPED", "hubble.drop_reason": poison, "k8s.pod.ref": termRef, "dns.query": "sdp-" + flagHex + ".x.exfil.sdp.test."}))
 	f.alerts = []siem.Alert{{ID: "al-p", MonitorName: "sdp-git: policy probing " + poison, State: "ACTIVE", StartTime: ptrInt(t0.UnixMilli()),
-		Agg: &struct {
-			BucketKeys []string `json:"bucket_keys"`
-		}{BucketKeys: []string{"hm1:0011223344556677", "system:serviceaccount:x:y"}}}}
+		Agg: &siem.AlertAgg{BucketKeys: []any{"hm1:0011223344556677", "system:serviceaccount:x:y"}}}}
 	clk := &clock{t: t0}
 	tr := newTracker(t, f, clk)
 	registerTerminalFlag(tr, flagHex)
@@ -853,4 +847,129 @@ func (l *lockedWriter) Write(p []byte) (int, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.w.Write(p)
+}
+
+// A terminal run's contained intrusion: TTD from the command's `started` (300 ms), not from the pod's
+// readiness; TTI from Talon's audited delete (200 ms).
+func TestTerminalContainedIntrusion(t *testing.T) {
+	f := newFake()
+	f.hits["sdp-api"] = []siem.Hit{
+		apiRun("r1", t0, termRun, termRef, "started", ""),
+		apiRun("r2", t0.Add(2400*time.Millisecond), termRun, termRef, "pod_ready", ""),
+		apiCommand("c1", t0.Add(5*time.Second), termRun, termRef, 1, "whoami", "T1033", "recon", "started"),
+		apiCommand("c4", t0.Add(15*time.Second), termRun, termRef, 4, "read-shadow", "T1003.008", "credentials", "started"),
+	}
+	f.findings["sdp_falco"] = []siem.Finding{falcoFinding("f-falco-t", t0.Add(15300*time.Millisecond), termRef, "Read sensitive file untrusted")}
+	f.findings["sdp_talon"] = []siem.Finding{talonFinding("f-talon-t", t0.Add(15600*time.Millisecond), termRef, "Terminate Pod", "kubernetes:terminate")}
+	f.hits["sdp-k8s-audit"] = []siem.Hit{auditDoc("a1", t0.Add(15500*time.Millisecond), termRef, talonUser, "delete", 200)}
+	tr := newTracker(t, f, &clock{t: t0.Add(2 * time.Minute)})
+	tr.Poll(context.Background())
+	inc := one(t, tr.View(), KindContainedIntrusion)
+	if inc.TTDMs == nil || *inc.TTDMs != 300 || inc.TTIMs == nil || *inc.TTIMs != 200 || inc.RunID != termRun {
+		t.Fatalf("terminal contained intrusion: %+v ttd=%v tti=%v", inc, inc.TTDMs, inc.TTIMs)
+	}
+	for _, st := range inc.Steps {
+		if st.Source == "falco" && (st.CommandSeq == nil || *st.CommandSeq != 4) {
+			t.Fatalf("falco step command_seq %v", st.CommandSeq)
+		}
+	}
+}
+
+// detection-missing from an ACTIVE alert whose bucket key is a sandbox pod ref.
+func TestDetectionMissing(t *testing.T) {
+	f := newFake()
+	terminalRun(f, "sdp-"+flagHex)
+	st := t0.Add(40 * time.Second).UnixMilli()
+	f.alerts = []siem.Alert{{ID: "al-miss", MonitorName: "sdp-git: detection-missing", State: "ACTIVE", StartTime: &st,
+		Agg: &siem.AlertAgg{BucketKeys: []any{termRef}}}}
+	tr := newTracker(t, f, &clock{t: t0.Add(2 * time.Minute)})
+	tr.Poll(context.Background())
+	inc := one(t, tr.View(), KindDetectionMissing)
+	if inc.Severity != "medium" || inc.RunID != termRun ||
+		inc.Title != "Detection missing: a command the catalogue says is detected raised no Falco event on sandbox/terminal-3755e65530" ||
+		len(inc.Steps) != 1 || inc.Steps[0].Source != "api" || inc.Evidence[0] != (Evidence{Type: "alert", ID: "al-miss"}) {
+		t.Fatalf("detection missing: %+v", inc)
+	}
+}
+
+// Fixtures for the edges of each check, so that loosening any of them changes an answer.
+func TestCheckEdges(t *testing.T) {
+	t.Run("TTI only from Talon's own successful response", func(t *testing.T) {
+		f := newFake()
+		compareRun(f) // Falco +1.8 s, Talon's audited delete +2.2 s
+		f.hits["sdp-k8s-audit"] = append(f.hits["sdp-k8s-audit"],
+			auditDoc("a-other", t0.Add(time.Hour+1900*time.Millisecond), cmpRef, "system:admin", "patch", 200),
+			auditDoc("a-refused", t0.Add(time.Hour+2000*time.Millisecond), cmpRef, talonUser, "delete", 409))
+		tr := newTracker(t, f, &clock{t: t0.Add(2 * time.Hour)})
+		tr.Poll(context.Background())
+		if inc := one(t, tr.View(), KindContainedIntrusion); inc.TTIMs == nil || *inc.TTIMs != 400 {
+			t.Fatalf("TTI %v, want 400 (Talon's successful delete)", inc.TTIMs)
+		}
+	})
+	t.Run("policy enforced: the first drop after the label, within 30 s", func(t *testing.T) {
+		f := newFake()
+		quarantineRun(f) // Falco +2 s, patch +2.3 s, drop +2.6 s
+		at := t0.Add(2 * time.Hour)
+		f.hits["sdp-hubble"] = append(f.hits["sdp-hubble"], dropDoc("h-before", at.Add(2100*time.Millisecond), quarRef, 9))
+		tr := newTracker(t, f, &clock{t: at.Add(time.Minute)})
+		tr.Poll(context.Background())
+		if !hasStep(one(t, tr.View(), KindContainedIntrusion), "policy enforced +300 ms") {
+			t.Fatal("the drop before the label was taken")
+		}
+		f.hits["sdp-hubble"] = []siem.Hit{dropDoc("h-late", at.Add(2300*time.Millisecond+31*time.Second), quarRef, 9)}
+		tr = newTracker(t, f, &clock{t: at.Add(2 * time.Minute)})
+		tr.Poll(context.Background())
+		if hasStep(one(t, tr.View(), KindContainedIntrusion), "policy enforced") {
+			t.Fatal("a drop 31 s after the label counted as enforcement")
+		}
+	})
+	t.Run("twin dwell from the successful create to the delete after it", func(t *testing.T) {
+		f := newFake()
+		compareRun(f) // create +0.1 s (201), delete +14.1 s
+		f.hits["sdp-k8s-audit"] = append(f.hits["sdp-k8s-audit"],
+			auditDoc("a-old-del", t0.Add(time.Hour-time.Second), twinRef, apiUser, "delete", 404),
+			auditDoc("a-denied", t0.Add(time.Hour+50*time.Millisecond), twinRef, apiUser, "create", 400))
+		tr := newTracker(t, f, &clock{t: t0.Add(2 * time.Hour)})
+		tr.Poll(context.Background())
+		if v := tr.View(); v.Metrics.MedianTwinDwellMs == nil || *v.Metrics.MedianTwinDwellMs != 14000 {
+			t.Fatalf("dwell %v, want 14000", v.Metrics.MedianTwinDwellMs)
+		}
+	})
+	t.Run("dns-exfil joins a command at most 300 s before the query", func(t *testing.T) {
+		f := newFake()
+		f.hits["sdp-api"] = []siem.Hit{apiCommand("c3", t0, termRun, termRef, 3, "dns-exfil", "T1048.003", "exfiltration", "started")}
+		f.findings["sdp_hubble"] = []siem.Finding{dnsFinding("f-dns-1", t0.Add(301*time.Second), termRef, "sdp-"+flagHex)}
+		tr := newTracker(t, f, &clock{t: t0.Add(10 * time.Minute)})
+		tr.Poll(context.Background())
+		if inc := one(t, tr.View(), KindDNSExfil); len(inc.Steps) != 1 {
+			t.Fatalf("a command 301 s before was joined: %+v", inc.Steps)
+		}
+	})
+	t.Run("dns-exfil counts Falco only from the command to 60 s after", func(t *testing.T) {
+		f := newFake()
+		terminalRun(f, "sdp-"+flagHex) // dns-exfil started at +19 s
+		f.findings["sdp_falco"] = []siem.Finding{
+			falcoFinding("f-before", t0.Add(18*time.Second), termRef, "Terminal shell in container"),
+			falcoFinding("f-after", t0.Add(80*time.Second), termRef, "Terminal shell in container")}
+		tr := newTracker(t, f, &clock{t: t0.Add(5 * time.Minute)})
+		tr.Poll(context.Background())
+		if inc := one(t, tr.View(), KindDNSExfil); inc.FalcoEvents != 0 {
+			t.Fatalf("falco_events %d, want 0 (both outside the window)", inc.FalcoEvents)
+		}
+		f.findings["sdp_falco"] = append(f.findings["sdp_falco"], falcoFinding("f-in", t0.Add(78*time.Second), termRef, "Terminal shell in container"))
+		tr = newTracker(t, f, &clock{t: t0.Add(5 * time.Minute)})
+		tr.Poll(context.Background())
+		if inc := one(t, tr.View(), KindDNSExfil); inc.FalcoEvents != 1 {
+			t.Fatalf("falco_events %d, want 1", inc.FalcoEvents)
+		}
+	})
+}
+
+func hasStep(inc Incident, prefix string) bool {
+	for _, st := range inc.Steps {
+		if strings.HasPrefix(st.Detail, prefix) {
+			return true
+		}
+	}
+	return false
 }

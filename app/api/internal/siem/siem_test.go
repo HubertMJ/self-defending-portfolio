@@ -219,7 +219,7 @@ func TestCorrelationsAndAlertsDecode(t *testing.T) {
 	}
 	a := as[0]
 	if a.MonitorName != "sdp-git: prevented-not-detected (S0)" || a.State != "ACTIVE" || a.StartTime == nil ||
-		*a.StartTime != 1791097352733 || a.EndTime != nil || a.Agg == nil || a.Agg.BucketKeys[0] != "sandbox_g2-silent" {
+		*a.StartTime != 1791097352733 || a.EndTime != nil || a.Agg == nil || a.Agg.BucketKeys[0] != any("sandbox_g2-silent") {
 		t.Fatalf("alert: %+v", a)
 	}
 	mu.Lock()
@@ -336,5 +336,18 @@ func TestClientPresentsCertificate(t *testing.T) {
 	defer mu.Unlock()
 	if (*reqs)[0].clientCN != "portfolio-api-g1" {
 		t.Fatalf("client CN %q", (*reqs)[0].clientCN)
+	}
+}
+
+// A bucket key that is not a string does not fail the alerts read.
+func TestAlertBucketKeysAnyType(t *testing.T) {
+	var out struct {
+		Alerts []Alert `json:"alerts"`
+	}
+	if err := json.Unmarshal([]byte(`{"alerts":[{"id":"x","state":"ACTIVE","agg_alert_content":{"bucket_keys":[3,"sandbox_a",null]}}]}`), &out); err != nil {
+		t.Fatal(err)
+	}
+	if k := out.Alerts[0].Agg.BucketKeys; len(k) != 3 || k[1] != "sandbox_a" {
+		t.Fatalf("keys %v", k)
 	}
 }
