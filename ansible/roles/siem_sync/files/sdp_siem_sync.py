@@ -278,6 +278,8 @@ class Sync:
         records = self.records()
         last = records[0] if records else None
         applied = next((r for r in records if r.get("status") == "applied"), None)
+        # Only for the log: an SA id from a record is never written to (S0-#12).
+        self.prev_rules = (applied or {}).get("rules") or {}
         commit = self.git.fetch(self.cfg["repo"], self.cfg["branch"])
         base = {"commit": commit, "branch": self.cfg["branch"], "previous": applied["commit"] if applied else ""}
         log(f"fetched {self.cfg['branch']} at {commit}; last applied {base['previous'] or 'none (first run)'}")
@@ -498,6 +500,9 @@ class Sync:
             if op == "create":
                 _, out = self.c.req("POST", f"{SA}/rules?category={category}", text)
                 rule_ids[tree.rules[rel]["id"]] = out["_id"]
+                if tree.rules[rel]["id"] in self.prev_rules:
+                    log(f"rule {tree.rules[rel]['id']} re-created as {out['_id']}: its recorded SA id"
+                        f" {self.prev_rules[tree.rules[rel]['id']]} is gone from SA")
             else:
                 # oid was read back from SA in this run (plan); never an id from a record (S0-#12).
                 self.c.req("PUT", f"{SA}/rules/{oid}?category={category}&forced=true", text)

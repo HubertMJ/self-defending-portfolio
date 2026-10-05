@@ -4,7 +4,7 @@
 - name: Look for the rules-sync certificate and key
   ansible.builtin.stat:
     path: "{{ item }}"
-  loop: [ "{{ siem_sync_cert }}", "{{ siem_sync_key }}", "{{ siem_sync_ca }}" ]
+  loop: ["{{ siem_sync_cert }}", "{{ siem_sync_key }}", "{{ siem_sync_ca }}"]
   register: siem_sync_identity
 
 # The opensearch role makes the rules-sync identity on siem01 (it never passes the remote entry
@@ -24,6 +24,8 @@
     name: [git, python3-yaml]
     state: present
     install_recommends: false
+    update_cache: true
+    cache_valid_time: 3600
 
 - name: Create the system group the sync runs as
   ansible.builtin.group:
