@@ -18,6 +18,8 @@
     # 404: the alerting config index does not exist before the first monitor.
     status_code: [200, 404]
   register: opensearch_config_monitor_found
+  # A search, not a write: it runs in check mode too.
+  check_mode: false
 
 - name: Note the live state of "{{ opensearch_config_monitor_name }}"
   ansible.builtin.set_fact:
@@ -80,4 +82,5 @@
     owner: root
     group: root
     mode: "0600"
-  when: opensearch_config_monitor_write | bool
+  # Check mode writes nothing, so there is no new last_update_time to record.
+  when: opensearch_config_monitor_write | bool and not ansible_check_mode
