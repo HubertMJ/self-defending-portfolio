@@ -219,6 +219,7 @@ for host, port in ((sys.argv[1], 9200), (sys.argv[2], 22)):
         print(host, "refused", type(e).__name__)'
 outside=$($DOCKER exec "$K3S" python3 -c "$probe" 172.31.250.10 172.31.250.11 | paste -sd' ')
 cg=$($DOCKER exec "$K3S" systemctl show fluent-bit -p ControlGroup --value)
+# shellcheck disable=SC2016  # expanded by the container's shell
 inside=$($DOCKER exec "$K3S" sh -c 'echo $$ > "/sys/fs/cgroup$1/cgroup.procs" && exec python3 -c "$2" 172.31.250.10 172.31.250.11' \
   sh "$cg" "$probe" | paste -sd' ')
 echo "outside the unit: $outside; inside: $inside"
@@ -226,6 +227,7 @@ echo "outside the unit: $outside; inside: $inside"
 case $inside in "172.31.250.10 open 172.31.250.11 refused "*) ;; *) fail "IP filter: $inside" ;; esac
 # H1: inside the unit's namespace there is no block device to open, though the container's /dev has them.
 outside=$($DOCKER exec "$K3S" sh -c 'find /dev -type b | wc -l')
+# shellcheck disable=SC2016  # expanded by the container's shell
 inside=$($DOCKER exec "$K3S" sh -c 'nsenter -t "$(systemctl show fluent-bit -p MainPID --value)" -m find /dev -type b | wc -l')
 [ "$outside" -gt 0 ] || fail "the container shows no block device; the test proves nothing"
 [ "$inside" = 0 ] || fail "the unit sees $inside block devices"
@@ -239,7 +241,8 @@ done
 # away from sdp.falco.log before them.
 throttles=$(grep -cE '^ +Name +throttle$' <<<"$conf")
 data_only=$(grep -A3 -E '^ +Name +throttle$' <<<"$conf" | grep -cF '\.(log|journal|auditd|osaudit)$')
-[ "$throttles" = 6 ] && [ "$data_only" = 6 ] || fail "throttles: $throttles, matching the data inputs only: $data_only"
+if [ "$throttles" != 6 ] || [ "$data_only" != 6 ]; then fail "throttles: $throttles, matching the data inputs only: $data_only"; fi
+# shellcheck disable=SC2016  # a literal $priority in the rendered rule
 grep -qF 'Rule                  $priority ^(Warning|Error|Critical|Alert|Emergency)$ sdp.falco.urgent false' <<<"$conf" \
   || fail "Falco's Warning+ alerts are not re-tagged before the throttle"
 echo "unit: $state; listens on $listen; $subject"

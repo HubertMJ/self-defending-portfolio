@@ -24,7 +24,7 @@ MUTATIONS=(
   "lua-f1|lua|siem/fields/api.yaml|s.replace('fields:\\n', 'fields:\\n  event.overwrite: {type: boolean, from: event.overwrite}\\n', 1)|F1: an allow-list that lets a client-sent event.overwrite through"
   "lua-bracket|lua|siem/fields/talon.yaml|s.replace('note: \"Quarantine Pod -> quarantine-pod\"', 'note: \"x]==]y\"')|a field string that would end the Lua long bracket early"
   "lua-sshgreedy|lua|ansible/roles/fluent_bit/files/sdp.lua|s.replace('u, ip = msg:match(\"^Invalid user (.+) from (%S+) port %d+$\")', 'u, ip = msg:match(\"^Invalid user (.-) from (%S+) port %d+\")')|a lazy, unanchored ssh pattern (the user name chooses the address)"
-  "lua-falcoip|lua|siem/fields/falco.yaml|s.replace(', transform: ip_pseudonyms', '')|Falco's fd.name shipped with its addresses"
+  "lua-falcoip|lua|siem/fields/falco.yaml|s.replace('    transform: ip_pseudonyms\\n', '')|Falco's fd.name shipped with its addresses"
   "lua-falcouser|lua|siem/fields/falco.yaml|s.replace('transform: hmac_unless_sandbox', 'transform: hmac_unless_system')|Falco's user outside sandbox* verbatim"
   "lua-loss|lua|ansible/roles/fluent_bit/files/sdp.lua|s.replace('throttled = throttled + counter_delta', 'throttled = 0 * counter_delta')|throttle drops not reported"
   "audit-order|audit|ansible/roles/k3s/templates/audit-policy.yaml.j2|s.replace('  - level: Metadata\\n    resources:\\n      - group: authentication.k8s.io\\n        resources: [\"*\"]\\n', '').replace('  # Everything else: who, what, when.', '  - level: Metadata\\n    resources:\\n      - group: authentication.k8s.io\\n        resources: [\"*\"]\\n\\n  # Everything else: who, what, when.')|the Metadata rule after the RequestResponse rule (TokenReviews keep their bodies)"
@@ -40,8 +40,8 @@ MUTATIONS=(
 # The Cilium mutations need both sides changed, or the equality check fails for the wrong reason.
 extra_for() { # <id> -> "file|expression" for the Argo side, or nothing
   case $1 in
-    cilium-ip) echo "cluster/apps/cilium.yaml|s.replace('                - event_type\\n', '                - event_type\\n                - IP\\n')" ;;
-    cilium-empty) echo "cluster/apps/cilium.yaml|s.replace(\"                - '{\\\"destination_pod\\\":[\\\"sandbox-unguarded/\\\"]}'\\n\", \"                - '{\\\"destination_pod\\\":[\\\"sandbox-unguarded/\\\"]}'\\n                - '{}'\\n\")" ;;
+    cilium-ip) printf '%s\n' "cluster/apps/cilium.yaml|s.replace('                - event_type\\n', '                - event_type\\n                - IP\\n')" ;;
+    cilium-empty) printf '%s\n' "cluster/apps/cilium.yaml|s.replace(\"                - '{\\\"destination_pod\\\":[\\\"sandbox-unguarded/\\\"]}'\\n\", \"                - '{\\\"destination_pod\\\":[\\\"sandbox-unguarded/\\\"]}'\\n                - '{}'\\n\")" ;;
   esac
 }
 
