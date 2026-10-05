@@ -145,10 +145,12 @@ class FakeOS:
             if not self.index:
                 return 404, {}
             q, recs = body["query"], [r for r in self.records if "applied_at" in r]
-            if "term" in q:
-                recs = [r for r in recs if r.get("status") == q["term"]["status"]]
-            if "range" in q:
-                recs = [r for r in recs if r["applied_at"] > q["range"]["applied_at"]["gt"]]
+            for part in q.get("bool", {}).get("filter", [q]):
+                if "term" in part:
+                    recs = [r for r in recs if r.get("status") == part["term"]["status"]]
+                if "range" in part:
+                    rng = part["range"]["applied_at"]
+                    recs = [r for r in recs if r["applied_at"] > rng.get("gt", "") and r["applied_at"] >= rng.get("gte", "")]
             recs = sorted(recs, key=lambda r: r["applied_at"], reverse=True)[: body["size"]]
             return 200, {"hits": {"hits": [{"_source": r} for r in recs]}}
         if method == "PUT" and path == "/siem-sync":
@@ -171,7 +173,7 @@ class FakeOS:
         if "ids" in query:
             return [{"_id": i, "_source": {"category": c}} for i, c in self.created.items()
                     if i in query["ids"]["values"]] + [h for h in self.live.get("rules", []) if h["_id"] in query["ids"]["values"]]
-        for key in ("logtype", "rules", "detectors", "correlation", "monitors"):
+        for key in ("logtype", "correlation", "rules", "detectors", "monitors"):
             if f"/{key}" in path:
                 return self.live.get(key, [])
         return []
@@ -316,7 +318,8 @@ def mass_change_refused(tmp):
     hits, rmap = changed_rules_live(6)
     fake = FakeOS([applied_rec(A, "2026-10-05T00:00:00.000Z", rules=rmap)], live={"rules": hits})
     rc = make_sync(fake, FakeGit({A: SIEM}), tmp=tmp).run()
-    assert rc == 2 and "6 rule and monitor updates exceed the cap of 5" in fake.records[-1]["reason"], fake.records[-1]
+    assert rc == 2 and "6 rule, monitor and correlation updates (6 in 24 h) exceed the cap of 5" in fake.records[-1]["reason"], \
+        fake.records[-1]
     assert not fake.writes
     fake = FakeOS([applied_rec(A, "2026-10-05T00:00:00.000Z", rules=rmap)], live={"rules": hits})
     rc = make_sync(fake, FakeGit({A: SIEM}), flags=["allow-mass-change"], tmp=tmp).run()
@@ -349,22 +352,123 @@ def fetch_checks_objects():
     g = sync.Git("/nonexistent", "file", 5)
     seen = []
     g.run = lambda *a, **k: seen.append(a) or ("size: 1\nsize-pack: 2" if a[0] == "count-objects" else "c")
-    os.makedirs = os.makedirs
     g.path = tempfile.mkdtemp()
     os.makedirs(os.path.join(g.path, "objects"))
     try:
         g.fetch("file:///x", "main")
         fetch = next(a for a in seen if "fetch" in a)
         assert "transfer.fsckObjects=true" in fetch and "fetch.fsckObjects=true" in fetch, fetch
-        g.max_bytes = 1024
+    finally:
+        shutil.rmtree(g.path, ignore_errors=True)
+
+
+def size_cap_frees_disk():
+    """A real repository over the cap: the fetch is refused and the pack does not stay on disk."""
+    tmp = tempfile.mkdtemp()
+    try:
+        work = os.path.join(tmp, "w")
+        os.makedirs(os.path.join(work, "siem"))
+        env = dict(os.environ, GIT_CONFIG_GLOBAL="/dev/null", GIT_CONFIG_NOSYSTEM="1")
+        run = lambda *a: subprocess.run(["git", "-C", work, *a], check=True, capture_output=True, env=env)  # noqa: E731
+        run("init", "-q", "-b", "main")
+        with open(os.path.join(work, "big.bin"), "wb") as fh:
+            fh.write(os.urandom(3 << 20))
+        run("add", "-A")
+        run("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "big")
+        g = sync.Git(os.path.join(tmp, "repo.git"), "file", 60, max_bytes=1 << 20)
         try:
-            g.fetch("file:///x", "main")
+            g.fetch(f"file://{work}", "main")
         except sync.SyncError as exc:
-            assert "MiB" in str(exc)
+            assert "MiB" in str(exc), exc
         else:
             raise AssertionError("a repository over the size cap was accepted")
+        left = sum(os.path.getsize(os.path.join(d, f)) for d, _, fs in os.walk(os.path.join(tmp, "repo.git")) for f in fs) \
+            if os.path.exists(os.path.join(tmp, "repo.git")) else 0
+        assert left < (1 << 20), f"{left} bytes of the refused fetch stayed on disk"
     finally:
-        shutil.rmtree(g.path)
+        shutil.rmtree(tmp)
+
+
+@with_tmp
+def lint_time_limit(tmp):
+    slow = os.path.join(tmp, "slow_lint.py")
+    with open(slow, "w") as fh:
+        fh.write("import time\ntime.sleep(8)\nprint('[]')\n")
+    fake = FakeOS([])
+    sy = make_sync(fake, FakeGit({A: SIEM}), tmp=tmp)
+    sy.lint_path, sy.cfg["lint_timeout"] = slow, 2
+    rc = sy.run()
+    r = fake.records[-1]
+    assert rc == 1 and r["status"] == "failed" and r["reason"].startswith("TimeoutExpired"), r
+    assert (fake.heartbeat or {}).get("outcome") == "failed", fake.heartbeat
+    assert not fake.writes, "applied although the lint did not finish"
+
+
+def tree_objects():
+    tree = siem_lint.Tree(SIEM)
+    return tree, sorted(tree.monitors.values(), key=lambda d: d["name"]), sorted(tree.correlations.values(), key=lambda d: d["name"])
+
+
+@with_tmp
+def mixed_updates_capped(tmp):
+    tree, mons, cors = tree_objects()
+    hits, rmap = changed_rules_live(2)
+    live_mons = [{"_id": f"m{i}", "_source": {"type": "monitor", "name": d["name"], "enabled": True, "last_update_time": 9}}
+                 for i, d in enumerate(mons[:2])]
+    live_cors = [{"_id": f"c{i}", "_source": {"name": d["name"], "time_window": 1, "correlate": []}}
+                 for i, d in enumerate(cors[:2])]
+    fake = FakeOS([applied_rec(A, "2026-10-05T00:00:00.000Z", rules=rmap)],
+                  live={"rules": hits, "monitors": live_mons, "correlation": live_cors})
+    rc = make_sync(fake, FakeGit({A: SIEM}), tmp=tmp).run()
+    assert rc == 2 and "6 rule, monitor and correlation updates" in fake.records[-1]["reason"], fake.records[-1]
+
+
+@with_tmp
+def monitor_deletions_capped(tmp):
+    t = empty_tree(tmp)
+    live = [{"_id": f"m{i}", "_source": {"type": "monitor", "name": f"sdp-git: gone-{i}"}} for i in range(6)]
+    fake = FakeOS([applied_rec(A, "2026-10-05T00:00:00.000Z")], live={"monitors": live})
+    rc = make_sync(fake, FakeGit({A: t, B: t}, head=B), tmp=tmp).run()
+    assert rc == 2 and "6 managed deletions" in fake.records[-1]["reason"], fake.records[-1]
+    assert (fake.heartbeat or {}).get("outcome") == "refused", "no heartbeat on a refusal"
+
+
+def iso(hours_ago):
+    import datetime
+    t = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=hours_ago)
+    return t.isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
+@with_tmp
+def deletions_capped_per_day(tmp):
+    t = empty_tree(tmp)
+    live = [{"_id": f"m{i}", "_source": {"type": "monitor", "name": f"sdp-git: gone-{i}"}} for i in range(2)]
+    recs = [applied_rec(A, iso(30), counts={"rules": {"deleted": 9}}),  # older than a day: not counted
+            applied_rec(A, iso(3), counts={"rules": {"deleted": 4}})]
+    fake = FakeOS(recs, live={"monitors": live})
+    rc = make_sync(fake, FakeGit({A: t, B: t}, head=B), tmp=tmp).run()
+    assert rc == 2 and "2 managed deletions (6 in 24 h) exceed the cap of 5" in fake.records[-1]["reason"], fake.records[-1]
+    recs[1]["allowed"] = ["allow-mass-delete"]  # a run the operator allowed does not count
+    fake = FakeOS(recs, live={"monitors": live})
+    rc = make_sync(fake, FakeGit({A: t, B: t}, head=B), tmp=tmp).run()
+    assert rc == 0, fake.records[-1]
+
+
+@with_tmp
+def accept_commit_checked(tmp):
+    t = empty_tree(tmp)
+    C = "c" * 40
+    for accept, ancestor, want in ((C, False, 2), (B, False, 0), (C, True, 0)):
+        fake = FakeOS([applied_rec(A, "2026-10-05T00:00:00.000Z")])
+        git = FakeGit({A: t, B: t, C: t}, head=B, ancestor=False)
+        git.is_ancestor = lambda older, newer, a=ancestor: a if older == C else False
+        sy = make_sync(fake, git, tmp=tmp)
+        with open(os.path.join(sy.cfg["flag_dir"], "accept-commit"), "w") as fh:
+            fh.write(accept + "\n")
+        rc = sy.run()
+        assert rc == want, (accept[:1], ancestor, rc, fake.records[-1])
+        if want == 2:
+            assert "neither the fetched commit nor its ancestor" in fake.records[-1]["reason"], fake.records[-1]
 
 
 case("the client refuses the SA mappings API (F11)", mappings_refused)
@@ -380,7 +484,13 @@ case("live objects without the git marker are not adopted", unmarked_adoption_re
 case("more than five updates are refused unless allow-mass-change exists; changes are listed", mass_change_refused)
 case("trees of failed attempts are managed even without an applied record", failed_trees_managed_without_applied)
 case("a commit read back from siem-sync must be 40-hex", applied_commit_validated)
-case("fetch checks objects and caps the repository size", fetch_checks_objects)
-total = 14
+case("fetch checks objects (fsck)", fetch_checks_objects)
+case("a repository over the size cap is refused and removed from disk", size_cap_frees_disk)
+case("a lint that does not finish in time ends in a failed record and a heartbeat", lint_time_limit)
+case("rule, monitor and correlation updates count together against the cap", mixed_updates_capped)
+case("monitor deletions count against the cap; a refusal writes the heartbeat", monitor_deletions_capped)
+case("deletions are capped over 24 h; runs with an allow flag do not count", deletions_capped_per_day)
+case("accept-commit must be the fetched commit or its ancestor", accept_commit_checked)
+total = 20
 print(f"sync_unit_test: {total - len(fails)} passed, {len(fails)} failed")
 sys.exit(1 if fails else 0)

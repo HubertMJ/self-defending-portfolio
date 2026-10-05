@@ -1,0 +1,63 @@
+{
+  "settings": {
+    "index": {
+      "number_of_shards": 1,
+      "number_of_replicas": 0
+    }
+  },
+  "mappings": {
+    "dynamic": false,
+    "properties": {
+      "commit": {
+        "type": "keyword"
+      },
+      "applied_at": {
+        "type": "date"
+      },
+      "status": {
+        "type": "keyword"
+      },
+      "reason": {
+        "type": "keyword",
+        "ignore_above": 2048
+      },
+      "branch": {
+        "type": "keyword"
+      },
+      "previous": {
+        "type": "keyword"
+      },
+      "counts": {
+        "type": "object",
+        "enabled": false
+      },
+      "changed": {
+        "type": "object",
+        "enabled": false
+      },
+      "allowed": {
+        "type": "keyword"
+      },
+      "lint_sha256": {
+        "type": "keyword"
+      },
+      "rules": {
+        "type": "object",
+        "enabled": false
+      },
+      "monitors": {
+        "type": "object",
+        "enabled": false
+      },
+      "kind": {
+        "type": "keyword"
+      },
+      "checked_at": {
+        "type": "date"
+      },
+      "outcome": {
+        "type": "keyword"
+      }
+    }
+  }
+}

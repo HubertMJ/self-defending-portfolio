@@ -48,6 +48,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import ssl
 import subprocess
 import sys
@@ -73,17 +74,10 @@ REASON_MAX = 512
 HEARTBEAT_ID = "heartbeat"
 with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "siem_lint.py"), "rb") as _fh:
     LINT_SHA256 = hashlib.sha256(_fh.read()).hexdigest()
-RECORD_MAPPING = {
-    "settings": {"index": {"number_of_shards": 1, "number_of_replicas": 0}},
-    "mappings": {"dynamic": False, "properties": {
-        "commit": {"type": "keyword"}, "applied_at": {"type": "date"}, "status": {"type": "keyword"},
-        "reason": {"type": "keyword", "ignore_above": 2048}, "branch": {"type": "keyword"},
-        "previous": {"type": "keyword"}, "counts": {"type": "object", "enabled": False},
-        "changed": {"type": "object", "enabled": False}, "lint_sha256": {"type": "keyword"},
-        "kind": {"type": "keyword"}, "checked_at": {"type": "date"}, "outcome": {"type": "keyword"},
-        "rules": {"type": "object", "enabled": False}, "monitors": {"type": "object", "enabled": False},
-    }},
-}
+# One definition of the siem-sync index, shared with the role (which creates and extends it with the
+# admin certificate, so an index made by an older version gains the new fields).
+with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "siem-sync-index.json"), encoding="utf-8") as _fh:
+    RECORD_MAPPING = json.load(_fh)
 KINDS = ("log_types", "rules", "detectors", "correlations", "monitors")
 
 
@@ -187,7 +181,10 @@ class Git:
             if key in ("size", "size-pack"):
                 size += int(value) * 1024
         if size > self.max_bytes:
-            raise SyncError(f"the fetched repository holds {size >> 20} MiB, more than {self.max_bytes >> 20} MiB")
+            # The pack is already on disk: drop the whole repository, the next run starts from nothing.
+            shutil.rmtree(self.path, ignore_errors=True)
+            raise SyncError(f"the fetched repository holds {size >> 20} MiB, more than {self.max_bytes >> 20} MiB;"
+                            " removed it")
         return self.run("rev-parse", "--verify", f"{ref}^{{commit}}")
 
     def has_commit(self, commit):
@@ -247,6 +244,8 @@ class Sync:
         self.rule_ids = {}
         self.prev_rules = {}
         self.marked_rules = set()
+        self.allowed = []
+        self.lint_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "siem_lint.py")
 
     # ---- records (siem-sync) ------------------------------------------------------------------
     def _search_records(self, query, size):
@@ -374,7 +373,9 @@ class Sync:
                 elif not self.git.is_ancestor(applied["commit"], commit):
                     raise Refused(f"not a fast-forward from {applied['commit']}")
             with tempfile.TemporaryDirectory(prefix="sdp-siem-sync-") as tmp:
-                findings, tree = siem_lint.lint_detailed(self.git.export(commit, os.path.join(tmp, "new")))
+                root = self.git.export(commit, os.path.join(tmp, "new"))
+                findings = self.lint(root)
+                tree = siem_lint.Tree(root)
                 if findings:
                     # Files and checks only: a finding's message may quote a value from the commit.
                     names = sorted({f"{path}: {check}" for path, check, _ in findings})
@@ -391,7 +392,7 @@ class Sync:
             rule_map, monitor_state = self.apply(tree, plan)
             self.record(dict(base, applied_at=now(), status="applied",
                              reason="" if commit != base["previous"] else "drift repaired", counts=self.counts,
-                             changed=self.changed, rules=rule_map, monitors=monitor_state), last)
+                             changed=self.changed, allowed=self.allowed, rules=rule_map, monitors=monitor_state), last)
             log(f"applied {commit}: {json.dumps(self.counts, sort_keys=True)}")
             self.mark_consumed(used_accept)
             outcome, code = "applied", 0
@@ -412,21 +413,47 @@ class Sync:
             except Exception as exc:  # noqa: BLE001 - the heartbeat must not change the exit status
                 log(f"heartbeat not written: {exc_reason(exc)}")
 
+    def lint(self, root):
+        """The lint in its own process with a wall-clock limit: a tree that makes it slow ends in a
+        recorded failure and a heartbeat, not in the unit's start timeout."""
+        p = subprocess.run([sys.executable, self.lint_path, "--findings-json", root], capture_output=True, text=True,
+                           timeout=self.cfg.get("lint_timeout", 60), check=False)
+        if p.returncode != 0:
+            raise SyncError(f"the lint failed: {p.stderr.strip()[-300:]}")
+        return json.loads(p.stdout)
+
+    def recent(self):
+        """Deletions and updates applied in the last 24 h without an allow flag (a cap per day, so a
+        series of small commits cannot take the rules apart five at a time)."""
+        since = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=24)).isoformat(
+            timespec="milliseconds").replace("+00:00", "Z")
+        deleted = updated = 0
+        for r in self._search_records({"bool": {"filter": [{"term": {"status": "applied"}},
+                                                            {"range": {"applied_at": {"gte": since}}}]}}, 200):
+            if r.get("allowed"):
+                continue
+            c = r.get("counts") or {}
+            deleted += sum((c.get(k) or {}).get("deleted", 0) for k in KINDS)
+            updated += sum((c.get(k) or {}).get("updated", 0) for k in ("rules", "monitors", "correlations"))
+        return deleted, updated
+
     def check_caps(self, plan):
         deletions = sum(len(plan[k]) for k in ("del_monitors", "del_correlations", "del_detectors", "del_rules",
                                                "del_log_types"))
-        if deletions > self.cfg["delete_cap"]:
-            if self.flag("allow-mass-delete") is None:
-                raise Refused(f"{deletions} managed deletions exceed the cap of {self.cfg['delete_cap']};"
-                              " create /etc/sdp-siem/allow-mass-delete to allow them once")
-            log(f"allow-mass-delete present: {deletions} deletions allowed")
         # Rewriting what a detection means is as consequential as removing it (review M3).
-        updates = sum(1 for x in plan["rules"] + plan["monitors"] if x[0] == "update")
-        if updates > self.cfg["change_cap"]:
-            if self.flag("allow-mass-change") is None:
-                raise Refused(f"{updates} rule and monitor updates exceed the cap of {self.cfg['change_cap']};"
-                              " create /etc/sdp-siem/allow-mass-change to allow them once")
-            log(f"allow-mass-change present: {updates} updates allowed")
+        updates = sum(1 for x in plan["rules"] + plan["monitors"] + plan["correlations"] if x[0] == "update")
+        if not deletions and not updates:
+            return
+        past_deleted, past_updated = self.recent()
+        for count, past, cap, flag, what in (
+                (deletions, past_deleted, self.cfg["delete_cap"], "allow-mass-delete", "managed deletions"),
+                (updates, past_updated, self.cfg["change_cap"], "allow-mass-change", "rule, monitor and correlation updates")):
+            if count and count + past > cap:
+                if self.flag(flag) is None:
+                    raise Refused(f"{count} {what} ({count + past} in 24 h) exceed the cap of {cap};"
+                                  f" create /etc/sdp-siem/{flag} to allow them once")
+                log(f"{flag} present: {count} {what} allowed")
+                self.allowed.append(flag)
 
     def flag(self, name):
         path = os.path.join(self.cfg["flag_dir"], name)
@@ -678,6 +705,7 @@ def config():
         "flag_dir": env.get("SDP_SYNC_FLAG_DIR", "/etc/sdp-siem"),
         "delete_cap": int(env.get("SDP_SYNC_DELETE_CAP", "5")),
         "change_cap": int(env.get("SDP_SYNC_CHANGE_CAP", "5")),
+        "lint_timeout": int(env.get("SDP_SYNC_LINT_TIMEOUT", "60")),
         "repo_max_mb": int(env.get("SDP_SYNC_REPO_MAX_MB", "1024")),
         "ca": os.path.join(creds, "ca.crt"),
         "cert": os.path.join(creds, "client.crt"),
