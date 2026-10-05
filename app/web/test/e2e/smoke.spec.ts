@@ -35,7 +35,7 @@ async function wideFonts(page: Page) {
  * The hero shows no provenance data (ADR 0035, amended 2026-10-04): its copy has no commit, digest,
  * cosign or Rekor, and nothing in it (the evidence card included, which shows the attacked pod's own
  * image) names the api or web image or the commit they were built from. Nor does it link to #verify:
- * the owner moved that link to the footer, with the panel at the very bottom of the page.
+ * the owner moved that link to the footer, with the panel far down the page, above the skills.
  */
 async function hasNoProvenance(page: Page) {
   const hero = page.locator("#top");
@@ -47,6 +47,12 @@ async function hasNoProvenance(page: Page) {
   await expect(hero).not.toContainText(/0448cff|sha256:b{8}|sha256:1{8}|self-defending-portfolio\/(api|web)@/);
   await expect(hero.locator('a[href="#verify"]')).toHaveCount(0);
 }
+
+/**
+ * The page's sections in order (ADR 0035, amended 2026-10-05), as every build ships them: About is
+ * stripped while unwritten, the console is inside #attack.
+ */
+const PAGE_ORDER = ["top", "attack", "correlation", "how", "evidence", "posture", "verify", "skills", "projects"];
 
 async function noHorizontalScroll(page: Page) {
   const [scroll, client] = await page.evaluate(() => [document.documentElement.scrollWidth, document.documentElement.clientWidth]);
@@ -127,6 +133,20 @@ test.describe("API offline (nothing behind /api)", () => {
     await expect(page.getByRole("heading", { name: "Projects" })).toBeVisible();
     await noHorizontalScroll(page);
     expect(problems).toEqual([]);
+  });
+});
+
+test.describe("layout (ADR 0035, amended 2026-10-05; ?mock=1)", () => {
+  test("the attack, its response and the correlation come first; evidence, posture and verify sit above the skills", async ({ page }) => {
+    await page.goto("/?mock=1");
+    await expect(page.locator("#correlation")).toBeVisible();
+    expect(await page.evaluate(() => [...document.querySelectorAll("main > section")].map((el) => el.id))).toEqual(PAGE_ORDER);
+    // The live run is part of the attack section, before the correlation.
+    expect(await page.evaluate(() => document.querySelector("#attack #console") !== null)).toBe(true);
+    // The navigation follows the page; the one link to #verify is the footer's.
+    expect(await page.locator(".site-nav a").evaluateAll((as) => as.map((a) => a.getAttribute("href")))).toEqual(["#attack", "#how", "#posture"]);
+    await expect(page.locator('a[href="#verify"]')).toHaveCount(1);
+    await expect(page.locator('footer.site-footer a[href="#verify"]')).toHaveCount(1);
   });
 });
 
@@ -748,7 +768,7 @@ test.describe("accessibility basics", () => {
 test.describe("credibility on the production bundle (ADR 0035; serve.mjs --terminal-api, not ?mock)", () => {
   const CRED = "http://127.0.0.1:4176/";
 
-  test("above the fold: the evidence card, no provenance data and no link to #verify in the hero, the panel last and linked from the footer; on a phone the card follows the counters", async ({ page, isMobile }) => {
+  test("above the fold: the evidence card, no provenance data and no link to #verify in the hero, the panel far down and linked from the footer; on a phone the card follows the counters", async ({ page, isMobile }) => {
     const problems = guardConsole(page);
     if (!isMobile) await page.setViewportSize({ width: 1280, height: 720 });
     await page.goto(CRED);
@@ -774,9 +794,10 @@ test.describe("credibility on the production bundle (ADR 0035; serve.mjs --termi
       expect(box.card).toBeGreaterThanOrEqual(box.stats);
       expect(box.card - box.stats).toBeLessThan(80);
     }
-    // The order the owner asked for (ADR 0035, amended 2026-10-04): the proof first, the verify panel the
-    // last section of the page (About is stripped in production while unwritten).
-    expect(await page.evaluate(() => [...document.querySelectorAll("main > section")].map((el) => el.id))).toEqual(["top", "evidence", "posture", "attack", "correlation", "how", "skills", "projects", "verify"]);
+    // The order the owner asked for (ADR 0035, amended 2026-10-05): the attack, its response and the
+    // correlation first; the evidence, the posture and the verify panel after How it works, above the
+    // skills (About is stripped in production while unwritten).
+    expect(await page.evaluate(() => [...document.querySelectorAll("main > section")].map((el) => el.id))).toEqual(PAGE_ORDER);
     // The one way to it is a footer link.
     await expect(page.locator('a[href="#verify"]')).toHaveCount(1);
     const link = page.locator('footer.site-footer a[href="#verify"]');
@@ -941,9 +962,9 @@ test.describe("correlation (ADR 0036; serve.mjs --terminal-api --siem / --no-sie
     await page.goto(SIEM);
     const s = section(page);
     await expect(s).toBeVisible();
-    expect(await page.evaluate(() => [...document.querySelectorAll("main > section")].map((el) => el.id))).toEqual(["top", "evidence", "posture", "attack", "correlation", "how", "skills", "projects", "verify"]);
-    // "04 · Correlation", and How it works becomes 05.
-    expect((await numbered(page)).slice(0, 5)).toEqual(["evidence", "posture", "attack", "correlation", "how"]);
+    expect(await page.evaluate(() => [...document.querySelectorAll("main > section")].map((el) => el.id))).toEqual(PAGE_ORDER);
+    // "02 · Correlation", and How it works becomes 03.
+    expect((await numbered(page)).slice(0, 5)).toEqual(["attack", "correlation", "how", "evidence", "posture"]);
     await expect(s.locator(".section__head .eyebrow")).toHaveText("Correlation");
 
     // The health line (decision D1): the applied commit linked, each check named.
@@ -1070,7 +1091,7 @@ test.describe("correlation (ADR 0036; serve.mjs --terminal-api --siem / --no-sie
     await expect(page.locator("#verify-panel [data-image=\"api\"]")).toContainText("0448cff");
     await expect(section(page)).toBeHidden();
     await expect(section(page).locator(".incident, .tile")).toHaveCount(0);
-    expect((await numbered(page)).slice(0, 4)).toEqual(["evidence", "posture", "attack", "how"]);
+    expect((await numbered(page)).slice(0, 4)).toEqual(["attack", "how", "evidence", "posture"]);
     await expect(page.locator("#verify-panel")).not.toContainText("/api/correlation");
     expect(problems).toEqual([]);
   });

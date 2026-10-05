@@ -25,10 +25,10 @@
     </a>
     <nav class="site-nav" aria-label="Sections">
       <ul>
-        <li><a href="#posture">Posture</a></li>
         <li><a href="#attack">Attack it</a></li>
         <li><a href="#how">How it works</a></li>
         <li><a href="#about">About</a></li>
+        <li><a href="#posture">Posture</a></li>
       </ul>
     </nav>
     <div class="site-header__tools">
@@ -57,9 +57,9 @@
         <h1 id="hero-title">Hubert Jabłoński</h1>
         <p class="hero__lead">
           This page runs on a hardened single-node k3s cluster that watches itself.
-          Look at its security posture, then <a href="#attack">launch a real attack</a> against
-          a sandboxed pod and watch <strong>Falco</strong> detect it and <strong>Falco Talon</strong>
-          shut it down, live.
+          <a href="#attack">Launch a real attack</a> against a sandboxed pod and watch
+          <strong>Falco</strong> detect it and <strong>Falco Talon</strong> shut it down, live.
+          Its security posture and the full record follow further down.
         </p>
         <p class="hero__lead hero__lead--sub todo-content" data-todo-content="hero-intro">
           <!-- TODO-CONTENT: one or two sentences in your own words: who you are, what you work on, what you are looking for. -->
@@ -80,36 +80,6 @@
         </ol>
         <figcaption>Every step is streamed to this page as it happens.</figcaption>
       </figure>
-      </div>
-    </div>
-  </section>
-
-  <section class="section section--evidence" id="evidence" aria-labelledby="evidence-title">
-    <div class="wrap">
-      <header class="section__head">
-        <p class="eyebrow">Evidence</p>
-        <h2 id="evidence-title">What the cluster recorded</h2>
-        <p class="section__lead">The latest events as the API published them, newest first, with absolute times in UTC. Nothing here is generated in your browser: when nothing happens, it says since when.</p>
-      </header>
-      <p class="liveness" id="liveness"></p>
-      <p class="visually-hidden" id="ticker-live" role="status"></p>
-      <div class="ticker-wrap" id="ticker">
-        <noscript><p class="offline__body">The live evidence needs JavaScript. The rest of this page does not.</p></noscript>
-      </div>
-      <div class="evdetail-wrap" id="evidence-detail"></div>
-    </div>
-  </section>
-
-  <section class="section" id="posture" aria-labelledby="posture-title">
-    <div class="wrap">
-      <header class="section__head">
-        <p class="eyebrow">Posture</p>
-        <h2 id="posture-title">Live security posture</h2>
-        <p class="section__lead">What admission control, image scanning, the CIS benchmark and runtime detection report about this cluster right now.</p>
-      </header>
-      <div class="panel" id="posture-panel" aria-live="polite" aria-busy="true" data-state="loading">
-        <p class="loading">Loading posture…</p>
-        <noscript><p class="offline__body">The live panels need JavaScript. The rest of this page does not.</p></noscript>
       </div>
     </div>
   </section>
@@ -213,6 +183,49 @@
     </div>
   </section>
 
+  <section class="section section--evidence" id="evidence" aria-labelledby="evidence-title">
+    <div class="wrap">
+      <header class="section__head">
+        <p class="eyebrow">Evidence</p>
+        <h2 id="evidence-title">What the cluster recorded</h2>
+        <p class="section__lead">The latest events as the API published them, newest first, with absolute times in UTC. Nothing here is generated in your browser: when nothing happens, it says since when.</p>
+      </header>
+      <p class="liveness" id="liveness"></p>
+      <p class="visually-hidden" id="ticker-live" role="status"></p>
+      <div class="ticker-wrap" id="ticker">
+        <noscript><p class="offline__body">The live evidence needs JavaScript. The rest of this page does not.</p></noscript>
+      </div>
+      <div class="evdetail-wrap" id="evidence-detail"></div>
+    </div>
+  </section>
+
+  <section class="section" id="posture" aria-labelledby="posture-title">
+    <div class="wrap">
+      <header class="section__head">
+        <p class="eyebrow">Posture</p>
+        <h2 id="posture-title">Live security posture</h2>
+        <p class="section__lead">What admission control, image scanning, the CIS benchmark and runtime detection report about this cluster right now.</p>
+      </header>
+      <div class="panel" id="posture-panel" aria-live="polite" aria-busy="true" data-state="loading">
+        <p class="loading">Loading posture…</p>
+        <noscript><p class="offline__body">The live panels need JavaScript. The rest of this page does not.</p></noscript>
+      </div>
+    </div>
+  </section>
+
+  <section class="section" id="verify" aria-labelledby="verify-title">
+    <div class="wrap">
+      <header class="section__head">
+        <p class="eyebrow">Verify</p>
+        <h2 id="verify-title">Verify it yourself</h2>
+        <p class="section__lead">Which commit each running image was built from, by which CI run, the cosign command to check its signature, and every public endpoint this page reads.</p>
+      </header>
+      <div class="panel" id="verify-panel">
+        <p class="small">Every image is built and signed in CI from <a href="https://github.com/HubertMJ/self-defending-portfolio" rel="noopener noreferrer">the public repository</a>; with JavaScript this panel names the exact commits and digests.</p>
+      </div>
+    </div>
+  </section>
+
   <section class="section" id="skills" aria-labelledby="skills-title">
     <div class="wrap">
       <header class="section__head">
@@ -266,19 +279,6 @@
           <p class="project__tags">[TODO-CONTENT: stack]</p>
         </li>
       </ul>
-    </div>
-  </section>
-
-  <section class="section" id="verify" aria-labelledby="verify-title">
-    <div class="wrap">
-      <header class="section__head">
-        <p class="eyebrow">Verify</p>
-        <h2 id="verify-title">Verify it yourself</h2>
-        <p class="section__lead">Which commit each running image was built from, by which CI run, the cosign command to check its signature, and every public endpoint this page reads.</p>
-      </header>
-      <div class="panel" id="verify-panel">
-        <p class="small">Every image is built and signed in CI from <a href="https://github.com/HubertMJ/self-defending-portfolio" rel="noopener noreferrer">the public repository</a>; with JavaScript this panel names the exact commits and digests.</p>
-      </div>
     </div>
   </section>
 

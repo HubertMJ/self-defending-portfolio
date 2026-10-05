@@ -1,5 +1,5 @@
-// "Verify it yourself" for the site itself (ADR 0035, B3; amended 2026-10-04). The #verify panel,
-// the last section of the page: which commit each running image was built from, by which CI run, its
+// "Verify it yourself" for the site itself (ADR 0035, B3; amended 2026-10-04 and 2026-10-05). The #verify
+// panel, below the evidence and the posture, above the skills: which commit each running image was built from, by which CI run, its
 // digests, the cosign command to check each one, the digest's Rekor search, and a copyable curl for
 // every public endpoint. The footer carries one link to it; the evidence card is the above-the-fold proof.
 // The api's commit, CI run and digests come from GET /api/provenance; the web's commit and CI run
