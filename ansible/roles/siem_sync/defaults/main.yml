@@ -21,6 +21,11 @@ siem_sync_key: /etc/sdp-siem/pki/rules-sync.key
 # More managed deletions than this in one run are refused unless <flag dir>/allow-mass-delete exists
 # (removed again after the next successful run).
 siem_sync_delete_cap: 5
+# Likewise for updates of rules and monitors (a rewritten detection is as consequential as a removed
+# one), gated by <flag dir>/allow-mass-change.
+siem_sync_change_cap: 5
+# The fetched repository may not grow past this (MiB); objects are fsck-checked on fetch.
+siem_sync_repo_max_mb: 1024
 siem_sync_flag_dir: /etc/sdp-siem
 
 # How often the timer runs the sync, and whether it runs at all: false stops and disables the timer

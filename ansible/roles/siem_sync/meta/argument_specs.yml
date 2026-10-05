@@ -40,8 +40,16 @@ argument_specs:
         description: Managed deletions allowed in one run without the allow-mass-delete flag.
         type: int
         default: 5
+      siem_sync_change_cap:
+        description: Rule and monitor updates allowed in one run without the allow-mass-change flag.
+        type: int
+        default: 5
+      siem_sync_repo_max_mb:
+        description: Largest size of the fetched repository, in MiB.
+        type: int
+        default: 1024
       siem_sync_flag_dir:
-        description: Directory of the operator's one-shot flags accept-commit and allow-mass-delete.
+        description: Directory of the operator's one-shot flags accept-commit, allow-mass-delete and allow-mass-change.
         type: path
         default: /etc/sdp-siem
       siem_sync_interval:

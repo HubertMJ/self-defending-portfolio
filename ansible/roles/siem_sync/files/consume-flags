@@ -6,7 +6,7 @@
 set -eu
 state=$1
 flags=$2
-for f in accept-commit allow-mass-delete; do
+for f in accept-commit allow-mass-delete allow-mass-change; do
   if [ -e "$state/consumed/$f" ]; then
     rm -f -- "$flags/$f" "$state/consumed/$f"
     echo "consumed $flags/$f"

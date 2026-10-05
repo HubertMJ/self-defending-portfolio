@@ -12,7 +12,7 @@ work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 killed=0 survived=0
 verdict() { # <name> <test exit status> <log>
-  if [ "$2" != 0 ]; then killed=$((killed + 1)); echo "killed   $1 ($(grep -m1 -E 'FAIL|sync-it: FAIL' "$3" | cut -c1-140))"
+  if [ "$2" != 0 ]; then killed=$((killed + 1)); echo "killed   $1 ($(grep -m1 -E '^FAIL |sync-it: FAIL' "$3" | cut -c1-140))"
   else survived=$((survived + 1)); echo "SURVIVED $1"; fi
 }
 # mutate <src> <dst> <python expression old> <new>: exact, single replacement, or the mutation is broken
@@ -39,8 +39,12 @@ while read -r fn; do
 done < "$work/checks"
 
 echo "### unit: the sync's guards removed"
-unit() { # <name> <old> <new>
-  local m=$work/unit-$1.py rc=0
+mkdir -p "$work/unit-control" && cp "$LINT" "$PROG" "$work/unit-control/"
+python3 tests/siem/sync_unit_test.py "$work/unit-control/sdp_siem_sync.py" >"$work/log" 2>&1 \
+  || { cat "$work/log"; echo "the unmutated copy fails: the harness is broken"; exit 1; }
+unit() { # <name> <old> <new>; the copy sits next to the lint, as installed
+  local m=$work/unit-$1/sdp_siem_sync.py rc=0
+  mkdir -p "$work/unit-$1" && cp "$LINT" "$work/unit-$1/"
   mutate "$PROG" "$m" "$2" "$3"
   python3 tests/siem/sync_unit_test.py "$m" >"$work/log" 2>&1 || rc=$?
   verdict "unit $1" "$rc" "$work/log"
@@ -50,11 +54,33 @@ unit no-detector-readback 'missing = self.rules_exist(ids, tree.log_type_of(d["s
 unit symlink-exported 'if kind != "blob" or mode not in ("100644", "100755"):' 'if kind != "blob":'
 unit exec-mode-kept 'os.chmod(target, 0o644)' 'os.chmod(target, int(mode[-3:], 8))'
 unit refusal-every-run 'if rec["status"] != "applied" and last and' 'if False and last and'
+unit applied-among-recent 'recs = self._search_records({"term": {"status": "applied"}}, 1)' \
+  'recs = [r for r in self._search_records({"exists": {"field": "applied_at"}}, 50) if r.get("status") == "applied"][:1]'
+unit no-heartbeat 'self.heartbeat(base["commit"], outcome)' 'pass'
+unit only-syncerror-recorded 'except Exception as exc:  # noqa: BLE001 - every failure is recorded, whatever raised it' \
+  'except SyncError as exc:'
+unit fetch-outside-try '        used_accept = False
+        try:' '        used_accept = False
+        self.git.fetch(self.cfg["repo"], self.cfg["branch"])
+        try:'
+unit lint-values-recorded 'names = sorted({f"{path}: {check}" for path, check, _ in findings})' \
+  'names = sorted({f"{path}: {msg}" for path, _, msg in findings})'
+unit reason-uncapped 'rec = dict(rec, reason=cap(rec.get("reason", "")), lint_sha256=LINT_SHA256)' \
+  'rec = dict(rec, lint_sha256=LINT_SHA256)'
+unit adopts-unmarked 'if unmarked:' 'if False:'
+unit no-change-cap 'if updates > self.cfg["change_cap"]:' 'if False:'
+unit failed-trees-need-applied 'commits = [applied["commit"]] if applied else []' 'commits = [applied["commit"]] if applied else []
+        if not applied:
+            return out'
+unit applied-commit-unchecked 'if recs and not HEX40.match(str(recs[0].get("commit", ""))):' 'if False:'
+unit no-fsck '"-c", "transfer.fsckObjects=true", "-c", "fetch.fsckObjects=true", ' ''
+unit no-repo-cap 'if size > self.max_bytes:' 'if False:'
 
 if [ -n "${SYNC:-}" ]; then
   echo "### sync: the program mutated, against sync-it.sh"
   syncm() { # <name> <old> <new>
-    local m=$work/sync-$1.py rc=0
+    local m=$work/sync-$1/sdp_siem_sync.py rc=0
+    mkdir -p "$work/sync-$1" && cp "$LINT" "$work/sync-$1/"
     mutate "$PROG" "$m" "$2" "$3"
     SYNC_PY=$m QUICK=1 tests/siem/sync-it.sh >"$work/log-$1" 2>&1 || rc=$?
     verdict "sync $1" "$rc" "$work/log-$1"
@@ -64,9 +90,7 @@ if [ -n "${SYNC:-}" ]; then
   syncm no-fast-forward-check 'elif not self.git.is_ancestor(applied["commit"], commit):' 'elif False:'
   syncm accept-commit-ignored 'if accept is not None:' 'if False:'
   syncm no-delete-cap 'if deletions > self.cfg["delete_cap"]:' 'if False:'
-  syncm no-lint 'if findings:
-                    raise Refused' 'if False:
-                    raise Refused'
+  syncm no-lint 'raise Refused(f"lint ({len(findings)} findings): " + "; ".join(names))' 'pass'
   syncm manages-every-monitor '{"prefix": {"monitor.name.keyword": PREFIX}})' '{"match_all": {}})
         hits = [h for h in hits if h["_source"].update(name=PREFIX + h["_source"].get("name", "")) or True]'
   syncm not-idempotent 'elif rec.get("id") != live[0][0] or' 'elif True or'

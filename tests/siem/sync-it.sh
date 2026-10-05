@@ -220,7 +220,9 @@ for key in rules detectors monitors; do
     || fail "second run changed $key"
 done
 $DOCKER exec "$H" journalctl -u sdp-siem-sync --no-pager -n 5 | grep -q "nothing to do" || fail "second run did not say nothing to do"
-ok "second run: nothing to do, no record, rules/detectors/monitors untouched"
+hb=$(chk heartbeat)
+case $hb in *'"outcome": "unchanged"'*'"kind": "heartbeat"'*|*'"kind": "heartbeat"'*'"outcome": "unchanged"'*) ;; *) fail "heartbeat after the no-op run: $hb" ;; esac
+ok "second run: nothing to do, no record, rules/detectors/monitors untouched; heartbeat outcome unchanged"
 
 step "a changed rule stays attached to its detector"
 talon_id=$(python3 -c "import yaml; print(yaml.safe_load(open('siem/rules/talon-terminate.yml'))['id'])")
@@ -283,7 +285,8 @@ c3=$(commit "a detector names a rule that does not exist")
 rc=$(sync_run)
 snap s5
 { [ "$rc" = 2 ] && [ "$(last "['status']")" = refused ] && [ "$(last "['commit']")" = "$c3" ]; } || fail "lint: exit $rc"
-last "['reason']" | grep -q "lint: siem/detectors/talon.yaml: rule '00000000-0000-4000-8000-00000000dead' is not the id" || fail "reason: $(last "['reason']")"
+last "['reason']" | grep -q "lint (1 findings): siem/detectors/talon.yaml: check_detectors" || fail "reason: $(last "['reason']")"
+! last "['reason']" | grep -q "00000000dead" || fail "the reason quotes a value from the commit"
 [ "$(j "$work/s4.json" "json.dumps(d['detectors'], sort_keys=True)")" = "$(j "$work/s5.json" "json.dumps(d['detectors'], sort_keys=True)")" ] || fail "refused run changed detectors"
 ok "refused (exit 2) with the lint finding; detectors untouched"
 in_tree "sed -i '/00000000-0000-4000-8000-00000000dead/d' siem/detectors/talon.yaml"
@@ -324,6 +327,9 @@ rc=$(sync_run)
 snap s7
 { [ "$rc" = 0 ] && [ "$(last "['status']")" = applied ] && [ "$(last "['commit']")" = "$c5" ]; } || fail "with the flag: exit $rc $(last "['reason']")"
 [ "$(last "['counts']['rules']['deleted']")" = 6 ] || fail "deleted $(last "['counts']")"
+shell_id=$(python3 -c "import yaml; print(yaml.safe_load(open('siem/rules/api-exec-shell.yml'))['id'])")
+{ [ "$(last "['changed']['rules'].__len__()")" = 6 ] && last "['changed']['rules']" | grep -q "deleted $shell_id"; } \
+  || fail "the record does not list the deleted rules: $(last "['changed']")"
 [ "$(j "$work/s7.json" 'len(d["rules"])')" = "$(( $(j "$work/s6.json" 'len(d["rules"])') - 6 ))" ] || fail "rules after the flagged run"
 $DOCKER exec "$H" test ! -e /etc/sdp-siem/allow-mass-delete || fail "allow-mass-delete was not removed"
 ok "with allow-mass-delete: 6 rules deleted, the flag removed by the unit"

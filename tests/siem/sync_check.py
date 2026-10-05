@@ -5,6 +5,7 @@ Helper of tests/siem/sync-it.sh (offline) and tests/siem/p3-acceptance.sh (siem0
 Usage: sync_check.py <url> <ca> <admin cert> <admin key> <command> [args]
   snapshot              JSON: custom log types, rules by Sigma id, detectors, correlations, monitors, workflows
   records               JSON: the siem-sync records, newest first
+  heartbeat             JSON: the sync's heartbeat document
   guard                 L5 / F11: every sdp-* template keeps its data stream, pattern [<stream>] and no
                         component, and no SA alias-mappings component exists; exit 1 otherwise
   delete-rule <sigma>   delete the SA rule(s) with that Sigma id behind the sync's back (S0-#12 test)
@@ -125,7 +126,11 @@ def main():
         print(json.dumps(snapshot(c), sort_keys=True))
     elif cmd == "records":
         code, out = c.req("POST", "/siem-sync/_search", {"size": 100, "sort": [{"applied_at": {"order": "desc"}}]})
-        print(json.dumps([h["_source"] for h in out.get("hits", {}).get("hits", [])] if code == 200 else []))
+        hits = out.get("hits", {}).get("hits", []) if code == 200 else []
+        print(json.dumps([h["_source"] for h in hits if "status" in h["_source"]]))
+    elif cmd == "heartbeat":
+        code, out = c.req("GET", "/siem-sync/_doc/heartbeat")
+        print(json.dumps(out.get("_source", {}), sort_keys=True))
     elif cmd == "guard":
         return guard(c)
     elif cmd == "delete-rule":

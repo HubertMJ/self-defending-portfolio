@@ -15,9 +15,19 @@ client certificate. One run:
      of failed attempts since, so an object a failed run created is not orphaned) plus every Alerting
      monitor named "sdp-git: *". SA's own detector workflows, the host role's ops monitors and
      anything made in Dashboards are never touched (MJ5);
-  5. refuse more than DELETE_CAP deletions unless /etc/sdp-siem/allow-mass-delete exists;
+  5. refuse to adopt a live object the sync did not make (no git marker) - it would silently become
+     managed; refuse more than DELETE_CAP deletions unless /etc/sdp-siem/allow-mass-delete exists, and
+     more than CHANGE_CAP rule/monitor updates unless /etc/sdp-siem/allow-mass-change exists;
   6. apply: log types -> rules -> detectors -> correlations -> monitors, then the deletions in the
-     reverse order; record {commit, applied_at, status, reason, counts, rules} in siem-sync.
+     reverse order; record {commit, applied_at, status, reason, counts, changed, rules, monitors,
+     lint_sha256} in siem-sync.
+
+Records in siem-sync (read by the API, ADR 0036): one document per applied, refused or failed run
+(field status, time applied_at). A run that finds nothing to do writes no record; instead every run
+that reaches OpenSearch overwrites the single document with id "heartbeat" ({kind: heartbeat,
+checked_at, commit, outcome: applied|unchanged|refused|failed, lint_sha256}; no status, no
+applied_at, so record queries never see it) - a stale checked_at is a dead sync, a fresh one with an
+old applied_at an idle one.
 
 Security Analytics quirks this program is written around (S0 spike):
   - SA ignores the Sigma id: the Sigma id -> SA id map is rebuilt from SA's stored rule YAML on every
@@ -30,6 +40,8 @@ Security Analytics quirks this program is written around (S0 spike):
 
 Exit status: 0 applied or nothing to do, 1 failed (recorded), 2 refused (recorded, nothing changed).
 The record of a refusal or failure is not repeated while the commit and the reason stay the same.
+Any exception is recorded as failed (its type and at most 300 characters); a reason is capped at 512
+characters and a lint refusal names files and checks, never values.
 """
 import datetime
 import hashlib
@@ -56,12 +68,19 @@ HEX40 = re.compile(r"^[0-9a-f]{40}$")
 MAX_FILE = 1 << 20
 MAX_TREE = 8 << 20
 TRIGGER_NAME = "any finding"
+DETECTOR_MARK = "sdp-git "
+REASON_MAX = 512
+HEARTBEAT_ID = "heartbeat"
+with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "siem_lint.py"), "rb") as _fh:
+    LINT_SHA256 = hashlib.sha256(_fh.read()).hexdigest()
 RECORD_MAPPING = {
     "settings": {"index": {"number_of_shards": 1, "number_of_replicas": 0}},
     "mappings": {"dynamic": False, "properties": {
         "commit": {"type": "keyword"}, "applied_at": {"type": "date"}, "status": {"type": "keyword"},
         "reason": {"type": "keyword", "ignore_above": 2048}, "branch": {"type": "keyword"},
         "previous": {"type": "keyword"}, "counts": {"type": "object", "enabled": False},
+        "changed": {"type": "object", "enabled": False}, "lint_sha256": {"type": "keyword"},
+        "kind": {"type": "keyword"}, "checked_at": {"type": "date"}, "outcome": {"type": "keyword"},
         "rules": {"type": "object", "enabled": False}, "monitors": {"type": "object", "enabled": False},
     }},
 }
@@ -74,6 +93,15 @@ class SyncError(Exception):
 
 class Refused(Exception):
     pass
+
+
+def cap(text, limit=REASON_MAX):
+    text = str(text)
+    return text if len(text) <= limit else text[: limit - 3] + "..."
+
+
+def exc_reason(exc):
+    return f"{type(exc).__name__}: {str(exc)[:300]}"
 
 
 def log(msg):
@@ -130,9 +158,10 @@ class Client:
 class Git:
     """A bare repository holding what was fetched; only plumbing reads, nothing is checked out."""
 
-    def __init__(self, path, protocols, timeout):
+    def __init__(self, path, protocols, timeout, max_bytes=1 << 30):
         self.path = path
         self.timeout = timeout
+        self.max_bytes = max_bytes
         # Hermetic: no system or user configuration, no prompts, only the allowed transports.
         self.env = {"PATH": "/usr/bin:/bin", "HOME": path, "GIT_TERMINAL_PROMPT": "0", "GIT_CONFIG_NOSYSTEM": "1",
                     "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_ALLOW_PROTOCOL": protocols, "LC_ALL": "C"}
@@ -141,14 +170,24 @@ class Git:
         p = subprocess.run(["git", "--git-dir", self.path, *args], env=self.env, capture_output=True,
                            timeout=self.timeout, check=False)
         if p.returncode not in ok:
-            raise SyncError(f"git {' '.join(args[:2])}: {p.stderr.decode(errors='replace').strip()[:300]}")
+            verb = next((a for a in args if not a.startswith("-") and "=" not in a), "")
+            raise SyncError(f"git {verb}: {p.stderr.decode(errors='replace').strip()[:300]}")
         return p if binary else p.stdout.decode().strip()
 
     def fetch(self, url, branch):
         if not os.path.isdir(os.path.join(self.path, "objects")):
             subprocess.run(["git", "init", "--bare", "-q", self.path], env=self.env, check=True, timeout=self.timeout)
         ref = f"refs/remotes/origin/{branch}"
-        self.run("fetch", "--quiet", "--no-tags", "--no-recurse-submodules", url, f"+refs/heads/{branch}:{ref}")
+        # Every fetched object is checked (malformed trees, odd paths); the repository has a size cap.
+        self.run("-c", "transfer.fsckObjects=true", "-c", "fetch.fsckObjects=true", "fetch", "--quiet", "--no-tags",
+                 "--no-recurse-submodules", url, f"+refs/heads/{branch}:{ref}")
+        size = 0
+        for line in self.run("count-objects", "-v").splitlines():
+            key, _, value = line.partition(": ")
+            if key in ("size", "size-pack"):
+                size += int(value) * 1024
+        if size > self.max_bytes:
+            raise SyncError(f"the fetched repository holds {size >> 20} MiB, more than {self.max_bytes >> 20} MiB")
         return self.run("rev-parse", "--verify", f"{ref}^{{commit}}")
 
     def has_commit(self, commit):
@@ -203,23 +242,56 @@ class Sync:
         self.c = client
         self.git = git
         self.counts = {k: {"created": 0, "updated": 0, "deleted": 0, "unchanged": 0} for k in KINDS}
+        self.changed = {k: [] for k in KINDS}
+        self.record_index = None
+        self.rule_ids = {}
+        self.prev_rules = {}
+        self.marked_rules = set()
 
     # ---- records (siem-sync) ------------------------------------------------------------------
-    def records(self, n=50):
+    def _search_records(self, query, size):
         status, out = self.c.req("POST", f"/{RECORD_INDEX}/_search",
-                                 {"size": n, "sort": [{"applied_at": {"order": "desc"}}]}, ok=(200, 404))
+                                 {"size": size, "query": query, "sort": [{"applied_at": {"order": "desc"}}]},
+                                 ok=(200, 404))
         self.record_index = status == 200
         return [h["_source"] for h in out["hits"]["hits"]] if self.record_index else []
 
+    def last_applied(self):
+        """The newest applied record, by its own query: any number of refusals since cannot hide it."""
+        recs = self._search_records({"term": {"status": "applied"}}, 1)
+        if recs and not HEX40.match(str(recs[0].get("commit", ""))):
+            raise SyncError("the last applied record does not hold a 40-hex commit")
+        return recs[0] if recs else None
+
+    def since(self, applied):
+        """Records after the last applied one (all records when there is none), newest first."""
+        query = ({"range": {"applied_at": {"gt": applied["applied_at"]}}} if applied
+                 else {"exists": {"field": "applied_at"}})
+        return self._search_records(query, 50)
+
+    def ensure_index(self):
+        if self.record_index:
+            return
+        # First write: the index with its mapping (rules-sync may create siem-sync and nothing else).
+        status, out = self.c.req("PUT", f"/{RECORD_INDEX}", RECORD_MAPPING, ok=(200, 400))
+        if status == 400 and "resource_already_exists" not in json.dumps(out):
+            raise SyncError(f"PUT /{RECORD_INDEX} -> 400: {json.dumps(out)[:300]}")
+        self.record_index = True
+
     def record(self, rec, last):
+        rec = dict(rec, reason=cap(rec.get("reason", "")), lint_sha256=LINT_SHA256)
         if rec["status"] != "applied" and last and all(last.get(k) == rec[k] for k in ("commit", "status", "reason")):
             log(f"{rec['status']} again for the same reason, not recorded twice: {rec['reason']}")
             return
-        if not self.record_index:
-            # First record: the index with its mapping (rules-sync may create siem-sync and nothing else).
-            self.c.req("PUT", f"/{RECORD_INDEX}", RECORD_MAPPING, ok=(200,))
-            self.record_index = True
+        self.ensure_index()
         self.c.req("POST", f"/{RECORD_INDEX}/_doc?refresh=wait_for", rec)
+
+    def heartbeat(self, commit, outcome):
+        """Overwrites the one heartbeat document: when the sync last ran to an end, and how it ended."""
+        self.ensure_index()
+        self.c.req("PUT", f"/{RECORD_INDEX}/_doc/{HEARTBEAT_ID}",
+                   {"kind": "heartbeat", "checked_at": now(), "commit": commit, "outcome": outcome,
+                    "lint_sha256": LINT_SHA256})
 
     # ---- live state ----------------------------------------------------------------------------
     def live_log_types(self):
@@ -236,8 +308,8 @@ class Sync:
         for h in self.c.search(f"{SA}/rules/_search?pre_packaged=false", {"match_all": {}}, size=5000):
             s = h["_source"]
             try:
-                parsed = yaml.safe_load(s.get("rule") or "")
-            except yaml.YAMLError:
+                parsed = siem_lint.strict_yaml(s.get("rule") or "")
+            except (yaml.YAMLError, RecursionError):
                 continue
             if isinstance(parsed, dict) and isinstance(parsed.get("id"), str):
                 out.setdefault(parsed["id"], []).append((h["_id"], s.get("category"), parsed))
@@ -275,16 +347,21 @@ class Sync:
 
     # ---- one run -------------------------------------------------------------------------------
     def run(self):
-        records = self.records()
-        last = records[0] if records else None
-        applied = next((r for r in records if r.get("status") == "applied"), None)
-        # Only for the log: an SA id from a record is never written to (S0-#12).
-        self.prev_rules = (applied or {}).get("rules") or {}
-        commit = self.git.fetch(self.cfg["repo"], self.cfg["branch"])
-        base = {"commit": commit, "branch": self.cfg["branch"], "previous": applied["commit"] if applied else ""}
-        log(f"fetched {self.cfg['branch']} at {commit}; last applied {base['previous'] or 'none (first run)'}")
+        base = {"commit": "", "branch": self.cfg["branch"], "previous": ""}
+        last, outcome, code = None, "failed", 1
         used_accept = False
         try:
+            applied = self.last_applied()
+            since = self.since(applied)
+            last = since[0] if since else applied
+            base["previous"] = applied["commit"] if applied else ""
+            # Rules the sync made: SA ids in the last applied record and in failed attempts since.
+            self.prev_rules = (applied or {}).get("rules") or {}
+            self.marked_rules = {v for r in [applied or {}] + [x for x in since if x.get("status") == "failed"]
+                                 for v in (r.get("rules") or {}).values()}
+            base["commit"] = self.git.fetch(self.cfg["repo"], self.cfg["branch"])
+            commit = base["commit"]
+            log(f"fetched {self.cfg['branch']} at {commit}; last applied {base['previous'] or 'none (first run)'}")
             if applied and commit != applied["commit"]:
                 accept = self.flag("accept-commit")
                 if accept is not None:
@@ -297,44 +374,59 @@ class Sync:
                 elif not self.git.is_ancestor(applied["commit"], commit):
                     raise Refused(f"not a fast-forward from {applied['commit']}")
             with tempfile.TemporaryDirectory(prefix="sdp-siem-sync-") as tmp:
-                findings, tree = siem_lint.lint(self.git.export(commit, os.path.join(tmp, "new")))
+                findings, tree = siem_lint.lint_detailed(self.git.export(commit, os.path.join(tmp, "new")))
                 if findings:
-                    raise Refused("lint: " + "; ".join(findings[:5]) + (f" (+{len(findings) - 5} more)" if len(findings) > 5 else ""))
-                managed = self.managed(records, applied, tmp)
+                    # Files and checks only: a finding's message may quote a value from the commit.
+                    names = sorted({f"{path}: {check}" for path, check, _ in findings})
+                    raise Refused(f"lint ({len(findings)} findings): " + "; ".join(names))
+                managed = self.managed(applied, since, tmp)
                 plan = self.plan(tree, managed, (applied or {}).get("monitors") or {})
+            writes = sum(len(v) for k, v in plan.items() if k not in ("keep", "monitor_state"))
+            if writes == 0 and applied and commit == applied["commit"]:
+                log("nothing to do")
+                self.mark_consumed(used_accept)
+                outcome, code = "unchanged", 0
+                return 0
+            self.check_caps(plan)
+            rule_map, monitor_state = self.apply(tree, plan)
+            self.record(dict(base, applied_at=now(), status="applied",
+                             reason="" if commit != base["previous"] else "drift repaired", counts=self.counts,
+                             changed=self.changed, rules=rule_map, monitors=monitor_state), last)
+            log(f"applied {commit}: {json.dumps(self.counts, sort_keys=True)}")
+            self.mark_consumed(used_accept)
+            outcome, code = "applied", 0
+            return 0
         except Refused as exc:
             log(f"REFUSED: {exc}")
             self.record(dict(base, applied_at=now(), status="refused", reason=str(exc)), last)
+            outcome, code = "refused", 2
             return 2
-        except (SyncError, KeyError, TypeError, ValueError) as exc:
-            log(f"FAILED: {exc!r}")
-            self.record(dict(base, applied_at=now(), status="failed", reason=str(exc)), last)
+        except Exception as exc:  # noqa: BLE001 - every failure is recorded, whatever raised it
+            log(f"FAILED: {exc_reason(exc)}")
+            self.record(dict(base, applied_at=now(), status="failed", reason=exc_reason(exc), counts=self.counts,
+                             changed=self.changed, rules=dict(sorted(self.rule_ids.items()))), last)
             return 1
-        writes = sum(len(v) for k, v in plan.items() if k not in ("keep", "monitor_state"))
-        deletions = sum(len(plan[k]) for k in ("del_monitors", "del_correlations", "del_detectors", "del_rules", "del_log_types"))
-        if writes == 0 and applied and commit == applied["commit"]:
-            log("nothing to do")
-            self.mark_consumed(used_accept)
-            return 0
+        finally:
+            try:
+                self.heartbeat(base["commit"], outcome)
+            except Exception as exc:  # noqa: BLE001 - the heartbeat must not change the exit status
+                log(f"heartbeat not written: {exc_reason(exc)}")
+
+    def check_caps(self, plan):
+        deletions = sum(len(plan[k]) for k in ("del_monitors", "del_correlations", "del_detectors", "del_rules",
+                                               "del_log_types"))
         if deletions > self.cfg["delete_cap"]:
             if self.flag("allow-mass-delete") is None:
-                reason = (f"{deletions} managed deletions exceed the cap of {self.cfg['delete_cap']};"
-                          " create /etc/sdp-siem/allow-mass-delete to allow them once")
-                log(f"REFUSED: {reason}")
-                self.record(dict(base, applied_at=now(), status="refused", reason=reason), last)
-                return 2
+                raise Refused(f"{deletions} managed deletions exceed the cap of {self.cfg['delete_cap']};"
+                              " create /etc/sdp-siem/allow-mass-delete to allow them once")
             log(f"allow-mass-delete present: {deletions} deletions allowed")
-        try:
-            rule_map, monitor_state = self.apply(tree, plan)
-        except (SyncError, KeyError, TypeError, ValueError) as exc:
-            log(f"FAILED: {exc}")
-            self.record(dict(base, applied_at=now(), status="failed", reason=str(exc), counts=self.counts), last)
-            return 1
-        self.record(dict(base, applied_at=now(), status="applied", reason="" if commit != base["previous"]
-                         else "drift repaired", counts=self.counts, rules=rule_map, monitors=monitor_state), last)
-        log(f"applied {commit}: {json.dumps(self.counts, sort_keys=True)}")
-        self.mark_consumed(used_accept)
-        return 0
+        # Rewriting what a detection means is as consequential as removing it (review M3).
+        updates = sum(1 for x in plan["rules"] + plan["monitors"] if x[0] == "update")
+        if updates > self.cfg["change_cap"]:
+            if self.flag("allow-mass-change") is None:
+                raise Refused(f"{updates} rule and monitor updates exceed the cap of {self.cfg['change_cap']};"
+                              " create /etc/sdp-siem/allow-mass-change to allow them once")
+            log(f"allow-mass-change present: {updates} updates allowed")
 
     def flag(self, name):
         path = os.path.join(self.cfg["flag_dir"], name)
@@ -349,22 +441,20 @@ class Sync:
         done = os.path.join(self.cfg["state_dir"], "consumed")
         os.makedirs(done, exist_ok=True)
         names = (["accept-commit"] if used_accept else []) + \
-            (["allow-mass-delete"] if self.flag("allow-mass-delete") is not None else [])
+            [f for f in ("allow-mass-delete", "allow-mass-change") if self.flag(f) is not None]
         for name in names:
             with open(os.path.join(done, name), "w", encoding="ascii") as fh:
                 fh.write(now() + "\n")
 
-    def managed(self, records, applied, tmp):
-        """Identities in the last applied tree and in the trees of failed attempts since (B6)."""
+    def managed(self, applied, since, tmp):
+        """Identities in the last applied tree and in the trees of failed attempts since (B6) - also
+        when nothing was ever applied, so a failed first run does not orphan what it created."""
         out = {k: set() for k in KINDS}
-        if not applied:
-            return out
-        commits = [applied["commit"]]
-        for r in records:
-            if r is applied:
-                break
-            if r.get("status") == "failed" and r.get("commit") not in commits:
-                commits.append(r["commit"])
+        commits = [applied["commit"]] if applied else []
+        for r in since:
+            c = str(r.get("commit", ""))
+            if r.get("status") == "failed" and HEX40.match(c) and c not in commits:
+                commits.append(c)
         for i, c in enumerate(commits):
             if not self.git.has_commit(c):
                 raise SyncError(f"the tree of {c} (last applied or failed since) is not in the local repository")
@@ -382,52 +472,70 @@ class Sync:
                      "correlations": self.live_by_name(f"{SA}/correlation/rules/_search"),
                      "monitors": self.live_monitors()}
         want = identities(tree)
-        # Log types.
+        unmarked = []
+        # Log types: the sync's own when their name is in the managed set (L1).
         for d in tree.log_types.values():
             live = self.live["log_types"].get(d["name"])
             body = {"name": d["name"], "description": d["description"], "source": "Custom", "category": "Other"}
             if not live:
-                p["log_types"].append(("create", None, body))
+                p["log_types"].append(("create", None, d["name"], body))
+            elif d["name"] not in managed["log_types"]:
+                unmarked.append(f"log type {d['name']}")
             elif live[0][1].get("description") != d["description"] or live[0][1].get("category") != "Other":
-                p["log_types"].append(("update", live[0][0], body))
+                p["log_types"].append(("update", live[0][0], d["name"], body))
             else:
                 self.counts["log_types"]["unchanged"] += 1
         for name in sorted((managed["log_types"] - want["log_types"]) & set(self.live["log_types"])):
-            p["del_log_types"] += [i for i, _ in self.live["log_types"][name]]
-        # Rules: identity is the Sigma id inside SA's stored YAML.
+            p["del_log_types"] += [(i, name) for i, _ in self.live["log_types"][name]]
+        # Rules: identity is the Sigma id inside SA's stored YAML; the sync's own are the SA ids it
+        # recorded. Other SA rules with a git rule's Sigma id are duplicates and go (by design).
         for rel, d in tree.rules.items():
             category = tree.log_type_of(d["logsource"]["service"])
             live = self.live["rules"].get(d["id"], [])
             if not live:
                 p["rules"].append(("create", None, rel, category))
                 continue
-            keep, *dupes = live
+            mine = [x for x in live if x[0] in self.marked_rules]
+            if not mine:
+                unmarked.append(f"rule {d['id']} (SA id {live[0][0]})")
+                continue
+            keep = mine[0]
             p["keep"][d["id"]] = keep[0]
-            p["del_rules"] += [i for i, _, _ in dupes]
+            p["del_rules"] += [(i, d["id"]) for i, _, _ in live if i != keep[0]]
             if keep[1] != category or keep[2] != d:
                 p["rules"].append(("update", keep[0], rel, category))
             else:
                 self.counts["rules"]["unchanged"] += 1
         for rid in sorted((managed["rules"] - want["rules"]) & set(self.live["rules"])):
-            p["del_rules"] += [i for i, _, _ in self.live["rules"][rid]]
-        # Detectors are planned in apply() (their bodies need the rule ids); deletions here.
-        for name in sorted(managed["detectors"] - want["detectors"]):
-            p["del_detectors"] += [i for i, _ in self.live["detectors"].get(name, [])]
+            p["del_rules"] += [(i, rid) for i, _, _ in self.live["rules"][rid]]
+        # Detectors are planned in apply() (their bodies need the rule ids); the sync's own carry the
+        # marker in their description.
         for name in want["detectors"]:
-            p["del_detectors"] += [i for i, _ in self.live["detectors"].get(name, [])[1:]]
-        # Correlation rules.
+            live = self.live["detectors"].get(name, [])
+            if any(not self.detector_marked(s) for _, s in live):
+                unmarked.append(f"detector {name}")
+            p["del_detectors"] += [(i, name) for i, _ in live[1:]]
+        for name in sorted(managed["detectors"] - want["detectors"]):
+            p["del_detectors"] += [(i, name) for i, s in self.live["detectors"].get(name, []) if self.detector_marked(s)]
+        # Correlation rules: the sync's own when their name is in the managed set.
         for d in tree.correlations.values():
             body = self.correlation_body(tree, d)
             live = self.live["correlations"].get(d["name"], [])
-            p["del_correlations"] += [i for i, _ in live[1:]]
+            if live and d["name"] not in managed["correlations"]:
+                unmarked.append(f"correlation {d['name']}")
+                continue
+            p["del_correlations"] += [(i, d["name"]) for i, _ in live[1:]]
             if not live:
-                p["correlations"].append(("create", None, body))
+                p["correlations"].append(("create", None, d["name"], body))
             elif {k: live[0][1].get(k) for k in body} != body:
-                p["correlations"].append(("update", live[0][0], body))
+                p["correlations"].append(("update", live[0][0], d["name"], body))
             else:
                 self.counts["correlations"]["unchanged"] += 1
         for name in sorted(managed["correlations"] - want["correlations"]):
-            p["del_correlations"] += [i for i, _ in self.live["correlations"].get(name, [])]
+            p["del_correlations"] += [(i, name) for i, _ in self.live["correlations"].get(name, [])]
+        if unmarked:
+            raise Refused("SA holds objects the sync did not make (no git marker), refusing to adopt them: "
+                          + ", ".join(unmarked) + "; remove them or rename the git objects")
         # Monitors: every live monitor with the prefix is managed (B6). Alerting normalises a stored
         # query, so the live body never equals the file: a monitor is unchanged when the last applied
         # record wrote this very body (its hash) and nobody updated it since (its last_update_time, which
@@ -435,22 +543,27 @@ class Sync:
         p["monitor_state"] = {}
         for d in tree.monitors.values():
             live = self.live["monitors"].get(d["name"], [])
-            p["del_monitors"] += [i for i, _ in live[1:]]
+            p["del_monitors"] += [(i, d["name"]) for i, _ in live[1:]]
             rec = recorded.get(d["name"]) or {}
             if not live:
-                p["monitors"].append(("create", None, d))
+                p["monitors"].append(("create", None, d["name"], d))
             elif rec.get("id") != live[0][0] or rec.get("sha256") != digest(d) \
                     or str(rec.get("last_update_time")) != str(live[0][1].get("last_update_time")) \
                     or live[0][1].get("enabled") != d["enabled"]:
-                p["monitors"].append(("update", live[0][0], d))
+                p["monitors"].append(("update", live[0][0], d["name"], d))
             else:
                 p["monitor_state"][d["name"]] = rec
                 self.counts["monitors"]["unchanged"] += 1
         for name in sorted(set(self.live["monitors"]) - want["monitors"]):
-            p["del_monitors"] += [i for i, _ in self.live["monitors"][name]]
+            p["del_monitors"] += [(i, name) for i, _ in self.live["monitors"][name]]
         # Detectors that will change: counted as writes for the "nothing to do" decision.
         p["detectors"] = self.detector_changes(tree, p)
         return p
+
+    @staticmethod
+    def detector_marked(source):
+        di = ((source.get("inputs") or [{}])[0] or {}).get("detector_input") or {}
+        return str(di.get("description", "")).startswith(DETECTOR_MARK)
 
     def detector_body(self, tree, d, rule_ids):
         lt = tree.log_type_of(d["source"])
@@ -463,8 +576,9 @@ class Sync:
                                                "pre_packaged_rules": []}}],
                 "triggers": [{"name": TRIGGER_NAME, "severity": "1", "types": [lt], "ids": [], "sev_levels": [],
                               "tags": [], "actions": []}]}
-        # The hash covers the body and the text of each rule, so a changed rule re-applies its detector.
-        body["inputs"][0]["detector_input"]["description"] = "sdp-git " + digest([body, texts])[:32]
+        # The hash covers the body and the text of each rule, so a changed rule re-applies its detector;
+        # its prefix is the marker that the sync made this detector.
+        body["inputs"][0]["detector_input"]["description"] = DETECTOR_MARK + digest([body, texts])[:32]
         return body
 
     def detector_changes(self, tree, p):
@@ -487,29 +601,34 @@ class Sync:
                 self.counts["detectors"]["unchanged"] += 1
         return changes
 
+    def done(self, kind, op, identity):
+        self.counts[kind][op] += 1
+        self.changed[kind].append(f"{op} {identity}")
+
     def apply(self, tree, p):
-        for op, oid, body in p["log_types"]:
+        for op, oid, name, body in p["log_types"]:
             if op == "create":
                 self.c.req("POST", f"{SA}/logtype", body)
             else:
                 self.c.req("PUT", f"{SA}/logtype/{oid}", body)
-            self.counts["log_types"][op + "d"] += 1
-        rule_ids = dict(p["keep"])
+            self.done("log_types", op + "d", name)
+        self.rule_ids = dict(p["keep"])
         for op, oid, rel, category in p["rules"]:
             text = tree.rule_text[rel]
+            sigma = tree.rules[rel]["id"]
             if op == "create":
                 _, out = self.c.req("POST", f"{SA}/rules?category={category}", text)
-                rule_ids[tree.rules[rel]["id"]] = out["_id"]
-                if tree.rules[rel]["id"] in self.prev_rules:
-                    log(f"rule {tree.rules[rel]['id']} re-created as {out['_id']}: its recorded SA id"
-                        f" {self.prev_rules[tree.rules[rel]['id']]} is gone from SA")
+                self.rule_ids[sigma] = out["_id"]
+                if sigma in self.prev_rules:
+                    log(f"rule {sigma} re-created as {out['_id']}: its recorded SA id {self.prev_rules[sigma]}"
+                        " is gone from SA")
             else:
                 # oid was read back from SA in this run (plan); never an id from a record (S0-#12).
                 self.c.req("PUT", f"{SA}/rules/{oid}?category={category}&forced=true", text)
-            self.counts["rules"][op + "d"] += 1
+            self.done("rules", op + "d", sigma)
         for name in p["detectors"]:
             d = next(x for x in tree.detectors.values() if x["name"] == name)
-            ids = [rule_ids[r] for r in d["rules"]]
+            ids = [self.rule_ids[r] for r in d["rules"]]
             missing = self.rules_exist(ids, tree.log_type_of(d["source"]))
             if missing:
                 # SA would accept the dangling ids silently (S0-i).
@@ -518,33 +637,33 @@ class Sync:
             live = self.live["detectors"].get(name, [])
             if live:
                 self.c.req("PUT", f"{SA}/detectors/{live[0][0]}", body)
-                self.counts["detectors"]["updated"] += 1
+                self.done("detectors", "updated", name)
             else:
                 self.c.req("POST", f"{SA}/detectors", body)
-                self.counts["detectors"]["created"] += 1
-        for op, oid, body in p["correlations"]:
+                self.done("detectors", "created", name)
+        for op, oid, name, body in p["correlations"]:
             if op == "create":
                 self.c.req("POST", f"{SA}/correlation/rules", body)
             else:
                 self.c.req("PUT", f"{SA}/correlation/rules/{oid}", body)
-            self.counts["correlations"][op + "d"] += 1
+            self.done("correlations", op + "d", name)
         monitor_state = dict(p["monitor_state"])
-        for op, oid, body in p["monitors"]:
+        for op, oid, name, body in p["monitors"]:
             if op == "create":
                 _, out = self.c.req("POST", f"{ALERTING}/monitors", body)
             else:
                 _, out = self.c.req("PUT", f"{ALERTING}/monitors/{oid}", body)
-            monitor_state[body["name"]] = {"id": out["_id"], "sha256": digest(body),
-                                           "last_update_time": out["monitor"]["last_update_time"]}
-            self.counts["monitors"][op + "d"] += 1
+            monitor_state[name] = {"id": out["_id"], "sha256": digest(body),
+                                   "last_update_time": out["monitor"]["last_update_time"]}
+            self.done("monitors", op + "d", name)
         # Deletions after every write, dependants first: nothing still points at what goes.
         for kind, path in (("monitors", f"{ALERTING}/monitors/{{}}"), ("correlations", f"{SA}/correlation/rules/{{}}"),
                            ("detectors", f"{SA}/detectors/{{}}"), ("rules", f"{SA}/rules/{{}}?forced=true"),
                            ("log_types", f"{SA}/logtype/{{}}")):
-            for oid in p["del_" + kind]:
+            for oid, name in p["del_" + kind]:
                 self.c.req("DELETE", path.format(oid))
-                self.counts[kind]["deleted"] += 1
-        return {r: rule_ids[r] for r in sorted(rule_ids) if r in tree.rule_ids()}, monitor_state
+                self.done(kind, "deleted", name)
+        return {r: self.rule_ids[r] for r in sorted(self.rule_ids) if r in tree.rule_ids()}, monitor_state
 
 
 def config():
@@ -558,6 +677,8 @@ def config():
         "state_dir": env.get("SDP_SYNC_STATE_DIR", "/var/lib/sdp-siem-sync"),
         "flag_dir": env.get("SDP_SYNC_FLAG_DIR", "/etc/sdp-siem"),
         "delete_cap": int(env.get("SDP_SYNC_DELETE_CAP", "5")),
+        "change_cap": int(env.get("SDP_SYNC_CHANGE_CAP", "5")),
+        "repo_max_mb": int(env.get("SDP_SYNC_REPO_MAX_MB", "1024")),
         "ca": os.path.join(creds, "ca.crt"),
         "cert": os.path.join(creds, "client.crt"),
         "key": os.path.join(creds, "client.key"),
@@ -570,12 +691,13 @@ def config():
 def main():
     cfg = config()
     client = Client(cfg["url"], cfg["ca"], cfg["cert"], cfg["key"])
-    git = Git(os.path.join(cfg["state_dir"], "repo.git"), cfg["protocols"], timeout=300)
+    git = Git(os.path.join(cfg["state_dir"], "repo.git"), cfg["protocols"], timeout=300,
+              max_bytes=cfg["repo_max_mb"] << 20)
     try:
         return Sync(cfg, client, git).run()
-    except SyncError as exc:
-        # Before a record could be written (OpenSearch or the fetch unreachable): the journal only.
-        log(f"FAILED before recording: {exc}")
+    except Exception as exc:  # noqa: BLE001
+        # Recording itself failed (OpenSearch unreachable or refusing): the journal only.
+        log(f"FAILED, not recorded: {exc_reason(exc)}")
         return 1
 
 
