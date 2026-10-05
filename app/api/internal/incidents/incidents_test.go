@@ -562,7 +562,7 @@ func TestAvailability(t *testing.T) {
 	// Unconfigured: available:false, checked_at null, everything empty.
 	v := New(Config{}).View()
 	b, _ := json.Marshal(v)
-	want := `{"available":false,"checked_at":null,"rules":{"commit":"","applied_at":null,"status":"unknown"},"health":{"ingest":"unknown","evidence_rewritten":false,"disk":"unknown"},"metrics":{"since":null,"incidents":0,"median_ttd_ms":null,"median_tti_ms":null,"median_twin_dwell_ms":null,"host_findings":0},"incidents":[]}`
+	want := `{"available":false,"checked_at":null,"rules":{"commit":"","applied_at":null,"status":"unknown"},"health":{"ingest":"unknown","evidence_rewritten":false,"disk":"unknown"},"metrics":{"since":null,"incidents":0,"median_ttd_ms":null,"median_tti_ms":null,"median_twin_dwell_ms":null,"host_findings":0,"ingest_lag_ms":null},"incidents":[]}`
 	if string(b) != want {
 		t.Fatalf("unconfigured:\n%s\nwant\n%s", b, want)
 	}
@@ -1148,4 +1148,40 @@ func TestJSONMarshalledOncePerPoll(t *testing.T) {
 	if got := string(New(Config{}).JSON()); !strings.HasPrefix(got, `{"available":false,"checked_at":null`) {
 		t.Fatalf("unconfigured JSON %s", got)
 	}
+}
+
+// metrics.ingest_lag_ms: per source, the median of event.ingested - @timestamp over the documents
+// read that were ingested in the last 15 min; null for a source with none.
+func TestIngestLag(t *testing.T) {
+	f := newFake()
+	terminalRun(f, "sdp-"+flagHex) // api lines ingested 3 s after the event, the DNS finding's document 2 s
+	f.findings["sdp_host"] = []siem.Finding{finding("h1", t0.Add(10*time.Second), "ssh", nil, map[string]any{"ssh.event": "accepted"})}
+	clk := &clock{t: t0.Add(time.Minute)}
+	tr := newTracker(t, f, clk)
+	tr.Poll(context.Background())
+	lag := tr.View().Metrics.IngestLagMs
+	want := map[string]any{"api": int64(3000), "hubble": int64(2000), "host": int64(2000), "falco": nil, "talon": nil, "k8s-audit": nil}
+	if len(lag) != len(want) {
+		t.Fatalf("lag %v", lag)
+	}
+	for k, w := range want {
+		got := lag[k]
+		if (got == nil) != (w == nil) || (got != nil && *got != w.(int64)) {
+			t.Errorf("%s lag %v, want %v", k, ptr64(got), w)
+		}
+	}
+	clk.Set(t0.Add(20 * time.Minute))
+	tr.Poll(context.Background())
+	for k, v := range tr.View().Metrics.IngestLagMs {
+		if v != nil {
+			t.Errorf("%s lag %d 20 min later, want null", k, *v)
+		}
+	}
+}
+
+func ptr64(p *int64) any {
+	if p == nil {
+		return nil
+	}
+	return *p
 }

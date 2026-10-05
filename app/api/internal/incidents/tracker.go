@@ -53,6 +53,10 @@ const (
 	// matches as it would have on time; the registrations themselves (MACs only) are kept for the
 	// evidence retention.
 	flagKeep = 15 * time.Minute
+	// lagWindow: the ingest lag is the median over documents the SIEM ingested this recently. Wider
+	// than one poll window (2 min 15 s), which mostly holds no evidence at all: a sandbox source
+	// writes only when someone attacks.
+	lagWindow = 15 * time.Minute
 	// maxFlags bounds the registrations (one run at a time; the cap only matters for a burst).
 	maxFlags = 64
 )
@@ -85,6 +89,7 @@ type Tracker struct {
 	mu      sync.Mutex
 	records map[string]*record
 	hosts   map[string]time.Time // host finding id -> time (counted only)
+	lags    map[string]lagSample // per document read: its source and ingest lag
 	corr    map[string]seenCorrelation
 	alerts  []siem.Alert
 	active  []siem.Alert // the ACTIVE alerts, for the health line
@@ -132,7 +137,7 @@ func New(cfg Config) *Tracker {
 		cfg.Rules, _ = siemindex.Load()
 	}
 	return &Tracker{cfg: cfg, start: cfg.Now(), records: map[string]*record{}, hosts: map[string]time.Time{},
-		corr: map[string]seenCorrelation{}, rules: RulesView{Status: "unknown"}, flags: map[string]*flagEntry{}, logged: map[string]bool{}}
+		corr: map[string]seenCorrelation{}, rules: RulesView{Status: "unknown"}, flags: map[string]*flagEntry{}, logged: map[string]bool{}, lags: map[string]lagSample{}}
 }
 
 // Enabled reports whether a SIEM is configured.
@@ -212,6 +217,7 @@ func (t *Tracker) Poll(ctx context.Context) {
 	}
 	var news []found
 	hosts := map[string]time.Time{}
+	var lags []record // every document read, for the ingest lag
 	for _, lt := range logTypes {
 		fs, err := src.Findings(ctx, lt.logType, from, now, pageSize)
 		if err != nil {
@@ -228,6 +234,8 @@ func (t *Tracker) Poll(ctx context.Context) {
 		t.note("full "+lt.logType, len(fs) >= pageSize, "siem: a findings page came back full; older items of the window are not read",
 			"log_type", lt.logType, "size", pageSize)
 		for _, f := range fs {
+			r, q, ok := t.fromFinding(f, lt.source)
+			lags = append(lags, r)
 			if lt.source == "host" {
 				// Host findings are counted, nothing else (ADR 0034 "counts only").
 				if idPat.MatchString(f.ID) {
@@ -235,7 +243,7 @@ func (t *Tracker) Poll(ctx context.Context) {
 				}
 				continue
 			}
-			if r, q, ok := t.fromFinding(f, lt.source); ok {
+			if ok {
 				news = append(news, found{r, q})
 			}
 		}
@@ -263,7 +271,9 @@ func (t *Tracker) Poll(ctx context.Context) {
 		t.note("full "+s.index, len(res.Hits) >= pageSize, "siem: a search page came back full; older documents of the window are not read",
 			"index", s.index, "size", pageSize)
 		for _, h := range res.Hits {
-			if r, ok := t.fromHit(h, s.source); ok {
+			r, ok := t.fromHit(h, s.source)
+			lags = append(lags, r)
+			if ok {
 				news = append(news, found{r, ""})
 			}
 		}
@@ -287,6 +297,11 @@ func (t *Tracker) Poll(ctx context.Context) {
 	}
 	for id, at := range hosts {
 		t.hosts[id] = at
+	}
+	for _, r := range lags {
+		if r.key != "" && !r.at.IsZero() && !r.ingested.IsZero() {
+			t.lags[r.key] = lagSample{source: r.source, ingested: r.ingested, lag: r.ingested.Sub(r.at)}
+		}
 	}
 	for _, c := range corr {
 		t.corr[c.Finding1+"|"+c.Finding2] = seenCorrelation{c, now}
@@ -333,7 +348,7 @@ type search struct {
 func (t *Tracker) searches(from, now time.Time) []search {
 	q := func(filters []map[string]any, source ...string) siem.Query {
 		return siem.Query{TimeField: "event.ingested", Since: from, Until: now, Filters: filters, Size: pageSize,
-			SortField: "@timestamp", Source: append([]string{"@timestamp", "k8s.pod.ref"}, source...)}
+			SortField: "@timestamp", Source: append([]string{"@timestamp", "event.ingested", "k8s.pod.ref"}, source...)}
 	}
 	term := func(f string, v any) map[string]any { return map[string]any{"term": map[string]any{f: v}} }
 	terms := func(f string, v ...string) map[string]any { return map[string]any{"terms": map[string]any{f: v}} }
@@ -482,12 +497,42 @@ func (t *Tracker) prune(now time.Time) {
 		}
 	}
 	capOldest(t.hosts, func(at time.Time) time.Time { return at })
+	for k, l := range t.lags {
+		if l.ingested.Before(now.Add(-lagWindow)) {
+			delete(t.lags, k)
+		}
+	}
+	capOldest(t.lags, func(l lagSample) time.Time { return l.ingested })
 	for k, c := range t.corr {
 		if c.seen.Before(cut) {
 			delete(t.corr, k)
 		}
 	}
 	capOldest(t.corr, func(c seenCorrelation) time.Time { return c.seen })
+}
+
+// lagSample is one document's ingest lag: event.ingested (the SIEM's clock) - @timestamp (the event).
+type lagSample struct {
+	source   string
+	ingested time.Time
+	lag      time.Duration
+}
+
+// lagSources are the sources the API reads documents of; each is a key of metrics.ingest_lag_ms.
+var lagSources = []string{"falco", "talon", "hubble", "k8s-audit", "api", "host"}
+
+// ingestLag is the median ingest lag per source over the documents ingested in the last lagWindow,
+// null for a source with none. t.mu held.
+func (t *Tracker) ingestLag() map[string]*int64 {
+	per := map[string][]int64{}
+	for _, l := range t.lags {
+		per[l.source] = append(per[l.source], l.lag.Milliseconds())
+	}
+	out := map[string]*int64{}
+	for _, s := range lagSources {
+		out[s] = median(per[s])
+	}
+	return out
 }
 
 // seenCorrelation is an SA correlation and when it was first read (the list carries no time).
@@ -524,6 +569,7 @@ func (t *Tracker) buildView(now time.Time) View {
 	}
 	incs, metrics := t.build(evidence{records: recs, correlations: corr, alerts: t.alerts, now: now})
 	metrics.HostFindings = len(t.hosts)
+	metrics.IngestLagMs = t.ingestLag()
 	checked := now
 	return View{Available: true, CheckedAt: &checked, Rules: t.rules, Health: t.health(), Metrics: metrics, Incidents: incs}
 }

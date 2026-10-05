@@ -21,7 +21,7 @@ func TestCorrelationWithoutSIEM(t *testing.T) {
 	ts := httptest.NewServer(New(Config{}).Public())
 	defer ts.Close()
 	raw := getRaw(t, ts.URL+"/api/correlation")
-	want := `{"available":false,"checked_at":null,"rules":{"commit":"","applied_at":null,"status":"unknown"},"health":{"ingest":"unknown","evidence_rewritten":false,"disk":"unknown"},"metrics":{"since":null,"incidents":0,"median_ttd_ms":null,"median_tti_ms":null,"median_twin_dwell_ms":null,"host_findings":0},"incidents":[]}` + "\n"
+	want := `{"available":false,"checked_at":null,"rules":{"commit":"","applied_at":null,"status":"unknown"},"health":{"ingest":"unknown","evidence_rewritten":false,"disk":"unknown"},"metrics":{"since":null,"incidents":0,"median_ttd_ms":null,"median_tti_ms":null,"median_twin_dwell_ms":null,"host_findings":0,"ingest_lag_ms":null},"incidents":[]}` + "\n"
 	if raw != want {
 		t.Fatalf("got\n%s\nwant\n%s", raw, want)
 	}
@@ -49,7 +49,7 @@ func TestCorrelationShape(t *testing.T) {
 	ttd, seq := int64(800), 3
 	v := incidents.View{Available: true, CheckedAt: &at, Rules: incidents.RulesView{Commit: "0123456789abcdef0123456789abcdef01234567", AppliedAt: &at, Status: "applied"},
 		Health:  incidents.HealthView{Ingest: "ok", Disk: "ok"},
-		Metrics: incidents.MetricsView{Since: &at, Incidents: 1, MedianTTDMs: &ttd},
+		Metrics: incidents.MetricsView{Since: &at, Incidents: 1, MedianTTDMs: &ttd, IngestLagMs: map[string]*int64{"falco": &ttd, "api": nil}},
 		Incidents: []incidents.Incident{{ID: "5f0c3d2a9b7e4c11", Kind: "dns-exfil", Severity: "critical", Title: "x", RunID: "3755e65530aa11bb",
 			FirstAt: at, LastAt: at, Attack: []string{"T1048.003"}, FlagMatch: &yes, TTDMs: &ttd,
 			Steps:    []incidents.Step{{At: at, Source: "api", CommandSeq: &seq, Detail: "command dns-exfil started"}},
@@ -69,7 +69,7 @@ func TestCorrelationShape(t *testing.T) {
 		"available": "bool", "checked_at": "string", "rules.commit": "string", "rules.applied_at": "string", "rules.status": "string",
 		"health.ingest": "string", "health.evidence_rewritten": "bool", "health.disk": "string",
 		"metrics.since": "string", "metrics.incidents": "number", "metrics.median_ttd_ms": "number", "metrics.median_tti_ms": "null",
-		"metrics.median_twin_dwell_ms": "null", "metrics.host_findings": "number", "incidents": "array",
+		"metrics.median_twin_dwell_ms": "null", "metrics.host_findings": "number", "metrics.ingest_lag_ms": "object", "metrics.ingest_lag_ms.falco": "number", "metrics.ingest_lag_ms.api": "null", "incidents": "array",
 		"incidents.[].id": "string", "incidents.[].kind": "string", "incidents.[].severity": "string", "incidents.[].title": "string",
 		"incidents.[].run_id": "string", "incidents.[].arm": "string", "incidents.[].first_at": "string", "incidents.[].last_at": "string",
 		"incidents.[].attack": "array", "incidents.[].falco_events": "number", "incidents.[].flag_match": "bool",

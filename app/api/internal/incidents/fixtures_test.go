@@ -192,6 +192,7 @@ var docSeq int
 func finding(id string, at time.Time, rule string, tags []string, doc map[string]any) siem.Finding {
 	docSeq++
 	doc["@timestamp"] = at.Format(time.RFC3339Nano)
+	doc["event.ingested"] = at.Add(2 * time.Second).Format(time.RFC3339Nano)
 	b, _ := json.Marshal(doc)
 	return siem.Finding{ID: id, DetectorID: "det1", Timestamp: at.Add(30 * time.Second).UnixMilli(),
 		Queries:   []siem.FindingQuery{{ID: "sa-" + id, Name: rule, Tags: append([]string{"high"}, tags...)}},

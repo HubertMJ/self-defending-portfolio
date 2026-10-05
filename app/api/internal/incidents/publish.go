@@ -42,6 +42,10 @@ type MetricsView struct {
 	MedianTTIMs       *int64     `json:"median_tti_ms"`
 	MedianTwinDwellMs *int64     `json:"median_twin_dwell_ms"`
 	HostFindings      int        `json:"host_findings"`
+	// IngestLagMs: per source (falco, talon, hubble, k8s-audit, api, host), the median of
+	// event.ingested - @timestamp over the documents read that the SIEM ingested in the last 15 min;
+	// null for a source with none, null as a whole when the SIEM is unavailable.
+	IngestLagMs map[string]*int64 `json:"ingest_lag_ms"`
 }
 
 // Incident is one assembled incident; FlagMatch is set for dns-exfil only.

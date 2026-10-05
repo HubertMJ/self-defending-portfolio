@@ -43,7 +43,8 @@ type record struct {
 	docID         string // the document's _id (a finding's first matched document)
 	source        string // falco | talon | hubble | k8s-audit | api
 	at            time.Time
-	ref           string // "<ns>_<pod>", only for the two sandbox namespaces
+	ingested      time.Time // event.ingested, set by the sdp-final pipeline (for the ingest lag only)
+	ref           string    // "<ns>_<pod>", only for the two sandbox namespaces
 
 	rule   string   // the finding's Sigma rule title
 	attack []string // ATT&CK ids from the finding's tags
@@ -148,6 +149,7 @@ func (t *Tracker) fill(r *record, m map[string]any) (dnsQuery string) {
 	if at := timeOf(m, "@timestamp"); !at.IsZero() {
 		r.at = at
 	}
+	r.ingested = timeOf(m, "event.ingested")
 	if ref := str(m, "k8s.pod.ref"); ref != "" {
 		if _, _, ok := t.splitRef(ref); ok {
 			r.ref = ref
