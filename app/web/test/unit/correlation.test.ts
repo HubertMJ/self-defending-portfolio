@@ -387,10 +387,11 @@ describe("the section's parts", () => {
   });
 
   it("ingest lag per source: parsed leniently, one small line in source order, omitted when absent", () => {
-    const c = parseCorrelation(answer({ metrics: { since: at(86_400), incidents: 1, median_ttd_ms: 840, median_tti_ms: 212, median_twin_dwell_ms: null, host_findings: 0, ingest_lag_ms: { hubble: 3400, falco: 1240, host: null, "Bad Key": 5, api: -1, talon: "860" } } }));
-    expect(c.metrics.ingest_lag_ms).toEqual([["hubble", 3400], ["falco", 1240], ["host", null]]);
+    const c = parseCorrelation(answer({ metrics: { since: at(86_400), incidents: 1, median_ttd_ms: 840, median_tti_ms: 212, median_twin_dwell_ms: null, host_findings: 0, ingest_lag_ms: { hubble: 3400, falco: 1240, host: null, "Bad Key": 5, api: -1, talon: "860", "k8s-audit": Number.NaN } } }));
+    // A negative lag is clock skew between the hosts, published as it is (ADR 0036 §5).
+    expect(c.metrics.ingest_lag_ms).toEqual([["hubble", 3400], ["falco", 1240], ["host", null], ["api", -1]]);
     const line = renderMetrics(c, NOW).querySelector(".corr-lag");
-    expect(line?.textContent).toBe("Ingest lag, per source (how far behind its newest record was when the API last read it): falco 1.2 s · hubble 3.4 s · host –");
+    expect(line?.textContent).toBe("Ingest lag, per source (how far behind its newest record was when the API last read it): falco 1.2 s · hubble 3.4 s · api -1 ms · host –");
     expect(renderMetrics(parseCorrelation(answer()), NOW).querySelector(".corr-lag")).toBeNull();
     expect(parseCorrelation(answer({ metrics: { ingest_lag_ms: {} } })).metrics.ingest_lag_ms).toBeUndefined();
     expect(parseCorrelation(answer({ metrics: { ingest_lag_ms: [1, 2] } })).metrics.ingest_lag_ms).toBeUndefined();
@@ -508,6 +509,24 @@ describe("mountCorrelation", () => {
     expect(section.querySelector(".incident")).toBe(incident);
     expect(section.querySelector('.corr-lag__ms[data-source="falco"]')).toBe(falco);
     expect(falco?.textContent).toBe("2.5 s");
+  });
+
+  it("an ingest lag crossing zero (clock skew) keeps its row and redraws nothing: an open <details> stays open", async () => {
+    vi.useFakeTimers();
+    const many = Array.from({ length: BOARD_INCIDENTS + 2 }, (_, n) => incident({ id: n.toString(16).padStart(16, "0"), last_at: at(100 + n) }));
+    const lagged = (falco: number) => ok({ incidents: many, metrics: { since: at(86_400), incidents: many.length, median_ttd_ms: 840, median_tti_ms: 212, median_twin_dwell_ms: null, host_findings: 0, ingest_lag_ms: { falco, api: null } } });
+    const { section } = setup([lagged(100), lagged(-100)]);
+    await vi.advanceTimersByTimeAsync(0);
+    const older = section.querySelector<HTMLDetailsElement>(".corr-older");
+    expect(older).not.toBeNull();
+    if (older) older.open = true;
+    const falco = section.querySelector('.corr-lag__ms[data-source="falco"]');
+    expect(falco?.textContent).toBe("100 ms");
+    await vi.advanceTimersByTimeAsync(POLL_MS);
+    expect(section.querySelector(".corr-older")).toBe(older);
+    expect(older?.open).toBe(true);
+    expect(section.querySelector('.corr-lag__ms[data-source="falco"]')).toBe(falco);
+    expect(falco?.textContent).toBe("-100 ms");
   });
 
   it("the rule index is asked again when the applied commit moves; a new answer redraws", async () => {

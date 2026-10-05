@@ -1293,11 +1293,14 @@ function parseIncident(v: unknown): CorrelationIncident | null {
   };
 }
 
-/** metrics.ingest_lag_ms: source -> ms or null; a bad key or value is dropped, an empty or absent map is undefined. */
+/**
+ * metrics.ingest_lag_ms: source -> ms or null; a bad key or value is dropped, an empty or absent map is
+ * undefined. A negative lag (clock skew between the hosts) is kept as the API publishes it (ADR 0036 §5).
+ */
 function ingestLag(v: unknown): CorrelationMetrics["ingest_lag_ms"] {
   if (!isObj(v)) return undefined;
   const rows = Object.entries(v)
-    .filter((e): e is [string, number | null] => /^[a-z0-9-]{1,30}$/.test(e[0]) && (e[1] === null || isCount(e[1])))
+    .filter((e): e is [string, number | null] => /^[a-z0-9-]{1,30}$/.test(e[0]) && (e[1] === null || (typeof e[1] === "number" && Number.isFinite(e[1]))))
     .slice(0, 12);
   return rows.length ? rows : undefined;
 }
