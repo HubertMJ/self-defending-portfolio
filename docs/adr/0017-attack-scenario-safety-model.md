@@ -164,3 +164,20 @@ grow:
   has none and the lookup is dropped there; a quarantined pod's lookup is dropped too.
 
 Every other command still prints no environment, names no host outside the pod and resolves no name.
+
+## Amendment 2026-10-04: the dns-exfil argv as built; the envelope is unchanged (ADR 0032, 0034)
+
+The exception above is delivered as decided, with two tightenings and no widening. The argv is fixed
+and carries no visitor input; its one variable, the run's flag, is read from `/srv/shop/.flag` and
+must be exactly `SDP{` + 16 lowercase hex + `}` or the command stops before any lookup - so the only
+flag-bearing name it can ever ask for is `sdp-<16 hex>.x.exfil.sdp.test.`. It asks for it only after
+the sinkhole's canary `ok.x.exfil.sdp.test` came back as 192.0.2.53, so a resolver that does not hold
+the sinkhole never receives the flag (fail closed) - nor does one where another block took over
+`x.exfil.sdp.test`, the parent the canary shares with the flagged name - and it exits 0 only on NXDOMAIN (ADR 0032
+amendment of 2026-10-04), not `; true`. The zone is answered by a server block in CoreDNS's own
+Corefile, delivered by the k3s role (ADR 0026 amendment of 2026-10-04), with no `forward` and no `log`;
+`make validate` checks the effective configuration so that nothing else can serve the zone, and the
+live test reads CoreDNS's own counters to show the query counted in the zone and nothing forwarded.
+Order of delivery: the sinkhole is applied and proven from a sandbox pod before the command enters the
+catalogue (separate branches), because until the new Corefile is loaded the zone is forwarded like any
+other name - the canary would then stop the command, but the order does not rely on it.

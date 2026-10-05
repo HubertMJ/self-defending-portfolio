@@ -88,13 +88,13 @@ describe("terminal catalogue generator (scripts/terminal-catalogue.mjs)", () => 
 });
 
 describe("the committed ?mock=1 catalogue", () => {
-  it("is the real one: five objectives, fourteen commands, deface's real 80-character line", () => {
+  it("is the real one: five objectives, fifteen commands, deface's real 80-character line", () => {
     const parsed = parseScenarioDetails(terminalDetails());
     // The session limits the API now sends: 300 s, and 90 s without a command.
     expect(parsed.timeout_seconds).toBe(300);
     expect(parsed.idle_seconds).toBe(90);
     expect(parsed.objectives).toHaveLength(5);
-    expect(parsed.commands).toHaveLength(14); // none dropped by the page's own catalogue checks
+    expect(parsed.commands).toHaveLength(15); // none dropped by the page's own catalogue checks
     const deface = parsed.commands?.find((c) => c.id === "deface");
     expect(deface?.input).toHaveLength(80);
     expect(deface?.aliases).toEqual(["deface"]);

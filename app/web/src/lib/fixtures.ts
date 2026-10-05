@@ -239,7 +239,10 @@ export interface MockCommandOutput {
   exit: number;
 }
 
-/** `${FLAG}` is replaced with the run's own flag, which the mock generates per terminal run. */
+/**
+ * `${FLAG}` (a whole line) is replaced with the run's own flag, which the mock generates per terminal
+ * run, and `${LABEL}` (anywhere in a line) with the DNS label dns-exfil makes of it, `sdp-<16 hex>`.
+ */
 export const TERMINAL_OUTPUT: Record<string, MockCommandOutput> = {
   whoami: { stdout: ["uid=10001 gid=10001 groups=10001,42"], exit: 0 },
   hostname: { stdout: ["scenario-terminal"], exit: 0 },
@@ -255,6 +258,8 @@ export const TERMINAL_OUTPUT: Record<string, MockCommandOutput> = {
   "read-token": { stderr: ["cat: can't open '/var/run/secrets/kubernetes.io/serviceaccount/token': No such file or directory"], exit: 1 },
   "chown-root": { stderr: ["chown: /srv/shop/index.html: Operation not permitted"], exit: 1 },
   beacon: { stderr: ["wget: can't connect to remote host (127.0.0.1): Connection refused"], exit: 1 },
+  // CoreDNS answers the sinkhole zone itself; the resolver's address is scrubbed by the API (ADR 0021).
+  "dns-exfil": { stdout: ["query ${LABEL}.x.exfil.sdp.test.", "Server:\t\t[ip]", "Address:\t[ip]:53", "", "** server can't find ${LABEL}.x.exfil.sdp.test.: NXDOMAIN", ""], exit: 0 },
   // `busybox echo` exits 0 before the kill; sh -i (TTY) has no output and is killed outright.
   "drop-run": { stdout: ["dropped and ran"], exit: 0 },
   shell: { exit: 0 },
