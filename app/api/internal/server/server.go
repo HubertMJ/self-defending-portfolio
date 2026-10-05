@@ -24,12 +24,14 @@ import (
 
 	"github.com/hubertmj/self-defending-portfolio/app/api/internal/clientip"
 	"github.com/hubertmj/self-defending-portfolio/app/api/internal/events"
+	"github.com/hubertmj/self-defending-portfolio/app/api/internal/incidents"
 	"github.com/hubertmj/self-defending-portfolio/app/api/internal/limits"
 	"github.com/hubertmj/self-defending-portfolio/app/api/internal/posture"
 	"github.com/hubertmj/self-defending-portfolio/app/api/internal/ruleindex"
 	"github.com/hubertmj/self-defending-portfolio/app/api/internal/runlog"
 	"github.com/hubertmj/self-defending-portfolio/app/api/internal/runner"
 	"github.com/hubertmj/self-defending-portfolio/app/api/internal/scenarios"
+	"github.com/hubertmj/self-defending-portfolio/app/api/internal/siemindex"
 	"github.com/hubertmj/self-defending-portfolio/app/api/internal/stats"
 	"github.com/hubertmj/self-defending-portfolio/app/api/internal/webhook"
 )
@@ -47,6 +49,12 @@ type Runner interface {
 	ArmFor(namespace, pod string) string
 	ObserveFalco(namespace, pod, rule string)
 	ObserveTalon(namespace, pod, status, actionner string)
+}
+
+// CorrelationReader is what GET /api/correlation needs from internal/incidents: the view as JSON,
+// marshalled once per poll by the tracker.
+type CorrelationReader interface {
+	JSON() []byte
 }
 
 // Poster is what the server needs from internal/posture.
@@ -87,6 +95,11 @@ type Config struct {
 	// New's time; a CIRunID that is not 1-20 digits is published as "".
 	StartedAt time.Time
 	CIRunID   string
+	// Correlation is the SIEM incident tracker behind GET /api/correlation, SiemIndex the embedded
+	// SIEM rule index behind GET /api/correlation/rules (ADR 0036). A nil Correlation answers
+	// available:false, as an unconfigured SIEM does.
+	Correlation CorrelationReader
+	SiemIndex   *siemindex.Index
 
 	// AllowedOrigin is the only Origin a browser may POST from (the site itself).
 	AllowedOrigin string
@@ -166,11 +179,13 @@ func (s *Server) Public() http.Handler {
 	mux.HandleFunc("GET /api/stats", s.stats)
 	mux.HandleFunc("GET /api/limits", s.limits)
 	mux.HandleFunc("GET /api/provenance", s.provenance)
+	mux.HandleFunc("GET /api/correlation", s.correlation)
+	mux.HandleFunc("GET /api/correlation/rules", s.correlationRules)
 	// The same paths without a method: a wrong method gets a JSON 405 instead of net/http's plain
 	// text one, so every /api answer is JSON (the page parses errors too).
 	for _, p := range []string{"/api/healthz", "/api/scenarios", "/api/attack/{id}", "/api/events", "/api/posture",
 		"/api/scenarios/{id}/details", "/api/runs", "/api/runs/{id}", "/api/runs/{id}/commands", "/api/stats", "/api/limits",
-		"/api/provenance"} {
+		"/api/provenance", "/api/correlation", "/api/correlation/rules"} {
 		mux.HandleFunc(p, methodNotAllowed)
 	}
 	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
@@ -318,6 +333,28 @@ func (s *Server) posture(w http.ResponseWriter, r *http.Request) {
 	}
 	snap.Kyverno.Violations = vs
 	writeJSON(w, http.StatusOK, snap)
+}
+
+// correlation answers the tracker's current view: built by its own poller, never by this request,
+// so a visitor never causes a SIEM query (ADR 0036). Everything in it is already cleaned.
+func (s *Server) correlation(w http.ResponseWriter, _ *http.Request) {
+	if s.cfg.Correlation == nil {
+		writeJSON(w, http.StatusOK, incidents.Unavailable())
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(append(s.cfg.Correlation.JSON(), '\n'))
+}
+
+// correlationRules is the SIEM's detection content from git (the embedded index), served whether or
+// not the SIEM is reachable.
+func (s *Server) correlationRules(w http.ResponseWriter, _ *http.Request) {
+	ix := s.cfg.SiemIndex
+	if ix == nil {
+		ix, _ = siemindex.Load()
+	}
+	writeJSON(w, http.StatusOK, ix)
 }
 
 // maxWebhookBody: a Falco alert with every output field is a few KiB.
