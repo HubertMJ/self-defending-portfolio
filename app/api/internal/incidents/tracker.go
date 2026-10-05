@@ -38,8 +38,12 @@ const (
 	retention = 24 * time.Hour
 	// pageSize: at most this many items per type and request (siem contract M16).
 	pageSize = siem.MaxSize
-	// maxPerSource bounds the evidence kept per source.
+	// maxPerSource bounds the evidence kept per source (Hubble: per kind, DNS findings and drops
+	// apart, so a flood of drops never pushes a DNS finding out).
 	maxPerSource = 2000
+	// dropSettle: a Hubble drop older than this that no check uses is dropped from memory - by then
+	// the command or Talon patch it could belong to has been read too.
+	dropSettle = 10 * time.Minute
 	// staleAfter: the section is available while the last fully successful poll is at most this old
 	// (three polls), so a stopped SIEM hides it within a minute (L11) and one slow poll does not.
 	staleAfter = 45 * time.Second
@@ -88,6 +92,8 @@ type Tracker struct {
 	lastTry time.Time
 	failing bool
 	view    View
+	// logged: notes already logged (a full page per read, a 404 per log type); Poll's goroutine only.
+	logged map[string]bool
 
 	fmu   sync.Mutex
 	flags map[string]*flagEntry // by run id
@@ -121,7 +127,7 @@ func New(cfg Config) *Tracker {
 		cfg.Rules, _ = siemindex.Load()
 	}
 	return &Tracker{cfg: cfg, start: cfg.Now(), records: map[string]*record{}, hosts: map[string]time.Time{},
-		corr: map[string]siem.Correlation{}, rules: RulesView{Status: "unknown"}, flags: map[string]*flagEntry{}}
+		corr: map[string]siem.Correlation{}, rules: RulesView{Status: "unknown"}, flags: map[string]*flagEntry{}, logged: map[string]bool{}}
 }
 
 // Enabled reports whether a SIEM is configured.
@@ -190,9 +196,14 @@ func (t *Tracker) Poll(ctx context.Context) {
 			var se *siem.StatusError
 			if !errors.As(err, &se) || se.Code != 404 {
 				errs = append(errs, err)
+			} else {
+				t.note("404 "+lt.logType, true, "siem: no detector for a log type yet", "log_type", lt.logType)
 			}
 			continue
 		}
+		t.note("404 "+lt.logType, false, "")
+		t.note("full "+lt.logType, len(fs) >= pageSize, "siem: a findings page came back full; older items of the window are not read",
+			"log_type", lt.logType, "size", pageSize)
 		for _, f := range fs {
 			if lt.source == "host" {
 				// Host findings are counted, nothing else (ADR 0034 "counts only").
@@ -220,6 +231,8 @@ func (t *Tracker) Poll(ctx context.Context) {
 			errs = append(errs, err)
 			continue
 		}
+		t.note("full "+s.index, len(res.Hits) >= pageSize, "siem: a search page came back full; older documents of the window are not read",
+			"index", s.index, "size", pageSize)
 		for _, h := range res.Hits {
 			if r, ok := t.fromHit(h, s.source); ok {
 				news = append(news, found{r, ""})
@@ -376,16 +389,45 @@ func (t *Tracker) readRewrite(ctx context.Context, now time.Time) (bool, bool) {
 	return res.Total > 0, true
 }
 
-// prune drops evidence older than the retention and keeps at most maxPerSource records per source.
+// note logs msg once when cond becomes true, and forgets it when cond is false again.
+func (t *Tracker) note(key string, cond bool, msg string, args ...any) {
+	if !cond {
+		delete(t.logged, key)
+		return
+	}
+	if !t.logged[key] {
+		t.logged[key] = true
+		t.cfg.Log.Warn(msg, args...)
+	}
+}
+
+// prune drops evidence older than the retention, settled Hubble drops no check uses, and keeps at
+// most maxPerSource records per source (Hubble DNS findings and drops counted apart).
 func (t *Tracker) prune(now time.Time) {
 	cut := now.Add(-retention)
-	per := map[string][]*record{}
+	byRef := map[string][]*record{}
 	for k, r := range t.records {
 		if r.at.Before(cut) {
 			delete(t.records, k)
 			continue
 		}
-		per[r.source] = append(per[r.source], r)
+		byRef[r.ref] = append(byRef[r.ref], r)
+	}
+	per := map[string][]*record{}
+	for _, list := range byRef {
+		sort.Slice(list, func(i, j int) bool { return list[i].at.Before(list[j].at) })
+		used := usedDrops(list)
+		for _, r := range list {
+			bucket := r.source
+			if r.source == "hubble" && !r.dns {
+				if r.at.Before(now.Add(-dropSettle)) && !used[r] {
+					delete(t.records, r.key)
+					continue
+				}
+				bucket = "hubble-drop"
+			}
+			per[bucket] = append(per[bucket], r)
+		}
 	}
 	for _, list := range per {
 		if len(list) <= maxPerSource {

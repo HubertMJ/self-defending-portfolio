@@ -41,6 +41,9 @@ const (
 	// quarantineDropWindow: a quarantined pod's lookup is dropped at once; nslookup gives up within
 	// the API's 5 s command bound.
 	quarantineDropWindow = 10 * time.Second
+	// enforceWindow: the first drop after Talon's quarantine label counts as "policy enforced" only
+	// this soon after it (ADR 0032 measures isolation under 3 s).
+	enforceWindow = 30 * time.Second
 )
 
 const monitorPrefix = "sdp-git: "
@@ -278,9 +281,7 @@ func (ix *index) containedIntrusion(ref string) *draft {
 	if anchor != nil {
 		d.TTDMs = msPtr(f0.at.Sub(anchor.at))
 	}
-	resp := first(all, f0.at, func(r *record) bool {
-		return r.source == "k8s-audit" && r.actor == actorTalon && r.resource == "pods" && r.subresource == "" && (r.verb == "patch" || r.verb == "delete")
-	})
+	resp := first(all, f0.at, isTalonResponse)
 	d.add(anchor)
 	d.add(falcos...)
 	d.add(talons...)
@@ -296,7 +297,7 @@ func (ix *index) containedIntrusion(ref string) *draft {
 		if resp.verb == "patch" {
 			// The first drop after the label is the network policy taking effect: its own step,
 			// "policy enforced +N ms", not part of TTI.
-			if drop := first(all, resp.at, func(r *record) bool { return r.source == "hubble" && r.verdict == "DROPPED" && !r.dns }); drop != nil {
+			if drop := enforcedDrop(all, resp); drop != nil {
 				d.extra = append(d.extra, Step{At: drop.at, Source: "hubble", Rule: drop.rule,
 					Detail: "policy enforced +" + fmt.Sprint(drop.at.Sub(resp.at).Milliseconds()) + " ms: " + ix.t.detail(drop)})
 				d.ev = append(d.ev, evidenceOf(drop))
@@ -321,9 +322,7 @@ func (ix *index) dnsExfil(ref string) *draft {
 		if cmd == nil {
 			return nil
 		}
-		drop := first(all, cmd.at, func(r *record) bool {
-			return r.source == "hubble" && r.verdict == "DROPPED" && r.port == 53 && !r.at.After(cmd.at.Add(quarantineDropWindow))
-		})
+		drop := lookupDrop(all, cmd)
 		if drop == nil {
 			return nil
 		}
@@ -670,6 +669,49 @@ func (ix *index) finish(d *draft) Incident {
 		}
 	}
 	return inc
+}
+
+func isDrop(r *record) bool { return r.source == "hubble" && r.verdict == "DROPPED" && !r.dns }
+
+func isTalonResponse(r *record) bool {
+	return r.source == "k8s-audit" && r.actor == actorTalon && r.resource == "pods" && r.subresource == "" &&
+		(r.verb == "patch" || r.verb == "delete") && r.code < 300
+}
+
+// enforcedDrop is the first drop on the ref at or after Talon's quarantine patch, within
+// enforceWindow; nil for a delete.
+func enforcedDrop(all []*record, resp *record) *record {
+	if resp.verb != "patch" {
+		return nil
+	}
+	return first(all, resp.at, func(r *record) bool { return isDrop(r) && !r.at.After(resp.at.Add(enforceWindow)) })
+}
+
+// lookupDrop is a quarantined pod's dropped lookup: a drop to port 53 within quarantineDropWindow of
+// the dns-exfil command.
+func lookupDrop(all []*record, cmd *record) *record {
+	return first(all, cmd.at, func(r *record) bool {
+		return isDrop(r) && r.port == 53 && !r.at.After(cmd.at.Add(quarantineDropWindow))
+	})
+}
+
+// usedDrops are the drops of one ref's time-ordered records that a check reads: the policy-enforced
+// drop after each Talon patch and the dropped lookup after each dns-exfil command.
+func usedDrops(list []*record) map[*record]bool {
+	used := map[*record]bool{}
+	for _, r := range list {
+		var d *record
+		switch {
+		case isTalonResponse(r):
+			d = enforcedDrop(list, r)
+		case isCommandStart(r) && r.commandID == "dns-exfil":
+			d = lookupDrop(list, r)
+		}
+		if d != nil {
+			used[d] = true
+		}
+	}
+	return used
 }
 
 // evidenceOf cites a record: its finding, or the document when no rule fired on it.

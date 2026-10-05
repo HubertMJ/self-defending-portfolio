@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -761,4 +763,94 @@ func TestRulesHealthSurvivesQuietWeeks(t *testing.T) {
 	if r := tr.View().Rules; r.Status != "refused" || r.Commit != commit {
 		t.Fatalf("refused after applied: %+v", r)
 	}
+}
+
+// Hubble drops are capped apart from DNS findings, and a settled drop no check reads is not kept: a
+// quarantined pod's drop flood never pushes a DNS finding or the policy-enforced drop out.
+func TestHubbleDropsCappedApart(t *testing.T) {
+	f := newFake()
+	quarantineRun(f) // Talon patch at t0+2h+2.3 s, first drop at +2.6 s
+	terminalRun(f, "sdp-"+flagHex)
+	clk := &clock{t: t0.Add(2*time.Hour + time.Minute)}
+	tr := newTracker(t, f, clk)
+	tr.Poll(context.Background())
+	// A flood of later drops on the quarantined pod, past the cap.
+	tr.mu.Lock()
+	for i := 0; i < maxPerSource+500; i++ {
+		r := &record{key: fmt.Sprintf("doc:flood/%d", i), docID: fmt.Sprintf("fl%d", i), source: "hubble", ref: quarRef,
+			at: t0.Add(2*time.Hour + 3*time.Second + time.Duration(i)*time.Millisecond), verdict: "DROPPED", port: 9}
+		tr.records[r.key] = r
+	}
+	tr.prune(clk.Now())
+	n := len(tr.records)
+	tr.mu.Unlock()
+	if n > maxPerSource+50 {
+		t.Fatalf("%d records kept", n)
+	}
+	clk.Set(t0.Add(2*time.Hour + 15*time.Minute))
+	tr.Poll(context.Background())
+	tr.mu.Lock()
+	drops := 0
+	for _, r := range tr.records {
+		if r.source == "hubble" && !r.dns {
+			drops++
+		}
+	}
+	tr.mu.Unlock()
+	if drops != 1 {
+		t.Fatalf("%d settled drops kept, want only the policy-enforced one", drops)
+	}
+	v := tr.View()
+	if inc := one(t, v, KindDNSExfil); inc.Evidence[len(inc.Evidence)-1].ID != "f-dns-1" {
+		t.Fatalf("dns finding lost: %+v", inc)
+	}
+	for _, inc := range incidentsOf(v, KindContainedIntrusion) {
+		if inc.RunID != quarRun {
+			continue
+		}
+		found := false
+		for _, st := range inc.Steps {
+			found = found || strings.HasPrefix(st.Detail, "policy enforced +300 ms")
+		}
+		if !found {
+			t.Fatalf("policy-enforced drop pruned: %+v", inc.Steps)
+		}
+	}
+}
+
+// A page that comes back full and a log type without a detector are logged once each, not every poll.
+func TestPollNotesLoggedOnce(t *testing.T) {
+	f := newFake()
+	for i := 0; i < pageSize; i++ {
+		f.hits["sdp-hubble"] = append(f.hits["sdp-hubble"], dropDoc(fmt.Sprintf("hd%d", i), t0.Add(time.Duration(i)*time.Millisecond), quarRef, 9))
+	}
+	var buf strings.Builder
+	var mu sync.Mutex
+	log := slog.New(slog.NewTextHandler(&lockedWriter{w: &buf, mu: &mu}, nil))
+	clk := &clock{t: t0.Add(time.Minute)}
+	tr := New(Config{Source: &statusSource{fakeSource: f, code: 404}, Rules: rulesIndex(t), Namespace: "sandbox",
+		UnguardedNamespace: "sandbox-unguarded", Now: clk.Now, Log: log})
+	tr.Poll(context.Background())
+	clk.Set(t0.Add(time.Minute + 15*time.Second))
+	tr.Poll(context.Background())
+	mu.Lock()
+	out := buf.String()
+	mu.Unlock()
+	if strings.Count(out, "search page came back full") != 1 || !strings.Contains(out, "index=sdp-hubble") {
+		t.Fatalf("full page logged %d times: %s", strings.Count(out, "search page came back full"), out)
+	}
+	if strings.Count(out, "no detector for a log type yet") != 1 || !strings.Contains(out, "log_type=sdp_host") {
+		t.Fatalf("404 logged %d times: %s", strings.Count(out, "no detector for a log type yet"), out)
+	}
+}
+
+type lockedWriter struct {
+	w  *strings.Builder
+	mu *sync.Mutex
+}
+
+func (l *lockedWriter) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.w.Write(p)
 }
