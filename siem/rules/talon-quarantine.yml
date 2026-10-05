@@ -1,0 +1,22 @@
+# Falco Talon's record of a response it carried out (sdp-talon). A response is not an ATT&CK technique, so the
+# rule is informational and carries no technique tag; the contained-intrusion correlation joins it with the
+# Falco alert it answered.
+title: Talon - pod quarantined
+id: ab2bc6ee-e717-4b7a-a69e-92acb304903e
+status: experimental
+level: informational
+description: >-
+  Talon labelled a sandbox pod for quarantine in answer to a Falco alert (action Quarantine Pod,
+  kubernetes:label); the quarantine policy then drops all its traffic.
+author: Hubert Jabłoński
+date: 2026/10/04
+logsource:
+  product: sdp
+  service: talon
+detection:
+  selection:
+    talon.action_slug: quarantine-pod
+    talon.status: success
+  condition: selection
+falsepositives:
+  - "Talon answering a scenario, a terminal command or tests/scenarios/run.sh - Talon's normal work"

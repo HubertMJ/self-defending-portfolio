@@ -1,0 +1,26 @@
+# The portfolio API's own record of a catalogue command it started in a visitor's terminal (sdp-api,
+# siem.command). The command id is fixed by the catalogue, so the technique is the catalogue's claim; the SIEM
+# evidence that it happened comes from the other sources.
+title: Terminal exfiltration - web request
+id: a3480924-d541-4ad0-acd5-61487b20547e
+status: experimental
+level: medium
+description: >-
+  A visitor started a network tool in the attacker terminal (catalogue T1071.001); Falco answers it and Talon
+  quarantines the pod.
+author: Hubert Jabłoński
+date: 2026/10/04
+logsource:
+  product: sdp
+  service: api
+detection:
+  selection:
+    event.action: siem.command
+    api.state: started
+    api.technique: T1071.001
+  condition: selection
+tags:
+  - attack.command_and_control
+  - attack.t1071.001
+falsepositives:
+  - "A visitor (or the canary) running this catalogue command on the public page - that is the point"

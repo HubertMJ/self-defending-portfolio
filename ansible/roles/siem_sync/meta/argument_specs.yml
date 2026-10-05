@@ -1,0 +1,74 @@
+---
+argument_specs:
+  main:
+    short_description: The rules sync on siem01
+    description:
+      - Installs the sync program and the siem/ lint (from this role, never from the fetched tree), the system user that runs
+        them, a sandboxed oneshot unit with the rules-sync certificate as systemd credentials, and the timer that runs it.
+        The sync fetches the branch, applies only fast-forwards, lints, diffs against the objects it manages and records
+        every applied commit in the siem-sync index.
+    options:
+      siem_sync_repo_url:
+        description: Repository the sync fetches.
+        type: str
+        default: https://github.com/HubertMJ/self-defending-portfolio.git
+      siem_sync_branch:
+        description: Branch the sync fetches.
+        type: str
+        default: main
+      siem_sync_git_protocols:
+        description: Transports git may use (GIT_ALLOW_PROTOCOL, colon-separated).
+        type: str
+        default: https
+      siem_sync_url:
+        description: OpenSearch URL.
+        type: str
+        default: https://127.0.0.1:9200
+      siem_sync_ca:
+        description: CA certificate that signed the node certificate.
+        type: path
+        default: /etc/opensearch/certs/ca.crt
+      siem_sync_cert:
+        description: Client certificate of the rules-sync identity.
+        type: path
+        default: /etc/sdp-siem/pki/rules-sync.crt
+      siem_sync_key:
+        description: Key of the rules-sync identity (read only by systemd, as a credential).
+        type: path
+        default: /etc/sdp-siem/pki/rules-sync.key
+      siem_sync_delete_cap:
+        description: Managed deletions allowed in one run without the allow-mass-delete flag.
+        type: int
+        default: 5
+      siem_sync_change_cap:
+        description: Rule and monitor updates allowed in one run without the allow-mass-change flag.
+        type: int
+        default: 5
+      siem_sync_repo_max_mb:
+        description: Largest size of the fetched repository, in MiB.
+        type: int
+        default: 1024
+      siem_sync_flag_dir:
+        description: Directory of the operator's one-shot flags accept-commit, allow-mass-delete and allow-mass-change.
+        type: path
+        default: /etc/sdp-siem
+      siem_sync_interval:
+        description: Time between the end of one run and the next (systemd time span).
+        type: str
+        default: 5min
+      siem_sync_timer_enabled:
+        description: Run the sync on its timer; false stops and disables the timer (the rollback).
+        type: bool
+        default: true
+      siem_sync_lib_dir:
+        description: Where the program and the lint are installed.
+        type: path
+        default: /usr/local/lib/sdp-siem-sync
+      siem_sync_state_dir:
+        description: The sync's own state (the fetched bare repository).
+        type: path
+        default: /var/lib/sdp-siem-sync
+      siem_sync_user:
+        description: System user the sync runs as.
+        type: str
+        default: sdp-sync

@@ -1,0 +1,24 @@
+# A Falco alert shipped from k3s01 (sdp-falco). Rule names have spaces and SA never matches a value with a
+# space, so the rule matches the slug sdp.lua writes next to the name (siem contract S0-#4).
+title: Falco - terminal shell in a container
+id: 14a9ddb2-f159-47ca-a138-4addee907b0f
+status: experimental
+level: high
+description: >-
+  Falco rule "Terminal shell in container" fired: an interactive shell with a terminal started in a container
+  (scenario shell-in-container, terminal command shell).
+author: Hubert Jabłoński
+date: 2026/10/04
+logsource:
+  product: sdp
+  service: falco
+detection:
+  selection:
+    event.kind: alert
+    falco.rule_slug: terminal-shell-in-container
+  condition: selection
+tags:
+  - attack.execution
+  - attack.t1059.004
+falsepositives:
+  - "A scenario or terminal command on the public page, or tests/scenarios/run.sh - each is a real attack on a sandbox pod"

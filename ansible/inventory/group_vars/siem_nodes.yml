@@ -85,3 +85,7 @@ opensearch_cert_generations:
   shipper-siem01: 1
   shipper-k3s01: 1
   portfolio-api: 1
+
+# --- rules from git (P3): the sync timer applies siem/ of main (role siem_sync; rollback:
+# siem_sync_timer_enabled: false) ---
+siem_sync_enabled: true

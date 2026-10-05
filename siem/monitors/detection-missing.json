@@ -1,0 +1,137 @@
+{
+  "type": "monitor",
+  "monitor_type": "bucket_level_monitor",
+  "name": "sdp-git: detection-missing",
+  "enabled": true,
+  "schedule": {
+    "period": {
+      "interval": 1,
+      "unit": "MINUTES"
+    }
+  },
+  "inputs": [
+    {
+      "search": {
+        "indices": [
+          "sdp-api",
+          "sdp-falco"
+        ],
+        "query": {
+          "size": 0,
+          "query": {
+            "bool": {
+              "filter": [
+                {
+                  "range": {
+                    "@timestamp": {
+                      "gte": "{{period_end}}||-4m",
+                      "lte": "{{period_end}}",
+                      "format": "epoch_millis"
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          "aggregations": {
+            "composite_agg": {
+              "composite": {
+                "size": 50,
+                "sources": [
+                  {
+                    "pod": {
+                      "terms": {
+                        "field": "k8s.pod.ref"
+                      }
+                    }
+                  }
+                ]
+              },
+              "aggregations": {
+                "commands": {
+                  "filter": {
+                    "bool": {
+                      "filter": [
+                        {
+                          "term": {
+                            "event.action": "siem.command"
+                          }
+                        },
+                        {
+                          "term": {
+                            "api.state": "started"
+                          }
+                        },
+                        {
+                          "term": {
+                            "api.outcome": "detected"
+                          }
+                        },
+                        {
+                          "range": {
+                            "@timestamp": {
+                              "gte": "{{period_end}}||-3m",
+                              "lte": "{{period_end}}||-1m",
+                              "format": "epoch_millis"
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  }
+                },
+                "falco": {
+                  "filter": {
+                    "bool": {
+                      "filter": [
+                        {
+                          "term": {
+                            "event.dataset": "falco"
+                          }
+                        },
+                        {
+                          "term": {
+                            "event.kind": "alert"
+                          }
+                        },
+                        {
+                          "range": {
+                            "@timestamp": {
+                              "gte": "{{period_end}}||-210s",
+                              "lte": "{{period_end}}",
+                              "format": "epoch_millis"
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "triggers": [
+    {
+      "bucket_level_trigger": {
+        "name": "detected command, no Falco alert",
+        "severity": "1",
+        "condition": {
+          "buckets_path": {
+            "commands": "commands._count",
+            "falco": "falco._count"
+          },
+          "parent_bucket_path": "composite_agg",
+          "script": {
+            "source": "params.commands > 0 && params.falco == 0",
+            "lang": "painless"
+          }
+        },
+        "actions": []
+      }
+    }
+  ]
+}

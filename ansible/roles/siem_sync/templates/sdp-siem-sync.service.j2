@@ -1,0 +1,46 @@
+# {{ ansible_managed }}
+# The rules sync (ADR 0034 "Rules from git", siem contract P3). It runs as its own user with no
+# capability; the rules-sync key arrives as a systemd credential, readable only through
+# $CREDENTIALS_DIRECTORY. The only writable place is its state directory: the one-shot flags in
+# {{ siem_sync_flag_dir }} are removed by the root ExecStartPost, after a successful run only.
+[Unit]
+Description=Apply siem/ from git to OpenSearch (rules sync)
+After=network-online.target opensearch.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User={{ siem_sync_user }}
+Group={{ siem_sync_user }}
+EnvironmentFile=/etc/sdp-siem/sync.env
+ExecStart=/usr/bin/python3 {{ siem_sync_lib_dir }}/sdp_siem_sync.py
+ExecStartPost=+{{ siem_sync_lib_dir }}/consume-flags {{ siem_sync_state_dir }} {{ siem_sync_flag_dir }}
+LoadCredential=ca.crt:{{ siem_sync_ca }}
+LoadCredential=client.crt:{{ siem_sync_cert }}
+LoadCredential=client.key:{{ siem_sync_key }}
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths={{ siem_sync_state_dir }}
+InaccessiblePaths=-/etc/sdp-siem/pki -/etc/opensearch -/etc/opensearch-dashboards -/etc/fluent-bit
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+UMask=0077
+MemoryMax=512M
+TimeoutStartSec=15min

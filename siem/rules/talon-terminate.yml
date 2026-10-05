@@ -1,0 +1,21 @@
+# Falco Talon's record of a response it carried out (sdp-talon). A response is not an ATT&CK technique, so the
+# rule is informational and carries no technique tag; the contained-intrusion correlation joins it with the
+# Falco alert it answered.
+title: Talon - pod terminated
+id: ba58109c-e0e4-4409-9c4c-0a80bfca3dce
+status: experimental
+level: informational
+description: >-
+  Talon deleted a sandbox pod in answer to a Falco alert (action Terminate Pod, kubernetes:terminate).
+author: Hubert Jabłoński
+date: 2026/10/04
+logsource:
+  product: sdp
+  service: talon
+detection:
+  selection:
+    talon.action_slug: terminate-pod
+    talon.status: success
+  condition: selection
+falsepositives:
+  - "Talon answering a scenario, a terminal command or tests/scenarios/run.sh - Talon's normal work"

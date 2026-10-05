@@ -1,0 +1,25 @@
+# A Kubernetes audit event (sdp-k8s-audit); refusals are shipped from every namespace (F2).
+title: Kubernetes - pod refused by admission
+id: b1b84b49-2ff5-4245-b753-69e1da48de20
+status: experimental
+level: low
+description: >-
+  A pod create was refused by an admission webhook (Kyverno answers 400): an unsigned image, a privileged pod,
+  a sandbox pod without its deadline. One refusal is noise; the policy probing monitor counts them per
+  principal.
+author: Hubert Jabłoński
+date: 2026/10/04
+logsource:
+  product: sdp
+  service: k8s-audit
+detection:
+  selection:
+    audit.verb: create
+    audit.object.resource: pods
+    audit.response.code: 400
+  condition: selection
+tags:
+  - attack.execution
+  - attack.t1610
+falsepositives:
+  - "tests/admission/run.sh (the canary; server-side dry runs, audited all the same)"

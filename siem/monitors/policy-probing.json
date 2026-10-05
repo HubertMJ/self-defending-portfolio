@@ -1,0 +1,122 @@
+{
+  "type": "monitor",
+  "monitor_type": "bucket_level_monitor",
+  "name": "sdp-git: policy-probing",
+  "enabled": true,
+  "schedule": {
+    "period": {
+      "interval": 1,
+      "unit": "MINUTES"
+    }
+  },
+  "inputs": [
+    {
+      "search": {
+        "indices": [
+          "sdp-k8s-audit"
+        ],
+        "query": {
+          "size": 0,
+          "query": {
+            "bool": {
+              "filter": [
+                {
+                  "term": {
+                    "audit.verb": "create"
+                  }
+                },
+                {
+                  "term": {
+                    "audit.object.resource": "pods"
+                  }
+                },
+                {
+                  "range": {
+                    "@timestamp": {
+                      "gte": "{{period_end}}||-10m",
+                      "lte": "{{period_end}}",
+                      "format": "epoch_millis"
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          "aggregations": {
+            "composite_agg": {
+              "composite": {
+                "size": 50,
+                "sources": [
+                  {
+                    "principal": {
+                      "terms": {
+                        "field": "user.name"
+                      }
+                    }
+                  }
+                ]
+              },
+              "aggregations": {
+                "denied": {
+                  "filter": {
+                    "range": {
+                      "audit.response.code": {
+                        "gte": 400
+                      }
+                    }
+                  },
+                  "aggregations": {
+                    "last": {
+                      "max": {
+                        "field": "@timestamp"
+                      }
+                    }
+                  }
+                },
+                "allowed": {
+                  "filter": {
+                    "range": {
+                      "audit.response.code": {
+                        "gte": 200,
+                        "lt": 300
+                      }
+                    }
+                  },
+                  "aggregations": {
+                    "last": {
+                      "max": {
+                        "field": "@timestamp"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "triggers": [
+    {
+      "bucket_level_trigger": {
+        "name": "three refused pod creates, then an allowed one after the last refusal",
+        "severity": "2",
+        "condition": {
+          "buckets_path": {
+            "denied": "denied._count",
+            "allowed": "allowed._count",
+            "denied_last": "denied>last",
+            "allowed_last": "allowed>last"
+          },
+          "parent_bucket_path": "composite_agg",
+          "script": {
+            "source": "params.denied >= 3 && params.allowed > 0 && params.allowed_last > params.denied_last",
+            "lang": "painless"
+          }
+        },
+        "actions": []
+      }
+    }
+  ]
+}

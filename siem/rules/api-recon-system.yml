@@ -1,0 +1,25 @@
+# The portfolio API's own record of a catalogue command it started in a visitor's terminal (sdp-api,
+# siem.command). The command id is fixed by the catalogue, so the technique is the catalogue's claim; the SIEM
+# evidence that it happened comes from the other sources.
+title: Terminal recon - system information
+id: 03ffcde5-3de6-4626-93dd-dd98f1d8cde3
+status: experimental
+level: low
+description: >-
+  A visitor ran hostname or read the capability sets in the attacker terminal (catalogue T1082).
+author: Hubert Jabłoński
+date: 2026/10/04
+logsource:
+  product: sdp
+  service: api
+detection:
+  selection:
+    event.action: siem.command
+    api.state: started
+    api.technique: T1082
+  condition: selection
+tags:
+  - attack.discovery
+  - attack.t1082
+falsepositives:
+  - "A visitor (or the canary) running this catalogue command on the public page - that is the point"

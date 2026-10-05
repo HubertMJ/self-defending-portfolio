@@ -60,6 +60,10 @@ jobs:
         run: scripts/check-web-csp.sh
       - name: no placeholder image digests (ADR 0016)
         run: scripts/check-image-digests.sh
+      - name: the SIEM rules tree lints clean, with the program the sync on siem01 runs (ADR 0034)
+        run: scripts/check-siem.sh
+      - name: the API's embedded SIEM rule index matches siem/ (ADR 0036)
+        run: scripts/gen-siem-index.sh --check
       - name: kustomize build + kubeconform, helm template + kyverno apply
         run: scripts/validate-cluster.sh
       - name: the SIEM shipper's filter under the pinned Fluent Bit (ADR 0034)

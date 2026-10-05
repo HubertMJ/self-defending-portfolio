@@ -51,8 +51,11 @@ sdp_rules_sync:
     - "cluster:admin/opensearch/securityanalytics/rule/*"
     - "cluster:admin/opensearch/securityanalytics/mapping/get"
     - "cluster:admin/opensearch/securityanalytics/mapping/view/get"
-    - "cluster:admin/opendistro/alerting/*"
-    - "cluster:admin/opensearch/alerting/*"
+    # P3 review L4: the sync reads, writes and deletes monitors and nothing else of Alerting.
+    - "cluster:admin/opendistro/alerting/monitor/get"
+    - "cluster:admin/opendistro/alerting/monitor/search"
+    - "cluster:admin/opendistro/alerting/monitor/write"
+    - "cluster:admin/opendistro/alerting/monitor/delete"
     - "cluster:admin/opensearch/notifications/feature/publish"
     - "cluster:admin/index/correlation/rules/*"
     - "cluster_monitor"

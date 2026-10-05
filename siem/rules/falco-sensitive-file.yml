@@ -1,0 +1,24 @@
+# A Falco alert shipped from k3s01 (sdp-falco). Rule names have spaces and SA never matches a value with a
+# space, so the rule matches the slug sdp.lua writes next to the name (siem contract S0-#4).
+title: Falco - sensitive file read
+id: fcdedb54-6d05-4d6d-a319-005dbf970467
+status: experimental
+level: high
+description: >-
+  Falco rule "Read sensitive file untrusted" fired: an untrusted program opened a credential file such as
+  /etc/shadow (scenario sensitive-file-read, terminal command read-shadow).
+author: Hubert Jabłoński
+date: 2026/10/04
+logsource:
+  product: sdp
+  service: falco
+detection:
+  selection:
+    event.kind: alert
+    falco.rule_slug: read-sensitive-file-untrusted
+  condition: selection
+tags:
+  - attack.credential_access
+  - attack.t1003.008
+falsepositives:
+  - "A scenario or terminal command on the public page, or tests/scenarios/run.sh - each is a real attack on a sandbox pod"
