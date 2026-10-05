@@ -259,3 +259,38 @@ footer carries one plain link "Verify the running images", styled like the other
 content, its polling and the `isPinnedImageRef` rule are unchanged. The end-to-end suite asserts the
 section order, a hero with no provenance and no `#verify` link, and that the footer link brings
 `#verify-title` into view.
+
+## Amendment 2026-10-05: the attack first; every section below the hero folds
+
+**Context.** The owner found that the page still led a visitor away from what it exists to show: the live
+attack, the cluster's response and the SIEM's correlation (ADR 0036). Evidence and posture came first, and
+every section was always open, so the attack started a long scroll down.
+
+**Decision.** The sections run hero, `#attack` (the terminal, the one-click launcher, the live run
+`#console` and the run history), `#correlation` (shown only while the SIEM answers), `#how`, `#about`,
+`#evidence`, `#posture`, `#verify`, `#skills`, `#projects`; in production `#about` is stripped while
+unwritten. The navigation follows the page (Attack it, How it works, About, Posture). The stylesheet's
+counter numbers the eyebrows, so the numbers follow the order with no copy to change. `#verify` keeps the
+footer's link as its only one; the hero still links to none of it, and its lead now opens with the attack.
+The hero's evidence card stays where it was, the above-the-fold proof; its "full record" link reaches
+`#evidence` further down.
+
+Every section but the hero folds under its heading (`app/web/src/ui/sections.ts`). The h2's text moves
+into a `<button>` with `aria-expanded` and `aria-controls` naming the section's `.section__body`, a chevron
+and the page's focus ring; every section starts open, and a visitor's choice is kept per section in
+`localStorage` (`collapsed:<id>`; a storage error leaves it unremembered). A folded section shows its
+eyebrow and its title only. A link to a folded section, or to anything inside one, opens it before the
+browser scrolls; so do a hash change and a page opened at a hash. Without JavaScript nothing folds.
+Folded is not hidden: `#correlation` hides itself while the SIEM is unavailable whether folded or not.
+
+A folded section stops drawing what nobody can see. The posture is still fetched every minute (the
+evidence's liveness line reads it) but drawn only when unfolded; the correlation is still polled (it
+decides shown or hidden and the verify panel's endpoint list) but drawn only when unfolded; a folded
+`#evidence` draws neither its ticker, its liveness line nor its full record, while the hero's card goes on,
+and what arrived meanwhile is not announced as new on unfolding. The attack section's terminal, launcher,
+console and history keep running folded or not: a session must not stall because its panel was folded.
+
+**Consequences.** The attack is right after the hero; the proof of what was recorded and the posture
+remain one link or scroll away. The end-to-end suite asserts the order, the toggle (aria, hidden body,
+kept over a reload, by keyboard), anchors opening a folded section, and toggles that fit 320 and 360 px
+with a wide font forced in.
