@@ -5,7 +5,9 @@ id: 0a66d582-41d5-41ed-9c45-074725c6f640
 status: experimental
 level: low
 description: >-
-  An SSH login to k3s01 was refused: a wrong key, or a user that may not log in.
+  An SSH login to k3s01 was refused: a wrong key, or a user that may not log in. A user
+  outside AllowUsers leaves only "Connection closed by ... [preauth]" (closed-preauth); only the admin
+  networks reach port 22, so a connection closed before authentication is a refused attempt.
 author: Hubert Jabłoński
 date: 2026/10/04
 logsource:
@@ -17,6 +19,7 @@ detection:
     ssh.event:
       - failed
       - invalid-user
+      - closed-preauth
   condition: selection
 tags:
   - attack.credential_access

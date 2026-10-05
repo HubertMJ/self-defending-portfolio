@@ -5,7 +5,9 @@ id: 073abeb3-92b1-48b5-bad5-040b71030364
 status: experimental
 level: low
 description: >-
-  An SSH login to siem01 was refused: a wrong key, or a user that may not log in.
+  An SSH login to siem01 was refused: a wrong key, or a user that may not log in. A user
+  outside AllowUsers leaves only "Connection closed by ... [preauth]" (closed-preauth); only the admin
+  networks reach port 22, so a connection closed before authentication is a refused attempt.
 author: Hubert Jabłoński
 date: 2026/10/04
 logsource:
@@ -17,6 +19,7 @@ detection:
     ssh.event:
       - failed
       - invalid-user
+      - closed-preauth
   condition: selection
 tags:
   - attack.credential_access
