@@ -35,13 +35,14 @@
 # expected refusal, all on one pod, with no Falco alert after any of them; every `detected` command, on a
 # fresh pod each, raises its Falco rule and Talon's action, as the one-click scenarios do.
 # The `exfil.sdp.test` sinkhole (ADR 0034), from a sandbox pod with the terminal's spec: CoreDNS answers
-# a lookup in the zone with NXDOMAIN itself - coredns_dns_requests_total{zone="exfil.sdp.test."} goes up
-# while forward's upstream counter stays still, and the zone's server block runs exactly errors,
-# prometheus and template - read from :9153 of every CoreDNS pod over `kubectl port-forward`. Falco logs
-# nothing for that pod. With the catalogue's dns-exfil command: on the quiet pod it exits 0 with
-# NXDOMAIN, the same counters, no Falco line; on a quarantined pod (after `beacon`) it gets no NXDOMAIN
-# and exits non-zero. Every dns-exfil exec is bounded by `timeout 6` (busybox nslookup has no timeout
-# option; a dropped query is given up after ~5 s, N9). SINKHOLE_ONLY=1 runs the sinkhole check alone -
+# a lookup in the zone with NXDOMAIN and the canary ok.exfil.sdp.test with 192.0.2.53 itself -
+# coredns_dns_requests_total{zone="exfil.sdp.test."} goes up while forward's upstream counter stays
+# still, and the zone's server block runs exactly errors, prometheus and template - read from :9153 of
+# every CoreDNS pod over `kubectl port-forward`. Falco logs nothing for that pod. The catalogue's
+# dns-exfil command runs only if that check passed in the same run (it sends the flag): on the quiet pod
+# it exits 0 with NXDOMAIN, the same counters, no Falco line; on a quarantined pod (after `beacon`) it
+# gets no answer and exits non-zero. Every dns-exfil exec is bounded on the client by `timeout 6`; the
+# command itself ends on busybox nslookup's own ~5 s when a query is dropped (no timeout option, N9). SINKHOLE_ONLY=1 runs the sinkhole check alone -
 # the proof that must pass before the dns-exfil command is put into the catalogue (siem contract, P5).
 # Talon's log is its record of an action: Talon 0.3.0 writes no Kubernetes Events here (its k8sevents
 # notifier is off, ADR 0013 correction), and its JSON log line carries the actionner, the status and
@@ -100,6 +101,7 @@ WATCH_PID=
 PROBE_LOOP_PID=
 PF_PID=
 SINKHOLE_ONLY=${SINKHOLE_ONLY:-}
+SINKHOLE_OK=
 # Stops what runs in the background, then deletes every pod this script created, by name. Runs on every
 # exit: errexit, die, the end of the script, and (through the INT/TERM traps) Ctrl-C and SIGTERM.
 cleanup() {
@@ -788,14 +790,28 @@ coredns_metrics() { # file; status 1 if a pod could not be read
 forwards() { awk '/^coredns_proxy_conn_cache_(hits|misses)_total[{].*proxy_name="forward"/ { s += $NF } END { print s + 0 }' "$1"; }
 zone_requests() { awk '/^coredns_dns_requests_total[{].*zone="exfil[.]sdp[.]test[.]"/ { s += $NF } END { print s + 0 }' "$1"; }
 
+# sinkhole_plugins <file>: 0 if every CoreDNS pod's exfil.sdp.test block runs exactly errors,
+# prometheus and template and no block serves a name under the zone; else 1. Sets SINKHOLE_PLUGINS to
+# what was found, for the message.
+sinkhole_plugins() {
+  local plugins templates children
+  plugins=$(sed -n 's/^coredns_plugin_enabled{name="\([^"]*\)".*zone="exfil.sdp.test."} 1$/\1/p' "$1" | sort -u | xargs)
+  templates=$(grep -c '^coredns_plugin_enabled{name="template".*zone="exfil.sdp.test."} 1$' "$1" || true)
+  children=$(grep -o 'zone="[^"]*[.]exfil[.]sdp[.]test[.]"' "$1" | sort -u | xargs || true)
+  SINKHOLE_PLUGINS="'${plugins:-nothing}' on $templates of $COREDNS_PODS CoreDNS pod(s)${children:+, and blocks for $children}"
+  [ "$plugins" = "errors prometheus template" ] && [ "$templates" -eq "$COREDNS_PODS" ] && [ -z "$children" ]
+}
+
 # dns_check <who> <pod> <argv>: runs argv in the pod's container target, bounded by `timeout 6`, between
 # two reads of the counters, and asserts the zone counter rose, the forward counter did not, and every
-# CoreDNS pod's exfil.sdp.test block runs exactly errors, prometheus and template. Leaves the output and
-# status in DNS_OUT and DNS_RC for the caller's own assertions. The forward counter is the whole
-# cluster's, so another pod resolving an outside name in the same seconds also moves it: a move is
-# retried, up to three runs, before it counts - a leak moves it on every run.
+# CoreDNS pod's exfil.sdp.test block runs exactly errors, prometheus and template (and nothing serves a
+# name under the zone). Leaves the output and status in DNS_OUT and DNS_RC for the caller's own
+# assertions. The forward counter is the whole cluster's, so another pod resolving an outside name in
+# the same seconds also moves it. A moved reading is retried, up to three runs, but only while the
+# counters just read show the exact sinkhole on every pod - so a retried run, the flagged command
+# included, cannot have been the one forwarded; a leak moves it on every run.
 dns_check() {
-  local who=$1 pod=$2 argv=$3 try z0 z1 f0 f1 plugins templates
+  local who=$1 pod=$2 argv=$3 try z0 z1 f0 f1
   for try in 1 2 3; do
     if ! coredns_metrics "$WORK_DIR/m0.txt"; then fail "$who: could not read CoreDNS's metrics: $(head -c 300 "$WORK_DIR/pf.err")"; return 1; fi
     DNS_OUT=$(eval "timeout 6 $KUBECTL exec -n $NAMESPACE $pod -c target -- $argv" </dev/null 2>&1) && DNS_RC=0 || DNS_RC=$?
@@ -803,19 +819,17 @@ dns_check() {
     z0=$(zone_requests "$WORK_DIR/m0.txt"); z1=$(zone_requests "$WORK_DIR/m1.txt")
     f0=$(forwards "$WORK_DIR/m0.txt"); f1=$(forwards "$WORK_DIR/m1.txt")
     [ "$f1" -ne "$f0" ] || break
-    printf '  ....  %s: the forward counter moved %s -> %s during the lookup (run %s of 3)\n' "$who" "$f0" "$f1" "$try"
+    sinkhole_plugins "$WORK_DIR/m1.txt" || break
+    [ "$try" -lt 3 ] || break
+    printf '  ....  %s: the forward counter moved %s -> %s during the lookup, the sinkhole is in place on every pod: run %s of 3\n' \
+      "$who" "$f0" "$f1" "$((try + 1))"
   done
-  plugins=$(sed -n 's/^coredns_plugin_enabled{name="\([^"]*\)".*zone="exfil.sdp.test."} 1$/\1/p' "$WORK_DIR/m1.txt" | sort -u | xargs)
-  templates=$(grep -c '^coredns_plugin_enabled{name="template".*zone="exfil.sdp.test."} 1$' "$WORK_DIR/m1.txt" || true)
-  if [ "$plugins" = "errors prometheus template" ] && [ "$templates" -eq "$COREDNS_PODS" ]; then
-    pass "$who: the exfil.sdp.test block on all $COREDNS_PODS CoreDNS pod(s) runs exactly: $plugins"
-  else
-    fail "$who: the exfil.sdp.test block runs '${plugins:-nothing}' ($templates of $COREDNS_PODS CoreDNS pods have it); want 'errors prometheus template' on every pod"
-  fi
+  if sinkhole_plugins "$WORK_DIR/m1.txt"; then pass "$who: the exfil.sdp.test block runs exactly errors prometheus template ($SINKHOLE_PLUGINS)"
+  else fail "$who: the exfil.sdp.test block runs $SINKHOLE_PLUGINS; want 'errors prometheus template' on every pod and no block under the zone"; fi
   if [ "$z1" -gt "$z0" ]; then pass "$who: coredns_dns_requests_total{zone=\"exfil.sdp.test.\"} $z0 -> $z1"
   else fail "$who: the zone counter did not move ($z0 -> $z1): the lookup never reached the sinkhole block"; fi
   if [ "$f1" -eq "$f0" ]; then pass "$who: forward's upstream counter unchanged ($f0 -> $f1): nothing left the cluster"
-  else fail "$who: forward's upstream counter moved on each of 3 runs (last $f0 -> $f1): exfil.sdp.test may be forwarded"; fi
+  else fail "$who: forward's upstream counter moved ($f0 -> $f1, run $try): exfil.sdp.test may be forwarded"; fi
 }
 
 if [ -s "$WORK_DIR/term.tsv" ]; then
@@ -830,10 +844,15 @@ if [ -s "$WORK_DIR/term.tsv" ]; then
     fail "sinkhole: could not read $spod's creation time"
   else
     pass "sinkhole: pod $spod admitted and Ready"
+    before=$failures
     name="probe-$(randhex 4).x.exfil.sdp.test."
     if dns_check "sinkhole" "$spod" "nslookup -type=a $name"; then
       if grep -q NXDOMAIN <<<"$DNS_OUT"; then pass "sinkhole: $name answers NXDOMAIN"
       else fail "sinkhole: $name did not answer NXDOMAIN (rc=$DNS_RC): $(tr '\n' ' ' <<<"$DNS_OUT" | head -c 300)"; fi
+    fi
+    if dns_check "sinkhole canary" "$spod" "nslookup -type=a ok.exfil.sdp.test."; then
+      if grep -q '^Address: 192\.0\.2\.53' <<<"${DNS_OUT//$'\r'/}"; then pass "sinkhole: the canary ok.exfil.sdp.test. answers 192.0.2.53"
+      else fail "sinkhole: the canary did not answer 192.0.2.53 (rc=$DNS_RC): $(tr '\n' ' ' <<<"$DNS_OUT" | head -c 300)"; fi
     fi
     sleep "$QUIET_WAIT"
     if ! read_log falco ds/falco "$ssince" "$WORK_DIR/falco.log"; then
@@ -843,6 +862,8 @@ if [ -s "$WORK_DIR/term.tsv" ]; then
     else
       fail "sinkhole: $n Falco line(s) name $spod: $(awk -v p="$spod" 'index($0, p)' "$WORK_DIR/falco.log" | grep -o '"rule":"[^"]*"' | tr '\n' ' ')"
     fi
+    # The gate for dns-exfil below: the flag is only ever sent after this section passed in this run.
+    [ "$failures" -ne "$before" ] || SINKHOLE_OK=1
   fi
   delete_pod "$spod"
 fi
@@ -916,14 +937,16 @@ if [ -s "$WORK_DIR/term.tsv" ] && [ -z "$SINKHOLE_ONLY" ]; then
             # The raw exec, not the API: its scrub is not in play here (the API's view is live acceptance
             # L7). The label must be this pod's flag in the zone's form, and the answer CoreDNS's own.
             label="sdp-${FLAG#SDP\{}"; label="${label%\}}.x.exfil.sdp.test."
-            if dns_check "$cid" "$tpod" "$argv"; then
+            if [ -z "$SINKHOLE_OK" ]; then
+              fail "$cid: not run - the exfil.sdp.test sinkhole check did not pass in this run, so the flag could leave the cluster"
+            elif dns_check "$cid" "$tpod" "$argv"; then
               if [ "$DNS_RC" = 0 ] && grep -qF "query $label" <<<"$DNS_OUT" && grep -q NXDOMAIN <<<"$DNS_OUT"; then
                 pass "$cid: looked up $label, NXDOMAIN, exit 0"
               else
                 fail "$cid: rc=$DNS_RC (want 0: NXDOMAIN from the cluster resolver for $label): $(tr '\n' ' ' <<<"$DNS_OUT" | head -c 300)"
               fi
             fi
-            quiet_check "$cid"
+            [ -z "$SINKHOLE_OK" ] || quiet_check "$cid"
           elif out=$(exec_in "$tpod" "$ttyc" "$argv"); then
             if [ "$cid" = read-flag ]; then
               if grep -qF "$FLAG" <<<"$out"; then pass "$cid: prints the flag"; else fail "$cid: flag not printed"; fi
@@ -1010,9 +1033,12 @@ if [ -s "$WORK_DIR/term.tsv" ] && [ -z "$SINKHOLE_ONLY" ]; then
           if [ "$phase" = Running ]; then pass "$cid: still Running (isolated, not killed)"; else fail "$cid: pod is ${phase:-gone}, expected Running"; fi
           check_falco "$cid" "$det" "$dpod" "$since"
           check_talon "$cid" "kubernetes:label" "$dpod" "$since"
-          # dns-exfil after the quarantine: the lookup is dropped before Cilium's DNS proxy, so no
-          # NXDOMAIN and a non-zero exit - "Phone home" is not achieved (D3) - within `timeout 6` (N9).
-          if [ -n "$DNS_EXFIL_ARGV" ] && [ "$phase" = Running ]; then
+          # dns-exfil after the quarantine: every lookup is dropped before Cilium's DNS proxy, so the
+          # canary fails, no NXDOMAIN, a non-zero exit - "Phone home" is not achieved (D3). The client
+          # is bounded by `timeout 6`, the command by nslookup's own ~5 s (N9). Gated like the quiet run.
+          if [ -n "$DNS_EXFIL_ARGV" ] && [ "$phase" = Running ] && [ -z "$SINKHOLE_OK" ]; then
+            fail "dns-exfil on the quarantined $dpod: not run - the sinkhole check did not pass in this run"
+          elif [ -n "$DNS_EXFIL_ARGV" ] && [ "$phase" = Running ]; then
             t0=${EPOCHREALTIME/,/.}
             out=$(eval "timeout 6 $KUBECTL exec -n $NAMESPACE $dpod -c target -- $DNS_EXFIL_ARGV" </dev/null 2>&1) && rc=0 || rc=$?
             took=$(awk -v a="$t0" -v b="${EPOCHREALTIME/,/.}" 'BEGIN { printf "%.1f", b - a }')
