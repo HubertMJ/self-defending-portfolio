@@ -327,6 +327,7 @@ def mass_change_refused(tmp):
     assert rc == 0 and r["status"] == "applied", r
     assert sorted(x for x in r["changed"]["rules"] if x.startswith("updated ")) == sorted(f"updated {k}" for k in rmap), r["changed"]
     assert os.path.exists(os.path.join(tmp, "state", "consumed", "allow-mass-change")), "flag not marked for removal"
+    assert r.get("allowed") == ["allow-mass-change"], f"the record does not say which flag allowed it: {r.get('allowed')}"
 
 
 @with_tmp
@@ -387,6 +388,115 @@ def size_cap_frees_disk():
         assert left < (1 << 20), f"{left} bytes of the refused fetch stayed on disk"
     finally:
         shutil.rmtree(tmp)
+
+
+def big_repo(tmp):
+    work = os.path.join(tmp, "w")
+    os.makedirs(os.path.join(work, "siem"))
+    env = dict(os.environ, GIT_CONFIG_GLOBAL="/dev/null", GIT_CONFIG_NOSYSTEM="1")
+    run = lambda *a: subprocess.run(["git", "-C", work, *a], check=True, capture_output=True, env=env)  # noqa: E731
+    run("init", "-q", "-b", "main")
+    with open(os.path.join(work, "big.bin"), "wb") as fh:
+        fh.write(os.urandom(3 << 20))
+    run("add", "-A")
+    run("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "big")
+    return work
+
+
+def leftovers(path):
+    files = [os.path.join(d, f) for d, _, fs in os.walk(path) for f in fs] if os.path.exists(path) else []
+    return [f for f in files if "tmp_" in f], sum(os.path.getsize(f) for f in files)
+
+
+def fsize_limit_leaves_nothing():
+    """The unit's LimitFSIZE kills index-pack mid-write; two such fetches leave no partial pack."""
+    tmp = tempfile.mkdtemp()
+    try:
+        work, repo = big_repo(tmp), os.path.join(tmp, "repo.git")
+        script = (
+            "import importlib.util, resource, sys\n"
+            f"sys.path.insert(0, {os.path.dirname(PROG)!r})\n"
+            f"spec = importlib.util.spec_from_file_location('s', {PROG!r}); m = importlib.util.module_from_spec(spec)\n"
+            "spec.loader.exec_module(m)\n"
+            "resource.setrlimit(resource.RLIMIT_FSIZE, (1 << 20, 1 << 20))\n"
+            f"g = m.Git({repo!r}, 'file', 60, max_bytes=1 << 30)\n"
+            "for _ in range(2):\n"
+            "    try:\n"
+            f"        g.fetch('file://{work}', 'main')\n"
+            "        print('FETCHED')\n"
+            "    except m.SyncError as exc:\n"
+            "        print('refused:', str(exc)[:80])\n")
+        out = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, timeout=120)
+        assert "FETCHED" not in out.stdout and out.stdout.count("refused") == 2, (out.stdout, out.stderr[-300:])
+        tmps, size = leftovers(repo)
+        assert not tmps and size < (1 << 20), f"left behind: {tmps[:3]}, {size} bytes"
+    finally:
+        shutil.rmtree(tmp)
+
+
+def sweep_before_fetch():
+    """What a killed run left (tmp_pack_*, tmp_obj_*) is removed by the next fetch."""
+    tmp = tempfile.mkdtemp()
+    try:
+        work = big_repo(tmp)
+        repo = os.path.join(tmp, "repo.git")
+        g = sync.Git(repo, "file", 60)
+        g.fetch(f"file://{work}", "main")
+        for rel in ("objects/pack/tmp_pack_x", "objects/ab/tmp_obj_y"):
+            os.makedirs(os.path.dirname(os.path.join(repo, rel)), exist_ok=True)
+            with open(os.path.join(repo, rel), "wb") as fh:
+                fh.write(b"x" * 1000)
+        g.fetch(f"file://{work}", "main")
+        tmps, _ = leftovers(repo)
+        assert not tmps, f"left behind: {tmps}"
+    finally:
+        shutil.rmtree(tmp)
+
+
+@with_tmp
+def window_counts_monitor_updates(tmp):
+    hits, rmap = changed_rules_live(2)
+    recs = [applied_rec(A, iso(3), rules=rmap, counts={"monitors": {"updated": 4}})]
+    fake = FakeOS(recs, live={"rules": hits})
+    rc = make_sync(fake, FakeGit({A: SIEM}), tmp=tmp).run()
+    assert rc == 2 and "(6 in 24 h)" in fake.records[-1]["reason"], fake.records[-1]
+
+
+@with_tmp
+def cap_is_inclusive(tmp):
+    hits, rmap = changed_rules_live(5)
+    fake = FakeOS([applied_rec(A, iso(3), rules=rmap)], live={"rules": hits})
+    rc = make_sync(fake, FakeGit({A: SIEM}), tmp=tmp).run()
+    assert rc == 0, f"five updates (the cap) were refused: {fake.records[-1]}"
+
+
+@with_tmp
+def past_deletions_do_not_cap_updates(tmp):
+    hits, rmap = changed_rules_live(1)
+    fake = FakeOS([applied_rec(A, iso(3), rules=rmap, counts={"rules": {"deleted": 9}})], live={"rules": hits})
+    rc = make_sync(fake, FakeGit({A: SIEM}), tmp=tmp).run()
+    assert rc == 0, f"a run without deletions was refused for yesterday's deletions: {fake.records[-1]}"
+
+
+@with_tmp
+def only_applied_runs_count(tmp):
+    t = empty_tree(tmp)
+    live = [{"_id": f"m{i}", "_source": {"type": "monitor", "name": f"sdp-git: gone-{i}"}} for i in range(2)]
+    recs = [applied_rec(A, iso(30)),
+            {"commit": B, "status": "refused", "reason": "x", "applied_at": iso(3), "counts": {"rules": {"deleted": 9}}}]
+    fake = FakeOS(recs, live={"monitors": live})
+    rc = make_sync(fake, FakeGit({A: t, B: t}, head=B), tmp=tmp).run()
+    assert rc == 0, f"a refused run's counts were held against the cap: {fake.records[-1]}"
+
+
+@with_tmp
+def each_flag_frees_its_own_cap(tmp):
+    hits, rmap = changed_rules_live(2)
+    recs = [applied_rec(A, iso(3), rules=rmap, counts={"rules": {"updated": 4}}, allowed=["allow-mass-delete"])]
+    fake = FakeOS(recs, live={"rules": hits})
+    rc = make_sync(fake, FakeGit({A: SIEM}), tmp=tmp).run()
+    assert rc == 2 and "(6 in 24 h)" in fake.records[-1]["reason"], \
+        f"updates of a run allowed only to delete did not count: {fake.records[-1]}"
 
 
 @with_tmp
@@ -491,6 +601,13 @@ case("rule, monitor and correlation updates count together against the cap", mix
 case("monitor deletions count against the cap; a refusal writes the heartbeat", monitor_deletions_capped)
 case("deletions are capped over 24 h; runs with an allow flag do not count", deletions_capped_per_day)
 case("accept-commit must be the fetched commit or its ancestor", accept_commit_checked)
-total = 20
+case("fetches killed at the file size limit leave no partial pack", fsize_limit_leaves_nothing)
+case("a fetch sweeps what an interrupted one left", sweep_before_fetch)
+case("the 24 h window counts monitor updates too", window_counts_monitor_updates)
+case("updates up to the cap are allowed", cap_is_inclusive)
+case("past deletions do not refuse a run without deletions", past_deletions_do_not_cap_updates)
+case("only applied runs count toward the 24 h window", only_applied_runs_count)
+case("each flag frees only its own cap in the window", each_flag_frees_its_own_cap)
+total = 27
 print(f"sync_unit_test: {total - len(fails)} passed, {len(fails)} failed")
 sys.exit(1 if fails else 0)

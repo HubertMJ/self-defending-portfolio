@@ -168,13 +168,33 @@ class Git:
             raise SyncError(f"git {verb}: {p.stderr.decode(errors='replace').strip()[:300]}")
         return p if binary else p.stdout.decode().strip()
 
+    def sweep(self):
+        """Removes what an interrupted fetch leaves (objects/pack/tmp_pack_*, objects/??/tmp_obj_*,
+        quarantine directories): count-objects does not see it, so it would pile up unnoticed."""
+        objects = os.path.join(self.path, "objects")
+        for d, dirs, files in os.walk(objects):
+            for name in list(dirs):
+                if name.startswith(("incoming-", "tmp_")):
+                    shutil.rmtree(os.path.join(d, name), ignore_errors=True)
+                    dirs.remove(name)
+            for name in files:
+                if name.startswith("tmp_"):
+                    os.remove(os.path.join(d, name))
+
     def fetch(self, url, branch):
+        self.sweep()
         if not os.path.isdir(os.path.join(self.path, "objects")):
             subprocess.run(["git", "init", "--bare", "-q", self.path], env=self.env, check=True, timeout=self.timeout)
         ref = f"refs/remotes/origin/{branch}"
         # Every fetched object is checked (malformed trees, odd paths); the repository has a size cap.
-        self.run("-c", "transfer.fsckObjects=true", "-c", "fetch.fsckObjects=true", "fetch", "--quiet", "--no-tags",
-                 "--no-recurse-submodules", url, f"+refs/heads/{branch}:{ref}")
+        try:
+            self.run("-c", "transfer.fsckObjects=true", "-c", "fetch.fsckObjects=true", "fetch", "--quiet", "--no-tags",
+                     "--no-recurse-submodules", url, f"+refs/heads/{branch}:{ref}")
+        except (SyncError, subprocess.TimeoutExpired):
+            # A fetch that failed - killed at the unit's file size limit above all - may leave a partial
+            # pack behind; drop the repository, the next run starts from nothing.
+            shutil.rmtree(self.path, ignore_errors=True)
+            raise
         size = 0
         for line in self.run("count-objects", "-v").splitlines():
             key, _, value = line.partition(": ")
@@ -430,11 +450,13 @@ class Sync:
         deleted = updated = 0
         for r in self._search_records({"bool": {"filter": [{"term": {"status": "applied"}},
                                                             {"range": {"applied_at": {"gte": since}}}]}}, 200):
-            if r.get("allowed"):
-                continue
+            # Each cap ignores only what its own flag allowed.
+            allowed = r.get("allowed") or []
             c = r.get("counts") or {}
-            deleted += sum((c.get(k) or {}).get("deleted", 0) for k in KINDS)
-            updated += sum((c.get(k) or {}).get("updated", 0) for k in ("rules", "monitors", "correlations"))
+            if "allow-mass-delete" not in allowed:
+                deleted += sum((c.get(k) or {}).get("deleted", 0) for k in KINDS)
+            if "allow-mass-change" not in allowed:
+                updated += sum((c.get(k) or {}).get("updated", 0) for k in ("rules", "monitors", "correlations"))
         return deleted, updated
 
     def check_caps(self, plan):
