@@ -1,5 +1,355 @@
 {
-  "rules": [],
-  "monitors": [],
-  "correlations": []
+  "rules": [
+    {
+      "id": "c688437b-f1eb-4c1b-af13-13738b0fce91",
+      "title": "Terminal credentials - flag file read",
+      "level": "high",
+      "status": "experimental",
+      "attack": [
+        "T1552.001"
+      ],
+      "file": "siem/rules/api-credentials-flag.yml",
+      "line": 4,
+      "source": "api",
+      "canary": "api:terminal:read-flag"
+    },
+    {
+      "id": "8e8c5e64-5298-46cb-bb6f-45d11ff9f40b",
+      "title": "Terminal credentials - password database read",
+      "level": "medium",
+      "status": "experimental",
+      "attack": [
+        "T1003.008"
+      ],
+      "file": "siem/rules/api-credentials-shadow.yml",
+      "line": 4,
+      "source": "api",
+      "canary": "api:terminal:read-shadow"
+    },
+    {
+      "id": "9f000f47-2f12-40b1-b04a-06319e1ef425",
+      "title": "Terminal execution - dropped binary",
+      "level": "medium",
+      "status": "experimental",
+      "attack": [
+        "T1105"
+      ],
+      "file": "siem/rules/api-exec-dropped-binary.yml",
+      "line": 4,
+      "source": "api",
+      "canary": "api:terminal:drop-run"
+    },
+    {
+      "id": "c78e8dde-6c3b-4410-8425-bd3ccf82bd1a",
+      "title": "Terminal execution - interactive shell",
+      "level": "medium",
+      "status": "experimental",
+      "attack": [
+        "T1059.004"
+      ],
+      "file": "siem/rules/api-exec-shell.yml",
+      "line": 4,
+      "source": "api",
+      "canary": "api:terminal:shell"
+    },
+    {
+      "id": "f4c0703b-e8a3-4540-a944-bfcc86783dc1",
+      "title": "Terminal exfiltration - flag over DNS",
+      "level": "high",
+      "status": "experimental",
+      "attack": [
+        "T1048.003"
+      ],
+      "file": "siem/rules/api-exfil-dns.yml",
+      "line": 4,
+      "source": "api",
+      "canary": "api:terminal:dns-exfil"
+    },
+    {
+      "id": "a3480924-d541-4ad0-acd5-61487b20547e",
+      "title": "Terminal exfiltration - web request",
+      "level": "medium",
+      "status": "experimental",
+      "attack": [
+        "T1071.001"
+      ],
+      "file": "siem/rules/api-exfil-web.yml",
+      "line": 4,
+      "source": "api",
+      "canary": "api:terminal:beacon"
+    },
+    {
+      "id": "344dca25-2ac6-4a93-b5b3-7db61552f229",
+      "title": "Terminal recon - file discovery",
+      "level": "low",
+      "status": "experimental",
+      "attack": [
+        "T1083"
+      ],
+      "file": "siem/rules/api-recon-files.yml",
+      "line": 4,
+      "source": "api",
+      "canary": "api:terminal:ls-shop"
+    },
+    {
+      "id": "e73b1008-1ef3-4438-b3df-a60e9251ac9b",
+      "title": "Terminal recon - process discovery",
+      "level": "low",
+      "status": "experimental",
+      "attack": [
+        "T1057"
+      ],
+      "file": "siem/rules/api-recon-process.yml",
+      "line": 4,
+      "source": "api",
+      "canary": "api:terminal:ps"
+    },
+    {
+      "id": "03ffcde5-3de6-4626-93dd-dd98f1d8cde3",
+      "title": "Terminal recon - system information",
+      "level": "low",
+      "status": "experimental",
+      "attack": [
+        "T1082"
+      ],
+      "file": "siem/rules/api-recon-system.yml",
+      "line": 4,
+      "source": "api",
+      "canary": "api:terminal:hostname"
+    },
+    {
+      "id": "43a02cd0-4943-4c88-9eed-b8ff82d541a9",
+      "title": "Terminal recon - user discovery",
+      "level": "low",
+      "status": "experimental",
+      "attack": [
+        "T1033"
+      ],
+      "file": "siem/rules/api-recon-user.yml",
+      "line": 4,
+      "source": "api",
+      "canary": "api:terminal:whoami"
+    },
+    {
+      "id": "b3a3f3cb-7971-40e2-a1ee-35e82e1a5dfd",
+      "title": "Falco - dropped binary executed",
+      "level": "high",
+      "status": "experimental",
+      "attack": [
+        "T1105"
+      ],
+      "file": "siem/rules/falco-drop-and-execute.yml",
+      "line": 3,
+      "source": "falco",
+      "canary": "api:scenario:drop-and-execute"
+    },
+    {
+      "id": "d546021b-1d62-4dfa-b2d3-7e94822640d4",
+      "title": "Falco - network tool in the sandbox",
+      "level": "high",
+      "status": "experimental",
+      "attack": [
+        "T1071.001"
+      ],
+      "file": "siem/rules/falco-network-tool.yml",
+      "line": 3,
+      "source": "falco",
+      "canary": "api:scenario:network-tool"
+    },
+    {
+      "id": "fcdedb54-6d05-4d6d-a319-005dbf970467",
+      "title": "Falco - sensitive file read",
+      "level": "high",
+      "status": "experimental",
+      "attack": [
+        "T1003.008"
+      ],
+      "file": "siem/rules/falco-sensitive-file.yml",
+      "line": 3,
+      "source": "falco",
+      "canary": "api:scenario:sensitive-file-read"
+    },
+    {
+      "id": "44a53745-246a-4179-bb42-04ce4b023de8",
+      "title": "Falco - execution from the shop volume",
+      "level": "high",
+      "status": "experimental",
+      "attack": [
+        "T1105"
+      ],
+      "file": "siem/rules/falco-shop-volume-exec.yml",
+      "line": 3,
+      "source": "falco",
+      "canary": "api:terminal:drop-run"
+    },
+    {
+      "id": "14a9ddb2-f159-47ca-a138-4addee907b0f",
+      "title": "Falco - terminal shell in a container",
+      "level": "high",
+      "status": "experimental",
+      "attack": [
+        "T1059.004"
+      ],
+      "file": "siem/rules/falco-terminal-shell.yml",
+      "line": 3,
+      "source": "falco",
+      "canary": "api:scenario:shell-in-container"
+    },
+    {
+      "id": "0ee27053-8f8c-4740-a990-98d398477490",
+      "title": "Cluster node - SSH login accepted",
+      "level": "low",
+      "status": "experimental",
+      "attack": [
+        "T1021.004"
+      ],
+      "file": "siem/rules/host-ssh-accepted.yml",
+      "line": 3,
+      "source": "host",
+      "canary": "exec:ssh to the cluster node"
+    },
+    {
+      "id": "0a66d582-41d5-41ed-9c45-074725c6f640",
+      "title": "Cluster node - SSH login refused",
+      "level": "low",
+      "status": "experimental",
+      "attack": [
+        "T1110"
+      ],
+      "file": "siem/rules/host-ssh-failed.yml",
+      "line": 3,
+      "source": "host",
+      "canary": "exec:ssh to the cluster node with a key it does not know"
+    },
+    {
+      "id": "fa0bd074-18fc-4827-834c-705c707a94f9",
+      "title": "Hubble - flag-shaped DNS lookup",
+      "level": "critical",
+      "status": "experimental",
+      "attack": [
+        "T1048.003",
+        "T1071.004"
+      ],
+      "file": "siem/rules/hubble-dns-exfil.yml",
+      "line": 4,
+      "source": "hubble",
+      "canary": "api:terminal:dns-exfil"
+    },
+    {
+      "id": "1c543e7e-a886-43fa-9e75-6c93368d3f1a",
+      "title": "Hubble - sandbox traffic dropped by policy",
+      "level": "low",
+      "status": "experimental",
+      "attack": [
+        "T1071"
+      ],
+      "file": "siem/rules/hubble-sandbox-policy-drop.yml",
+      "line": 3,
+      "source": "hubble",
+      "canary": "api:terminal:beacon,whoami"
+    },
+    {
+      "id": "b1b84b49-2ff5-4245-b753-69e1da48de20",
+      "title": "Kubernetes - pod refused by admission",
+      "level": "low",
+      "status": "experimental",
+      "attack": [
+        "T1610"
+      ],
+      "file": "siem/rules/k8s-admission-denied.yml",
+      "line": 2,
+      "source": "k8s-audit",
+      "canary": "exec:tests/admission/run.sh"
+    },
+    {
+      "id": "bcef7457-e973-4d34-a82b-e7705623bdc5",
+      "title": "Kubernetes - exec into a sandbox pod, not by the API",
+      "level": "high",
+      "status": "experimental",
+      "attack": [
+        "T1609"
+      ],
+      "file": "siem/rules/k8s-exec-outside-api.yml",
+      "line": 4,
+      "source": "k8s-audit",
+      "canary": "exec:tests/scenarios/run.sh"
+    },
+    {
+      "id": "be0a7f61-9416-4b12-a6bb-e597485e9538",
+      "title": "SIEM host - SSH login accepted",
+      "level": "low",
+      "status": "experimental",
+      "attack": [
+        "T1021.004"
+      ],
+      "file": "siem/rules/siem-host-ssh-accepted.yml",
+      "line": 3,
+      "source": "siem-host",
+      "canary": "exec:ssh to the SIEM host"
+    },
+    {
+      "id": "073abeb3-92b1-48b5-bad5-040b71030364",
+      "title": "SIEM host - SSH login refused",
+      "level": "low",
+      "status": "experimental",
+      "attack": [
+        "T1110"
+      ],
+      "file": "siem/rules/siem-host-ssh-failed.yml",
+      "line": 3,
+      "source": "siem-host",
+      "canary": "exec:ssh to the SIEM host with a key it does not know"
+    },
+    {
+      "id": "ab2bc6ee-e717-4b7a-a69e-92acb304903e",
+      "title": "Talon - pod quarantined",
+      "level": "informational",
+      "status": "experimental",
+      "attack": [],
+      "file": "siem/rules/talon-quarantine.yml",
+      "line": 4,
+      "source": "talon",
+      "canary": "api:scenario:network-tool"
+    },
+    {
+      "id": "ba58109c-e0e4-4409-9c4c-0a80bfca3dce",
+      "title": "Talon - pod terminated",
+      "level": "informational",
+      "status": "experimental",
+      "attack": [],
+      "file": "siem/rules/talon-terminate.yml",
+      "line": 4,
+      "source": "talon",
+      "canary": "api:scenario:shell-in-container"
+    }
+  ],
+  "monitors": [
+    {
+      "name": "sdp-git: detection-missing",
+      "file": "siem/monitors/detection-missing.json",
+      "canary": "synthetic:detection-missing"
+    },
+    {
+      "name": "sdp-git: policy-probing",
+      "file": "siem/monitors/policy-probing.json",
+      "canary": "exec:tests/admission/run.sh"
+    },
+    {
+      "name": "sdp-git: prevented-not-detected",
+      "file": "siem/monitors/prevented-not-detected.json",
+      "canary": "api:terminal:touch-bin"
+    }
+  ],
+  "correlations": [
+    {
+      "name": "contained-intrusion",
+      "file": "siem/correlations/contained-intrusion.yaml",
+      "canary": "api:scenario:shell-in-container"
+    },
+    {
+      "name": "dns-exfil",
+      "file": "siem/correlations/dns-exfil.yaml",
+      "canary": "api:terminal:dns-exfil"
+    }
+  ]
 }
