@@ -55,14 +55,16 @@ Proven in the S0 spike (siem contract S0-b, S0-k); the lint enforces what it can
   without the marker is never adopted: the run is refused and says which object to remove.
 - Another SA rule carrying a git rule's Sigma id (made by hand, or left over) is a duplicate and is
   deleted by design: the Sigma id belongs to git.
-- More than five deletions, or more than five rule/monitor updates, in one run are refused until the
-  operator creates `/etc/sdp-siem/allow-mass-delete` or `/etc/sdp-siem/allow-mass-change` (removed
+- More than five deletions, or more than five rule/monitor/correlation updates, in one run or in
+  24 hours of runs (those an allow flag permitted do not count) are refused until the operator creates `/etc/sdp-siem/allow-mass-delete` or `/etc/sdp-siem/allow-mass-change` (removed
   after the next successful run). Every monitor is enabled in git: switching one off is a deletion.
 - `siem-sync` holds one record per applied, refused or failed run (`commit`, `applied_at`, `status`,
   `reason` - at most 512 characters, a lint refusal names files and checks only - `counts`,
   `changed`, `rules`, `monitors`, `lint_sha256`) and one document `heartbeat` that every run
   overwrites (`kind: heartbeat`, `checked_at`, `commit`, `outcome`: applied | unchanged | refused |
-  failed). A run with nothing to do writes only the heartbeat, so an old `applied_at` with a fresh
+  failed). The role creates the index and adds missing fields with the admin certificate, so the
+  heartbeat's `kind` is searchable also in an index an older version made. A run with nothing to do
+  writes only the heartbeat, so an old `applied_at` with a fresh
   `checked_at` is an idle sync and a stale `checked_at` a dead one.
 - Monitors may read only the six k3s01 streams (the API reads their alerts); sources are the seven of
   ADR 0034 - both pinned in `siem_lint.py`. A monitor's search may use only term, terms (no lookup),

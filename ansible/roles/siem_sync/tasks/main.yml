@@ -62,7 +62,74 @@
     owner: root
     group: root
     mode: "0755"
-  loop: [sdp_siem_sync.py, siem_lint.py, consume-flags]
+  loop: [sdp_siem_sync.py, siem_lint.py, consume-flags, siem-sync-index.json]
+
+# The index of the sync's records (the API reads it, ADR 0036) is created and extended here with the
+# admin certificate: rules-sync may write records but not change mappings, and an index made by an
+# older version (dynamic: false) would keep new fields such as the heartbeat's kind unsearchable.
+- name: Read the siem-sync index
+  ansible.builtin.uri:
+    url: "{{ siem_sync_url }}/siem-sync/_mapping"
+    ca_path: "{{ siem_sync_ca }}"
+    client_cert: "{{ siem_sync_admin_cert }}"
+    client_key: "{{ siem_sync_admin_key }}"
+    status_code: [200, 404]
+  register: siem_sync_index
+  check_mode: false
+
+- name: Note the wanted and the live fields of siem-sync
+  ansible.builtin.set_fact:
+    siem_sync_index_want: "{{ lookup('ansible.builtin.file', 'siem-sync-index.json') | from_json }}"
+    siem_sync_index_live: >-
+      {{ (siem_sync_index.json | default({})).get('siem-sync', {}).get('mappings', {}).get('properties', {}) }}
+
+- name: Create the siem-sync index with its mapping
+  ansible.builtin.uri:
+    url: "{{ siem_sync_url }}/siem-sync"
+    method: PUT
+    body: "{{ siem_sync_index_want }}"
+    body_format: json
+    ca_path: "{{ siem_sync_ca }}"
+    client_cert: "{{ siem_sync_admin_cert }}"
+    client_key: "{{ siem_sync_admin_key }}"
+  changed_when: true
+  when: siem_sync_index.status == 404
+
+- name: Find siem-sync fields mapped with another type
+  ansible.builtin.set_fact:
+    siem_sync_index_mismatch: >-
+      {%- set m = [] -%}
+      {%- for k, v in siem_sync_index_live.items() -%}
+      {%-   if k in siem_sync_index_want.mappings.properties
+            and v.get('type', 'object') != siem_sync_index_want.mappings.properties[k].get('type', 'object') -%}
+      {%-     set _ = m.append(k) -%}
+      {%-   endif -%}
+      {%- endfor -%}
+      {{ m }}
+
+- name: Assert no existing field of siem-sync has another type
+  ansible.builtin.assert:
+    that:
+      - siem_sync_index_mismatch | length == 0
+    fail_msg: "siem-sync maps {{ siem_sync_index_mismatch | join(', ') }} with another type; that needs a new index."
+    success_msg: Existing siem-sync fields keep their types.
+
+- name: Add the missing fields to siem-sync
+  ansible.builtin.uri:
+    url: "{{ siem_sync_url }}/siem-sync/_mapping"
+    method: PUT
+    body:
+      properties: >-
+        {{ siem_sync_index_want.mappings.properties | dict2items
+           | rejectattr('key', 'in', siem_sync_index_live) | items2dict }}
+    body_format: json
+    ca_path: "{{ siem_sync_ca }}"
+    client_cert: "{{ siem_sync_admin_cert }}"
+    client_key: "{{ siem_sync_admin_key }}"
+  changed_when: true
+  when:
+    - siem_sync_index.status == 200
+    - siem_sync_index_want.mappings.properties | dict2items | rejectattr('key', 'in', siem_sync_index_live) | list | length > 0
 
 - name: Write the sync's settings
   ansible.builtin.template:
