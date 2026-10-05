@@ -1301,7 +1301,7 @@ function parseIncident(v: unknown): CorrelationIncident | null {
 function ingestLag(v: unknown): CorrelationMetrics["ingest_lag_ms"] {
   if (!isObj(v)) return undefined;
   const rows = Object.entries(v)
-    .filter((e): e is [string, number | null] => /^[a-z0-9-]{1,30}$/.test(e[0]) && (e[1] === null || (typeof e[1] === "number" && Number.isFinite(e[1]))))
+    .filter((e): e is [string, number | null] => /^[a-z0-9-]{1,30}$/.test(e[0]) && publishable(e[0]) && (e[1] === null || (typeof e[1] === "number" && Number.isFinite(e[1]))))
     .slice(0, 12);
   return rows.length ? rows : undefined;
 }
@@ -1373,7 +1373,7 @@ export function parseRuleIndex(v: unknown): RuleIndex {
         title: siemText(o.title, 200),
         level: oneOf<string>(["informational", ...SEVERITIES], o.level, ""),
         status: isStr(o.status) && /^[a-z]{1,20}$/.test(o.status) ? o.status : "",
-        source: isStr(o.source) && /^[a-z0-9-]{1,30}$/.test(o.source) ? o.source : "",
+        source: isStr(o.source) && /^[a-z0-9-]{1,30}$/.test(o.source) && publishable(o.source) ? o.source : "",
         attack: techniques(o.attack),
         file: isRepoPath(o.file) ? o.file : "",
         line: isRepoPath(o.file) && isLine(o.line) ? o.line : 0,

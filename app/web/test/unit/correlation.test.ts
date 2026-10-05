@@ -258,6 +258,14 @@ describe("review L5: what the parsers drop and sort", () => {
     expect(idx.correlations.map((m) => m.name)).toEqual(["contained-intrusion"]);
   });
 
+  it("a lag source or a rule source that is not publishable is dropped (review L-1)", () => {
+    const lag = parseCorrelation(answer({ metrics: { ingest_lag_ms: { k3s01: 5, siem01: 7, falco: 1240 } } })).metrics.ingest_lag_ms;
+    expect(lag).toEqual([["falco", 1240]]);
+    expect(parseCorrelation(answer({ metrics: { ingest_lag_ms: { k3s01: 5 } } })).metrics.ingest_lag_ms).toBeUndefined();
+    const idx = parseRuleIndex({ rules: [{ id: UUID, title: "Host process", source: "k3s01" }, { id: "7d3e4f50-6172-4c83-ad94-b5c6d7e8f901", title: "Shell", source: "falco" }] });
+    expect(idx.rules.map((r) => r.source)).toEqual(["", "falco"]);
+  });
+
   it("steps that arrive out of order are drawn in time order", () => {
     const steps = [
       { at: at(1), source: "talon", rule: "third", rule_id: "", command_seq: null, detail: "" },
