@@ -84,12 +84,13 @@ type Tracker struct {
 	mu      sync.Mutex
 	records map[string]*record
 	hosts   map[string]time.Time // host finding id -> time (counted only)
-	corr    map[string]siem.Correlation
+	corr    map[string]seenCorrelation
 	alerts  []siem.Alert
 	active  []siem.Alert // the ACTIVE alerts, for the health line
 	rules   RulesView
 	rewrite bool
-	lastOK  time.Time
+	lastOK  time.Time // start of the last fully successful poll: the next window starts 2 min before it
+	lastEnd time.Time // end of that poll: the staleness of the view is measured from here
 	lastTry time.Time
 	failing bool
 	view    View
@@ -128,7 +129,7 @@ func New(cfg Config) *Tracker {
 		cfg.Rules, _ = siemindex.Load()
 	}
 	return &Tracker{cfg: cfg, start: cfg.Now(), records: map[string]*record{}, hosts: map[string]time.Time{},
-		corr: map[string]siem.Correlation{}, rules: RulesView{Status: "unknown"}, flags: map[string]*flagEntry{}, logged: map[string]bool{}}
+		corr: map[string]seenCorrelation{}, rules: RulesView{Status: "unknown"}, flags: map[string]*flagEntry{}, logged: map[string]bool{}}
 }
 
 // Enabled reports whether a SIEM is configured.
@@ -160,7 +161,7 @@ func (t *Tracker) View() View {
 		return unavailable(nil)
 	}
 	now := t.cfg.Now()
-	if t.lastOK.IsZero() || now.Sub(t.lastOK) > staleAfter {
+	if t.lastEnd.IsZero() || now.Sub(t.lastEnd) > staleAfter {
 		var checked *time.Time
 		if !t.lastTry.IsZero() {
 			c := t.lastTry
@@ -218,10 +219,10 @@ func (t *Tracker) Poll(ctx context.Context) {
 			}
 		}
 	}
-	corr, err := src.Correlations(ctx, from, now)
-	if err != nil {
-		errs = append(errs, err)
-	}
+	// SA correlations are cited evidence, never a condition: a failed read keeps the pairs read
+	// before and does not fail the poll.
+	corr, corrErr := src.Correlations(ctx, from, now)
+	t.note("correlations", corrErr != nil, "siem: correlations not read; the previous ones stand", "err", corrErr)
 	alerts, alertsErr := src.MonitorAlerts(ctx, "ALL", pageSize)
 	if alertsErr != nil {
 		errs = append(errs, alertsErr)
@@ -267,7 +268,7 @@ func (t *Tracker) Poll(ctx context.Context) {
 		t.hosts[id] = at
 	}
 	for _, c := range corr {
-		t.corr[c.Finding1+"|"+c.Finding2] = c
+		t.corr[c.Finding1+"|"+c.Finding2] = seenCorrelation{c, now}
 	}
 	if alertsErr == nil {
 		t.alerts = alerts
@@ -296,7 +297,7 @@ func (t *Tracker) Poll(ctx context.Context) {
 		t.cfg.Log.Info("siem poll recovered")
 	}
 	t.failing = false
-	t.lastOK = now
+	t.lastOK, t.lastEnd = now, t.cfg.Now().UTC()
 	t.view = t.buildView(now)
 }
 
@@ -458,8 +459,33 @@ func (t *Tracker) prune(now time.Time) {
 			delete(t.hosts, id)
 		}
 	}
-	if len(t.corr) > maxPerSource {
-		t.corr = map[string]siem.Correlation{}
+	capOldest(t.hosts, func(at time.Time) time.Time { return at })
+	for k, c := range t.corr {
+		if c.seen.Before(cut) {
+			delete(t.corr, k)
+		}
+	}
+	capOldest(t.corr, func(c seenCorrelation) time.Time { return c.seen })
+}
+
+// seenCorrelation is an SA correlation and when it was first read (the list carries no time).
+type seenCorrelation struct {
+	siem.Correlation
+	seen time.Time
+}
+
+// capOldest keeps the maxPerSource newest entries of m.
+func capOldest[V any](m map[string]V, at func(V) time.Time) {
+	if len(m) <= maxPerSource {
+		return
+	}
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(i, j int) bool { return at(m[keys[i]]).After(at(m[keys[j]])) })
+	for _, k := range keys[maxPerSource:] {
+		delete(m, k)
 	}
 }
 
@@ -472,7 +498,7 @@ func (t *Tracker) buildView(now time.Time) View {
 	}
 	corr := make([]siem.Correlation, 0, len(t.corr))
 	for _, c := range t.corr {
-		corr = append(corr, c)
+		corr = append(corr, c.Correlation)
 	}
 	incs, metrics := t.build(evidence{records: recs, correlations: corr, alerts: t.alerts, now: now})
 	metrics.HostFindings = len(t.hosts)

@@ -1038,3 +1038,79 @@ func TestOneDocumentOneEvent(t *testing.T) {
 		t.Fatalf("dns on a searched document: %+v", dx)
 	}
 }
+
+// hookSource runs a hook inside the correlations read (a slow SIEM) or fails that read alone.
+type hookSource struct {
+	*fakeSource
+	hook    func()
+	corrErr error
+}
+
+func (h *hookSource) Correlations(ctx context.Context, from, to time.Time) ([]siem.Correlation, error) {
+	if h.hook != nil {
+		h.hook()
+	}
+	if h.corrErr != nil {
+		return nil, h.corrErr
+	}
+	return h.fakeSource.Correlations(ctx, from, to)
+}
+
+// Staleness is measured from the end of the last successful poll: a poll that took 40 s leaves the
+// view available 30 s later.
+func TestStalenessFromPollEnd(t *testing.T) {
+	f := newFake()
+	clk := &clock{t: t0}
+	src := &hookSource{fakeSource: f, hook: func() { clk.Set(clk.Now().Add(40 * time.Second)) }}
+	tr := newTracker(t, src, clk)
+	tr.Poll(context.Background())
+	clk.Set(clk.Now().Add(30 * time.Second))
+	if !tr.View().Available {
+		t.Fatal("hidden 30 s after a slow poll ended")
+	}
+	clk.Set(clk.Now().Add(16 * time.Second))
+	if tr.View().Available {
+		t.Fatal("still available 46 s after the poll ended")
+	}
+}
+
+// A failed correlations read keeps the pairs read before and does not hide the section.
+func TestCorrelationsReadFailureIsSoft(t *testing.T) {
+	f := newFake()
+	compareRun(f)
+	f.corr = []siem.Correlation{{Finding1: "f-falco-g", Finding2: "f-talon-g", Rules: []string{"corr-1"}}}
+	clk := &clock{t: t0.Add(2 * time.Hour)}
+	src := &hookSource{fakeSource: f}
+	tr := newTracker(t, src, clk)
+	tr.Poll(context.Background())
+	src.corrErr = errDown
+	clk.Set(clk.Now().Add(15 * time.Second))
+	tr.Poll(context.Background())
+	v := tr.View()
+	if !v.Available {
+		t.Fatal("a failed correlations read hid the section")
+	}
+	if inc := one(t, v, KindContainedIntrusion); inc.Evidence[0] != (Evidence{Type: "correlation", ID: "corr-1"}) {
+		t.Fatalf("the earlier correlation was lost: %v", inc.Evidence)
+	}
+	if !v.CheckedAt.Equal(clk.Now()) {
+		t.Fatalf("checked_at %v: the poll did not count", v.CheckedAt)
+	}
+	// Correlations age out with the evidence retention; host finding ids are capped.
+	src.corrErr = nil
+	f.corr = nil
+	clk.Set(clk.Now().Add(25 * time.Hour))
+	tr.Poll(context.Background())
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+	if len(tr.corr) != 0 {
+		t.Fatalf("%d correlations after 25 h", len(tr.corr))
+	}
+	for i := 0; i < maxPerSource+300; i++ {
+		tr.hosts[fmt.Sprintf("h%d", i)] = clk.Now().Add(-time.Duration(i) * time.Second)
+	}
+	tr.prune(clk.Now())
+	if len(tr.hosts) != maxPerSource {
+		t.Fatalf("%d host findings kept", len(tr.hosts))
+	}
+}
