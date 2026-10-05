@@ -61,7 +61,7 @@ const (
 	DefaultTimeout = 5 * time.Second
 	// MaxSize is the most items one request may ask for (findings, alerts, search hits).
 	MaxSize = 500
-	// MaxRange bounds a search's time range: the incidents look back 24 h, the sync record a week.
+	// MaxRange bounds a search's time range: the incidents look back 24 h, the sync record 31 days.
 	MaxRange = 31 * 24 * time.Hour
 	// maxBody bounds a response: 500 findings with their source documents are about 1 MiB.
 	maxBody = 16 << 20
