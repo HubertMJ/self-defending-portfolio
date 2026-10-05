@@ -35,7 +35,7 @@ resources:
 images:
   - name: ghcr.io/hubertmj/self-defending-portfolio/api
     newTag: main
-    digest: sha256:a5eb9b5ee47a4125dd657d9d8cc72ca238bfcfa9baca83c9b243ba7c3b58d0ea
+    digest: sha256:f5cded59b64de5446809845545988ca182cdda6c935c4268742710a56620a2f8
 
 generators:
   - ksops.yaml
