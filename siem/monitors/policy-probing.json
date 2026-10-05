@@ -66,8 +66,8 @@
                     }
                   },
                   "aggregations": {
-                    "first": {
-                      "min": {
+                    "last": {
+                      "max": {
                         "field": "@timestamp"
                       }
                     }
@@ -100,18 +100,18 @@
   "triggers": [
     {
       "bucket_level_trigger": {
-        "name": "three refused pod creates, then one allowed",
+        "name": "three refused pod creates, then an allowed one after the last refusal",
         "severity": "2",
         "condition": {
           "buckets_path": {
             "denied": "denied._count",
             "allowed": "allowed._count",
-            "denied_first": "denied>first",
+            "denied_last": "denied>last",
             "allowed_last": "allowed>last"
           },
           "parent_bucket_path": "composite_agg",
           "script": {
-            "source": "params.denied >= 3 && params.allowed > 0 && params.allowed_last > params.denied_first",
+            "source": "params.denied >= 3 && params.allowed > 0 && params.allowed_last > params.denied_last",
             "lang": "painless"
           }
         },

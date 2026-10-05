@@ -138,6 +138,10 @@ def build(tag, now):
     for i in (1, 2, 3):
         audit(f"deny{i}", "create", "pods", 400, prober, off=-40 + 10 * i)
     audit("allow", "create", "pods", 201, prober)
+    # Allowed before the last refusal: not probing that succeeded (the monitor wants success after it).
+    early = f"system:p3c-{tag}-early"
+    for name, code, off in (("early1", 400, -45), ("early2", 400, -35), ("earlyok", 201, -25), ("early3", 400, -15)):
+        audit(name, "create", "pods", code, early, off=off)
     for stream in ("sdp-host", "sdp-siem01"):
         ssh(stream, f"{stream}-accepted", "accepted")
         ssh(stream, f"{stream}-refused", "invalid-user")
@@ -153,14 +157,14 @@ def build(tag, now):
             "falco-shop-volume-exec": [ref("droprun")], "talon-terminate": [ref("shell")],
             "talon-quarantine": [ref("beacon")], "hubble-sandbox-policy-drop": [ref("beacon")],
             "hubble-dns-exfil": [ref("dnsexfil")], "k8s-exec-outside-api": [ref("exec")],
-            "k8s-admission-denied": [ref("deny1"), ref("deny2"), ref("deny3")],
+            "k8s-admission-denied": [ref("deny1"), ref("deny2"), ref("deny3"), ref("early1")],
             "host-ssh-accepted": [hm("sdp-host-accepted")], "host-ssh-failed": [hm("sdp-host-refused")],
             "siem-host-ssh-accepted": [hm("sdp-siem01-accepted")], "siem-host-ssh-failed": [hm("sdp-siem01-refused")],
         },
         "not": {"hubble-dns-exfil": [ref("dnsneg1"), ref("dnsneg2")], "k8s-exec-outside-api": [ref("execapi")]},
         "correlations": {"contained-intrusion": [ref("shell"), ref("beacon")], "dns-exfil": [ref("dnsexfil")]},
         "monitors": {
-            "sdp-git: policy-probing": ([prober], []),
+            "sdp-git: policy-probing": ([prober], [early]),
             "sdp-git: prevented-not-detected": ([ref("pnd")], []),
             "sdp-git: detection-missing": ([ref("dm")], [ref("shadow"), ref("shell"), ref("beacon"), ref("droprun")]),
         },

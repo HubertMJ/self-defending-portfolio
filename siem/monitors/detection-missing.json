@@ -24,8 +24,8 @@
                 {
                   "range": {
                     "@timestamp": {
-                      "gte": "{{period_end}}||-3m",
-                      "lte": "{{period_end}}||-1m",
+                      "gte": "{{period_end}}||-4m",
+                      "lte": "{{period_end}}",
                       "format": "epoch_millis"
                     }
                   }
@@ -66,6 +66,15 @@
                           "term": {
                             "api.outcome": "detected"
                           }
+                        },
+                        {
+                          "range": {
+                            "@timestamp": {
+                              "gte": "{{period_end}}||-3m",
+                              "lte": "{{period_end}}||-1m",
+                              "format": "epoch_millis"
+                            }
+                          }
                         }
                       ]
                     }
@@ -83,6 +92,15 @@
                         {
                           "term": {
                             "event.kind": "alert"
+                          }
+                        },
+                        {
+                          "range": {
+                            "@timestamp": {
+                              "gte": "{{period_end}}||-210s",
+                              "lte": "{{period_end}}",
+                              "format": "epoch_millis"
+                            }
                           }
                         }
                       ]

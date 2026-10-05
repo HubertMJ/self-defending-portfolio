@@ -3,9 +3,10 @@
 a visitor does: POST /api/attack/terminal, then POST /api/runs/{id}/commands per command with the run's
 token, DELETE to leave; one-click scenarios with POST /api/attack/{id}. Helper of tests/siem/canaries.sh.
 
-Sessions: every terminal command whose catalogue outcome is not `detected` runs in ONE session (a
-detected command ends the run - Talon terminates or quarantines the pod), then each canary that
-contains a detected command gets its own session, its commands in the canary's order. Refuses to start
+Sessions: every rule canary's terminal commands whose catalogue outcome is not `detected` run in ONE
+session (a detected command ends the run - Talon terminates or quarantines the pod); each canary that
+contains a detected command, and each monitor canary (its bucket is the pod, so no other command may
+share it), gets its own session, its commands in the canary's order. Refuses to start
 while /api/runs shows a run in progress, and stays far inside the attack limits (60 per IP; a pass is
 about ten runs). Prints one JSON line: {"start_ms": ..., "runs": [{"run_id", "kind", "what", "state"}]}.
 
@@ -95,10 +96,10 @@ def main():
     with open(catalogue, encoding="utf-8") as fh:
         cat = yaml.safe_load(fh)
     outcome = {c["id"]: c.get("outcome") for s in cat if s.get("id") == "terminal" for c in s.get("commands", [])}
-    api = [c for sec in canaries.values() for c in (sec or {}).values() if c.get("kind") == "api"]
+    api = [(sec, c) for sec, objs in canaries.items() for c in (objs or {}).values() if c.get("kind") == "api"]
     sessions, scenarios = [], []
     quiet = []
-    for c in api:
+    for sec, c in api:
         if c.get("scenario"):
             if c["scenario"] not in scenarios:
                 scenarios.append(c["scenario"])
@@ -106,7 +107,7 @@ def main():
         unknown = [x for x in c["terminal"] if x not in outcome]
         if unknown:
             raise SystemExit(f"canary commands not in the catalogue: {unknown}")
-        if any(outcome[x] == "detected" for x in c["terminal"]):
+        if sec == "monitors" or any(outcome[x] == "detected" for x in c["terminal"]):
             if c["terminal"] not in sessions:
                 sessions.append(c["terminal"])
         else:
