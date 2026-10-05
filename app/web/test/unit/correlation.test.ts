@@ -84,6 +84,31 @@ describe("publishable (ADR 0021 on the page)", () => {
   });
 });
 
+describe("publishable: review M2 probes", () => {
+  it("an address at the end of a sentence is withheld; a version-like number run is not an address", () => {
+    expect(publishable("to 10.43.0.10.")).toBe(false);
+    expect(publishable("to 10.43.0.10")).toBe(false);
+    expect(publishable("(10.43.0.10)")).toBe(false);
+    expect(publishable("version 1.2.3.4.5")).toBe(true);
+  });
+
+  it("checks the whole text before the cap: a leak past character 200 still withholds the detail and the title", () => {
+    const long = `${"x".repeat(195)} to 10.43.0.10:53`;
+    const c = parseCorrelation(answer({ incidents: [incident({ title: `${"t".repeat(195)} on k3s01`, steps: [{ at: at(1), source: "hubble", rule: `${"r".repeat(190)} kube-system/coredns-1`, rule_id: "", command_seq: null, detail: long }] })] }));
+    const i = c.incidents[0];
+    expect(i.title).toBe("");
+    expect(i.steps[0]).toMatchObject({ rule: "", detail: "", withheld: true });
+  });
+
+  it("the SIEM's own <ns>_<pod> form outside the sandbox is withheld; words with an underscore are not refs", () => {
+    expect(publishable("kube-system_coredns-5d78c9869d-x7k2p")).toBe(false);
+    expect(publishable("on falco-response_falco-talon-7d9f")).toBe(false);
+    expect(publishable("sandbox_terminal-7e57000001")).toBe(true);
+    expect(publishable("sandbox-unguarded_scenario-network-tool-7e57aaaaaa-u")).toBe(true);
+    for (const word of ["read_shadow", "event_overwrite", "default_value", "ingest_lag_ms", "falco_events", "sdp_falco", "k8s_pod_ref"]) expect(publishable(`field ${word} set`), word).toBe(true);
+  });
+});
+
 describe("parseCorrelation", () => {
   it("parses a full answer, newest first", () => {
     const c = parseCorrelation(answer({ incidents: [incident(), incident({ id: "d15e0f17a1b2c3d4", kind: "dns-exfil", last_at: at(10), first_at: at(12), flag_match: true, falco_events: 0 })] }));

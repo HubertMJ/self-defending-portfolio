@@ -1189,7 +1189,8 @@ const SANDBOX_NS: ReadonlySet<string> = new Set(["sandbox", "sandbox-unguarded"]
  * pseudonym, a dns-exfil query label, the flag.
  */
 const NEVER_PUBLISHED: readonly RegExp[] = [
-  /(?<![\d.])(?!127\.)(?:\d{1,3}\.){3}\d{1,3}(?![\d.])/,
+  // An address at the end of a sentence ("to 10.43.0.10.") is still one.
+  /(?<![\d.])(?!127\.)(?:\d{1,3}\.){3}\d{1,3}(?!\.?\d)/,
   /\.svc\b|cluster\.local/i,
   /k3s01|siem01/i,
   /serviceaccount/i,
@@ -1198,8 +1199,11 @@ const NEVER_PUBLISHED: readonly RegExp[] = [
   /SDP\{/,
 ];
 
-/** `a/b` that does not start inside a path ("/etc/shadow" is not one): a candidate `<namespace>/<pod>`. */
-const SLASHED = /(?<![\w./-])([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)\/([a-z0-9](?:[a-z0-9.-]*[a-z0-9])?)/g;
+/**
+ * `a/b` or `a_b` that does not start inside a path or a word ("/etc/shadow", "sdp_falco" are not one):
+ * a candidate `<namespace>/<pod>`, or the SIEM's own `<namespace>_<pod>` (S0-#1).
+ */
+const SLASHED = /(?<![\w./-])([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)([/_])([a-z0-9](?:[a-z0-9.-]*[a-z0-9])?)(?![\w])/g;
 
 /** The cluster's other namespaces (cluster/ manifests and the Kubernetes defaults): a ref into one is never shown. */
 const CLUSTER_NS: ReadonlySet<string> = new Set(["argocd", "cert-manager", "cloudflared", "default", "falco", "falco-response", "gateway", "hello", "kube-bench", "kube-node-lease", "kube-public", "kube-system", "kyverno", "policy-reporter", "portfolio-api", "trivy-system"]);
@@ -1213,7 +1217,11 @@ const CLUSTER_NS: ReadonlySet<string> = new Set(["argocd", "cert-manager", "clou
  */
 export function publishable(s: string): boolean {
   if (NEVER_PUBLISHED.some((re) => re.test(s))) return false;
-  for (const [, ns, pod] of s.matchAll(SLASHED)) if (!SANDBOX_NS.has(ns) && (CLUSTER_NS.has(ns) || pod.includes("-"))) return false;
+  for (const [, ns, sep, pod] of s.matchAll(SLASHED)) {
+    if (SANDBOX_NS.has(ns)) continue;
+    // `ns_x` is a ref only with a controller's pod name ("default_value", "read_shadow" are words).
+    if (sep === "/" ? CLUSTER_NS.has(ns) || pod.includes("-") : pod.includes("-")) return false;
+  }
   return true;
 }
 
@@ -1222,16 +1230,16 @@ const techniques = (v: unknown): string[] => (Array.isArray(v) ? [...new Set(v.f
 const isSigmaId = (v: unknown): v is string => isStr(v) && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(v);
 const optMs = (v: unknown): number | null => (isCount(v) ? v : null);
 const oneOf = <T extends string>(list: readonly T[], v: unknown, fallback: T): T => ((list as readonly unknown[]).includes(v) ? (v as T) : fallback);
-/** Free text from the SIEM path: control characters stripped, capped, and "" if not publishable. */
+/** Free text from the SIEM path: the whole text is checked before it is capped (a cap could cut a leak in half). */
 const siemText = (v: unknown, max: number): string => {
-  const s = cap(isStr(v) ? stripControl(v) : "", max);
-  return publishable(s) ? s : "";
+  const s = isStr(v) ? stripControl(v) : "";
+  return publishable(s) ? cap(s, max) : "";
 };
 
 function parseStep(v: unknown): CorrelationStep | null {
   if (!isObj(v) || !isTime(v.at) || !(CORRELATION_SOURCES as readonly unknown[]).includes(v.source)) return null;
-  const raw = isStr(v.detail) ? cap(stripControl(v.detail), 200) : "";
-  const detail = publishable(raw) ? raw : "";
+  const full = isStr(v.detail) ? stripControl(v.detail) : "";
+  const detail = publishable(full) ? cap(full, 200) : "";
   return {
     at: v.at,
     source: v.source as CorrelationSource,
@@ -1239,7 +1247,7 @@ function parseStep(v: unknown): CorrelationStep | null {
     rule_id: isSigmaId(v.rule_id) ? v.rule_id : "",
     command_seq: typeof v.command_seq === "number" && Number.isInteger(v.command_seq) && v.command_seq > 0 ? v.command_seq : null,
     detail,
-    ...(raw && !detail ? { withheld: true as const } : {}),
+    ...(full && !detail ? { withheld: true as const } : {}),
   };
 }
 
