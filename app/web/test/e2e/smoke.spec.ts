@@ -1052,6 +1052,9 @@ test.describe("correlation (ADR 0036; serve.mjs --terminal-api --siem / --no-sie
         await nothingPastEdge(page, "#correlation .corr-incidents");
         await nothingPastEdge(page, "#correlation .corr-health");
         await nothingPastEdge(page, "#correlation .corr-rulelist");
+        await expect(s.locator(".corr-lag")).toBeVisible();
+        await nothingPastEdge(page, "#correlation .corr-metrics");
+        await nothingPastEdge(page, "#correlation .corr-lag");
       }
     });
   }
