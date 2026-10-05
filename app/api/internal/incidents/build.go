@@ -381,21 +381,44 @@ func (ix *index) dnsExfil(ref string) *draft {
 	return d
 }
 
-// execOutsideAPI: an audited exec/attach/portforward into a sandbox pod by anyone but the API.
+// execOutsideAPI: audited exec/attach/portforward sessions into a sandbox pod by anyone but the API,
+// one incident per pod with each session a step. A session is audited once per stage
+// (ResponseStarted, then ResponseComplete) under one audit id: the stages are one step, both
+// findings cited.
 func (ix *index) execOutsideAPI(ref string) []*draft {
-	var out []*draft
+	d := &draft{key: ref, refs: []string{ref}}
+	d.Kind, d.Severity = KindExecOutsideAPI, "high"
+	seen := map[string]bool{}
+	var first *record
 	for _, r := range ix.on(ref, isFinding("k8s-audit")) {
 		if r.actor == actorAPI || (r.subresource != "exec" && r.subresource != "attach" && r.subresource != "portforward") {
 			continue
 		}
-		d := &draft{key: r.findingID, refs: []string{ref}}
-		d.Kind, d.Severity = KindExecOutsideAPI, "high"
-		verb := map[string]string{"exec": "Exec into", "attach": "Attach to", "portforward": "Port-forward to"}[r.subresource]
-		d.Title = verb + " " + ix.t.publicRef(ref) + " outside the API"
+		key := r.auditID
+		if key == "" {
+			key = r.subresource + "@" + r.at.Format(time.RFC3339Nano)
+		}
+		if seen[key] {
+			d.ev = append(d.ev, evidenceOf(r))
+			continue
+		}
+		seen[key] = true
+		if first == nil {
+			first = r
+		}
 		d.add(r)
-		out = append(out, d)
 	}
-	return out
+	if first == nil {
+		return nil
+	}
+	pod := ix.t.publicRef(ref)
+	if len(d.recs) == 1 {
+		verb := map[string]string{"exec": "Exec into", "attach": "Attach to", "portforward": "Port-forward to"}[first.subresource]
+		d.Title = verb + " " + pod + " outside the API"
+	} else {
+		d.Title = fmt.Sprintf("%d exec/attach/port-forward sessions into %s outside the API", len(d.recs), pod)
+	}
+	return []*draft{d}
 }
 
 // stagedAttack: in one run, a recon step, then a credentials step, then an exfiltration attempt, by

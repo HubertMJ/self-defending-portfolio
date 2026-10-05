@@ -55,6 +55,7 @@ type record struct {
 	flag                                  *bool // DNS findings: the flag match when first read
 
 	verb, resource, subresource, actor string
+	auditID                            string // one request's id, shared by its stages
 	code                               int
 
 	apiAction, runID, state, arm, commandID, technique, objective, outcome string
@@ -163,6 +164,7 @@ func (t *Tracker) fill(r *record, m map[string]any) (dnsQuery string) {
 		r.dns = dnsQuery != ""
 	case "k8s-audit":
 		r.verb, r.resource, r.subresource = str(m, "audit.verb"), str(m, "audit.object.resource"), str(m, "audit.object.subresource")
+		r.auditID = str(m, "audit.id")
 		r.code, _ = num(m, "audit.response.code")
 		switch str(m, "user.name") {
 		case apiUser:

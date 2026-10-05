@@ -388,20 +388,43 @@ func TestStagedAttack(t *testing.T) {
 
 func TestExecOutsideAPI(t *testing.T) {
 	f := newFake()
-	exec := func(id, user string) siem.Finding {
-		return finding(id, t0, "Exec into a sandbox pod not by the API", []string{"sdp_k8s_audit", "attack.t1609"}, map[string]any{
-			"audit.verb": "create", "audit.object.resource": "pods", "audit.object.subresource": "exec", "audit.response.code": 101,
-			"k8s.pod.ref": quarRef, "user.name": user, "source.ip": "hm1:0011223344556677"})
+	exec := func(id string, at time.Time, ref, sub, user, auditID, stage string) siem.Finding {
+		return finding(id, at, "Exec into a sandbox pod not by the API", []string{"sdp_k8s_audit", "attack.t1609"}, map[string]any{
+			"audit.id": auditID, "audit.stage": stage, "audit.verb": "create", "audit.object.resource": "pods",
+			"audit.object.subresource": sub, "audit.response.code": 101, "k8s.pod.ref": ref, "user.name": user, "source.ip": "hm1:0011223344556677"})
 	}
-	f.findings["sdp_k8s_audit"] = []siem.Finding{exec("f-exec-admin", "system:admin"), exec("f-exec-api", apiUser), exec("f-exec-op", "hm1:8899aabbccddeeff")}
+	f.findings["sdp_k8s_audit"] = []siem.Finding{
+		// One kubectl exec, audited at ResponseStarted and at ResponseComplete under one audit id.
+		exec("f-exec-1a", t0, quarRef, "exec", "system:admin", "aud-1", "ResponseStarted"),
+		exec("f-exec-1b", t0, quarRef, "exec", "system:admin", "aud-1", "ResponseComplete"),
+		// The API's own exec is not one.
+		exec("f-exec-api", t0.Add(time.Second), quarRef, "exec", apiUser, "aud-2", "ResponseComplete"),
+		// A second session on the same pod, by a person (pseudonymised).
+		exec("f-exec-3", t0.Add(5*time.Second), quarRef, "exec", "hm1:8899aabbccddeeff", "aud-3", "ResponseComplete"),
+		// Attach and port-forward on other pods.
+		exec("f-attach", t0, cmpRef, "attach", "system:admin", "aud-4", "ResponseComplete"),
+		exec("f-pf", t0, termRef, "portforward", "system:admin", "aud-5", "ResponseComplete"),
+		// Not a session: a log read.
+		exec("f-log", t0, twinRef, "log", "system:admin", "aud-6", "ResponseComplete"),
+	}
 	tr := newTracker(t, f, &clock{t: t0.Add(time.Minute)})
 	tr.Poll(context.Background())
-	list := incidentsOf(tr.View(), KindExecOutsideAPI)
-	if len(list) != 2 {
-		t.Fatalf("%d exec-outside-api incidents, want 2 (the API's own exec is not one)", len(list))
+	byTitle := map[string]Incident{}
+	for _, inc := range incidentsOf(tr.View(), KindExecOutsideAPI) {
+		byTitle[inc.Title] = inc
 	}
-	if list[0].Title != "Exec into sandbox/network-tool-b2c3d4e5f6 outside the API" || list[0].Steps[0].Detail != "create pods/exec on sandbox/network-tool-b2c3d4e5f6 not by the API, response 101" {
-		t.Fatalf("incident %+v", list[0])
+	if len(byTitle) != 3 {
+		t.Fatalf("%d exec-outside-api incidents, want 3 (one per pod): %v", len(byTitle), byTitle)
+	}
+	two := byTitle["2 exec/attach/port-forward sessions into sandbox/network-tool-b2c3d4e5f6 outside the API"]
+	if len(two.Steps) != 2 || two.Steps[0].Detail != "create pods/exec on sandbox/network-tool-b2c3d4e5f6 not by the API, response 101" || len(two.Evidence) != 3 {
+		t.Fatalf("two sessions: %+v", two)
+	}
+	if _, ok := byTitle["Attach to sandbox/shell-in-container-a1b2c3d4e5 outside the API"]; !ok {
+		t.Errorf("no attach incident: %v", byTitle)
+	}
+	if _, ok := byTitle["Port-forward to sandbox/terminal-3755e65530 outside the API"]; !ok {
+		t.Errorf("no port-forward incident: %v", byTitle)
 	}
 }
 
@@ -511,7 +534,7 @@ func TestCaps(t *testing.T) {
 	f := newFake()
 	for i := 0; i < 260; i++ {
 		f.findings["sdp_k8s_audit"] = append(f.findings["sdp_k8s_audit"], finding(fmt.Sprintf("ex-%d", i), t0.Add(time.Duration(i)*time.Second),
-			"Exec", nil, map[string]any{"audit.object.subresource": "exec", "audit.object.resource": "pods", "k8s.pod.ref": quarRef, "user.name": "system:admin"}))
+			"Exec", nil, map[string]any{"audit.object.subresource": "exec", "audit.object.resource": "pods", "k8s.pod.ref": fmt.Sprintf("sandbox_p-%d", i), "user.name": "system:admin"}))
 	}
 	for i := 0; i < 70; i++ {
 		f.findings["sdp_falco"] = append(f.findings["sdp_falco"], falcoFinding(fmt.Sprintf("fa-%d", i), t0.Add(time.Duration(i)*time.Second), cmpRef, "Terminal shell in container"))
