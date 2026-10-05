@@ -367,6 +367,29 @@ describe("the section's parts", () => {
     expect(bad.querySelectorAll(".chip--warning")).toHaveLength(1);
   });
 
+  it("the rules chip: failed is critical, stale a warning, a word the page does not know reads as unknown and never good", () => {
+    const rulesChip = (status: unknown) => {
+      const el = renderHealth(parseCorrelation(answer({ rules: { commit: COMMIT, applied_at: at(5400), status } })), NOW);
+      return { data: el.getAttribute("data-rules"), chip: el.querySelector(".corr-health__rules .chip") };
+    };
+    const failed = rulesChip("failed");
+    expect(failed.data).toBe("failed");
+    expect(failed.chip?.className).toBe("chip chip--critical");
+    expect(failed.chip?.textContent).toContain("rules failed");
+    // The rules sync has not checked in for over 30 minutes.
+    const stale = rulesChip("stale");
+    expect(stale.data).toBe("stale");
+    expect(stale.chip?.className).toBe("chip chip--warning");
+    expect(stale.chip?.textContent).toContain("rules stale");
+    for (const word of ["unknown", "pending", "APPLIED", 1, null, undefined]) {
+      const unknown = rulesChip(word);
+      expect(unknown.data, String(word)).toBe("unknown");
+      expect(unknown.chip?.className, String(word)).toBe("chip chip--neutral");
+      expect(unknown.chip?.textContent, String(word)).toContain("rules unknown");
+    }
+    expect(rulesChip("applied").chip?.className).toBe("chip chip--good");
+  });
+
   it("the metrics: the API's medians, a p95 only over two or more, host findings as a count", () => {
     const two = parseCorrelation(answer({ incidents: [incident(), incident({ id: "0000000000000009", tti_ms: 1830, ttd_ms: 1210 })] }));
     const el = renderMetrics(two, NOW);

@@ -1121,7 +1121,8 @@ export interface CorrelationIncident {
   evidence: { type: EvidenceType; id: string }[];
 }
 
-export type RulesStatus = "applied" | "refused" | "failed" | "unknown";
+/** "stale": the rules sync has not checked in for over 30 minutes (a value the API is to add); any other word reads as "unknown". */
+export type RulesStatus = "applied" | "refused" | "failed" | "stale" | "unknown";
 export type IngestHealth = "ok" | "silent" | "unknown";
 export type DiskHealth = "ok" | "high" | "unknown";
 
@@ -1332,7 +1333,7 @@ export function parseCorrelation(v: unknown): Correlation {
     rules: {
       commit: isStr(r.commit) && /^[0-9a-f]{40}$/.test(r.commit) ? r.commit : "",
       applied_at: isTime(r.applied_at) ? r.applied_at : null,
-      status: oneOf<RulesStatus>(["applied", "refused", "failed", "unknown"], r.status, "unknown"),
+      status: oneOf<RulesStatus>(["applied", "refused", "failed", "stale", "unknown"], r.status, "unknown"),
     },
     health: {
       ingest: oneOf<IngestHealth>(["ok", "silent", "unknown"], hl.ingest, "unknown"),

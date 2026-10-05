@@ -58,7 +58,7 @@ export function percentile(values: number[], p: number): number | undefined {
 
 // ---------- health line ----------
 
-const RULES_TONE: Record<Correlation["rules"]["status"], Tone> = { applied: "good", refused: "critical", failed: "critical", unknown: "neutral" };
+const RULES_TONE: Record<Correlation["rules"]["status"], Tone> = { applied: "good", refused: "critical", failed: "critical", stale: "warning", unknown: "neutral" };
 
 /** "SIEM health · rules applied at <commit> <when> · ingest ok · evidence not rewritten · disk ok · checked <when>". */
 export function renderHealth(c: Correlation, now: number): HTMLElement {
