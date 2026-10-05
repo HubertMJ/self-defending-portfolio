@@ -55,15 +55,26 @@ The constraints are the project's:
   time, documents by `event.ingested` (so a document that arrives late is still read) - and
   de-duplicates by finding id, document id and correlation pair.
 - Per poll: findings per detector type (`sdp_falco`, `sdp_talon`, `sdp_hubble`, `sdp_k8s_audit`,
-  `sdp_api`, `sdp_host`); SA correlations; Alerting alerts (newest 500); three bounded document searches
-  (`sdp-api` run/command lines; `sdp-k8s-audit` pod patches/deletes by Talon and pod creates/deletes in
-  the twin namespace; `sdp-hubble` drops); the newest `siem-sync` records; one count of
-  `event.overwrite: true` documents ingested in the last 24 h over the six streams.
-- A detector log type that answers 404 (no detector of that type yet) is "no findings", not an outage;
-  any other failure of the reads above fails the poll. The `siem-sync` and `event.overwrite` reads are
-  optional: their failure keeps the previous value and does not hide the section.
-- The evidence is kept in memory for 24 h (at most 2 000 records per source); incidents are rebuilt from
-  it after every poll by one pure function, so the same evidence always gives the same incidents and ids.
+  `sdp_api`, `sdp_host`); SA correlations; Alerting alerts (newest 500 of every state, and the ACTIVE
+  ones on their own for the health line, so an ops alarm older than a burst of incident alerts still
+  shows); three bounded document searches (`sdp-api` run/command lines; `sdp-k8s-audit` pod
+  patches/deletes by Talon and pod creates/deletes in the twin namespace; `sdp-hubble` drops); the newest
+  `siem-sync` records; one count of `event.overwrite: true` documents ingested in the last 24 h over the
+  six streams. Fourteen requests.
+- A detector log type that answers 404 (no detector of that type yet) is "no findings", not an outage,
+  logged once per type; any other failure of the findings, alerts and document reads fails the poll. The
+  correlations, `siem-sync` and `event.overwrite` reads are soft: their failure keeps what was read
+  before and does not hide the section (an SA correlation is cited evidence, never a condition). A page
+  that comes back full (500) is logged once until it no longer is.
+- The evidence is kept in memory for 24 h, at most 2 000 records per source; Hubble DNS findings and
+  drops are capped apart, and a drop older than 10 minutes that no check reads (the first drop after a
+  Talon patch, a dropped lookup after a dns-exfil command) and no finding names is not kept, so a
+  quarantined pod's drop flood never pushes a DNS finding out. Correlations age out with the retention;
+  host finding ids are capped too. Incidents are rebuilt after every poll by one pure function, so the
+  same evidence always gives the same incidents and ids; the view is marshalled once per poll and every
+  request is served those bytes.
+- One document is one event: several findings on one document (two rules matched it, or a finding on a
+  document a search also read) make one step citing every finding (up to five).
 
 ### 3. Pod refs and publication
 - A ref is read as `<ns>_<pod>`, split at the **first** `_` (no namespace or pod name contains one), and
@@ -97,7 +108,7 @@ an SA correlation, when one pairs two of the incident's findings, is cited as ev
 | `dns-exfil` | an SA finding on a Hubble DNS query, joined with the run's `dns-exfil` command on the ref | critical with a flag match, else high |
 | `dns-exfil` (quarantined, F7) | the run's `dns-exfil` command and a Hubble drop to port 53 from the same ref within 10 s, no DNS finding | medium |
 | `staged-attack` | one run's command lines: a recon step, then a credentials step, then an exfiltration attempt, in `@timestamp` order | high |
-| `exec-outside-api` | an SA finding on a `sdp-k8s-audit` exec/attach/portforward into a sandbox pod by anyone but the API | high |
+| `exec-outside-api` | SA findings on `sdp-k8s-audit` exec/attach/portforward sessions into a sandbox pod by anyone but the API; one step per session (its ResponseStarted and ResponseComplete records, one audit id, are one step) | high |
 | `policy-probing` | an alert of the `sdp-git: policy-probing` monitor | medium |
 | `prevented-not-detected` | an alert of the `sdp-git: prevented-not-detected` monitor | low |
 | `detection-missing` | an alert of the `sdp-git: detection-missing` monitor | medium |
@@ -106,8 +117,8 @@ an SA correlation, when one pairs two of the incident's findings, is cited as ev
 - **Monitor kinds** are chosen by the monitor name after the `sdp-git: ` prefix (lower-cased, words
   joined by `-`, matched as a prefix); other monitors make no incident. Alerts in state `ERROR` or
   `DELETED` are ignored.
-- **One incident per** ref (contained-intrusion, dns-exfil), run (staged-attack, twin-dwell), finding
-  (exec-outside-api) or alert (monitor kinds); its id is the first 16 hex of SHA-256 over kind and key,
+- **One incident per** ref (contained-intrusion, dns-exfil, exec-outside-api), run (staged-attack,
+  twin-dwell) or alert (monitor kinds); its id is the first 16 hex of SHA-256 over kind and key,
   stable across polls and restarts.
 - **Steps** are the incident's evidence in time order (at most 50): the commands that anchor it, the
   findings, the audit and Hubble documents that measure it. `command_seq` is the run's command sequence
@@ -119,18 +130,24 @@ an SA correlation, when one pairs two of the incident's findings, is cited as ev
 - **Time to detect (TTD)** = the first Falco finding's `@timestamp` - the anchoring command's `started`
   (the latest `siem.command started` on the ref at or before it), or, for a one-click run, the run's
   `pod_ready` on that ref (the scripted attack is executed as soon as the pod is ready).
-- **Time to isolate (TTI)** (M11) = Talon's audited response on that pod - the first `patch` (quarantine
-  label) or `delete` (terminate) of the pod by `system:serviceaccount:falco-response:falco-talon` in
-  `sdp-k8s-audit` at or after the Falco finding - minus the Falco finding's `@timestamp`. Anchored on the
-  API server's record of the action, not on Talon's own log line or the runner's observation. The first
-  Hubble drop on the ref after a quarantine patch is a separate step, "policy enforced +N ms", not part of
-  TTI.
+- **Time to isolate (TTI)** (M11) = Talon's audited response on that pod - the first successful
+  (code < 300) `patch` (quarantine label) or `delete` (terminate) of the pod by
+  `system:serviceaccount:falco-response:falco-talon` in `sdp-k8s-audit` at or after the Falco finding -
+  minus the Falco finding's `@timestamp`. Anchored on the API server's record of the action, not on
+  Talon's own log line or the runner's observation. The first Hubble drop on the ref within 30 s after a
+  quarantine patch is a separate step, "policy enforced +N ms", not part of TTI.
 - **Twin dwell** = the twin pod's audited `delete` - its audited `create` (both in the twin namespace,
   from `sdp-k8s-audit`): how long an attacker kept the pod nobody answered. The `twin-dwell` incident
   carries the guarded arm's TTD and TTI from the same run, for the contrast.
 - `metrics`: over the last 24 h (`since` = now - 24 h); medians (the mean of the two middle values for an
   even count, whole ms) of TTD and TTI over `contained-intrusion` incidents and of dwell over
   `twin-dwell` incidents; null when there is none.
+- **Ingest lag** (`metrics.ingest_lag_ms`, an object keyed `falco`, `talon`, `hubble`, `k8s-audit`,
+  `api`, `host`) = per source, the median of `event.ingested` (set by the `sdp-final` pipeline, siem01's
+  clock) - `@timestamp` over the documents the API read that were ingested in the last 15 minutes; null
+  for a source with none. Only documents the polls read anyway count - no extra request. 15 minutes, not
+  one poll window: a sandbox source writes only when someone attacks, so one 2-minute window is almost
+  always empty. Negative values (clock skew between the hosts) are published as they are.
 
 ### 6. Flag match (dns-exfil)
 - At terminal start the runner computes `HMAC-SHA256(procKey, "sdp-" + <16 hex of the flag>)` and hands
@@ -150,15 +167,20 @@ an SA correlation, when one pairs two of the incident's findings, is cited as ev
   an API restart lost `procKey` ("flag match unavailable").
 
 ### 7. Health on the page (D1)
-- `rules`: the newest `siem-sync` record gives `status` (`applied|refused|failed`, else `unknown`); the
-  newest record with status `applied` gives `commit` (40 hex, else empty) and `applied_at`.
-- `health.ingest` = `silent` when any Alerting alert of a monitor named `ingest silent <source>` is
-  `ACTIVE`, else `ok`; `unknown` when the alerts could not be read. `health.disk` likewise from
-  `disk watermark` (`high`). `health.evidence_rewritten` = any `event.overwrite: true` document ingested
-  in the last 24 h in the six streams (F1).
+- `rules`: from the newest `siem-sync` records of the last 31 days: the newest one gives `status`
+  (`applied|refused|failed`, else `unknown`), the newest with status `applied` gives `commit` (40 hex)
+  and `applied_at`. The sync writes a record only when it has something to do, so a quiet repository
+  leaves the last record old: when no record is found, or no applied one, the last known value stands
+  (`unknown` only until a record has been read once).
+- `health.ingest` = `silent` when an ACTIVE Alerting alert belongs to a monitor named
+  `ingest silent <source>`, else `ok`; `health.disk` = `high` likewise for `disk watermark`. Both read
+  the ACTIVE alerts on their own. When the alerts cannot be read the poll fails, and after 45 s the whole
+  answer is `available:false` (section 8), where both are `unknown`. `health.evidence_rewritten` = any
+  `event.overwrite: true` document ingested in the last 24 h in the six streams (F1); a failed count
+  keeps the previous value.
 
 ### 8. Degradation
-`available` is true while the last fully successful poll is at most 45 s old (so a stopped OpenSearch
+`available` is true while the last fully successful poll ended at most 45 s ago (so a stopped OpenSearch
 turns it false within 60 s, L11, and one slow poll does not hide the section). `available:false` empties
 everything else (`rules.commit` "", `applied_at` null, `status`/`ingest`/`disk` `unknown`,
 `evidence_rewritten` false, metrics zero/null, no incidents). The page hides the section; the demo is
@@ -168,14 +190,14 @@ untouched. An unconfigured SIEM looks the same, with `checked_at` null.
 GET only, under the public middleware and request budget, both in the 405 list.
 
 `GET /api/correlation` (incidents newest first by `first_at`; every array marshals `[]`). The example is
-the API's own output for the unit-test fixtures (a terminal run whose dns-exfil carried its flag, one
-compare run; three more incidents omitted); `rule_id` is empty there because the embedded rule index
+the API's own output for the unit-test fixtures (a terminal run whose dns-exfil carried its flag; its
+staged-attack incident omitted); `rule_id` is empty there because the embedded rule index
 is not generated yet:
 
 ```json
 {
   "available": true,
-  "checked_at": "2026-10-04T11:01:00Z",
+  "checked_at": "2026-10-04T10:02:00Z",
   "rules": {
     "commit": "0123456789abcdef0123456789abcdef01234567",
     "applied_at": "2026-10-04T09:55:00Z",
@@ -187,12 +209,20 @@ is not generated yet:
     "disk": "ok"
   },
   "metrics": {
-    "since": "2026-10-03T11:01:00Z",
-    "incidents": 4,
-    "median_ttd_ms": 800,
-    "median_tti_ms": 400,
-    "median_twin_dwell_ms": 14000,
-    "host_findings": 2
+    "since": "2026-10-03T10:02:00Z",
+    "incidents": 2,
+    "median_ttd_ms": null,
+    "median_tti_ms": null,
+    "median_twin_dwell_ms": null,
+    "host_findings": 2,
+    "ingest_lag_ms": {
+      "api": 3000,
+      "falco": null,
+      "host": 2000,
+      "hubble": 2000,
+      "k8s-audit": null,
+      "talon": null
+    }
   },
   "incidents": [
     {
@@ -250,7 +280,7 @@ is not generated yet:
         },
         {
           "type": "finding",
-          "id": "3f7b9c2e-5a14-4e8d-b6f0-91c2d7a4e358"
+          "id": "f-dns-1"
         }
       ]
     }
@@ -266,7 +296,8 @@ is not generated yet:
   `api` for the two sdp-api/sdp-falco monitors). `rule`: the Sigma rule's title from the finding (or the
   monitor name), "" for a document without a finding. `rule_id`: the rule's Sigma id, looked up by title in
   the embedded rule index, "" when not found.
-- `evidence[].type`: `finding` (SA finding id), `alert` (Alerting alert id), `correlation` (the SA
+- `evidence[]`: correlations first (so the cap of 50 never cuts them), then each step's finding(s) or
+  document. `evidence[].type`: `finding` (SA finding id), `alert` (Alerting alert id), `correlation` (the SA
   correlation rule id that paired two of the incident's findings - the correlations list has no id of its
   own) and `document` (the `_id` of a stream document an incident is measured on: Talon's audited
   response, the twin's create/delete, a Hubble drop, the anchoring command line). `document` is a
@@ -302,12 +333,14 @@ or not the SIEM is reachable:
 ## Consequences
 - The section shows incidents 1-3 minutes after the event (detector interval 1 min, Fluent Bit flush,
   refresh, the 15 s poll); the page says so.
-- About thirteen bounded read requests every 15 s from one client certificate; at most 24 h of evidence
+- Fourteen bounded read requests every 15 s from one client certificate; at most 24 h of evidence
   in memory (capped per source), at most 200 incidents of at most 50 steps.
 - Incidents are detection code in the API: versioned, unit- and mutation-tested (`internal/incidents`,
   `internal/siem`), each kind with a canary; a leak test runs the JSON through ADR 0021's never-publish
   list.
 - An API restart loses the flag-match key: dns-exfil incidents from before it show "flag match
   unavailable".
+- The client certificate is read once, at start: a rotation restarts the API after the new Secret is
+  synced and before the old generation is unmapped (docs/bootstrap.md 9.8).
 - The rule index is generated from `siem/` and embedded; until it is regenerated, a rule's `rule_id` is
   empty and `/api/correlation/rules` lists nothing new.
