@@ -1,0 +1,62 @@
+# Allow-list of the sdp-api data stream (siem/fields/README.md). Derived from tests/siem/fixtures/api.log, which is
+# app/api/internal/siemlog/testdata/lines.golden (the package's golden) as the container runtime writes it.
+# The API builds these lines field by field (package siemlog): no output chunk, flag, client IP, token, run detail or
+# ServiceAccount is ever in one (ADR 0017, 0021, 0030). Every string value is a short identifier
+# ([A-Za-z0-9][A-Za-z0-9._-]{0,99}) or empty, so no value carries a space (siem contract S0-#4) and none needs a slug.
+owner: api-events
+source: api
+stream: sdp-api
+log_type: sdp_api
+input: >-
+  CRI lines of /var/log/pods/portfolio-api_portfolio-api-*/api/*.log on k3s01, the slog JSON body; only lines with
+  msg siem.run (every run state; a compare run's states with arm guarded, plus started and its final state again
+  with arm unguarded and the twin's ref - the unguarded started line means "created together with the guarded pod",
+  not that the twin's own create was acknowledged; its detected/responded are never written for the twin, which
+  nothing answers) or siem.command (started, exited, killed; output events are never
+  written). The slog keys time and level are dropped; a key is null (not indexed) where noted.
+fixture: tests/siem/fixtures/api.log
+fields:
+  "@timestamp": {type: date, from: at, note: "the event's time (RFC 3339, UTC), not slog's write time"}
+  event.kind: {type: keyword, value: event, note: "event | heartbeat"}
+  event.dataset: {type: keyword, value: api}
+  event.action: {type: keyword, from: msg, note: "siem.run | siem.command"}
+  api.run_id: {type: keyword, from: run_id, note: "16 hex: a random per-run id, public via /api/runs (ADR 0017, 0035)"}
+  api.scenario: {type: keyword, from: scenario, note: "siem.run only: scenario id (terminal, shell-in-container, ...)"}
+  api.state:
+    type: keyword
+    from: state
+    note: >-
+      holds run and command states, so always pair it with event.action (started is both); siem.run: queued |
+      started | pod_ready | detected | responded | finished | failed | timeout; siem.command: started | exited |
+      killed
+  api.arm:
+    type: keyword
+    from: arm
+    note: >-
+      siem.run only: guarded | unguarded on a compare run (ADR 0031), empty otherwise; unguarded only with started
+      (created together with the guarded pod) and the final state
+  api.command_seq:
+    type: integer
+    from: command_seq
+    note: >-
+      siem.run only: the command a terminal run's detected/responded is about; null otherwise
+  api.seq: {type: integer, from: seq, note: "siem.command only: the command's sequence number in its run (1-30)"}
+  api.command_id: {type: keyword, from: command_id, note: "siem.command only: catalogue command id (whoami, read-flag, ...)"}
+  api.exit_code:
+    type: integer
+    from: exit_code
+    note: >-
+      siem.command only: set for an exited command that reported a status; null otherwise
+  api.achieved: {type: boolean, from: achieved, note: "siem.command only: an exited command with an objective that exited 0"}
+  api.technique: {type: keyword, from: technique, note: "siem.command only: ATT&CK id from the catalogue (T1552.001)"}
+  api.objective:
+    type: keyword
+    from: objective
+    note: >-
+      siem.command only: recon | tamper | credentials | exfiltration | execution, empty for none
+  api.outcome: {type: keyword, from: outcome, note: "siem.command only: allowed | prevented | detected (the catalogue's claim)"}
+  k8s.pod.ref:
+    type: keyword
+    from: pod_ref
+    note: >-
+      <ns>_<pod> as written by the API (S0-#1); null (not indexed) before the pod exists; no transform
