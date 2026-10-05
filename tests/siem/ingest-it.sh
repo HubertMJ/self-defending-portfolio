@@ -24,6 +24,9 @@ NET=sdp-ingest-it
 OS=sdp-ingest-os
 SIGNER=sdp-ingest-signer
 K3S=sdp-ingest-k3s
+# Collections are installed once per test into a volume: one Galaxy outage mid-test is one less
+# way for it to fail for reasons that are not the role's.
+COLLECTIONS=sdp-ingest-it-collections
 OS_IMAGE='opensearchproject/opensearch:3.9.0@sha256:adfa61f85025d06b4aeb562e7e74fde7e31c437039c93c3862c17e9acebd6c7c'
 
 work=$(mktemp -d)
@@ -31,7 +34,7 @@ cleanup() {
   if [ -z "${KEEP:-}" ]; then
     for c in "$OS" "$SIGNER" "$K3S" sdp-ingest-n5; do $DOCKER rm -f "$c" >/dev/null 2>&1 || true; done
     $DOCKER network rm "$NET" >/dev/null 2>&1 || true
-    $DOCKER volume rm sdp-ingest-it-collections >/dev/null 2>&1 || true
+    $DOCKER volume rm "$COLLECTIONS" >/dev/null 2>&1 || true
   fi
   rm -rf "$work"
 }
@@ -97,6 +100,9 @@ plugins.security.allow_default_init_securityindex: false
 plugins.security.restapi.roles_enabled: []
 EOF
 chmod -R a+rX "$work/sec" "$work/opensearch.yml"
+# Leftovers of an earlier run kept with KEEP=1 would hold the network and its addresses.
+for c in "$OS" "$SIGNER" "$K3S" sdp-ingest-n5; do $DOCKER rm -f "$c" >/dev/null 2>&1 || true; done
+$DOCKER volume rm "$COLLECTIONS" >/dev/null 2>&1 || true
 $DOCKER network rm "$NET" >/dev/null 2>&1 || true
 $DOCKER network create --subnet 172.31.250.0/24 "$NET" >/dev/null
 $DOCKER run -d --name "$OS" --network "$NET" --ip 172.31.250.10 --memory 2g --ulimit nofile=65536:65536 \
@@ -142,9 +148,6 @@ mkdir -p "$work/inv/group_vars"
 cp tests/siem/ingest-it.inventory.yml "$work/inv/hosts.yml"
 cp ansible/inventory/group_vars/all.yml "$work/inv/group_vars/all.yml"
 chmod -R a+rX "$work/inv"
-# Collections are installed once per test into a volume: one Galaxy outage mid-test is one less
-# way for it to fail for reasons that are not the role's.
-COLLECTIONS=sdp-ingest-it-collections
 tooling() { # <command...> in the tooling container on the test network
   $DOCKER run --rm --network "$NET" -v "$PWD":/work:ro -v "$pki":/pki:ro -v "$work/inv":/inv:ro -v /var/run/docker.sock:/var/run/docker.sock \
     -v "$COLLECTIONS":/collections \

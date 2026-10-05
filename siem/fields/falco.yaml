@@ -29,7 +29,11 @@ fields:
   proc.exepath: {type: keyword, from: [output_fields, proc.exepath]}
   proc.pname: {type: keyword, from: [output_fields, proc.pname]}
   proc.cmdline: {type: keyword, from: [output_fields, proc.cmdline], note: fixed argv of a sandbox command}
-  fd.name: {type: keyword, from: [output_fields, fd.name], transform: ip_pseudonyms, note: "every IPv4 address in it pseudonymised (P2, review L2)"}
+  fd.name:
+    type: keyword
+    from: [output_fields, fd.name]
+    transform: ip_pseudonyms
+    note: every IPv4 address in it pseudonymised (P2, review L2)
   user.name:
     type: keyword
     from: [[output_fields, user.name], [output_fields, k8s.ns.name]]
