@@ -1,13 +1,18 @@
 # DNS exfiltration (ADR 0034 "A scenario only correlation catches", ADR 0032 amendment): a flag-shaped
 # DNS lookup from a pod (sdp-hubble) and the API's record of the dns-exfil command in that pod's
-# terminal (sdp-api) within five minutes. Joined on k8s.pod.ref (<ns>_<pod>, S0-#1). Falco has no rule
+# terminal (sdp-api) within two minutes. Joined on k8s.pod.ref (<ns>_<pod>, S0-#1). Falco has no rule
 # for name lookups, so this pair is the whole detection; the API matches the flag itself (ADR 0036) and
 # cites this correlation when SA recorded it (S0-#13).
+# The join is bounded to L7 DNS events (event_type 129, a few per lookup): hubble-dns-exfil requires them for
+# its findings and the query above for the documents an API finding joins. With every flow carrying the
+# exporter's stale dns.query (sdp.lua before d607ce1) one session's ~3,000 findings joined each other over
+# five minutes and ran siem01 out of heap. Two minutes covers the detectors' one-minute interval and the
+# ingest lag.
 name: dns-exfil
-time_window_ms: 300000
+time_window_ms: 120000
 field: k8s.pod.ref
 correlate:
   - source: hubble
-    query: "_exists_:dns.query"
+    query: "hubble.event_type:129 AND _exists_:dns.query"
   - source: api
     query: "api.command_id:dns-exfil"
