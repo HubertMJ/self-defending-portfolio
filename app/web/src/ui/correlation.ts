@@ -189,10 +189,20 @@ function ruleRef(step: CorrelationStep, ctx: BoardContext): Node | string | null
   return url ? extLink(url, name) : name;
 }
 
-function stepItem(s: CorrelationStep, t0: number, ctx: BoardContext): HTMLElement {
+const countTitle = (count: number) => `${count} records of the same evidence`;
+
+/** "×12": the step stands for that many records of the same evidence; `n` (its place) lets a new count be written in place. */
+function countEl(s: CorrelationStep, n: number): HTMLElement | null {
+  if (s.count === undefined || s.count < 2) return null;
+  return h("span", { class: "corr-step__count", "data-step": String(n), title: countTitle(s.count) }, `×${s.count}`);
+}
+
+function stepItem(s: CorrelationStep, n: number, t0: number, ctx: BoardContext): HTMLElement {
   const at = Date.parse(s.at);
   const delta = at - t0;
   const rule = ruleRef(s, ctx);
+  const count = countEl(s, n);
+  const lead = !!rule || !!count;
   return h(
     "li",
     { class: "corr-step", "data-source": s.source },
@@ -203,11 +213,12 @@ function stepItem(s: CorrelationStep, t0: number, ctx: BoardContext): HTMLElemen
     " ",
     // A stream document without a finding has no rule: its detail says what it is.
     rule ? h("strong", { class: "corr-step__rule" }, rule) : null,
-    s.command_seq !== null ? h("span", { class: "corr-step__cmd" }, `${rule ? " · " : ""}command ${s.command_seq}`) : null,
+    count ? [rule ? " " : null, count] : null,
+    s.command_seq !== null ? h("span", { class: "corr-step__cmd" }, `${lead ? " · " : ""}command ${s.command_seq}`) : null,
     s.detail
-      ? h("span", { class: "corr-step__detail" }, rule || s.command_seq !== null ? " · " : null, s.detail)
+      ? h("span", { class: "corr-step__detail" }, lead || s.command_seq !== null ? " · " : null, s.detail)
       : s.withheld
-        ? h("span", { class: "corr-step__detail corr-step__detail--withheld" }, rule || s.command_seq !== null ? " · " : null, "detail withheld by the page (ADR 0021)")
+        ? h("span", { class: "corr-step__detail corr-step__detail--withheld" }, lead || s.command_seq !== null ? " · " : null, "detail withheld by the page (ADR 0021)")
         : null,
   );
 }
@@ -243,7 +254,7 @@ export function renderIncident(i: CorrelationIncident, ctx: BoardContext): HTMLE
       flagFact(i),
       fact("ATT&CK", i.attack.length ? techniqueLinks(i.attack) : null),
     ),
-    shown.length ? h("ol", { class: "corr-steps", "aria-label": "Evidence timeline" }, shown.map((s) => stepItem(s, t0, ctx))) : h("p", { class: "small" }, "No step of this incident is publishable."),
+    shown.length ? h("ol", { class: "corr-steps", "aria-label": "Evidence timeline" }, shown.map((s, n) => stepItem(s, n, t0, ctx))) : h("p", { class: "small" }, "No step of this incident is publishable."),
     more > 0 ? h("p", { class: "small" }, `${more} more step${more === 1 ? "" : "s"} in the raw JSON.`) : null,
     i.evidence.length
       ? h(
@@ -447,9 +458,12 @@ export function mountCorrelation(
     if (!data || !active) return;
     // Redrawn only when what it shows changes. The API moves checked_at and metrics.since on every
     // poll: those two are rewritten in place, so an open <details> or a focused link survives a poll.
-    // The ingest lags move on every poll too: only which sources are listed is part of the key.
+    // The ingest lags move on every poll too: only which sources are listed is part of the key. So
+    // does a step's count while its records keep arriving: only whether it shows one is.
     const lag = data.metrics.ingest_lag_ms;
-    const k = JSON.stringify({ d: { ...data, checked_at: !!data.checked_at, metrics: { ...data.metrics, since: !!data.metrics.since, ingest_lag_ms: lag?.map(([src]) => src) } }, i: index === undefined ? "u" : index, c: linkCommit() });
+    const counted = (s: CorrelationStep) => (s.count ?? 1) > 1;
+    const incidents = data.incidents.map((i) => ({ ...i, steps: i.steps.map((s) => ({ ...s, count: counted(s) })) }));
+    const k = JSON.stringify({ d: { ...data, checked_at: !!data.checked_at, metrics: { ...data.metrics, since: !!data.metrics.since, ingest_lag_ms: lag?.map(([src]) => src) }, incidents }, i: index === undefined ? "u" : index, c: linkCommit() });
     const now = Date.now();
     if (!force && k === key) {
       const moveTo = (el: HTMLTimeElement | null, t: string) => {
@@ -463,6 +477,15 @@ export function mountCorrelation(
       for (const [src, ms] of lag ?? []) {
         const el = [...mounts.metrics.querySelectorAll<HTMLElement>(".corr-lag__ms")].find((e) => e.dataset.source === src);
         if (el) setText(el, lagText(ms));
+      }
+      for (const i of data.incidents) {
+        i.steps.forEach((s, n) => {
+          const el = counted(s) ? mounts.board.querySelector<HTMLElement>(`[data-incident="${i.id}"] .corr-step__count[data-step="${n}"]`) : null;
+          if (el && s.count) {
+            setText(el, `×${s.count}`);
+            el.title = countTitle(s.count);
+          }
+        });
       }
       refreshRelative(section, now);
       return;

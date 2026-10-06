@@ -4061,6 +4061,13 @@ html[data-terminal="off"] .needs-terminal {
   font-size: 0.78rem;
 }
 
+.corr-step__count {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  white-space: nowrap;
+}
+
 .corr-step__detail {
   color: var(--text-muted);
 }

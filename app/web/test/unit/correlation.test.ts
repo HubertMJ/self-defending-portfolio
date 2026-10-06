@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Result } from "../../src/lib/api";
-import { type Correlation, MAX_INCIDENTS, MAX_STEPS, type RuleIndex, parseCorrelation, parseRuleIndex, publishable } from "../../src/lib/contract";
+import { type Correlation, MAX_INCIDENTS, MAX_STEPS, MAX_STEP_COUNT, type RuleIndex, parseCorrelation, parseRuleIndex, publishable } from "../../src/lib/contract";
 import { RULE_INDEX, correlation as fixtureCorrelation, shiftTimes } from "../../src/lib/fixtures";
 import { BOARD_INCIDENTS, POLL_404_MS, POLL_MS, coverage, kindLabel, mountCorrelation, percentile, renderBoard, renderHealth, renderIncident, renderMetrics, renderRuleLibrary } from "../../src/ui/correlation";
 import { CORRELATION_PATHS, renderVerifyPanel } from "../../src/ui/verify";
@@ -223,6 +223,17 @@ describe("parseCorrelation", () => {
   });
 });
 
+describe("a step's count (ADR 0036 amendment 2026-10-06)", () => {
+  const step = (count: unknown) => ({ at: at(1), source: "hubble", rule: "Hubble - flag-shaped DNS lookup", rule_id: "", command_seq: 3, detail: "DNS query under the exfil zone from sandbox/terminal-7e57000001, FORWARDED egress+ingress udp/53", count });
+  const parsed = (count: unknown) => parseCorrelation(answer({ incidents: [incident({ steps: [step(count)] })] })).incidents[0].steps[0].count;
+
+  it("keeps an integer from 1 to MAX_STEP_COUNT, ignores anything else", () => {
+    for (const ok of [1, 2, 12, MAX_STEP_COUNT]) expect(parsed(ok), String(ok)).toBe(ok);
+    for (const bad of [0, -1, 1.5, MAX_STEP_COUNT + 1, Number.NaN, Number.POSITIVE_INFINITY, "12", null, true, [12], { n: 12 }]) expect(parsed(bad), String(bad)).toBeUndefined();
+    expect(parseCorrelation(answer()).incidents[0].steps.every((s) => !("count" in s))).toBe(true);
+  });
+});
+
 describe("parseRuleIndex", () => {
   it("keeps valid rules only, links only repository paths", () => {
     const idx = parseRuleIndex({
@@ -329,6 +340,21 @@ describe("the section's parts", () => {
     expect(el.querySelector("img")).toBeNull();
     expect(el.querySelector(".incident__title")?.textContent).toBe(evil);
     expect(el.querySelector(".corr-step__detail")?.textContent).toBe(` · ${evil}`);
+  });
+
+  it("a counted step reads ×N after its rule; a count of one, or none, shows nothing", () => {
+    const steps = [
+      { at: at(3), source: "hubble", rule: "Hubble - flag-shaped DNS lookup", rule_id: "", command_seq: 3, detail: "FORWARDED egress+ingress udp/53", count: 12 },
+      { at: at(2), source: "falco", rule: "Credential file read", rule_id: "", command_seq: null, detail: "cat", count: 1 },
+      { at: at(1), source: "k8s-audit", rule: "", rule_id: "", command_seq: null, detail: "create pods/exec on sandbox/terminal-7e57000001 not by the API, response 101", count: 2 },
+    ];
+    const c = parseCorrelation(answer({ incidents: [incident({ steps })] }));
+    const items = [...renderIncident(c.incidents[0], ctx(c)).querySelectorAll(".corr-step")];
+    expect(items.map((li) => li.querySelector(".corr-step__count")?.textContent ?? null)).toEqual(["×12", null, "×2"]);
+    expect(items[0].querySelector(".corr-step__count")?.getAttribute("title")).toBe("12 records of the same evidence");
+    expect(items[0].textContent).toContain("Hubble - flag-shaped DNS lookup ×12 · command 3 · FORWARDED");
+    // Without a rule the count leads, and the detail is still set apart.
+    expect(items[2].textContent).toMatch(/audit ×2 · create pods\/exec/);
   });
 
   it("a withheld detail says so, a withheld title falls back to the kind", () => {
@@ -579,6 +605,29 @@ describe("mountCorrelation", () => {
     expect(section.querySelector(".incident")).toBe(incident);
     expect(section.querySelector('.corr-lag__ms[data-source="falco"]')).toBe(falco);
     expect(falco?.textContent).toBe("2.5 s");
+  });
+
+  it("a step's count moving between polls is rewritten in place; a count appearing redraws", async () => {
+    vi.useFakeTimers();
+    const counted = (count?: number) =>
+      ok({ incidents: [incident({ steps: [{ at: at(600), source: "hubble", rule: "Hubble - flag-shaped DNS lookup", rule_id: "", command_seq: 3, detail: "FORWARDED egress udp/53", ...(count === undefined ? {} : { count }) }] })] });
+    const { section } = setup([counted(12), counted(14), counted(), counted(2)]);
+    await vi.advanceTimersByTimeAsync(0);
+    const incident0 = section.querySelector(".incident");
+    const count = section.querySelector(".corr-step__count");
+    expect(count?.textContent).toBe("×12");
+    await vi.advanceTimersByTimeAsync(POLL_MS);
+    expect(section.querySelector(".incident")).toBe(incident0);
+    expect(section.querySelector(".corr-step__count")).toBe(count);
+    expect(count?.textContent).toBe("×14");
+    expect(count?.getAttribute("title")).toBe("14 records of the same evidence");
+    await vi.advanceTimersByTimeAsync(POLL_MS);
+    expect(section.querySelector(".incident")).not.toBe(incident0);
+    expect(section.querySelector(".corr-step__count")).toBeNull();
+    const incident2 = section.querySelector(".incident");
+    await vi.advanceTimersByTimeAsync(POLL_MS);
+    expect(section.querySelector(".incident")).not.toBe(incident2);
+    expect(section.querySelector(".corr-step__count")?.textContent).toBe("×2");
   });
 
   it("an ingest lag crossing zero (clock skew) keeps its row and redraws nothing: an open <details> stays open", async () => {

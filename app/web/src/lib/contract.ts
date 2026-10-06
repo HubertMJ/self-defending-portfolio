@@ -1095,6 +1095,8 @@ export interface CorrelationStep {
   detail: string;
   /** Set by the parser when it withheld the detail (see `publishable`). */
   withheld?: true;
+  /** How many records of the same evidence the step stands for (ADR 0036 amendment 2026-10-06); absent for one or a value the parser ignored. */
+  count?: number;
 }
 
 export interface CorrelationIncident {
@@ -1184,6 +1186,8 @@ export interface RuleIndex {
 /** The page keeps no more than the API promises to send. */
 export const MAX_INCIDENTS = 200;
 export const MAX_STEPS = 50;
+/** A step's count above this is not believed. */
+export const MAX_STEP_COUNT = 10_000;
 const MAX_RULES = 300;
 
 /** The namespaces whose pod names may be published (ADR 0021, 0031); lib/timeline.ts's SANDBOX_NAMESPACES. */
@@ -1263,6 +1267,7 @@ function parseStep(v: unknown): CorrelationStep | null {
     command_seq: typeof v.command_seq === "number" && Number.isInteger(v.command_seq) && v.command_seq > 0 ? v.command_seq : null,
     detail,
     ...(full && !detail ? { withheld: true as const } : {}),
+    ...(typeof v.count === "number" && Number.isInteger(v.count) && v.count >= 1 && v.count <= MAX_STEP_COUNT ? { count: v.count } : {}),
   };
 }
 
