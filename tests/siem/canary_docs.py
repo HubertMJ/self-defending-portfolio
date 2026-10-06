@@ -78,14 +78,16 @@ def build(tag, now):
                                              "actionner": actionner, "status": "success", "rule": "canary",
                                              "rule_slug": "canary"}, "k8s": k8s(name)}))
 
-    def hubble(name, verdict, off=0.0, drop=None, query=None):
-        h = {"verdict": verdict, "event_type": 1 if drop else 129, "source": {"namespace": "sandbox", "pod_name": pod(name)},
-             "traffic_direction": "EGRESS", "is_reply": False, "l4": {"protocol": "udp", "destination_port": 53}}
+    def hubble(name, verdict, off=0.0, drop=None, query=None, trace=False):
+        h = {"verdict": verdict, "event_type": 1 if drop else 4 if trace else 129,
+             "source": {"namespace": "sandbox", "pod_name": pod(name)}, "traffic_direction": "EGRESS", "is_reply": False,
+             "l4": {"protocol": "tcp", "destination_port": 8080} if trace else {"protocol": "udp", "destination_port": 53}}
         d = {"@timestamp": ts(off), "event": {"kind": "flow", "dataset": "hubble"}, "k8s": k8s(name), "hubble": h}
         if drop:
             h["drop_reason"] = drop
-        if query:
+        if query and not trace:
             h["l7"] = {"type": "REQUEST"}
+        if query:
             d["dns"] = {"query": query}
         docs.append(("sdp-hubble", d))
 
@@ -127,6 +129,8 @@ def build(tag, now):
     # Look-alikes the DNS rule must not match (S0-k: full match).
     hubble("dnsneg1", "FORWARDED", query="evil-sdp-0123456789abcdef.x.exfil.sdp.test.")
     hubble("dnsneg2", "FORWARDED", query="sdp-0123456789abcdef.x.exfil.sdp.test.evil.com.")
+    # A trace (event_type 4, tcp/8080) with the exporter's stale query, as shipped before sdp.lua dropped it.
+    hubble("dnsstale", "FORWARDED", query="sdp-0123456789abcdef.x.exfil.sdp.test.", trace=True)
     # Prevented, and a detected command Falco never answered.
     api("pnd", "touch-bin")
     api("dm", "read-shadow")
@@ -161,7 +165,7 @@ def build(tag, now):
             "host-ssh-accepted": [hm("sdp-host-accepted")], "host-ssh-failed": [hm("sdp-host-refused")],
             "siem-host-ssh-accepted": [hm("sdp-siem01-accepted")], "siem-host-ssh-failed": [hm("sdp-siem01-refused")],
         },
-        "not": {"hubble-dns-exfil": [ref("dnsneg1"), ref("dnsneg2")], "k8s-exec-outside-api": [ref("execapi")]},
+        "not": {"hubble-dns-exfil": [ref("dnsneg1"), ref("dnsneg2"), ref("dnsstale")], "k8s-exec-outside-api": [ref("execapi")]},
         "correlations": {"contained-intrusion": [ref("shell"), ref("beacon")], "dns-exfil": [ref("dnsexfil")]},
         "monitors": {
             "sdp-git: policy-probing": ([prober], [early]),
