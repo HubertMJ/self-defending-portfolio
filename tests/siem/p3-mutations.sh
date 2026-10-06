@@ -3,6 +3,7 @@
 # make its test fail. A mutation no test notices is a FAIL of this script.
 #   lint:  every check of siem_lint.py disabled in turn (an early "return []") -> tests/siem/lint_test.py
 #   unit:  the sync's offline guards removed -> tests/siem/sync_unit_test.py
+#   slugs: the contained-intrusion slugs or Talon's rules changed -> tests/siem/talon_slugs_test.py
 #   sync:  (SYNC=1, about six minutes each) the sync program mutated -> tests/siem/sync-it.sh QUICK=1
 set -euo pipefail
 cd "$(dirname "$0")/../.."
@@ -126,6 +127,24 @@ unit allowed-not-recorded 'changed=self.changed, allowed=self.allowed,' 'changed
 unit recent-applied-only-removed '{"bool": {"filter": [{"term": {"status": "applied"}},' '{"bool": {"filter": ['
 unit flag-skips-both-caps 'if "allow-mass-change" not in allowed:' 'if not allowed:'
 unit ff-accept-any 'if accept != commit and not self.git.is_ancestor(accept, commit):' 'if False:'
+
+echo "### slugs: contained-intrusion against Talon's rules (tests/siem/talon_slugs_test.py)"
+slugm() { # <name> <file> <old> <new>; a copy of the files the test reads
+  local t=$work/slug-$1 rc=0
+  mkdir -p "$t/cluster/infra/falco-response/talon"
+  cp -r siem "$t/siem" && cp cluster/infra/falco-response/talon/rules.yaml "$t/cluster/infra/falco-response/talon/"
+  mutate "$2" "$t/$2" "$3" "$4"
+  python3 tests/siem/talon_slugs_test.py "$t" >"$work/log" 2>&1 || rc=$?
+  verdict "slugs $1" "$rc" "$work/log"
+}
+slugm misspelt siem/correlations/contained-intrusion.yaml 'sdp-network-tool-in-sandbox OR' 'sdp-network-tool-in-sandbx OR'
+slugm dropped siem/correlations/contained-intrusion.yaml ' OR sdp-execution-from-shop-volume)' ')'
+slugm talon-rule-added cluster/infra/falco-response/talon/rules.yaml '      - SDP execution from shop volume
+' '      - SDP execution from shop volume
+      - SDP execution from tmp
+'
+slugm no-detector-rule siem/detectors/falco.yaml '  - 44a53745-246a-4179-bb42-04ce4b023de8  # falco-shop-volume-exec
+' ''
 
 if [ -n "${SYNC:-}" ]; then
   echo "### sync: the program mutated, against sync-it.sh"

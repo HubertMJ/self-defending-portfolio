@@ -40,5 +40,11 @@ fields:
     note: the sandbox side - the source pod when it is in sandbox*, else the destination pod
   k8s.pod.name: {type: keyword, from: *hubble_sides, transform: sandbox_pod, note: as k8s.ns.name}
   k8s.pod.ref: {type: keyword, from: *hubble_sides, transform: sandbox_pod_ref, note: "<ns>_<pod> of the sandbox side, the join key"}
-  dns.query: {type: keyword, from: [flow, l7, dns, query], transform: lower, note: "lower-cased, trailing dot kept; never published (B9)"}
-  dns.rcode: {type: integer, from: [flow, l7, dns, rcode], transform: int, note: 3 = NXDOMAIN}
+  dns.query:
+    type: keyword
+    from: [flow, l7, dns, query]
+    transform: lower
+    note: >-
+      lower-cased, trailing dot kept; never published (B9). Only on an L7 DNS event (event_type 129, a request to port
+      53 or a response from it): sdp.lua drops the exporter's stale l7.dns on every other flow (Cilium 1.19 field mask)
+  dns.rcode: {type: integer, from: [flow, l7, dns, rcode], transform: int, note: "3 = NXDOMAIN; only where dns.query is"}

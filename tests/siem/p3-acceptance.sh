@@ -60,7 +60,8 @@ $DOCKER image inspect sdp-tooling >/dev/null 2>&1 || $DOCKER build -q -t sdp-too
 ssh -o ControlMaster=yes -o ControlPath="$cm" -o ControlPersist=30m -o BatchMode=yes -fN "ansible@$HOST"
 remote=$(ssh_siem 'sudo mktemp -d /root/sdp-p3-acceptance.XXXXXX')
 python3 ansible/roles/siem_sync/files/siem_lint.py --index siem > "$work/index.json"
-for f in tests/siem/sync_check.py tests/siem/canary_docs.py "$work/index.json"; do
+python3 tests/siem/correlation_sides.py siem > "$work/correlations.json"
+for f in tests/siem/sync_check.py tests/siem/canary_docs.py "$work/index.json" "$work/correlations.json"; do
   name=$(basename "$f")
   ssh_siem "sudo tee $remote/$name >/dev/null" < "$f"
 done
@@ -131,7 +132,7 @@ echo "ok   shipper-test-g1 signed and mapped to sdp_shipper_k3s01"
 echo "### synthetic canaries in the six k3s01 streams"
 ssh_siem "sudo python3 $remote/canary_docs.py --url https://127.0.0.1:9200 --ca $CA --admin $ADMIN \
   --writer $remote/shipper-test.crt $remote/shipper-test.key --index $remote/index.json \
-  --streams sdp-falco,sdp-talon,sdp-hubble,sdp-k8s-audit,sdp-api,sdp-host --timeout 240" || fail=1
+  --correlations $remote/correlations.json --streams sdp-falco,sdp-talon,sdp-hubble,sdp-k8s-audit,sdp-api,sdp-host --timeout 240" || fail=1
 
 echo "### the sdp-siem01 rules fired on the two logins"
 chk findings "$since_ms" > "$work/found.json"

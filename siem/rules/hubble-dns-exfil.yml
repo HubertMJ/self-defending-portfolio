@@ -1,6 +1,8 @@
 # SA's |re is a Lucene regular expression matched against the whole value (implicitly anchored, no ^ or $,
 # backslashes unusable), unlike Sigma's search semantics (siem contract S0-#3, S0-k). sdp.lua lower-cases
-# dns.query and keeps the trailing dot, hence the optional [.] at the end.
+# dns.query and keeps the trailing dot, hence the optional [.] at the end. Only an L7 DNS event (event_type
+# 129) carries its own query: Cilium 1.19's exporter leaves the last DNS event's l7.dns on later flows, which
+# sdp.lua drops since d607ce1; documents shipped before that still carry it on traces (4) and drops (1).
 title: Hubble - flag-shaped DNS lookup
 id: fa0bd074-18fc-4827-834c-705c707a94f9
 status: experimental
@@ -16,6 +18,7 @@ logsource:
   service: hubble
 detection:
   selection:
+    hubble.event_type: 129
     dns.query|re: 'sdp-[0-9a-f]{16}[.]x[.]exfil[.]sdp[.]test[.]?'
   condition: selection
 tags:

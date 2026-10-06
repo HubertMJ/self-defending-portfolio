@@ -231,7 +231,7 @@
         "T1071.004"
       ],
       "file": "siem/rules/hubble-dns-exfil.yml",
-      "line": 4,
+      "line": 6,
       "source": "hubble",
       "canary": "api:terminal:dns-exfil"
     },

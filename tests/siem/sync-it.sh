@@ -214,8 +214,10 @@ if [ -z "${QUICK:-}" ]; then
   step "the synthetic canaries: every rule's finding and every monitor's alert (detectors run once first, S0-a)"
   sleep 75
   python3 ansible/roles/siem_sync/files/siem_lint.py --index siem > "$work/index.json"
+  python3 tests/siem/correlation_sides.py siem > "$work/correlations.json"
   python3 tests/siem/canary_docs.py --url "$URL" --ca "$pki/ca.crt" --admin "$pki/admin.crt" "$pki/admin.key" \
-    --writer "$pki/shipper-test.crt" "$pki/shipper-test.key" --index "$work/index.json" --timeout 240 || fail "synthetic canaries"
+    --writer "$pki/shipper-test.crt" "$pki/shipper-test.key" --index "$work/index.json" \
+    --correlations "$work/correlations.json" --timeout 240 || fail "synthetic canaries"
 fi
 
 step "an idempotent second run"
