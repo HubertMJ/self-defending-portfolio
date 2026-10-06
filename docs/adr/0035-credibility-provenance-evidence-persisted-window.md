@@ -278,13 +278,17 @@ The hero's evidence card stays where it was, the above-the-fold proof; its "full
 Every section but the hero folds under its heading (`app/web/src/ui/sections.ts`). The h2's text moves
 into a `<button>` with `aria-expanded` and `aria-controls` naming the section's `.section__body`, a chevron
 and the page's focus ring; every section starts open, and a visitor's choice is kept per section in
-`localStorage` (`collapsed:<id>`; a storage error leaves it unremembered). A folded section shows its
-eyebrow and its title only. A link to a folded section, or to anything inside one, opens it before the
-browser scrolls; so do a hash change and a page opened at a hash. Without JavaScript nothing folds.
+`localStorage` (`sdp:collapsed:<id>`; a storage error leaves it unremembered). `theme.ts`, the
+render-blocking script that already applies the stored theme, names the folded sections in
+`html[data-folded]` before first paint and the stylesheet folds them, so nothing jumps when the buttons
+arrive. A folded section shows its eyebrow and its title only. A link to a folded section, or to anything inside one, opens it before the
+browser scrolls (a modified or non-primary click does not); so do a hash change and a page opened at a
+hash. A reload or back/forward keeps the scroll position the browser restores. Without JavaScript nothing folds.
 Folded is not hidden: `#correlation` hides itself while the SIEM is unavailable whether folded or not.
 
 A folded section stops drawing what nobody can see. The posture is still fetched every minute (the
-evidence's liveness line reads it) but drawn only when unfolded; the correlation is still polled (it
+evidence's liveness line reads it) but drawn only when unfolded, with its live region off for that draw so unfolding does not read the
+whole panel aloud; the correlation is still polled (it
 decides shown or hidden and the verify panel's endpoint list) but drawn only when unfolded; a folded
 `#evidence` draws neither its ticker, its liveness line nor its full record, while the hero's card goes on,
 and what arrived meanwhile is not announced as new on unfolding. The attack section's terminal, launcher,
