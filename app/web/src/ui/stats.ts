@@ -58,7 +58,8 @@ export function renderStats(s: Stats, objectives: Objective[], last?: LastRun, n
   return h(
     "div",
     { class: "herostats" },
-    h("p", { class: "herostats__label" }, "Live, across every visitor"),
+    // Not the visitor's own numbers: every visitor's runs, each tile with its window (ADR 0035, "this session first").
+    h("p", { class: "herostats__label" }, "Live, all visitors — not only yours"),
     tiles,
     objectives.length || Object.keys(s.objectives).length
       ? h(
@@ -96,7 +97,7 @@ export interface StatsHandle {
 
 /**
  * `onData`: every fresh snapshot (the evidence card reads its last_run_at). `label`: replaces "Live,
- * across every visitor" (the mock's, from lib/mock-hook.ts: mock data must not claim to be live).
+ * all visitors — not only yours" (the mock's, from lib/mock-hook.ts: mock data must not claim to be live).
  */
 export function mountStats(root: HTMLElement, api: ApiClient, onData?: (s: Stats) => void, label?: string): StatsHandle {
   let timer: ReturnType<typeof setTimeout> | undefined;

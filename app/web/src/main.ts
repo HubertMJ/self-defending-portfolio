@@ -17,6 +17,8 @@ import { mountPosture } from "./ui/posture";
 import { mountRunStatus } from "./ui/runstatus";
 import { SIEM_COMMAND, runEndsWithin } from "./lib/runstatus";
 import { mountScenarios } from "./ui/scenarios";
+import { mountScope } from "./ui/scope";
+import { type Focus, OWN_RUNS_MAX, loadOwnRuns, saveOwnRuns } from "./lib/scope";
 import { mountSections, sectionTitle } from "./ui/sections";
 import { mountStats } from "./ui/stats";
 import { mountTerminal } from "./ui/terminal";
@@ -101,6 +103,40 @@ function main(): void {
   );
   let latestView: TimelineView = { runs: [], unmatched: [] };
 
+  // This session first (ADR 0035, amendment 2026-10-06 "this session first"): the lists show the
+  // visitor's own runs and a run in progress now; everything else is behind "All activity, last 24 h".
+  // The visitor's runs are this tab's, kept in sessionStorage so a reload still knows them.
+  const tabStore = (() => {
+    try {
+      return sessionStorage;
+    } catch {
+      return undefined;
+    }
+  })();
+  const ownIds = loadOwnRuns(tabStore);
+  const earlierOwn = [...ownIds];
+  // Another visitor's run in progress now: its incidents count in this session too, labelled.
+  let liveRun: string | undefined;
+  let focusReady = false;
+  const focusNow = (): Focus => ({ all: scope.scope === "all", own: new Set(ownIds) });
+  const applyFocus = () => {
+    if (!focusReady) return;
+    const f = focusNow();
+    timeline.setFocus(f);
+    runConsole.setFocus(f);
+    evidence.setFocus(f);
+    correlation.setFocus({ ...f, live: liveRun });
+  };
+  const addOwn = (ids: readonly string[]) => {
+    const fresh = ids.filter((id) => isRunId(id) && !ownIds.includes(id));
+    if (!fresh.length) return;
+    ownIds.push(...fresh);
+    ownIds.splice(0, Math.max(0, ownIds.length - OWN_RUNS_MAX));
+    saveOwnRuns(ownIds, tabStore);
+    applyFocus();
+  };
+  const scope = mountScope(() => applyFocus());
+
   const verify = mountVerify(byId("verify-panel"));
   const posture = mountPosture(byId("posture-panel"), api, (p) => evidence.setPosture(p));
   // The visitor's own run told back (ADR 0035 amendment, UX stage 1): the status strip under the
@@ -116,8 +152,10 @@ function main(): void {
       terminal.setSiem(r.siem);
       quietRuns = r.ownRuns;
       applyQuiet();
+      addOwn(r.ownRuns);
     },
     onDismissFocus: () => terminal.focus(),
+    earlier: earlierOwn,
   });
   // The other announcers keep quiet about the visitor's own runs, and about any terminal run while the
   // visitor's own start is in flight: its first events can arrive before the POST returns its id.
@@ -226,6 +264,7 @@ function main(): void {
       runConsole.setScenarios(scenarios);
     },
     (runId) => {
+      addOwn([runId]);
       runConsole.markOwn(runId);
       timeline.setShown(undefined);
       // On a phone the console is far below the button that was just pressed: take the visitor there.
@@ -258,6 +297,11 @@ function main(): void {
     byId("timeline-live"),
     (view) => {
       const r = view.activeRun;
+      const live = r && !ownIds.includes(r.runId) ? r.runId : undefined;
+      if (live !== liveRun) {
+        liveRun = live;
+        if (focusReady) correlation.setFocus({ ...focusNow(), live });
+      }
       const wasActive = activeId;
       activeId = r?.runId;
       const active = r ? { runId: r.runId, scenario: r.scenario, since: r.states.started ?? r.states.queued ?? Date.now(), staleMs: r.staleAfterMs } : undefined;
@@ -308,6 +352,13 @@ function main(): void {
   });
   stream = events;
   events.start();
+
+  // The one control, drawn beside each list it scopes; then every scoped part is told the choice.
+  byId("timeline-panel").before(scope.control());
+  byId("ticker").before(scope.control());
+  byId("correlation-board").before(scope.control());
+  focusReady = true;
+  applyFocus();
 
   // Each section below the hero folds under its heading; a folded one's panels stop redrawing (the
   // posture is still fetched for the liveness line, the correlation still polled for shown/hidden).

@@ -12,6 +12,7 @@ import { humanAction } from "../lib/pipeline";
 import { cosignVerifyCommand, digestOf, isPinnedImageRef, oneLine, shortDigest } from "../lib/provenance";
 import type { ConnectionState } from "../lib/sse";
 import { type RunView, type TimelineView, formatDuration, noDetection, publishedPod, ts } from "../lib/timeline";
+import { type Focus, type Whose, ALL, focusRun, scopedRuns } from "../lib/scope";
 import { copyButton, extLink, sourceUrl } from "./common";
 
 /** The card shows this many Falco/Talon events and terminal commands; the rest are in #evidence and the raw JSON. */
@@ -37,6 +38,8 @@ export interface EvidenceContext {
   details?: ScenarioDetails;
   /** Terminal catalogue, by command id: what the visitor typed and the command's outcome class. */
   commands?: ReadonlyMap<string, CatalogueCommand>;
+  /** This session (lib/scope.ts): whose run the card shows, said on it; undefined: everything, as recorded. */
+  whose?: Whose | "example";
 }
 
 const rawUrl = (runId: string) => `/api/runs/${encodeURIComponent(runId)}`;
@@ -62,10 +65,21 @@ const armTag = (namespace: string) => {
 };
 
 /** The card's header follows the run's state, as the chip does: contained and over are not "in progress". */
-function eyebrow(run: RunView): string {
-  if (run.current === "responded") return "Attack contained";
-  return run.active ? "Attack in progress" : "Latest attack, as recorded";
+function eyebrow(run: RunView, whose?: EvidenceContext["whose"]): string {
+  if (whose === "live") return "Someone else is attacking right now";
+  if (whose === "example") return "Example: an earlier visitor’s attack";
+  const yours = whose === "own";
+  if (run.current === "responded") return yours ? "Your attack, contained" : "Attack contained";
+  if (run.active) return yours ? "Your attack, in progress" : "Attack in progress";
+  return yours ? "Your latest attack, as recorded" : "Latest attack, as recorded";
 }
+
+/** The full record's heading says whose run it is, as the card does. */
+const RECORD_WHOSE: Partial<Record<NonNullable<EvidenceContext["whose"]>, string>> = {
+  own: "Your run",
+  live: "Someone else’s run, right now",
+  example: "Example, an earlier visitor’s run",
+};
 
 const fact = (k: string, v: Node | string | null | undefined) => (v ? h("div", {}, h("dt", {}, k), h("dd", {}, v)) : null);
 const code = (s: string | undefined, title?: string) => (s ? h("code", title ? { title } : {}, s) : null);
@@ -144,8 +158,10 @@ export function renderEvidenceCard(run: RunView, ctx: EvidenceContext): HTMLElem
   const missed = noDetection(run, outcomes) === "missed";
   return h(
     "article",
-    { class: "evcard", "data-run": run.runId, "aria-labelledby": "evcard-title" },
-    h("p", { class: "evcard__eyebrow" }, eyebrow(run)),
+    { class: "evcard", "data-run": run.runId, "data-whose": ctx.whose ?? null, "aria-labelledby": "evcard-title" },
+    // This session with nothing in it: the card is the one example, after the prompt.
+    ctx.whose === "example" ? h("p", { class: "evcard__prompt" }, "Nothing from you yet — ", h("a", { href: "#attack" }, "launch an attack"), ".") : null,
+    h("p", { class: `evcard__eyebrow${ctx.whose ? ` evcard__eyebrow--${ctx.whose}` : ""}` }, eyebrow(run, ctx.whose)),
     h(
       "header",
       { class: "evcard__head" },
@@ -212,7 +228,7 @@ export function renderEvidenceDetail(run: RunView, ctx: EvidenceContext): HTMLEl
   return h(
     "div",
     { class: "evdetail", "data-run": run.runId },
-    h("h3", { class: "panel-title" }, `${ctx.title}: the full record`),
+    h("h3", { class: "panel-title" }, `${ctx.whose && RECORD_WHOSE[ctx.whose] ? `${RECORD_WHOSE[ctx.whose]}: ` : ""}${ctx.title}: the full record`),
     h(
       "dl",
       { class: "facts facts--wide facts--mono" },
@@ -307,18 +323,25 @@ export function tickerItems(view: TimelineView, max = TICKER_ITEMS): TickerItem[
   return unique.sort((a, b) => b.at - a.at || b.key.localeCompare(a.key)).slice(0, max);
 }
 
-export function renderTicker(items: TickerItem[], opts: { now: number; since?: string | number; connected: boolean; tickAt?: string; fresh?: ReadonlySet<string> }): HTMLElement {
+/**
+ * `hidden`: this session (lib/scope.ts), and how many items of other visitors' earlier runs it leaves
+ * out; with none of the visitor's own, the list says so and sends them to the terminal.
+ */
+export function renderTicker(items: TickerItem[], opts: { now: number; since?: string | number; connected: boolean; tickAt?: string; fresh?: ReadonlySet<string>; hidden?: number }): HTMLElement {
+  const note = opts.hidden ? h("p", { class: "scope-hidden small" }, `${opts.hidden} more event${opts.hidden === 1 ? "" : "s"} by other visitors under “All activity, last 24 h”.`) : null;
   if (items.length === 0) {
-    return h(
+    const empty = h(
       "p",
       { class: "ticker__empty" },
-      opts.since !== undefined ? ["No events since ", timeEl(opts.since), "; "] : "No events yet; ",
+      opts.hidden !== undefined ? "No event from your runs yet; " : opts.since !== undefined ? ["No events since ", timeEl(opts.since), "; "] : "No events yet; ",
       opts.connected ? "the stream is connected" : "the stream is not connected",
       opts.connected && opts.tickAt ? [" (server time ", timeEl(opts.tickAt, plTime(opts.tickAt), { class: "ticker__server" }), ")"] : null,
       ".",
     );
+    if (opts.hidden === undefined) return empty;
+    return h("div", { class: "ticker-scoped" }, h("p", { class: "scope-empty" }, "Nothing from you yet — ", h("a", { href: "#attack" }, "launch an attack"), "."), empty, note);
   }
-  return h(
+  const list = h(
     "ol",
     { class: "ticker", "aria-label": "Latest events, newest first" },
     items.map((i) =>
@@ -332,6 +355,7 @@ export function renderTicker(items: TickerItem[], opts: { now: number; since?: s
       ),
     ),
   );
+  return note ? h("div", { class: "ticker-scoped" }, list, note) : list;
 }
 
 /** "3 h 12 min", "4 min", "2 d 5 h": how long the API has been up. */
@@ -381,6 +405,8 @@ export interface EvidenceHandle {
   setLatest(summary: RunSummary): void;
   /** Runs the status strip announces (the visitor's own), and any terminal run while the visitor's own start is in flight: the ticker's announcer keeps quiet about them. */
   setQuiet(runIds: readonly string[], startingTerminal?: boolean): void;
+  /** This session or everything (lib/scope.ts), and which runs are the visitor's. */
+  setFocus(f: Focus): void;
   /**
    * Whether #evidence can be seen (its section is not folded away). While it cannot, only the hero's
    * card is drawn; the ticker, the liveness line and the full record are drawn on the way back, and
@@ -423,35 +449,42 @@ export function mountEvidence(
   let active = true;
   let quiet: ReadonlySet<string> = new Set();
   let startingTerminal = false;
+  let focus: Focus = ALL;
 
-  const ctxFor = (run: RunView, now: number): EvidenceContext => ({ title: titles.get(run.scenario) ?? run.scenario, now, details: details.get(run.scenario), commands });
+  const ctxFor = (run: RunView, now: number, w?: EvidenceContext["whose"]): EvidenceContext => ({ title: titles.get(run.scenario) ?? run.scenario, now, details: details.get(run.scenario), commands, ...(focus.all ? {} : { whose: w }) });
+  /** The card's run: the newest, or in this session the visitor's own, a live one, or the example. */
+  const picked = () => focusRun(view.runs, focus);
+  /** The ticker's view: everything, or the visitor's runs and the one in progress (no unattributed event). */
+  const scopedView = (): TimelineView => (focus.all ? view : { runs: scopedRuns(view.runs, focus), unmatched: [] });
 
   const drawRun = (force = false) => {
-    const run = view.runs[0];
-    const key = run ? `${run.runId}|${run.events.length}|${run.current}|${run.active}|${titles.get(run.scenario) ?? ""}|${details.has(run.scenario)}|${commands.size}` : `none|${decided}|${loading}|${latest?.run_id ?? ""}|${live.apiStartedAt ?? ""}|${lastRunAt ?? ""}`;
+    const pick = picked();
+    const run = pick?.run;
+    const key = run ? `${run.runId}|${focus.all}|${pick.whose}|${run.events.length}|${run.current}|${run.active}|${titles.get(run.scenario) ?? ""}|${details.has(run.scenario)}|${commands.size}` : `none|${decided}|${loading}|${latest?.run_id ?? ""}|${live.apiStartedAt ?? ""}|${lastRunAt ?? ""}`;
     if (!force && key === lastKey) return;
     lastKey = key;
     const now = Date.now();
     card.dataset.state = run ? "run" : "empty";
-    if (run) replace(card, renderEvidenceCard(run, ctxFor(run, now)));
+    if (run) replace(card, renderEvidenceCard(run, ctxFor(run, now, pick.whose)));
     else if (decided) replace(card, renderNoAttack({ apiStartedAt: live.apiStartedAt, lastRunAt, latest, now, loading }));
     drawDetail();
   };
 
   const drawDetail = () => {
     if (!active) return;
-    const run = view.runs[0];
-    if (run) replace(section.detail, renderEvidenceDetail(run, ctxFor(run, Date.now())));
+    const pick = picked();
+    if (pick) replace(section.detail, renderEvidenceDetail(pick.run, ctxFor(pick.run, Date.now(), pick.whose)));
     else if (decided) replace(section.detail, h("p", { class: "small" }, "The full record of the next attack appears here as it happens."));
   };
 
   const drawTicker = () => {
-    const items = tickerItems(view);
+    const items = tickerItems(scopedView());
+    const hidden = focus.all ? undefined : Math.max(0, tickerItems(view, Infinity).length - tickerItems(scopedView(), Infinity).length);
     const now = Date.now();
     // The list is rebuilt only when what it lists changes. Otherwise (a tick, a reconnect, the clock)
     // only its texts change in place, so a screen reader, a selection or a focused link is left alone.
     const since = live.apiStartedAt ?? openedAt;
-    const shape = items.length ? items.map((i) => i.key).join("\n") : `empty|${connected}|${since}|${live.tickAt !== undefined}`;
+    const shape = `${hidden ?? "all"}|${items.length ? items.map((i) => i.key).join("\n") : `empty|${connected}|${since}|${live.tickAt !== undefined}`}`;
     const wasPrimed = primed;
     primed ||= decided;
     if (!active) return;
@@ -469,7 +502,7 @@ export function mountEvidence(
     // spoken once through the visually hidden status line.
     const fresh = wasPrimed ? items.filter((i) => !seen.has(i.key)) : [];
     seen = new Set(items.map((i) => i.key));
-    replace(section.ticker, renderTicker(items, { now, since, connected, tickAt: live.tickAt, fresh: new Set(fresh.map((i) => i.key)) }));
+    replace(section.ticker, renderTicker(items, { now, since, connected, tickAt: live.tickAt, fresh: new Set(fresh.map((i) => i.key)), ...(hidden !== undefined ? { hidden } : {}) }));
     const spoken = fresh.filter((i) => !i.run || !(quiet.has(i.run) || (startingTerminal && i.scenario === "terminal")));
     if (spoken.length) replace(section.announce, `New event${spoken.length === 1 ? "" : "s"}: ${spoken.map((i) => i.text).join("; ")}`);
   };
@@ -554,12 +587,19 @@ export function mountEvidence(
       quiet = new Set(ids);
       startingTerminal = starting;
     },
+    setFocus(f) {
+      focus = f;
+      // What the new choice brings onto the ticker was already there to be seen: not "new", not spoken.
+      seen = new Set(tickerItems(scopedView()).map((i) => i.key));
+      drawRun();
+      drawTicker();
+    },
     setActive(on) {
       if (on === active) return;
       active = on;
       if (!on) return;
       // Whatever reached the ticker while it was folded is on it now, but not "new".
-      seen = new Set(tickerItems(view).map((i) => i.key));
+      seen = new Set(tickerItems(scopedView()).map((i) => i.key));
       tickerShape = "";
       drawTicker();
       drawLiveness();

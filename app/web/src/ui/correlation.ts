@@ -15,6 +15,7 @@ import { type Correlation, type CorrelationIncident, type CorrelationStep, type 
 import { h, refreshRelative, replace, setText, timeEl, plClock, when, whenEl } from "../lib/dom";
 import { commitUrl } from "../lib/provenance";
 import { type ScenarioState, kindLabel } from "../lib/runstatus";
+import { type Focus, ALL, exampleIncident, scopedIncidents } from "../lib/scope";
 import { formatDuration } from "../lib/timeline";
 import { attackUrl, extLink, pulse, sourceUrl } from "./common";
 import { type Tone, statusChip } from "./posture";
@@ -129,7 +130,8 @@ export function renderMetrics(c: Correlation, now: number): HTMLElement {
     ]),
     metricTile("Host findings", String(m.host_findings), m.host_findings > 0 ? "warning" : "good", m.host_findings > 0 ? "on the VM hosts" : "none", ["counted only: a host finding names users and addresses, which this page never shows"]),
   );
-  return h("div", {}, tiles);
+  // Not the visitor's own figures: every incident of the window, whoever's run it was.
+  return h("div", {}, h("h3", { class: "panel-title corr-metrics__title" }, "SOC figures · last 24 h, all visitors"), tiles);
 }
 
 /** A lag over an hour reads "> 1 h" (an absurd value is not spelled out); a negative one (clock skew) as it is, in ms (formatDuration). */
@@ -158,6 +160,8 @@ export interface BoardContext {
   commit: string;
   /** The visitor's own runs in this page view: their incidents are shown in full, pinned first. */
   own?: ReadonlySet<string>;
+  /** Incidents whose evidence ids the visitor opened: they stay open across a redraw. */
+  openEvidence?: ReadonlySet<string>;
 }
 
 /** "T1046, T1048.003", each linked to its MITRE page. */
@@ -232,7 +236,7 @@ function stepItem(s: CorrelationStep, n: number, t0: number, ctx: BoardContext):
   );
 }
 
-export function renderIncident(i: CorrelationIncident, ctx: BoardContext, tier?: "pinned" | "own"): HTMLElement {
+export function renderIncident(i: CorrelationIncident, ctx: BoardContext, tier?: "pinned" | "own" | "live" | "example"): HTMLElement {
   // Deltas count from the first step timed to the millisecond; a whole-second Talon step is no origin.
   const origin = i.steps.find((s) => !secondPrecision(s)) ?? i.steps[0];
   const t0 = origin ? Date.parse(origin.at) : Date.parse(i.first_at);
@@ -268,14 +272,41 @@ export function renderIncident(i: CorrelationIncident, ctx: BoardContext, tier?:
     ),
     shown.length ? h("ol", { class: "corr-steps", "aria-label": "Evidence timeline" }, shown.map((s, n) => stepItem(s, n, t0, ctx))) : h("p", { class: "small" }, "No step of this incident is publishable."),
     more > 0 ? h("p", { class: "small" }, `${more} more step${more === 1 ? "" : "s"} in the raw JSON.`) : null,
-    i.evidence.length
-      ? h(
-          "p",
-          { class: "incident__evidence small" },
-          "SIEM evidence: ",
-          i.evidence.flatMap((e, n) => [n ? ", " : "", `${e.type} `, h("code", {}, e.id)]),
-        )
-      : null,
+    evidenceFold(i, ctx.openEvidence?.has(i.id) ?? false),
+  );
+}
+
+/** The SIEM's record types, in the page's words: an SA correlation is OpenSearch Security Analytics' own. */
+const EVIDENCE_WORD: ReadonlyMap<string, [string, string]> = new Map([
+  ["correlation", ["SA correlation", "SA correlations"]],
+  ["finding", ["finding", "findings"]],
+  ["document", ["document", "documents"]],
+  ["alert", ["alert", "alerts"]],
+]);
+
+/** "1 SA correlation · 4 findings": how many records of each type, in the order they first appear. */
+export function evidenceSummary(list: CorrelationIncident["evidence"]): string {
+  const counts = new Map<string, number>();
+  for (const e of list) counts.set(e.type, (counts.get(e.type) ?? 0) + 1);
+  return [...counts].map(([type, n]) => {
+    const w = EVIDENCE_WORD.get(type) ?? [type, type];
+    return `${n} ${n === 1 ? w[0] : w[1]}`;
+  }).join(" · ");
+}
+
+/** The SIEM's evidence: one line of counts, the ids folded under "show IDs" as wrapped chips. */
+function evidenceFold(i: CorrelationIncident, open: boolean): HTMLElement | null {
+  if (!i.evidence.length) return null;
+  return h(
+    "details",
+    { class: "incident__evidence small", open },
+    h("summary", {}, h("span", { class: "incident__evidence-sum" }, `Evidence: ${evidenceSummary(i.evidence)}`), " ", h("span", { class: "incident__evidence-more" }, "show IDs")),
+    h(
+      "ul",
+      { class: "idchips", role: "list" },
+      i.evidence.map((e) => h("li", { class: "idchip" }, h("span", { class: "idchip__type" }, (EVIDENCE_WORD.get(e.type) ?? [e.type])[0]), " ", h("code", {}, e.id))),
+    ),
+    h("p", { class: "small" }, "The SIEM's own record ids. The whole incident as the API publishes it: ", extLink("/api/correlation", "/api/correlation"), " (JSON)."),
   );
 }
 
@@ -400,6 +431,41 @@ export function renderBoard(c: Correlation, ctx: BoardContext): HTMLElement {
   );
 }
 
+/**
+ * This session (lib/scope.ts): the incidents of the visitor's own runs, and of a run another visitor
+ * has in progress (`live`), labelled; with none, the prompt and one incident of an earlier visitor's
+ * run as the example. Everything else is under "All activity, last 24 h".
+ */
+export function renderSessionBoard(c: Correlation, ctx: BoardContext & { live?: string }): HTMLElement {
+  const own = ctx.own ?? new Set<string>();
+  const bySeverity = (list: CorrelationIncident[]) => [...list].sort((a, b) => (SEVERITY_RANK[b.severity] ?? 0) - (SEVERITY_RANK[a.severity] ?? 0) || Date.parse(b.last_at) - Date.parse(a.last_at));
+  const mine = bySeverity(c.incidents.filter((i) => !!i.run_id && own.has(i.run_id)));
+  const live = bySeverity(scopedIncidents(c.incidents, new Set(), ctx.live).filter((i) => !mine.includes(i)));
+  const example = mine.length || live.length ? undefined : exampleIncident(c.incidents);
+  const shown = mine.length + live.length + (example ? 1 : 0);
+  const rest = c.incidents.length - shown;
+  const tier = (cls: string, id: string, title: string, list: CorrelationIncident[], kind: "own" | "live" | "example") =>
+    h("section", { class: `corr-tier corr-tier--${cls}`, "aria-labelledby": id }, h("h4", { class: "corr-tier__title", id }, title), h("div", { class: "corr-incidents" }, list.map((i) => renderIncident(i, ctx, kind))));
+  return h(
+    "div",
+    { class: "corr-board corr-board--session" },
+    h("h3", { class: "panel-title" }, "Incidents from this session"),
+    mine.length ? tier("own", "corr-own-title", "From your run on this page", mine, "own") : null,
+    live.length ? tier("live", "corr-live-title", "Someone else is attacking right now", live, "live") : null,
+    example
+      ? [
+          own.size
+            ? h("p", { class: "scope-empty" }, "Nothing filed for your runs yet: the SIEM usually takes 1–3 min. Or ", h("a", { href: "#attack" }, "launch another attack"), ".")
+            : h("p", { class: "scope-empty" }, "Nothing from you yet — ", h("a", { href: "#attack" }, "launch an attack"), ", or run the DNS exfiltration above."),
+          tier("example", "corr-example-title", "Example: from an earlier visitor’s run", [example], "example"),
+        ]
+      : null,
+    !shown ? h("p", { class: "empty" }, "No incident in the last 24 hours. The rules run on every event the cluster ships; when one fires for your run, it appears here with its evidence.") : null,
+    rest > 0 ? h("p", { class: "scope-hidden small" }, `${rest} more incident${rest === 1 ? "" : "s"} by other visitors under “All activity, last 24 h”.`) : null,
+    h("p", { class: "small" }, "The whole board as the API publishes it: ", extLink("/api/correlation", "/api/correlation"), " (JSON)."),
+  );
+}
+
 // ---------- the SIEM scenario (REPORT point 1) ----------
 
 const PHASE_WORD: Record<ScenarioState["phase"], string> = {
@@ -487,7 +553,7 @@ function coverageTable(cov: Coverage): HTMLElement {
     h(
       "table",
       { class: "data-table corr-matrix" },
-      h("caption", {}, "ATT&CK coverage: rules per technique and log source, and incidents in the last 24 h"),
+      h("caption", {}, "ATT&CK coverage: rules per technique and log source, and incidents in the last 24 h, all visitors"),
       h("thead", {}, h("tr", {}, h("th", { scope: "col" }, "Technique"), cov.sources.map((s) => h("th", { scope: "col" }, s)), h("th", { scope: "col" }, "Incidents"))),
       h(
         "tbody",
@@ -584,6 +650,11 @@ export interface CorrelationHandle {
   setTerminal(available: boolean): void;
   /** Pulses an incident's card (the visitor was sent there). */
   pulse(incidentId: string): void;
+  /**
+   * This session or everything (lib/scope.ts), the visitor's runs (this tab's, a reload included) and
+   * the run in progress now: in this session the board shows only theirs, or the prompt and one example.
+   */
+  setFocus(f: Focus & { live?: string }): void;
 }
 
 /**
@@ -613,11 +684,26 @@ export function mountCorrelation(
   let due = false;
   let active = true;
   let own: ReadonlySet<string> = new Set();
+  let focus: Focus & { live?: string } = ALL;
   let eager = false;
   let terminal = true;
   let scenario: ScenarioState = { phase: "idle" };
   const pulsed = new Set<string>();
   let healthOpen = false;
+  const openEvidence = new Set<string>();
+  // The evidence folds stay as the visitor left them across a redraw (each poll can redraw the board).
+  mounts.board.addEventListener(
+    "toggle",
+    (e) => {
+      const t = e.target;
+      if (!(t instanceof HTMLDetailsElement) || !t.classList.contains("incident__evidence")) return;
+      const id = t.closest<HTMLElement>(".incident")?.dataset.incident;
+      if (!id) return;
+      if (t.open) openEvidence.add(id);
+      else openEvidence.delete(id);
+    },
+    true,
+  );
   const eagerMs = opts.eagerMs ?? EAGER_POLL_MS;
   const sc = mounts.scenario ? renderScenario(() => opts.onScenario?.()) : null;
   if (sc && mounts.scenario) replace(mounts.scenario, sc.el);
@@ -646,7 +732,7 @@ export function mountCorrelation(
     const lag = data.metrics.ingest_lag_ms;
     const counted = (s: CorrelationStep) => (s.count ?? 1) > 1;
     const incidents = data.incidents.map((i) => ({ ...i, steps: i.steps.map((s) => ({ ...s, count: counted(s) })) }));
-    const k = JSON.stringify({ d: { ...data, checked_at: !!data.checked_at, metrics: { ...data.metrics, since: !!data.metrics.since, ingest_lag_ms: lag?.map(([src]) => src) }, incidents }, i: index === undefined ? "u" : index, c: linkCommit(), o: [...own] });
+    const k = JSON.stringify({ d: { ...data, checked_at: !!data.checked_at, metrics: { ...data.metrics, since: !!data.metrics.since, ingest_lag_ms: lag?.map(([src]) => src) }, incidents }, i: index === undefined ? "u" : index, c: linkCommit(), o: [...own], f: [focus.all, [...focus.own], focus.live ?? ""] });
     const now = Date.now();
     if (!force && k === key) {
       const moveTo = (el: HTMLTimeElement | null, t: string) => {
@@ -680,7 +766,8 @@ export function mountCorrelation(
     health.addEventListener("toggle", () => (healthOpen = (health as HTMLDetailsElement).open));
     replace(mounts.health, health);
     replace(mounts.metrics, renderMetrics(data, now));
-    replace(mounts.board, renderBoard(data, { now, rules, commit: linkCommit(), own }));
+    const tiers = new Set([...own, ...focus.own]);
+    replace(mounts.board, focus.all ? renderBoard(data, { now, rules, commit: linkCommit(), own: tiers, openEvidence }) : renderSessionBoard(data, { now, rules, commit: linkCommit(), own: tiers, live: focus.live, openEvidence }));
     replace(mounts.rules, renderRuleLibrary(index, linkCommit(), data.incidents));
     // An incident of the visitor's own run pulses once when it first lands.
     for (const i of data.incidents) {
@@ -774,5 +861,9 @@ export function mountCorrelation(
       drawScenario();
     },
     pulse: (id) => pulseCard(id),
+    setFocus(f) {
+      focus = f;
+      draw();
+    },
   };
 }

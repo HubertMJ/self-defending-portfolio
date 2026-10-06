@@ -353,7 +353,11 @@ describe("the section's parts", () => {
     expect(steps[1].querySelector("a")?.getAttribute("href")).toBe(`https://github.com/HubertMJ/self-defending-portfolio/blob/${COMMIT}/siem/rules/falco/credential-file-read.yml#L3`);
     // A step without a rule id has no link.
     expect(steps[0].querySelector("a")).toBeNull();
-    expect(el.querySelector(".incident__evidence")?.textContent).toBe("SIEM evidence: finding f-77ab01c2d3");
+    // The SIEM's evidence is one line of counts; its ids are folded under "show IDs" (focus view).
+    const ev = el.querySelector<HTMLDetailsElement>("details.incident__evidence");
+    expect(ev?.open).toBe(false);
+    expect(ev?.querySelector("summary")?.textContent).toBe("Evidence: 1 finding show IDs");
+    expect([...(ev?.querySelectorAll(".idchip") ?? [])].map((c) => c.textContent)).toEqual(["finding f-77ab01c2d3"]);
     expect(el.querySelector('a[href="/api/runs/7e57000000000001"]')).not.toBeNull();
   });
 

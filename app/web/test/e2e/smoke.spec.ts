@@ -54,6 +54,14 @@ async function hasNoProvenance(page: Page) {
  */
 const PAGE_ORDER = ["top", "attack", "correlation", "how", "evidence", "posture", "verify", "skills", "projects"];
 
+/**
+ * "All activity, last 24 h" chosen before the page loads (ADR 0035, amendment "this session first"):
+ * for the tests of the whole history, console, ticker and board, which this session's view leaves out.
+ */
+async function allActivity(page: Page) {
+  await page.addInitScript(() => localStorage.setItem("sdp:scope", "all"));
+}
+
 async function noHorizontalScroll(page: Page) {
   const [scroll, client] = await page.evaluate(() => [document.documentElement.scrollWidth, document.documentElement.clientWidth]);
   expect(scroll, "page must not scroll horizontally").toBeLessThanOrEqual(client);
@@ -439,13 +447,14 @@ test.describe("live run console (mock)", () => {
     const problems = guardConsole(page);
     await page.goto("/?mock=1&mock-visitor=300&mock-details=0");
     const consoleEl = page.locator("#console");
-    await expect(consoleEl.locator(".console__who")).toContainText("Another visitor’s run");
+    await expect(consoleEl.locator(".console__who")).toContainText("Someone else is attacking right now");
     await expect(consoleEl.locator(".browser__ro")).toHaveText("read-only");
     await expect(consoleEl.locator(".card--exec")).toContainText("does not publish scenario details");
     expect(problems).toEqual([]);
   });
 
   test("the history's Show button puts that run in the console", async ({ page }) => {
+    await allActivity(page);
     await page.goto("/?mock=1&mock-speed=0.1");
     await page.locator('.scenario[data-scenario="sensitive-file-read"] .scenario__alt').click();
     await expect(page.locator(".run")).toHaveCount(2);
@@ -689,6 +698,7 @@ test.describe("narrow screens", () => {
 
 test.describe("technical mode", () => {
   test("toggles raw detail, is announced as a pressed button and persists", async ({ page }) => {
+    await allActivity(page);
     const problems = guardConsole(page);
     await page.goto("/?mock=1");
     const toggle = page.locator("#tech-toggle");
@@ -787,6 +797,7 @@ test.describe("a terminal session replayed as the API publishes it (serve.mjs --
 
 test.describe("real EventSource against a streaming server", () => {
   test("opens exactly one long-lived stream, keeps it open and shows the replay", async ({ page }) => {
+    await allActivity(page);
     test.skip(!!process.env.BASE_URL, "needs the local --stub-events server");
     test.setTimeout(60_000);
     const stub = "http://127.0.0.1:4174";
@@ -942,6 +953,7 @@ test.describe("credibility on the production bundle (ADR 0035; serve.mjs --termi
   });
 
   test("the server time follows the ticks; loading the page sends nothing but GETs", async ({ page }) => {
+    await allActivity(page);
     test.setTimeout(40_000);
     const problems = guardConsole(page);
     const nonGet: string[] = [];
@@ -996,6 +1008,7 @@ test.describe("credibility on the production bundle (ADR 0035; serve.mjs --termi
     const fonts = wide ? " (a wide font forced in)" : "";
 
     test(`no horizontal scroll at 360 and 320 px with the live policy names${fonts}`, async ({ page }) => {
+      await allActivity(page);
       if (wide) await wideFonts(page);
       for (const width of [360, 320]) {
         await page.setViewportSize({ width, height: 780 });
@@ -1056,6 +1069,7 @@ test.describe("credibility on the production bundle (ADR 0035; serve.mjs --termi
 
 test.describe("a side-by-side run, contained with the twin still held (serve.mjs --terminal-api --twin)", () => {
   test("the card says contained, names the guarded pod and labels each event by pod; the history and the console name the pod", async ({ page }) => {
+    await allActivity(page);
     const problems = guardConsole(page);
     await page.goto("http://127.0.0.1:4179/");
     const pod = "scenario-network-tool-7e57aaaaaa";
@@ -1092,6 +1106,7 @@ test.describe("correlation (ADR 0036; serve.mjs --terminal-api --siem / --no-sie
     page.evaluate(() => [...document.querySelectorAll("main > .section > .wrap > .section__head > .eyebrow")].filter((e) => e.getClientRects().length > 0).map((e) => e.closest("section")?.id));
 
   test("the section after the attack: health, SOC metrics, the incident board with its evidence timeline, the rule library; GETs only", async ({ page }) => {
+    await allActivity(page);
     test.setTimeout(45_000);
     const problems = guardConsole(page);
     const nonGet: string[] = [];
@@ -1220,6 +1235,7 @@ test.describe("correlation (ADR 0036; serve.mjs --terminal-api --siem / --no-sie
     });
 
     test(`no horizontal scroll at 360 and 320 px with the section open${fonts}`, async ({ page }) => {
+      await allActivity(page);
       if (wide) await wideFonts(page);
       for (const width of [360, 320]) {
         await page.setViewportSize({ width, height: 780 });
@@ -1435,6 +1451,7 @@ test.describe("the visitor's run, told back (mock, ADR 0035 amendment: UX stage 
   });
 
   test("on a phone the header carries a jump bar; nothing scrolls sideways at 360 and 320 px with a session and the verify details open", async ({ page }) => {
+    await allActivity(page);
     for (const width of [360, 320]) {
       await page.setViewportSize({ width, height: 760 });
       await page.goto("/?mock=1&mock-speed=0.2");
@@ -1477,4 +1494,144 @@ test.describe("the visitor's run, told back (mock, ADR 0035 amendment: UX stage 
     await page.waitForTimeout(1500);
     await expect(page.locator("#attack-title")).toBeInViewport();
   });
+});
+
+test.describe("this session first (mock, ADR 0035 amendment 2026-10-06)", () => {
+  const HISTORY_RUN = "a7c3e9f1b2d40658";
+  const EXAMPLE = "d15e0f17a1b2c3d4";
+  const hist = (page: Page) => page.locator("#timeline-panel");
+  const board = (page: Page) => page.locator("#correlation-board");
+
+  test("by default: the prompt and one labelled example in each list; the visitor's own run once launched", async ({ page }) => {
+    const problems = guardConsole(page);
+    await page.goto("/?mock=1&mock-speed=0.2");
+    await expect(page.locator('.scope__opt[data-scope="session"][aria-pressed="true"]')).toHaveCount(3);
+    // The run history: the prompt to the terminal, then exactly one earlier visitor's run, labelled.
+    await expect(hist(page).locator(".scope-empty")).toHaveText("Nothing from you yet — launch an attack.");
+    await expect(hist(page).locator(".scope-empty a")).toHaveAttribute("href", "#attack");
+    await expect(hist(page).locator(".run")).toHaveCount(1);
+    await expect(hist(page).locator('.run[data-who="example"]')).toHaveAttribute("data-run", HISTORY_RUN);
+    await expect(hist(page).locator(".run__who")).toHaveText("Example: an earlier visitor’s run");
+    // The hero's card is the same example, after the same prompt.
+    await expect(page.locator("#evidence-card .evcard")).toHaveAttribute("data-whose", "example");
+    await expect(page.locator("#evidence-card .evcard__prompt")).toHaveText("Nothing from you yet — launch an attack.");
+    await expect(page.locator("#evidence-card .evcard__eyebrow")).toHaveText("Example: an earlier visitor’s attack");
+    // The board: the prompt, the one example (the critical DNS exfil), the rest counted behind the filter.
+    await expect(board(page).locator(".scope-empty")).toContainText("Nothing from you yet");
+    await expect(board(page).locator(".incident")).toHaveCount(1);
+    await expect(board(page).locator(".corr-tier--example .corr-tier__title")).toHaveText("Example: from an earlier visitor’s run");
+    await expect(board(page).locator(".corr-tier--example .incident")).toHaveAttribute("data-incident", EXAMPLE);
+    await expect(board(page).locator(".scope-hidden")).toHaveText(/^\d+ more incidents by other visitors under “All activity, last 24 h”\.$/);
+    // The aggregates say whose they are.
+    await expect(page.locator("#correlation .corr-metrics__title")).toHaveText("SOC figures · last 24 h, all visitors");
+    await expect(page.locator("#hero-stats .herostats__label")).toContainText("all visitors, not only yours");
+    // No earlier visitor's run on the console or the ticker.
+    await expect(page.locator("#console .console__run")).toHaveCount(0);
+    await expect(page.locator("#ticker .ticker__item")).toHaveCount(0);
+    await expect(page.locator("#ticker .scope-empty")).toHaveText("Nothing from you yet — launch an attack.");
+
+    await page.locator('.scenario[data-scenario="sensitive-file-read"] .btn--attack').click();
+    const mine = hist(page).locator('.run[data-who="own"]');
+    await expect(mine).toHaveCount(1);
+    await expect(mine.locator(".run__who")).toHaveText("Your run");
+    await expect(hist(page).locator('.run[data-who="example"]')).toHaveCount(0);
+    await expect(hist(page).locator(".scope-empty")).toHaveCount(0);
+    await expect(hist(page).locator(".scope-hidden")).toHaveText("1 run by other visitors under “All activity, last 24 h”.");
+    await expect(mine.locator(".chip--state")).toHaveText("Finished", { timeout: 15_000 });
+    await expect(page.locator("#evidence-card .evcard")).toHaveAttribute("data-whose", "own");
+    await expect(page.locator("#evidence-card .evcard__eyebrow")).toHaveText("Your latest attack, as recorded");
+    await expect(page.locator("#console .console__run")).toHaveAttribute("data-run", (await mine.getAttribute("data-run")) ?? "");
+    await expect(page.locator("#ticker .ticker__item").first()).toBeVisible();
+    // Only the visitor's run is on the ticker.
+    expect(await page.locator("#ticker .ticker__text").allTextContents()).toEqual(expect.arrayContaining([expect.stringMatching(/^sensitive-file-read: /)]));
+    expect((await page.locator("#ticker .ticker__text").allTextContents()).some((t) => t.startsWith("shell-in-container"))).toBe(false);
+    // The tab keeps the id, for a reload.
+    const id = await mine.getAttribute("data-run");
+    expect(await page.evaluate(() => JSON.parse(sessionStorage.getItem("sdp:own-runs") ?? "[]"))).toEqual([id]);
+    // The SIEM has nothing for it yet: the board says so and still shows its one example.
+    await expect(board(page).locator(".scope-empty")).toContainText("Nothing filed for your runs yet");
+    await expect(board(page).locator(".incident")).toHaveCount(1);
+    expect(problems).toEqual([]);
+  });
+
+  test("All activity, last 24 h: every copy of the control moves, the history is back, and the choice is kept over a reload", async ({ page }) => {
+    await page.goto("/?mock=1");
+    await expect(hist(page).locator('.run[data-who="example"]')).toHaveCount(1);
+    await page.locator('#correlation .scope__opt[data-scope="all"]').click();
+    await expect(page.locator('.scope__opt[data-scope="all"][aria-pressed="true"]')).toHaveCount(3);
+    expect(await page.evaluate(() => localStorage.getItem("sdp:scope"))).toBe("all");
+    const check = async () => {
+      await expect(hist(page).locator(".run")).toHaveCount(1);
+      await expect(hist(page).locator(".run[data-who]")).toHaveCount(0);
+      await expect(hist(page).locator(".scope-empty, .scope-hidden")).toHaveCount(0);
+      await expect(page.locator("#correlation .corr-tier--pinned .incident")).toHaveCount(3);
+      await expect(page.locator("#correlation .corr-tier--example")).toHaveCount(0);
+      await expect(page.locator("#ticker .ticker__item").first()).toBeVisible();
+      await expect(page.locator("#evidence-card .evcard__eyebrow")).toHaveText("Latest attack, as recorded");
+      await expect(page.locator("#console .console__run")).toHaveAttribute("data-run", HISTORY_RUN);
+    };
+    await check();
+    await page.reload();
+    await expect(page.locator('.scope__opt[data-scope="all"][aria-pressed="true"]')).toHaveCount(3);
+    await check();
+    // And back: the default view again, the key removed.
+    await page.locator('#evidence .scope__opt[data-scope="session"]').click();
+    await expect(hist(page).locator('.run[data-who="example"]')).toHaveCount(1);
+    await expect(page.locator("#correlation .corr-tier--pinned")).toHaveCount(0);
+    expect(await page.evaluate(() => localStorage.getItem("sdp:scope"))).toBeNull();
+  });
+
+  test("another visitor's live run shows labelled, then drops out of the default view when it ends", async ({ page }) => {
+    test.setTimeout(60_000);
+    await page.goto("/?mock=1&mock-visitor=500&mock-speed=0.3");
+    const live = hist(page).locator('.run[data-who="live"]');
+    await expect(live).toHaveCount(1);
+    await expect(live.locator(".run__who")).toHaveText("Someone else is attacking right now");
+    const id = await live.getAttribute("data-run");
+    expect(id).not.toBe(HISTORY_RUN);
+    await expect(hist(page).locator('.run[data-who="example"]')).toHaveCount(0);
+    await expect(page.locator("#console .console__who")).toHaveText("Someone else is attacking right now · you are watching it live");
+    await expect(page.locator("#evidence-card .evcard__eyebrow")).toHaveText("Someone else is attacking right now");
+    await expect(page.locator("#evidence-card .evcard")).toHaveAttribute("data-run", id ?? "");
+    // Its events are on the ticker while it runs.
+    await expect(page.locator("#ticker .ticker__item").first()).toBeVisible();
+    // It ends: no longer live, no longer on the console; the list is back to the prompt and one example.
+    await expect(live).toHaveCount(0, { timeout: 30_000 });
+    await expect(page.locator("#console .console__run")).toHaveCount(0);
+    await expect(hist(page).locator(".scope-empty")).toBeVisible();
+    await expect(hist(page).locator(".run")).toHaveCount(1);
+    await expect(hist(page).locator('.run[data-who="example"]')).toHaveCount(1);
+    await expect(page.locator("#evidence-card .evcard")).toHaveAttribute("data-whose", "example");
+  });
+
+  test("a reload keeps the tab's own runs: their incidents under the own tier, no example; a bad id is ignored", async ({ page }) => {
+    await page.addInitScript(() => sessionStorage.setItem("sdp:own-runs", JSON.stringify(["7e57000000000001", "<img src=x>", 42])));
+    await page.goto("/?mock=1");
+    await expect(board(page).locator(".corr-tier--own .corr-tier__title")).toHaveText("From your run on this page");
+    await expect(board(page).locator(".corr-tier--own .incident")).toHaveCount(3);
+    expect(await board(page).locator(".incident").evaluateAll((es) => es.every((e) => e.closest(".corr-tier--own")))).toBe(true);
+    await expect(board(page).locator(".corr-tier--example, .scope-empty")).toHaveCount(0);
+    // The scenario chip still finds this tab's DNS exfil.
+    await expect(page.locator("#correlation .corr-scenario__state")).toHaveAttribute("data-phase", "found");
+  });
+
+  for (const width of [360, 320]) {
+    test(`the SIEM evidence is one line of counts, its ids folded as chips; nothing scrolls sideways at ${width} px`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 760 });
+      await page.goto("/?mock=1");
+      const ev = board(page).locator(`.incident[data-incident="${EXAMPLE}"] details.incident__evidence`);
+      await expect(ev.locator("summary")).toHaveText("Evidence: 1 finding · 1 document show IDs");
+      await expect(ev.locator(".idchip").first()).toBeHidden();
+      await expect(page.locator("#correlation")).not.toContainText("SIEM evidence:");
+      await ev.locator("summary").click();
+      await expect(ev.locator(".idchip code")).toHaveText(["8f0e6c1e-0d6b-4f7e-9a51-2b7f3c4d5e6f", "Zx3kQ5gBf2mP0aL1rT9e"]);
+      await expect(ev.locator('a[href="/api/correlation"]')).toBeVisible();
+      await noHorizontalScroll(page);
+      await nothingPastEdge(page, "#correlation .incident__evidence");
+      for (const s of await page.locator(".scope").all()) await expect(s).toBeVisible();
+      await nothingPastEdge(page, "#attack .scope");
+      await nothingPastEdge(page, "#correlation .scope");
+      await nothingPastEdge(page, "#evidence .scope");
+    });
+  }
 });

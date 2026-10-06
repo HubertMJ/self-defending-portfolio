@@ -6,6 +6,7 @@ import { h, replace, timeEl, plClock } from "../lib/dom";
 import { humanAction } from "../lib/pipeline";
 import type { ConnectionState } from "../lib/sse";
 import { type NoDetection, type RunView, type TimelineView, buildTimeline, formatDuration, guardedFalco, guardedTalon, noDetection, publishedPod, ts } from "../lib/timeline";
+import { type Focus, ALL, scopedRuns, whose } from "../lib/scope";
 import { CONNECTION_LONG, extLink } from "./common";
 
 // A run with victim probes every 500 ms produces a few hundred events; keep a handful of runs' worth.
@@ -40,6 +41,26 @@ export interface TimelineHandle {
    * while the visitor's own terminal start is in flight (its id not known yet), about any terminal run.
    */
   setQuiet(runIds: readonly string[], startingTerminal?: boolean): void;
+  /** This session or everything (lib/scope.ts), and which runs are the visitor's. */
+  setFocus(f: Focus): void;
+}
+
+/** Whose a card is, said on it: the visitor's, another visitor's live one, or the empty state's one example. */
+export type CardWho = "own" | "live" | "example";
+export const WHO_WORD: Record<CardWho, string> = {
+  own: "Your run",
+  live: "Someone else is attacking right now",
+  example: "Example: an earlier visitor’s run",
+};
+
+/** "Nothing from you yet — launch an attack": the scoped lists' empty state, its link to the terminal. */
+export function nothingYet(lead = "Nothing from you yet — "): HTMLElement {
+  return h("p", { class: "scope-empty" }, lead, h("a", { href: "#attack" }, "launch an attack"), ".");
+}
+
+/** "3 more by other visitors under “All activity, last 24 h”." when the default view leaves some out. */
+export function hiddenNote(n: number, what: [string, string]): HTMLElement | null {
+  return n > 0 ? h("p", { class: "scope-hidden small" }, `${n} ${n === 1 ? what[0] : what[1]} by other visitors under “All activity, last 24 h”.`) : null;
 }
 
 /**
@@ -88,6 +109,7 @@ export function renderRun(
   shown?: string,
   outcomes?: ReadonlyMap<string, CommandOutcome>,
   now: number = Date.now(),
+  who?: CardWho,
 ): HTMLElement {
   const interactive = run.scenario === "terminal";
   const falco = guardedFalco(run);
@@ -121,7 +143,8 @@ export function renderRun(
 
   return h(
     "li",
-    { class: `run run--${run.current}`, "data-run": run.runId, "data-active": String(run.active) },
+    { class: `run run--${run.current}`, "data-run": run.runId, "data-active": String(run.active), "data-who": who ?? null },
+    who ? h("p", { class: `run__who run__who--${who}` }, WHO_WORD[who]) : null,
     h(
       "header",
       { class: "run__head" },
@@ -241,6 +264,7 @@ export function mountTimeline(
   let outcomes: ReadonlyMap<string, CommandOutcome> = new Map();
   let quiet: ReadonlySet<string> = new Set();
   let startingTerminal = false;
+  let focus: Focus = ALL;
   // The fold of the older run cards stays as the visitor left it across the re-renders.
   let moreOpen = false;
   // The one countdown of the connection line. Replaced, never stacked: every setConnection clears it.
@@ -255,14 +279,22 @@ export function mountTimeline(
     // The list is rebuilt; a focused button inside it is found again by its data-focus-key.
     const active = document.activeElement;
     const focusKey = active instanceof HTMLElement && root.contains(active) ? active.dataset.focusKey : undefined;
+    const runs = scopedRuns(view.runs, focus);
+    const card = (r: RunView, who?: CardWho) => {
+      const w = whose(r, focus.own);
+      return renderRun(r, titleOf(r.scenario), openDetails, onShow, shown, outcomes, Date.now(), who ?? (w === "other" ? undefined : w));
+    };
     if (view.runs.length === 0) {
       replace(root, h("p", { class: "empty" }, "No runs yet. Launch an attack and it appears here as it happens."));
+    } else if (runs.length === 0) {
+      // This session, and nothing in it: the prompt, then one earlier visitor's run, labelled.
+      const example = view.runs[0];
+      replace(root, nothingYet(), h("ol", { class: "runs runs--example", role: "list" }, card(example, "example")), hiddenNote(view.runs.length - 1, ["more run", "more runs"]));
     } else {
-      const card = (r: RunView) => renderRun(r, titleOf(r.scenario), openDetails, onShow, shown, outcomes);
-      const rest = view.runs.slice(HISTORY_SHOWN);
-      const more = rest.length ? h("details", { class: "runs-more", open: moreOpen }, h("summary", {}, `${rest.length} earlier run${rest.length === 1 ? "" : "s"}`), h("ol", { class: "runs", role: "list" }, rest.map(card))) : null;
+      const rest = runs.slice(HISTORY_SHOWN);
+      const more = rest.length ? h("details", { class: "runs-more", open: moreOpen }, h("summary", {}, `${rest.length} earlier run${rest.length === 1 ? "" : "s"}`), h("ol", { class: "runs", role: "list" }, rest.map((r) => card(r)))) : null;
       more?.addEventListener("toggle", () => (moreOpen = (more as HTMLDetailsElement).open));
-      replace(root, h("ol", { class: "runs", role: "list" }, view.runs.slice(0, HISTORY_SHOWN).map(card)), more);
+      replace(root, h("ol", { class: "runs", role: "list" }, runs.slice(0, HISTORY_SHOWN).map((r) => card(r))), more, focus.all ? null : hiddenNote(view.runs.length - runs.length, ["run", "runs"]));
     }
     if (focusKey) [...root.querySelectorAll<HTMLElement>("[data-focus-key]")].find((el) => el.dataset.focusKey === focusKey)?.focus();
     // Announce transitions of the newest run while it is active, plus the terminal state of a run
@@ -350,6 +382,10 @@ export function mountTimeline(
     setQuiet(ids, starting = false) {
       quiet = new Set(ids);
       startingTerminal = starting;
+    },
+    setFocus(f) {
+      focus = f;
+      schedule();
     },
   };
 }

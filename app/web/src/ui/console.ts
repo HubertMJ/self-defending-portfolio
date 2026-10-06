@@ -22,6 +22,7 @@ import { type Child, h, prefersReducedMotion, replace, plClock } from "../lib/do
 import { type Hop, type Schedule, TIMER_END, TIMER_START, humanAction, runHops, scheduleHops, timerReading } from "../lib/pipeline";
 import { type RunView, type TimelineView, QUARANTINE_LABEL, formatDuration, guardedFalco, guardedTalon, publishedPod, ts } from "../lib/timeline";
 import { cosignVerifyCommand, isPinnedImageRef, oneLine } from "../lib/provenance";
+import { type Focus, ALL } from "../lib/scope";
 import { copyButton, extLink, sourceUrl } from "./common";
 import { heldMs, heldText, renderTwin } from "./twin";
 import { labelOf, renderVictim, victimState } from "./victim";
@@ -35,6 +36,11 @@ export interface ConsoleHandle {
   /** Scrolls the console into view if it is not, and moves focus to its heading. */
   reveal(): void;
   setScenarios(list: Scenario[]): void;
+  /**
+   * This session (lib/scope.ts): the console shows a run picked from the history, the run in progress,
+   * or the visitor's own newest, never an earlier visitor's on its own; everything: the newest as well.
+   */
+  setFocus(f: Focus): void;
 }
 
 const STATE_WORD: Record<string, string> = {
@@ -172,6 +178,7 @@ export function mountConsole(root: HTMLElement, api: ApiClient, onDetails?: (sce
   const replays = new Map<string, number>();
   let selected: string | undefined;
   let lastActive: string | undefined;
+  let focus: Focus = ALL;
   let view: TimelineView = { runs: [], unmatched: [] };
   let panels: Panels | undefined;
   let frame: number | undefined;
@@ -203,7 +210,7 @@ export function mountConsole(root: HTMLElement, api: ApiClient, onDetails?: (sce
     const picked = selected ? view.runs.find((r) => r.runId === selected) : undefined;
     if (showable(picked)) return picked;
     if (showable(view.activeRun)) return view.activeRun;
-    return view.runs.find(showable);
+    return view.runs.find((r) => showable(r) && (focus.all || own.has(r.runId) || focus.own.has(r.runId)));
   };
 
   const timings = (run: RunView, hops: Hop[]) => {
@@ -441,14 +448,15 @@ export function mountConsole(root: HTMLElement, api: ApiClient, onDetails?: (sce
     const sc = scenarios.get(run.scenario);
     const failed = run.current === "failed" || run.current === "timeout";
     const tone = failed ? "critical" : run.active ? "warning" : "good";
-    const who = run.active ? (own.has(run.runId) ? "Your run" : "Another visitor’s run · you are watching it live") : null;
+    const mine = own.has(run.runId) || focus.own.has(run.runId);
+    const who = run.active ? (mine ? "Your run" : "Someone else is attacking right now · you are watching it live") : null;
     return [
       h(
         "div",
         { class: "console__name" },
         h("p", { class: "console__scenario" }, sc?.title ?? run.scenario),
         h("span", { class: `chip chip--state chip--${tone}` }, STATE_WORD[run.current] ?? run.current),
-        who ? h("span", { class: `console__who${own.has(run.runId) ? "" : " console__who--other"}` }, who) : null,
+        who ? h("span", { class: `console__who${mine ? "" : " console__who--other"}` }, who) : null,
       ),
       h(
         "p",
@@ -708,7 +716,10 @@ export function mountConsole(root: HTMLElement, api: ApiClient, onDetails?: (sce
       panels = undefined;
       syncTwinClock(undefined);
       root.dataset.state = "empty";
-      replace(body, h("p", { class: "empty" }, "No run yet. Launch an attack above and it plays out here, hop by hop."));
+      replace(
+        body,
+        h("p", { class: "empty" }, focus.all || !view.runs.some(showable) ? "No run yet. Launch an attack above and it plays out here, hop by hop." : "No run of yours yet. Launch an attack above and it plays out here, hop by hop; another visitor’s run shows here while it is live, and earlier ones are in the history below."),
+      );
       return;
     }
     root.dataset.state = run.active ? "live" : "done";
@@ -721,7 +732,7 @@ export function mountConsole(root: HTMLElement, api: ApiClient, onDetails?: (sce
     const hops = runHops(run);
     const d = details.get(run.scenario);
     const dKey = d === undefined || d === "loading" ? "l" : d.ok ? "ok" : "no";
-    patch(p, "head", `${run.current}|${run.active}|${own.has(run.runId)}|${publishedPod(run)}|${selected}|${scenarios.size}|${view.activeRun?.runId}`, () => headPanel(run));
+    patch(p, "head", `${run.current}|${run.active}|${own.has(run.runId) || focus.own.has(run.runId)}|${publishedPod(run)}|${selected}|${scenarios.size}|${view.activeRun?.runId}`, () => headPanel(run));
     const vKey = run.victim.map((v) => `${v.arm ?? ""}${v.status}${v.checksum}${v.until}`).join(",");
     const twin = run.armPods !== undefined;
     patch(p, "victim", `${twin ? `twin|${run.unguardedPods.length}|` : ""}${vKey}|${run.active}|${run.pod}|${run.pods[run.pods.length - 1]?.phase}`, () => (twin ? renderTwin(run) : renderVictim(run, run.active && !own.has(run.runId))));
@@ -771,6 +782,10 @@ export function mountConsole(root: HTMLElement, api: ApiClient, onDetails?: (sce
       const visible = r.top >= 0 && r.top < innerHeight * 0.25;
       if (!visible) root.scrollIntoView({ behavior: reduced ? "auto" : "smooth", block: "start" });
       heading.focus({ preventScroll: true });
+    },
+    setFocus(f) {
+      focus = f;
+      render();
     },
     setScenarios(list) {
       scenarios.clear();

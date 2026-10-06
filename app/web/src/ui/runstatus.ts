@@ -54,6 +54,8 @@ export function mountRunStatus(opts: {
   onReading(r: RunReading): void;
   /** Where the focus goes when a dismiss button it was on goes away (the terminal's input or start button). */
   onDismissFocus?(): void;
+  /** This tab's runs from before a reload (lib/scope.ts): the scenario chip still finds their DNS exfil. */
+  earlier?: readonly string[];
 }): RunStatusHandle {
   const tracker = new StripTracker();
   let session: OwnSession | undefined;
@@ -211,7 +213,7 @@ export function mountRunStatus(opts: {
     const next: RunReading = {
       runId: session?.runId,
       ownRuns: [...own],
-      scenario: scenarioState({ run, incidents, ownRuns: own, siem, now, waited }),
+      scenario: scenarioState({ run, incidents, ownRuns: [...(opts.earlier ?? []), ...own], siem, now, waited }),
       siem: run ? siemRow({ run, commands: session?.commands ?? [], incidents, siem, now, waited }) : { text: "nothing to correlate yet", tone: "idle" },
       eager: pending && eagerSince !== undefined && Date.now() - eagerSince.at <= EAGER_CAP_MS,
     };
