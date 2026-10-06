@@ -272,8 +272,9 @@ export interface TickerItem {
   key: string;
   type: StreamEvent["type"];
   text: string;
-  /** The run it belongs to, when the timeline attributed it to one. */
+  /** The run it belongs to, when the timeline attributed it to one, and that run's scenario. */
   run?: string;
+  scenario?: string;
 }
 
 /**
@@ -282,10 +283,10 @@ export interface TickerItem {
  */
 export function tickerItems(view: TimelineView, max = TICKER_ITEMS): TickerItem[] {
   const out: TickerItem[] = [];
-  let run: string | undefined;
-  const add = (ev: StreamEvent, text: string) => out.push({ at: ts(ev.data.at), key: `${ev.id ?? ""}|${ev.type}|${ev.data.at}|${text}`, type: ev.type, text, ...(run ? { run } : {}) });
-  for (const [ev, owner] of [...view.runs.flatMap((r) => r.events.map((e) => [e, r.runId] as const)), ...view.unmatched.map((e) => [e, undefined] as const)]) {
-    run = owner;
+  let owner: RunView | undefined;
+  const add = (ev: StreamEvent, text: string) => out.push({ at: ts(ev.data.at), key: `${ev.id ?? ""}|${ev.type}|${ev.data.at}|${text}`, type: ev.type, text, ...(owner ? { run: owner.runId, scenario: owner.scenario } : {}) });
+  for (const [ev, r] of [...view.runs.flatMap((x) => x.events.map((e) => [e, x] as const)), ...view.unmatched.map((e) => [e, undefined] as const)]) {
+    owner = r;
     switch (ev.type) {
       case "run":
         add(ev, `${ev.data.scenario}: ${STATE_WORD[ev.data.state] ?? ev.data.state}`);
@@ -378,8 +379,8 @@ export interface EvidenceHandle {
   setLoading(loading: boolean): void;
   /** The newest run GET /api/runs knows, named on the card until its events arrive. */
   setLatest(summary: RunSummary): void;
-  /** Runs the status strip announces (the visitor's own): the ticker's announcer keeps quiet about them. */
-  setQuiet(runIds: readonly string[]): void;
+  /** Runs the status strip announces (the visitor's own), and any terminal run while the visitor's own start is in flight: the ticker's announcer keeps quiet about them. */
+  setQuiet(runIds: readonly string[], startingTerminal?: boolean): void;
   /**
    * Whether #evidence can be seen (its section is not folded away). While it cannot, only the hero's
    * card is drawn; the ticker, the liveness line and the full record are drawn on the way back, and
@@ -421,6 +422,7 @@ export function mountEvidence(
   let lastKey = "";
   let active = true;
   let quiet: ReadonlySet<string> = new Set();
+  let startingTerminal = false;
 
   const ctxFor = (run: RunView, now: number): EvidenceContext => ({ title: titles.get(run.scenario) ?? run.scenario, now, details: details.get(run.scenario), commands });
 
@@ -468,7 +470,7 @@ export function mountEvidence(
     const fresh = wasPrimed ? items.filter((i) => !seen.has(i.key)) : [];
     seen = new Set(items.map((i) => i.key));
     replace(section.ticker, renderTicker(items, { now, since, connected, tickAt: live.tickAt, fresh: new Set(fresh.map((i) => i.key)) }));
-    const spoken = fresh.filter((i) => !i.run || !quiet.has(i.run));
+    const spoken = fresh.filter((i) => !i.run || !(quiet.has(i.run) || (startingTerminal && i.scenario === "terminal")));
     if (spoken.length) replace(section.announce, `New event${spoken.length === 1 ? "" : "s"}: ${spoken.map((i) => i.text).join("; ")}`);
   };
 
@@ -548,8 +550,9 @@ export function mountEvidence(
       loading = false;
       drawRun();
     },
-    setQuiet(ids) {
+    setQuiet(ids, starting = false) {
       quiet = new Set(ids);
+      startingTerminal = starting;
     },
     setActive(on) {
       if (on === active) return;

@@ -3082,6 +3082,11 @@ html[data-terminal="off"] .needs-terminal {
   .thisrun__more {
     display: none;
   }
+
+  /* More below: the panel's foot fades, so its own scroll is not a surprise. */
+  .thisrun[data-overflow="true"]:not([data-at-end="true"]) {
+    mask-image: linear-gradient(to bottom, #000 calc(100% - 3rem), transparent);
+  }
 }
 
 @media (max-width: 899.98px) {
@@ -3510,8 +3515,9 @@ html[data-terminal="off"] .needs-terminal {
   color: var(--text-muted);
 }
 
+/* Red as in the legend, the timeline and the costly line: Falco answered. */
 .thisrun__row[data-tone="detect"] {
-  --c: var(--detect);
+  --c: var(--critical);
 }
 
 .thisrun__row[data-tone="respond"] {
@@ -4594,7 +4600,7 @@ html[data-terminal="off"] .needs-terminal {
 
 .run-strip[data-tone="detect"],
 .run-toast[data-tone="detect"] {
-  --c: var(--detect);
+  --c: var(--critical);
 }
 
 .run-strip[data-tone="respond"],
@@ -4695,6 +4701,24 @@ html[data-terminal="off"] .needs-terminal {
   flex: 1 1 14rem;
   min-width: 0;
   font-size: 0.88rem;
+}
+
+/* On a phone the toast is one slim line: the lead and the one way in, no second line, no "Run again". */
+@media (max-width: 640px) {
+  .run-toast {
+    flex-wrap: nowrap;
+    gap: 0.5rem;
+    padding: 0.35rem 0.5rem 0.35rem 0.6rem;
+  }
+
+  .run-toast__text,
+  .run-toast [data-action="again"] {
+    display: none;
+  }
+
+  .run-toast__msg {
+    font-size: 0.82rem;
+  }
 }
 
 /* A brief outline pulse on what the visitor was sent to; a steady outline under reduced motion. */
@@ -4805,11 +4829,13 @@ html[data-terminal="off"] .needs-terminal {
   border-top: 3px solid var(--accent);
 }
 
-.incident__own {
-  margin: 0.6rem 0 0;
-  color: var(--accent);
-  font-weight: 650;
-  font-size: 0.86rem;
+.corr-tier--own {
+  margin-bottom: 1.5rem;
+}
+
+/* A link to a card lands with its badge and title below the sticky header, the pulse outline in view. */
+.incident {
+  scroll-margin-top: 1rem;
 }
 
 .corr-contained {

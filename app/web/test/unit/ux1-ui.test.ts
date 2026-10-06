@@ -6,6 +6,7 @@ import type { Result } from "../../src/lib/api";
 import { type Correlation, type StreamEvent, parseCorrelation, toStreamEvent } from "../../src/lib/contract";
 import { TERMINAL_COMMANDS } from "../../src/lib/fixtures";
 import { buildTimeline } from "../../src/lib/timeline";
+import { EAGER_CAP_MS, SIEM_WAIT_MS, scenarioState } from "../../src/lib/runstatus";
 import { EAGER_POLL_MS, POLL_MS, mountCorrelation, renderBoard, renderHealth, tierOf } from "../../src/ui/correlation";
 import { type RunReading, mountRunStatus } from "../../src/ui/runstatus";
 import { HISTORY_SHOWN, mountTimeline } from "../../src/ui/timeline";
@@ -28,7 +29,7 @@ const answer = (incidents: Record<string, unknown>[], over: Record<string, unkno
   ...over,
 });
 
-function feed(): StreamEvent[] {
+function feed(extra = false): StreamEvent[] {
   const out: StreamEvent[] = [];
   let id = 1;
   const push = (type: string, data: Record<string, unknown>) => out.push(toStreamEvent(type, data, ++id) as StreamEvent);
@@ -37,6 +38,11 @@ function feed(): StreamEvent[] {
   push("run", { run_id: RUN, scenario: "terminal", state: "pod_ready", at: t(1900), detail: "", pod: POD });
   push("command", { run_id: RUN, seq: 1, id: "dns-exfil", state: "started", at: t(3000) });
   push("command", { run_id: RUN, seq: 1, id: "dns-exfil", state: "exited", at: t(3200), exit_code: 0, achieved: true });
+  // A prevented command later: a second filing awaited, its wait starting when the page sees it.
+  if (extra) {
+    push("command", { run_id: RUN, seq: 2, id: "touch-bin", state: "started", at: t(5000) });
+    push("command", { run_id: RUN, seq: 2, id: "touch-bin", state: "exited", at: t(5040), exit_code: 1 });
+  }
   return out;
 }
 
@@ -109,7 +115,7 @@ describe("the status strip and its toast", () => {
 describe("the incident board's tiers", () => {
   const ctx = (own: string[] = []) => ({ now: NOW, rules: new Map(), commit: "", own: new Set(own) });
 
-  it("pinned: caught by correlation (its kind, or no Falco event) and the visitor's own; contained folded; tests folded", () => {
+  it("own: the visitor's runs; pinned: caught by correlation (its kind, or no Falco event); contained folded; tests folded", () => {
     const own = new Set([RUN]);
     const tier = (over: Record<string, unknown>) => tierOf(parseCorrelation(answer([incident(over)])).incidents[0], own);
     expect(tier({ kind: "dns-exfil" })).toBe("pinned");
@@ -117,12 +123,13 @@ describe("the incident board's tiers", () => {
     expect(tier({ kind: "prevented-not-detected" })).toBe("pinned");
     expect(tier({ kind: "detection-missing", falco_events: 0 })).toBe("pinned");
     expect(tier({})).toBe("contained");
-    expect(tier({ run_id: RUN })).toBe("pinned");
+    expect(tier({ run_id: RUN })).toBe("own");
+    expect(tier({ run_id: RUN, kind: "dns-exfil" })).toBe("own");
     expect(tier({ kind: "staged-attack" })).toBe("other");
     expect(tier({ kind: "exec-outside-api", operator_test: true })).toBe("test");
   });
 
-  it("the visitor's own incident first and in full, the severity before the rest; contained intrusions one line each under a summary with medians", () => {
+  it("the visitor's own incidents in full under their own heading first, the pinned tier only correlation-caught ones, severity first; contained intrusions one line each under a summary with medians", () => {
     const c = parseCorrelation(
       answer([
         incident({ id: "0000000000000001", kind: "prevented-not-detected", severity: "low" }),
@@ -133,12 +140,18 @@ describe("the incident board's tiers", () => {
       ]),
     );
     const board = renderBoard(c, ctx([RUN]));
+    const ownTier = board.querySelector(".corr-tier--own");
+    expect(ownTier?.querySelector(".corr-tier__title")?.textContent).toBe("From your run on this page");
+    expect([...(ownTier?.querySelectorAll(".incident") ?? [])].map((e) => e.getAttribute("data-incident"))).toEqual(["0000000000000005"]);
+    expect(ownTier?.nextElementSibling?.classList.contains("corr-tier--pinned")).toBe(true);
     const cards = [...board.querySelectorAll(".corr-tier--pinned .incident")];
-    expect(cards.map((e) => e.getAttribute("data-incident"))).toEqual(["0000000000000005", "0000000000000004", "0000000000000001"]);
-    expect(cards[0].classList.contains("incident--own")).toBe(true);
-    expect(cards[0].textContent).toContain("From your run on this page.");
-    expect(cards[1].classList.contains("incident--pinned")).toBe(true);
-    expect(cards[1].querySelector(".incident__head")?.firstElementChild?.classList.contains("chip")).toBe(true);
+    expect(cards.map((e) => e.getAttribute("data-incident"))).toEqual(["0000000000000004", "0000000000000001"]);
+    expect(cards[0].classList.contains("incident--pinned")).toBe(true);
+    expect(cards[0].querySelector(".incident__head")?.firstElementChild?.classList.contains("chip")).toBe(true);
+    // The card carries the id the links name; its title has its own, for aria-labelledby.
+    expect(cards[0].id).toBe("incident-0000000000000004");
+    expect(cards[0].getAttribute("aria-labelledby")).toBe("incident-0000000000000004-title");
+    expect(cards[0].querySelector(".incident__title")?.id).toBe("incident-0000000000000004-title");
     const fold = board.querySelector<HTMLDetailsElement>("details.corr-contained");
     expect(fold?.open).toBe(false);
     expect(fold?.querySelector("summary")?.textContent).toBe("Contained automatically by Falco + Talon (2)");
@@ -205,7 +218,7 @@ describe("the SIEM scenario block and the eager poll", () => {
     expect(calls.correlation).toBe(2);
     await vi.advanceTimersByTimeAsync(EAGER_POLL_MS);
     expect(calls.correlation).toBe(3);
-    const card = mounts.board.querySelector('.corr-tier--pinned .incident[data-incident="d000000000000001"]');
+    const card = mounts.board.querySelector('.corr-tier--own .incident[data-incident="d000000000000001"]');
     expect(card?.classList.contains("is-pulsing")).toBe(true);
     handle.setVisitor({ ownRuns: [RUN], scenario: { phase: "idle" }, eager: false });
     await vi.advanceTimersByTimeAsync(EAGER_POLL_MS);
@@ -238,5 +251,136 @@ describe("run history, four cards then a fold", () => {
     handle.setTitles(new Map([["network-tool", "Download tool"]]));
     await new Promise((r) => setTimeout(r, 30));
     expect(root.querySelector<HTMLDetailsElement>("details.runs-more")?.open).toBe(true);
+  });
+});
+
+describe("review MEDIUM 1: a failed poll is not 'the SIEM is unavailable'", () => {
+  it("onData: the incidents, nothing on a network error, a 5xx, a 429 or a malformed answer; null on available:false or a 404", async () => {
+    vi.useFakeTimers();
+    const section = document.createElement("section");
+    const mounts = { health: document.createElement("div"), metrics: document.createElement("div"), board: document.createElement("div"), rules: document.createElement("div") };
+    section.append(...Object.values(mounts));
+    document.body.append(section);
+    const okAnswer: Result<Correlation> = { ok: true, value: parseCorrelation(answer([incident({ run_id: RUN })])) };
+    const seq: Result<Correlation>[] = [
+      okAnswer,
+      { ok: false, error: "offline", message: "network" },
+      { ok: false, error: "offline", message: "HTTP 502", status: 502 },
+      { ok: false, error: "rate-limited", message: "HTTP 429", status: 429 } as never,
+      { ok: false, error: "bad-response", message: "correlation: expected an object" },
+      { ok: true, value: parseCorrelation({ available: false }) },
+      { ok: false, error: "offline", message: "HTTP 404", status: 404, json: true },
+    ];
+    const data: (string | null)[] = [];
+    mountCorrelation(section, mounts, { correlation: async () => seq.shift() ?? okAnswer, correlationRules: async () => ({ ok: false, error: "offline", message: "x" }) as never }, undefined, { onData: (c) => data.push(c ? `${c.incidents.length} incidents` : null) });
+    await vi.advanceTimersByTimeAsync(0);
+    for (let i = 0; i < 6; i++) await vi.advanceTimersByTimeAsync(POLL_MS);
+    expect(data).toEqual(["1 incidents", null, null]);
+  });
+
+  it("the strip keeps the SIEM's catch through a failed poll (the coordinator is only told answers)", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW + 10_000);
+    const status = mountRunStatus({ toastParent: document.body, onTimeline() {}, onAgain() {}, onOpen() {}, onReading() {} });
+    document.body.append(status.strip);
+    status.setSession({ runId: RUN, run: buildTimeline(feed(), NOW + 10_000).runs[0], commands: TERMINAL_COMMANDS });
+    status.setCorrelation(true, parseCorrelation(answer([incident({ id: "d000000000000001", kind: "dns-exfil", severity: "critical", run_id: RUN })])).incidents);
+    expect(status.strip.querySelector(".run-strip__msg")?.textContent).toContain("The SIEM caught your DNS exfil");
+  });
+});
+
+describe("review MEDIUM 2: the SIEM waits run on the page's own clock", () => {
+  const setup = () => {
+    const readings: RunReading[] = [];
+    const status = mountRunStatus({ toastParent: document.body, onTimeline() {}, onAgain() {}, onOpen() {}, onReading: (r) => readings.push(r) });
+    document.body.append(status.strip);
+    return { status, readings };
+  };
+  const view = (extra = false) => buildTimeline(feed(extra), NOW + 10_000).runs[0];
+
+  it("a visitor's clock an hour behind the API: waiting, then late after the usual wait, and the eager poll ends", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW - 3_600_000);
+    const { status, readings } = setup();
+    status.setSession({ runId: RUN, run: view(), commands: TERMINAL_COMMANDS });
+    expect(readings.at(-1)?.scenario.phase).toBe("waiting");
+    expect(readings.at(-1)?.eager).toBe(true);
+    await vi.advanceTimersByTimeAsync(SIEM_WAIT_MS + 30_000);
+    expect(readings.at(-1)?.scenario.phase).toBe("late");
+    await vi.advanceTimersByTimeAsync(EAGER_CAP_MS);
+    expect(readings.at(-1)?.eager).toBe(false);
+  });
+
+  it("a visitor's clock an hour ahead: still waiting at first, not late at once", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW + 3_600_000);
+    const { status, readings } = setup();
+    status.setSession({ runId: RUN, run: view(), commands: TERMINAL_COMMANDS });
+    expect(readings.at(-1)?.scenario.phase).toBe("waiting");
+    expect(readings.at(-1)?.siem.text).toBe("waiting… (usually 1–3 min)");
+    expect(readings.at(-1)?.eager).toBe(true);
+  });
+
+  it("the eager poll stops EAGER_CAP_MS after it began, though a later expectation still waits", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW + 10_000);
+    const { status, readings } = setup();
+    status.setSession({ runId: RUN, run: view(), commands: TERMINAL_COMMANDS });
+    await vi.advanceTimersByTimeAsync(8 * 60_000);
+    status.setSession({ runId: RUN, run: view(true), commands: TERMINAL_COMMANDS });
+    expect(readings.at(-1)?.eager).toBe(true);
+    await vi.advanceTimersByTimeAsync(EAGER_CAP_MS - 8 * 60_000 + 20_000);
+    status.setSession({ runId: RUN, run: view(true), commands: TERMINAL_COMMANDS });
+    expect(readings.at(-1)?.eager).toBe(false);
+  });
+
+  it("the pure state machine takes the page's wait when given one, whatever `now` says", () => {
+    const run = view();
+    const base = { run, incidents: [], ownRuns: [RUN], siem: "available" as const };
+    expect(scenarioState({ ...base, now: NOW + 3_600_000, waited: () => 1000 }).phase).toBe("waiting");
+    expect(scenarioState({ ...base, now: NOW - 3_600_000, waited: () => SIEM_WAIT_MS + 1 }).phase).toBe("late");
+  });
+});
+
+describe("review LOWs: one announcement per message, focus after dismiss", () => {
+  it("the live line is outside the strip and rewritten only when the words change, not for a new note or button", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW + 10_000);
+    const focused: string[] = [];
+    const status = mountRunStatus({ toastParent: document.body, onTimeline() {}, onAgain() {}, onOpen() {}, onReading() {}, onDismissFocus: () => focused.push("terminal") });
+    document.body.append(status.strip);
+    const live = document.querySelector(".run-status-live") as HTMLElement;
+    expect(status.strip.contains(live)).toBe(false);
+    const writes: string[] = [];
+    // Counted per mutation record: one callback can carry several.
+    new MutationObserver((records) => records.forEach(() => writes.push(live.textContent ?? ""))).observe(live, { childList: true, characterData: true, subtree: true });
+    const run = buildTimeline(feed(), NOW + 10_000).runs[0];
+    status.setSession({ runId: RUN, run, commands: TERMINAL_COMMANDS });
+    status.setSession({ runId: RUN, run, commands: TERMINAL_COMMANDS });
+    expect(live.textContent).toBe("Waiting for the SIEM (usually 1–3 min)…");
+    const close = status.strip.querySelector(".run-strip__close") as HTMLButtonElement;
+    close.focus();
+    close.click();
+    expect(focused).toEqual(["terminal"]);
+    return Promise.resolve().then(() => expect(writes).toHaveLength(1));
+  });
+});
+
+describe("review LOW: quiet from the moment the visitor's own start is in flight", () => {
+  it("the run history's announcer says nothing of a terminal run while the start is pending, nor of an own run after", async () => {
+    const ago = (sec: number) => new Date(Date.now() - sec * 1000).toISOString();
+    const live = document.createElement("p");
+    const handle = mountTimeline(document.createElement("div"), document.createElement("div"), live, () => {}, () => {});
+    handle.setQuiet([], true);
+    handle.push(toStreamEvent("run", { run_id: RUN, scenario: "terminal", state: "queued", at: ago(5), detail: "" }, 1) as StreamEvent);
+    await new Promise((r) => setTimeout(r, 30));
+    expect(live.textContent).toBe("");
+    handle.setQuiet([RUN], false);
+    handle.push(toStreamEvent("run", { run_id: RUN, scenario: "terminal", state: "pod_ready", at: ago(4), detail: "", pod: POD }, 2) as StreamEvent);
+    await new Promise((r) => setTimeout(r, 30));
+    expect(live.textContent).toBe("");
+    handle.push(toStreamEvent("run", { run_id: "1111222233334444", scenario: "network-tool", state: "queued", at: ago(1), detail: "" }, 3) as StreamEvent);
+    await new Promise((r) => setTimeout(r, 30));
+    expect(live.textContent).toContain("queued");
   });
 });

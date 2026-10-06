@@ -946,3 +946,57 @@ describe("the session layout (UX stage 1)", () => {
     expect(t.root.querySelector(".term-start")).not.toBeNull();
   });
 });
+
+describe("review LOWs (UX stage 1)", () => {
+  it("the ready banner is swapped for the eye only: the strip says it aloud", async () => {
+    const t = await harness();
+    t.show(new Feed().open());
+    expect(t.root.querySelector(".term__out .term__line--sys")?.getAttribute("aria-hidden")).toBe("true");
+  });
+
+  it("a pick after an ended session starts the next one, and says so with the start", async () => {
+    let starting: boolean[] = [];
+    const t = await harness({ hooks: { onStarting: (p) => starting.push(p) } });
+    expect(starting).toEqual([true, false]);
+    starting = [];
+    const f = new Feed().open();
+    killedBy(f, 1, 5000);
+    t.show(f);
+    t.term.suggest("dns-exfil");
+    await flush();
+    expect(t.calls.filter((c) => c.method === "POST" && c.path === "/api/attack/terminal")).toHaveLength(2);
+    expect(starting).toEqual([true, false]);
+  });
+
+  it("focus() goes to the input in a live session and to the start button between sessions", async () => {
+    const t = await harness();
+    const f = new Feed().open();
+    t.show(f);
+    (document.activeElement as HTMLElement | null)?.blur();
+    t.term.focus();
+    expect(document.activeElement?.id).toBe("term-input");
+    killedBy(f, 1, 5000);
+    t.show(f);
+    t.term.again();
+    (document.activeElement as HTMLElement | null)?.blur();
+    t.term.focus();
+    expect(document.activeElement?.classList.contains("term-start__btn")).toBe(true);
+  });
+});
+
+describe("visual review D: 'Run again' starts the next session", () => {
+  it("restart() after the end opens a new session at once; during a live one it does nothing", async () => {
+    const t = await harness();
+    const f = new Feed().open();
+    t.show(f);
+    t.term.restart();
+    await flush();
+    expect(t.calls.filter((c) => c.method === "POST" && c.path === "/api/attack/terminal")).toHaveLength(1);
+    killedBy(f, 1, 5000);
+    t.show(f);
+    t.term.restart();
+    await flush();
+    expect(t.calls.filter((c) => c.method === "POST" && c.path === "/api/attack/terminal")).toHaveLength(2);
+    expect(t.root.querySelector(".term-start")).toBeNull();
+  });
+});

@@ -109,15 +109,24 @@ function main(): void {
   const runStatus = mountRunStatus({
     toastParent: document.body,
     onTimeline: () => terminal.showTimeline(),
-    onAgain: () => terminal.again(),
+    onAgain: () => terminal.restart(),
     onOpen: (id) => correlation.pulse(id),
     onReading: (r) => {
       correlation.setVisitor(r);
       terminal.setSiem(r.siem);
-      timeline.setQuiet(r.ownRuns);
-      evidence.setQuiet(r.ownRuns);
+      quietRuns = r.ownRuns;
+      applyQuiet();
     },
+    onDismissFocus: () => terminal.focus(),
   });
+  // The other announcers keep quiet about the visitor's own runs, and about any terminal run while the
+  // visitor's own start is in flight: its first events can arrive before the POST returns its id.
+  let quietRuns: readonly string[] = [];
+  let startingTerminal = false;
+  const applyQuiet = () => {
+    timeline.setQuiet(quietRuns, startingTerminal);
+    evidence.setQuiet(quietRuns, startingTerminal);
+  };
   // The SIEM's section (ADR 0036): shown only while GET /api/correlation says available.
   const siemNav = document.querySelector<HTMLElement>(".site-nav__siem");
   const correlation = mountCorrelation(
@@ -180,6 +189,10 @@ function main(): void {
       return r && l ? runEndsWithin(r, Date.now(), l.timeout, l.idle) : undefined;
     },
     strip: runStatus.strip,
+    onStarting: (pending) => {
+      startingTerminal = pending;
+      applyQuiet();
+    },
     onSession: (s) => runStatus.setSession(s),
     onLit: (lit) => defenceMap.setLit(lit),
     // A 429 starting the terminal sets the shared cooldown, so the blocked state shows on both the

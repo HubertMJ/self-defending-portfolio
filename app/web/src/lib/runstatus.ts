@@ -14,6 +14,16 @@ import { formatDuration, ts } from "./timeline";
 export const SIEM_COMMAND = "dns-exfil";
 /** After this long without the incident, "waiting for the SIEM" says it is late instead. */
 export const SIEM_WAIT_MS = 6 * 60_000;
+/** The eager poll stops this long after it began, whatever the waits say (a hard cap on the page's side). */
+export const EAGER_CAP_MS = 9 * 60_000;
+
+/**
+ * How long the page has waited for a filing of `kind` whose wait began at `apiSince` (the API's clock).
+ * The page passes one timed on its own clock from the moment it first saw the expectation, so a
+ * visitor's wrong clock moves nothing; without one, `now - apiSince` (both on the API's clock: tests).
+ */
+export type WaitClock = (kind: string, apiSince: number) => number;
+const waitedFor = (f: { now: number; waited?: WaitClock }, kind: string, since: number): number => (f.waited ? f.waited(kind, since) : f.now - since);
 /** The SIEM's incidents usually land this long after the event (ADR 0036): said, not measured. */
 export const SIEM_USUAL = "usually 1–3 min";
 
@@ -115,7 +125,9 @@ function exfilCommand(run: RunView | undefined) {
 /**
  * What the run should make the SIEM file, and since when: the DNS exfil once its command exited 0
  * (the question carried the flag), a contained intrusion once Falco alerted, a prevented command once
- * it ended. Each says when the wait began (the API's clock).
+ * it ended. Each says when the wait began (the API's clock). The API files all three with the run's id
+ * for a terminal run (app/api/internal/incidents: the run's own API records anchor a contained
+ * intrusion; a prevented-not-detected alert's bucket key is the run's pod ref, mapped to its run).
  */
 export function siemExpectations(run: RunView | undefined, commands: readonly CatalogueCommand[]): { kind: string; since: number }[] {
   if (!run) return [];
@@ -143,9 +155,9 @@ export interface ScenarioState {
 /**
  * not run yet → running → waiting for the SIEM (≈2 min) → found it. The current session's dns-exfil
  * comes first; with none in it, an incident of an earlier session of this page view still counts.
- * `now` is the API's clock (the page's, corrected by the terminal's skew estimate, is close enough).
+ * The wait is timed by `waited` (the page's own clock) when given, else by `now` on the API's clock.
  */
-export function scenarioState(f: { run?: RunView; incidents: readonly CorrelationIncident[]; ownRuns: readonly string[]; siem: SiemAvailability; now: number }): ScenarioState {
+export function scenarioState(f: { run?: RunView; incidents: readonly CorrelationIncident[]; ownRuns: readonly string[]; siem: SiemAvailability; now: number; waited?: WaitClock }): ScenarioState {
   const found = (runIds: readonly string[]): ScenarioState | undefined => {
     const i = f.incidents.filter((x) => x.kind === SIEM_COMMAND && runIds.includes(x.run_id)).sort((a, b) => Date.parse(b.last_at) - Date.parse(a.last_at))[0];
     return i ? { phase: "found", incidentId: i.id, severity: i.severity } : undefined;
@@ -157,7 +169,7 @@ export function scenarioState(f: { run?: RunView; incidents: readonly Correlatio
     if (exfil.endedAt === undefined) return { phase: "running" };
     if (exfil.exitCode !== 0) return { phase: "failed" };
     if (f.siem === "unavailable") return { phase: "down" };
-    return { phase: f.now - exfil.endedAt > SIEM_WAIT_MS ? "late" : "waiting" };
+    return { phase: waitedFor(f, SIEM_COMMAND, exfil.endedAt) > SIEM_WAIT_MS ? "late" : "waiting" };
   }
   return found(f.ownRuns) ?? { phase: "idle" };
 }
@@ -170,20 +182,20 @@ export interface SiemRow {
   incidentId?: string;
 }
 
-export function siemRow(f: { run?: RunView; commands: readonly CatalogueCommand[]; incidents: readonly CorrelationIncident[]; siem: SiemAvailability; now: number }): SiemRow {
+export function siemRow(f: { run?: RunView; commands: readonly CatalogueCommand[]; incidents: readonly CorrelationIncident[]; siem: SiemAvailability; now: number; waited?: WaitClock }): SiemRow {
   const mine = incidentsFor(f.incidents, f.run?.runId)[0];
   if (mine) return { text: `${mine.severity.toUpperCase()} — ${kindLabel(mine.kind)}`, tone: "siem", incidentId: mine.id };
   const expected = siemExpectations(f.run, f.commands);
   if (!expected.length) return { text: "nothing to correlate yet", tone: "idle" };
   if (f.siem === "unavailable") return { text: "unavailable right now", tone: "neutral" };
-  const since = Math.min(...expected.map((e) => e.since));
-  return f.now - since > SIEM_WAIT_MS ? { text: "nothing filed yet; the SIEM may be behind", tone: "pending" } : { text: `waiting… (${SIEM_USUAL})`, tone: "pending" };
+  const waited = Math.max(...expected.map((e) => waitedFor(f, e.kind, e.since)));
+  return waited > SIEM_WAIT_MS ? { text: "nothing filed yet; the SIEM may be behind", tone: "pending" } : { text: `waiting… (${SIEM_USUAL})`, tone: "pending" };
 }
 
 /** Whether a filing for this run is still awaited: the page then asks the SIEM more often. */
-export function siemPending(f: { run?: RunView; commands: readonly CatalogueCommand[]; incidents: readonly CorrelationIncident[]; now: number }): boolean {
+export function siemPending(f: { run?: RunView; commands: readonly CatalogueCommand[]; incidents: readonly CorrelationIncident[]; now: number; waited?: WaitClock }): boolean {
   const kinds = new Set(incidentsFor(f.incidents, f.run?.runId).map((i) => i.kind));
-  return siemExpectations(f.run, f.commands).some((e) => !kinds.has(e.kind) && f.now - e.since <= SIEM_WAIT_MS * 1.5);
+  return siemExpectations(f.run, f.commands).some((e) => !kinds.has(e.kind) && waitedFor(f, e.kind, e.since) <= SIEM_WAIT_MS * 1.5);
 }
 
 // ---------- the status strip ----------
@@ -214,8 +226,9 @@ export interface StripFacts {
   idleSeconds?: number;
   incidents: readonly CorrelationIncident[];
   siem: SiemAvailability;
-  /** The API's clock, for the SIEM wait. */
+  /** The API's clock, for the SIEM wait when no `waited` is given. */
   now: number;
+  waited?: WaitClock;
 }
 
 /** Tie-break among messages first seen in the same update: the bigger news wins. */
@@ -281,7 +294,7 @@ function siemMessages(f: StripFacts): Strip[] {
   if (exfil?.endedAt !== undefined && exfil.exitCode === 0 && !filed) {
     if (f.siem === "unavailable") {
       out.push({ key: "siem-down", kind: "siem-down", tone: "neutral", lead: "The SIEM is not reachable right now,", text: " so nothing on this page can tie your DNS query to this run.", actions: [], toast: true });
-    } else if (f.now - exfil.endedAt > SIEM_WAIT_MS) {
+    } else if (waitedFor(f, SIEM_COMMAND, exfil.endedAt) > SIEM_WAIT_MS) {
       out.push({ key: "siem-late", kind: "siem-late", tone: "pending", lead: "The SIEM has not tied your DNS exfil to this run yet.", text: ` It is ${SIEM_USUAL}; the board below keeps asking.`, actions: [], toast: true });
     } else {
       out.push({ key: "siem-waiting", kind: "siem-waiting", tone: "pending", lead: "Waiting for the SIEM", text: ` (${SIEM_USUAL})…`, actions: [], toast: true });

@@ -1282,6 +1282,8 @@ function parseStep(v: unknown): CorrelationStep | null {
  * second" and ordered by the end of its second (Talon logs after the API server acted).
  */
 export function secondPrecision(s: CorrelationStep): boolean {
+  // Keyed on the source: the API writes every step with milliseconds (".000" included), so a Falco,
+  // audit or Hubble step that happens to fall on a whole second is not coarse. Only Talon's clock is.
   return s.source === "talon" && Date.parse(s.at) % 1000 === 0;
 }
 

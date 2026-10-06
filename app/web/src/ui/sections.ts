@@ -112,4 +112,26 @@ export function mountSections(onChange?: (id: string, expanded: boolean) => void
   const restoring = nav?.type === "reload" || nav?.type === "back_forward";
   if (opened) opened.scrollIntoView({ behavior: "instant" });
   else if (!restoring && [...folds.values()].some((f) => !isOpen(f))) byHash(location.hash)?.scrollIntoView({ behavior: "instant" });
+
+  // Opened at #anchor, the landing does not hold on its own: the live parts render after their data
+  // (the hero's counters, the terminal's start panel, #correlation shown only once the SIEM answers),
+  // which moves the target, or shows it, after the browser landed. Until the visitor scrolls, touches
+  // or types, or for 10 s, each change of the page's size lands on the hash again. Not on a reload or
+  // back/forward, where the browser restores the visitor's own position.
+  if (location.hash.length > 1 && !restoring && typeof ResizeObserver === "function") {
+    const events = ["wheel", "touchstart", "keydown", "pointerdown"] as const;
+    let done = false;
+    const ro = new ResizeObserver(() => {
+      const target = done ? null : byHash(location.hash);
+      if (target && target.getClientRects().length) target.scrollIntoView({ behavior: "instant" });
+    });
+    const stop = () => {
+      done = true;
+      ro.disconnect();
+      for (const ev of events) removeEventListener(ev, stop);
+    };
+    ro.observe(document.querySelector("main") ?? document.body);
+    for (const ev of events) addEventListener(ev, stop, { passive: true });
+    setTimeout(stop, 10_000);
+  }
 }

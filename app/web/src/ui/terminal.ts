@@ -26,10 +26,14 @@ export interface TerminalHandle {
   setSiem(row: SiemRow): void;
   /** Takes the visitor to the terminal with a command picked: opens a session if idle (one run), highlights its chip and fills it in once the pod is ready. */
   suggest(commandId: string): void;
-  /** Back to the start panel for another session ("Run again"). */
+  /** Back to the start panel for another session (the summary's "Run another session"). */
   again(): void;
+  /** Starts the next session at once (the strip's "Run again": it costs one run, as the start panel says). */
+  restart(): void;
   /** Brings the "This run" timeline into view and pulses it ("Watch the kill timeline"). */
   showTimeline(): void;
+  /** Focus where the visitor works: the input in a live session, else the start button, else the output. */
+  focus(): void;
 }
 
 /** The visitor's own session as the status strip reads it (null: none, or no longer theirs). */
@@ -82,6 +86,8 @@ export function mountTerminal(
     onLit?: (lit: Map<DefenceLayer, LitLayer>) => void;
     /** How long until the run holding the one slot must end, in ms, when its limits are known. */
     blockedEndsIn?: () => number | undefined;
+    /** A start of the visitor's own is in flight (true) or settled (false): its run's first events may come before its id. */
+    onStarting?: (pending: boolean) => void;
   } = {},
 ): TerminalHandle {
   const reduced = prefersReducedMotion();
@@ -116,6 +122,8 @@ export function mountTerminal(
     banner: HTMLElement;
     rows: { detection: HTMLElement; response: HTMLElement; siem: HTMLElement };
     timeline: HTMLElement;
+    panel: HTMLElement;
+    shopFold: HTMLDetailsElement;
     summary: HTMLElement;
     status: HTMLElement;
     clock: HTMLElement;
@@ -282,6 +290,7 @@ export function mountTerminal(
       return;
     }
     starting = true;
+    hooks.onStarting?.(true);
     syncIdle();
     const r = await api.attackTerminal();
     starting = false;
@@ -289,6 +298,7 @@ export function mountTerminal(
       if (!isRunId(r.run.run_id)) {
         // The server accepted a run but named it something we will not put in a URL; say so plainly
         // rather than sending a request that could escape the run path.
+        hooks.onStarting?.(false);
         syncIdle();
         setNote("The server accepted a run but returned an unusable id. Reload and try again.");
         return;
@@ -300,9 +310,12 @@ export function mountTerminal(
       resetSessionState();
       hooks.onStarted?.(r.run.run_id);
       renderSession();
+      hooks.onStarting?.(false);
     } else if (r.kind === "unavailable") {
+      hooks.onStarting?.(false);
       renderUnavailable();
     } else {
+      hooks.onStarting?.(false);
       if (r.kind === "rate-limited") hooks.onRateLimited?.(r.retryAfterSeconds);
       if (r.kind === "offline" && r.message === "timed out") startTimedOutAt = Date.now();
       syncIdle();
@@ -379,7 +392,11 @@ export function mountTerminal(
     const siem = row("SIEM", "siem");
     const timeline = h("ol", { class: "thisrun__timeline", "aria-label": "This run, event by event" });
     const timelineWrap = h("div", { class: "thisrun__timelinewrap", tabindex: "-1" }, h("h4", { class: "thisrun__subhead" }, "Timeline of this run"), timeline);
-    const sideBody = h("div", { class: "thisrun__body", id: "thisrun-body" }, objectives, timelineWrap, h("details", { class: "thisrun__shop", open: true }, h("summary", {}, "The shop, from the pod's own :8080"), shop));
+    const shopSummary = h("summary", {}, "The shop, from the pod's own :8080");
+    const shopFold = h("details", { class: "thisrun__shop", open: true }, shopSummary, shop) as HTMLDetailsElement;
+    // Once the visitor opens or closes the shop, it stays as they left it.
+    shopSummary.addEventListener("click", () => (shopTouched = true));
+    const sideBody = h("div", { class: "thisrun__body", id: "thisrun-body" }, objectives, timelineWrap, shopFold);
     // On a phone the panel is one card above the input: its rows always, the rest on request.
     const more = h("button", { type: "button", class: "btn btn--ghost btn--small thisrun__more", "aria-expanded": "false", "aria-controls": "thisrun-body" }, "Details");
     // The aside fills its grid cell without adding to its height; the panel inside is sticky and no
@@ -421,7 +438,9 @@ export function mountTerminal(
     input.addEventListener("input", () => showHint(catalogue ? completions(catalogue, input.value) : []));
 
     const banner = bannerLine();
-    els = { out, form, input, hint, said, chips, palette, shop, objectives, banner, rows: { detection: detection.dd, response: response.dd, siem: siem.dd }, timeline, summary, status, clock, left, idleLeft, send, exit };
+    panel.addEventListener("scroll", () => markOverflow(), { passive: true });
+    shopTouched = false;
+    els = { out, form, input, hint, said, chips, palette, shop, objectives, banner, rows: { detection: detection.dd, response: response.dd, siem: siem.dd }, timeline, panel, shopFold, summary, status, clock, left, idleLeft, send, exit };
     replace(
       root,
       h(
@@ -462,6 +481,8 @@ export function mountTerminal(
   /** The banner's ready moment: "Pod starting…" does not stay at the top of the session. */
   const bannerReady = () => {
     if (!els || watching) return;
+    // Inside the live log; the strip already says "Pod ready" aloud, so this swap is for the eye only.
+    els.banner.setAttribute("aria-hidden", "true");
     replace(els.banner, "Pod ready. You are uid 10001, non-root, with no network and a read-only root filesystem. Try ", h("code", {}, "id"), " or tap a command below.");
   };
 
@@ -657,6 +678,7 @@ export function mountTerminal(
     if (!watching) hooks.onLit?.(litFromRun(run));
     applySuggestion(run);
     renderStatus(run);
+    fitPanel();
     tickClock();
     if (!run.active && !endedShown) renderSummary(run);
   };
@@ -893,6 +915,26 @@ export function mountTerminal(
       els.timeline,
       items.map((i) => h("li", { class: "thisrun__event", "data-kind": i.kind, "data-tone": i.tone }, h("span", { class: "thisrun__at" }, `+${formatDuration(i.at - t0)}`), h("span", { class: "thisrun__what" }, ...i.text))),
     );
+  };
+
+  // ---- the panel never scrolls without a cue ----
+  let shopTouched = false;
+
+  /** A fade at the panel's foot while there is more below (desktop: the panel is capped and scrolls). */
+  const markOverflow = () => {
+    if (!els) return;
+    const p = els.panel;
+    const over = p.scrollHeight > p.clientHeight + 1;
+    p.dataset.overflow = String(over);
+    p.dataset.atEnd = String(!over || p.scrollTop + p.clientHeight >= p.scrollHeight - 2);
+  };
+
+  /** On a wide screen, a panel that would overflow closes the shop first (unless the visitor chose). */
+  const fitPanel = () => {
+    if (!els) return;
+    const wide = typeof matchMedia === "function" && matchMedia("(min-width: 900px)").matches;
+    if (wide && !shopTouched && els.shopFold.open && els.panel.scrollHeight > els.panel.clientHeight + 1) els.shopFold.open = false;
+    markOverflow();
   };
 
   // ---- a command picked for the visitor (the SIEM scenario's button) ----
@@ -1154,9 +1196,22 @@ export function mountTerminal(
       suggested = commandId;
       root.scrollIntoView({ behavior: reduced ? "auto" : "smooth", block: "start" });
       if (mode === "idle") void start();
-      else applySuggestion(myRun());
+      else if (session && !watching && over()) {
+        // The last session is over: the pick starts the next one, as from the start panel.
+        again();
+        void start();
+      } else applySuggestion(myRun());
     },
     again,
+    restart() {
+      again();
+      if (mode === "idle") void start();
+    },
+    focus() {
+      if (els && mode === "session" && !els.input.disabled && !els.form.hidden) els.input.focus();
+      else if (idle) idle.btn.focus();
+      else els?.out.focus();
+    },
     showTimeline() {
       const wrap = els?.timeline.parentElement;
       if (!wrap) return;

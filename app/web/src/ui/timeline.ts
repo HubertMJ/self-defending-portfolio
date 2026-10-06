@@ -35,8 +35,11 @@ export interface TimelineHandle {
   setScenarioTimeout(scenario: string, seconds: number): void;
   /** The terminal catalogue's outcome per command id: why a finished run shows no detection. */
   setOutcomes(outcomes: ReadonlyMap<string, CommandOutcome>): void;
-  /** Runs the status strip announces (the visitor's own): this announcer keeps quiet about them. */
-  setQuiet(runIds: readonly string[]): void;
+  /**
+   * Runs the status strip announces (the visitor's own): this announcer keeps quiet about them; and,
+   * while the visitor's own terminal start is in flight (its id not known yet), about any terminal run.
+   */
+  setQuiet(runIds: readonly string[], startingTerminal?: boolean): void;
 }
 
 /**
@@ -237,6 +240,7 @@ export function mountTimeline(
   const timeouts = new Map<string, number>();
   let outcomes: ReadonlyMap<string, CommandOutcome> = new Map();
   let quiet: ReadonlySet<string> = new Set();
+  let startingTerminal = false;
   // The fold of the older run cards stays as the visitor left it across the re-renders.
   let moreOpen = false;
   // The one countdown of the connection line. Replaced, never stacked: every setConnection clears it.
@@ -268,7 +272,7 @@ export function mountTimeline(
       const key = `${newest.runId}:${newest.current}`;
       if (key !== lastAnnounced && (newest.active || lastAnnounced.startsWith(`${newest.runId}:`))) {
         lastAnnounced = key;
-        if (!quiet.has(newest.runId)) replace(liveEl, announce(newest, titleOf(newest.scenario)));
+        if (!quiet.has(newest.runId) && !(startingTerminal && newest.scenario === "terminal")) replace(liveEl, announce(newest, titleOf(newest.scenario)));
       }
     }
   };
@@ -343,8 +347,9 @@ export function mountTimeline(
       outcomes = o;
       schedule();
     },
-    setQuiet(ids) {
+    setQuiet(ids, starting = false) {
       quiet = new Set(ids);
+      startingTerminal = starting;
     },
   };
 }

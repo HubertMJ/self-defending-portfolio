@@ -240,13 +240,14 @@ export function renderIncident(i: CorrelationIncident, ctx: BoardContext, tier?:
   const more = i.steps.length - shown.length;
   return h(
     "article",
-    { class: tier ? `incident incident--${tier}` : "incident", "data-kind": i.kind, "data-severity": i.severity, "data-incident": i.id, "aria-labelledby": `incident-${i.id}` },
+    // The card carries the id every "Open it" link names, so the card's top (badge, title) is what lands.
+    { class: tier ? `incident incident--${tier}` : "incident", id: `incident-${i.id}`, "data-kind": i.kind, "data-severity": i.severity, "data-incident": i.id, "aria-labelledby": `incident-${i.id}-title` },
     h(
       "header",
       { class: "incident__head" },
       statusChip(SEVERITY_TONE[i.severity], i.severity),
       " ",
-      h("h4", { class: "incident__title", id: `incident-${i.id}` }, i.title || kindLabel(i.kind)),
+      h("h4", { class: "incident__title", id: `incident-${i.id}-title` }, i.title || kindLabel(i.kind)),
     ),
     h(
       "p",
@@ -267,7 +268,6 @@ export function renderIncident(i: CorrelationIncident, ctx: BoardContext, tier?:
     ),
     shown.length ? h("ol", { class: "corr-steps", "aria-label": "Evidence timeline" }, shown.map((s, n) => stepItem(s, n, t0, ctx))) : h("p", { class: "small" }, "No step of this incident is publishable."),
     more > 0 ? h("p", { class: "small" }, `${more} more step${more === 1 ? "" : "s"} in the raw JSON.`) : null,
-    tier === "own" ? h("p", { class: "incident__own" }, "From your run on this page.") : null,
     i.evidence.length
       ? h(
           "p",
@@ -311,14 +311,16 @@ const PINNED_KINDS: ReadonlySet<string> = new Set(["dns-exfil", "policy-probing"
 const SEVERITY_RANK: Record<string, number> = { critical: 4, high: 3, medium: 2, low: 1 };
 
 /**
- * Which tier an incident is drawn in. "pinned": caught by correlation, not by Falco (its kind, or a
- * Falco count of zero), and the visitor's own incidents while their session lasts; "contained": the
+ * Which tier an incident is drawn in. "own": the visitor's own incidents of this page view, under their
+ * own heading first; "pinned": caught by correlation, not by Falco (its kind, or a Falco count of zero);
+ * "contained": the
  * contained intrusions Falco and Talon handled on their own, folded into one line; "other": everything
  * else, as before; "test": the operator's test-suite execs, folded.
  */
-export function tierOf(i: CorrelationIncident, own: ReadonlySet<string> = new Set()): "pinned" | "contained" | "other" | "test" {
+export function tierOf(i: CorrelationIncident, own: ReadonlySet<string> = new Set()): "own" | "pinned" | "contained" | "other" | "test" {
   if (i.operator_test) return "test";
-  if ((i.run_id && own.has(i.run_id)) || PINNED_KINDS.has(i.kind) || i.falco_events === 0) return "pinned";
+  if (i.run_id && own.has(i.run_id)) return "own";
+  if (PINNED_KINDS.has(i.kind) || i.falco_events === 0) return "pinned";
   if (i.kind === "contained-intrusion") return "contained";
   return "other";
 }
@@ -345,13 +347,17 @@ export function renderBoard(c: Correlation, ctx: BoardContext): HTMLElement {
   const by = (tier: ReturnType<typeof tierOf>) => c.incidents.filter((i) => tierOf(i, own) === tier);
   // The live test suites' own execs (operator_test) are folded into one line, never dropped.
   const tests = by("test");
-  const isOwn = (i: CorrelationIncident) => !!i.run_id && own.has(i.run_id);
-  // Pinned: the visitor's own first, then the most severe, then the newest (the API's order).
-  const pinned = by("pinned")
-    .map((i, n) => ({ i, n }))
-    .sort((a, b) => Number(isOwn(b.i)) - Number(isOwn(a.i)) || (SEVERITY_RANK[b.i.severity] ?? 0) - (SEVERITY_RANK[a.i.severity] ?? 0) || a.n - b.n)
-    .map((x) => x.i);
-  const pinnedFull = pinned.filter((i, n) => isOwn(i) || n < BOARD_INCIDENTS);
+  // The most severe first, then the newest (the API's order).
+  const bySeverity = (list: CorrelationIncident[]) =>
+    list
+      .map((i, n) => ({ i, n }))
+      .sort((a, b) => (SEVERITY_RANK[b.i.severity] ?? 0) - (SEVERITY_RANK[a.i.severity] ?? 0) || a.n - b.n)
+      .map((x) => x.i);
+  // The visitor's own incidents, all in full, under their own heading: one of them may be a contained
+  // intrusion Falco did see, which is no "caught by correlation" card.
+  const mine = bySeverity(by("own"));
+  const pinned = bySeverity(by("pinned"));
+  const pinnedFull = pinned.slice(0, BOARD_INCIDENTS);
   const contained = by("contained");
   const other = by("other");
   const otherFull = other.slice(0, Math.max(0, BOARD_INCIDENTS - pinnedFull.length));
@@ -360,13 +366,21 @@ export function renderBoard(c: Correlation, ctx: BoardContext): HTMLElement {
     "div",
     { class: "corr-board" },
     h("h3", { class: "panel-title" }, `Incidents, newest first (${c.incidents.length} in the last 24 h)`),
+    mine.length
+      ? h(
+          "section",
+          { class: "corr-tier corr-tier--own", "aria-labelledby": "corr-own-title" },
+          h("h4", { class: "corr-tier__title", id: "corr-own-title" }, "From your run on this page"),
+          h("div", { class: "corr-incidents" }, mine.map((i) => renderIncident(i, ctx, "own"))),
+        )
+      : null,
     h(
       "section",
       { class: "corr-tier corr-tier--pinned", "aria-labelledby": "corr-pinned-title" },
       h("h4", { class: "corr-tier__title", id: "corr-pinned-title" }, "Caught by correlation, not by Falco"),
       pinnedFull.length
-        ? h("div", { class: "corr-incidents" }, pinnedFull.map((i) => renderIncident(i, ctx, isOwn(i) ? "own" : "pinned")))
-        : h("p", { class: "empty" }, contained.length || other.length ? "None in the last 24 hours. Run the DNS exfiltration above and yours appears here." : "No incident in the last 24 hours besides the operator's own test runs."),
+        ? h("div", { class: "corr-incidents" }, pinnedFull.map((i) => renderIncident(i, ctx, "pinned")))
+        : h("p", { class: "empty" }, mine.length ? "None in the last 24 hours besides yours above." : contained.length || other.length ? "None in the last 24 hours. Run the DNS exfiltration above and yours appears here." : "No incident in the last 24 hours besides the operator's own test runs."),
     ),
     contained.length
       ? h(
@@ -582,7 +596,7 @@ export function mountCorrelation(
   api: Pick<ApiClient, "correlation" | "correlationRules">,
   onAvailable?: (available: boolean) => void,
   opts: {
-    /** Every poll's answer: the incidents while the SIEM is available, null otherwise. */
+    /** The incidents while the SIEM is available; null once it says unavailable or has no endpoint. Not called on a failed poll. */
     onData?: (c: Correlation | null) => void;
     /** The scenario's button: take the visitor to the terminal with the DNS exfil picked. */
     onScenario?: () => void;
@@ -718,7 +732,10 @@ export function mountCorrelation(
     } else {
       show(false);
     }
-    opts.onData?.(r.ok && r.value.available ? r.value : null);
+    // Unavailable only when the API says so (available:false) or has no such endpoint (a 404): a
+    // network blip, a 5xx, a 429 or a malformed answer leaves the visitor's last reading as it was.
+    if (r.ok) opts.onData?.(r.value.available ? r.value : null);
+    else if (r.status === 404) opts.onData?.(null);
     schedule(!r.ok && r.status === 404 ? POLL_404_MS : eager ? eagerMs : POLL_MS);
   };
 
