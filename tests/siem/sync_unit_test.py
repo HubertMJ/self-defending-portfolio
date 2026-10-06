@@ -405,7 +405,8 @@ def big_repo(tmp):
 
 def leftovers(path):
     files = [os.path.join(d, f) for d, _, fs in os.walk(path) for f in fs] if os.path.exists(path) else []
-    return [f for f in files if "tmp_" in f], sum(os.path.getsize(f) for f in files)
+    # Relative to the repository: mkdtemp's own random name can contain "tmp_" too.
+    return [f for f in files if "tmp_" in os.path.relpath(f, path)], sum(os.path.getsize(f) for f in files)
 
 
 def fsize_limit_leaves_nothing():
