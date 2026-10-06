@@ -287,8 +287,8 @@ is not generated yet:
         {
           "at": "2026-10-04T10:00:20.101Z",
           "source": "hubble",
-          "rule": "DNS query carries an exfil label",
-          "rule_id": "",
+          "rule": "Hubble - flag-shaped DNS lookup",
+          "rule_id": "fa0bd074-18fc-4827-834c-705c707a94f9",
           "command_seq": 3,
           "detail": "DNS query under the exfil zone from sandbox/terminal-3755e65530, FORWARDED egress udp/53"
         }
@@ -318,9 +318,9 @@ is not generated yet:
   and the commands' catalogue techniques, upper-case, de-duplicated, in first-seen order.
 - `steps[].source`: `falco|talon|hubble|k8s-audit|api` (monitor steps: `k8s-audit` for policy probing,
   `api` for the two sdp-api/sdp-falco monitors). `rule`: the Sigma rule's title from the finding (or the
-  monitor name), "" for a document without a finding. `rule_id`: the rule's Sigma id, looked up by title in
-  the embedded rule index, "" when not found. `count`: the records the step stands for, omitted for one
-  (amendment 2026-10-06).
+  monitor name, or an audit document's name - amendment 2026-10-06), "" for another document without a
+  finding. `rule_id`: the rule's Sigma id, looked up by title in the embedded rule index, "" when not
+  found. `count`: the records the step stands for, omitted for one (amendment 2026-10-06).
 - `evidence[]`: correlations first (so the cap of 50 never cuts them), then each step's finding(s) or
   document. `evidence[].type`: `finding` (SA finding id), `alert` (Alerting alert id), `correlation` (the SA
   correlation rule id that paired two of the incident's findings - the correlations list has no id of its
@@ -392,3 +392,36 @@ counts the sessions.
 
 **Consequences.** Fewer steps, so the cap of 50 cuts later; the evidence list of a flood is five ids
 instead of one per record. A client that ignores `count` reads the step as before.
+
+## Amendment 2026-10-06: a DNS lookup is an L7 DNS event of the DNS rule; dns-exfil anchored on its command
+
+**Context.** The live acceptance check found the real cause of the repeated steps: Cilium's static flow
+exporter, with its field mask, leaves a stale `l7.dns.query` on ordinary flows (trace events, type 4:
+tcp/8080 replies, tcp/9200 drops), so about 1 600 `sdp-hubble` documents carried a flag-shaped
+`dns.query` that was no lookup. The API took any Hubble finding on a document with a query for a DNS
+query, whatever rule fired: four false dns-exfil incidents (test pods whose only steps were policy drops,
+read as "DNS query under the exfil zone ... DROPPED egress tcp/9200"), and a real one whose 50 earlier
+records filled the step cap before the run's command. The shipper and the Sigma rule are fixed apart;
+the API does not trust the field either.
+
+**Decision.**
+- A Hubble record is a DNS lookup only when it is a finding of the flag-shaped DNS rule
+  (`siem/rules/hubble-dns-exfil.yml`, Sigma id `fa0bd074-18fc-4827-834c-705c707a94f9`, looked up by the
+  finding's rule title in the embedded index) on an L7 DNS event (`hubble.event_type` 129 with an
+  `hubble.l7.type`). A document read by a search is never a lookup (no rule fired on it). Everything else
+  is a flow, described and used as one - a stale-query drop is a drop (the "policy enforced" step, the
+  quarantined lookup's drop).
+- A dns-exfil incident with lookups is anchored on the run's `dns-exfil` command that a lookup follows
+  within the join window: the command before the first lookup matching the run's flag, else before the
+  first lookup that follows any command. Its steps are that command (with the run's `read-flag` before
+  it) and the lookups at or after it; a lookup before that command is not this incident's, and the flag
+  match and the Falco window are taken over the lookups kept. Without any command, the lookups alone
+  make the incident, as before. dns-exfil still carries no TTD or TTI (section 5 defines them for
+  contained intrusions only).
+- An audit document no rule fired on is named in `rule`: "Kubernetes audit - pod labelled by the response
+  engine" (Talon's quarantine patch), "... pod deleted by the response engine" (Talon's delete), "... pod
+  created by the API" / "... pod deleted by the API" (the twin's create and delete). `rule_id` stays "".
+
+**Consequences.** The false dns-exfil incidents go; a real one shows the command first. Documents already
+in the SIEM keep their stale query, and the API ignores it. A rename of the DNS rule's title is followed
+through the regenerated index (the id is what the API knows).
