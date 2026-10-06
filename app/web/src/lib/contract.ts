@@ -1116,6 +1116,8 @@ export interface CorrelationIncident {
   falco_events: number | null;
   /** dns-exfil only: true/false; null when the match is unavailable (the API restarted since the run). */
   flag_match: boolean | null;
+  /** An exec-outside-api incident of the live test suites (ADR 0036 amendment 2026-10-06): only a literal true on that kind; anything else is false. */
+  operator_test: boolean;
   ttd_ms: number | null;
   tti_ms: number | null;
   steps: CorrelationStep[];
@@ -1287,6 +1289,7 @@ function parseIncident(v: unknown): CorrelationIncident | null {
     attack: techniques(v.attack),
     falco_events: isCount(v.falco_events) && Number.isInteger(v.falco_events) ? v.falco_events : null,
     flag_match: isBool(v.flag_match) ? v.flag_match : null,
+    operator_test: v.operator_test === true && v.kind === "exec-outside-api",
     ttd_ms: optMs(v.ttd_ms),
     tti_ms: optMs(v.tti_ms),
     steps: steps.sort((a, b) => Date.parse(a.at) - Date.parse(b.at)),

@@ -279,17 +279,36 @@ function olderItem(i: CorrelationIncident, now: number): HTMLElement {
   );
 }
 
+/** Sessions an operator-test incident stands for: its steps, each counted. */
+const sessions = (i: CorrelationIncident) => Math.max(1, i.steps.reduce((n, s) => n + (s.count ?? 1), 0));
+
+/** "N operator test-suite execs in the last 24 h", folded; opened, one line per incident. */
+function operatorTests(tests: CorrelationIncident[], now: number): HTMLElement {
+  const n = tests.reduce((sum, i) => sum + sessions(i), 0);
+  return h(
+    "details",
+    { class: "corr-optests" },
+    h("summary", {}, `${n} operator test-suite exec${n === 1 ? "" : "s"} in the last 24 h`),
+    h("p", { class: "small" }, "Sessions by the cluster admin's credential into pods the live test suites create (ADR 0036): true incidents, labelled and folded here, not hidden. The label says only what the evidence shows."),
+    h("ol", { class: "corr-older__list" }, tests.map((i) => olderItem(i, now))),
+  );
+}
+
 export function renderBoard(c: Correlation, ctx: BoardContext): HTMLElement {
   if (!c.incidents.length) {
     return h("div", { class: "corr-board" }, h("h3", { class: "panel-title" }, "Incidents"), h("p", { class: "empty" }, "No incident in the last 24 hours. The rules run on every event the cluster ships; when one fires, it appears here with its evidence."));
   }
-  const full = c.incidents.slice(0, BOARD_INCIDENTS);
-  const older = c.incidents.slice(BOARD_INCIDENTS);
+  // The live test suites' own execs (operator_test) are folded into one line, never dropped.
+  const tests = c.incidents.filter((i) => i.operator_test);
+  const rest = c.incidents.filter((i) => !i.operator_test);
+  const full = rest.slice(0, BOARD_INCIDENTS);
+  const older = rest.slice(BOARD_INCIDENTS);
   return h(
     "div",
     { class: "corr-board" },
     h("h3", { class: "panel-title" }, `Incidents, newest first (${c.incidents.length} in the last 24 h)`),
-    h("div", { class: "corr-incidents" }, full.map((i) => renderIncident(i, ctx))),
+    full.length ? h("div", { class: "corr-incidents" }, full.map((i) => renderIncident(i, ctx))) : h("p", { class: "empty" }, "No incident in the last 24 hours besides the operator's own test runs."),
+    tests.length ? operatorTests(tests, ctx.now) : null,
     older.length
       ? h("details", { class: "corr-older" }, h("summary", {}, `${older.length} older incident${older.length === 1 ? "" : "s"}`), h("ol", { class: "corr-older__list" }, older.map((i) => olderItem(i, ctx.now))))
       : null,

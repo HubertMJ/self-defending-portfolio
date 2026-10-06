@@ -234,6 +234,52 @@ describe("a step's count (ADR 0036 amendment 2026-10-06)", () => {
   });
 });
 
+describe("operator test runs (ADR 0036 amendment 2026-10-06)", () => {
+  const ctx = (c: Correlation) => ({ now: NOW, rules: new Map(index().rules.map((r) => [r.id, r])), commit: COMMIT, c });
+  const execStep = (sAgo: number, count?: number) => ({ at: at(sAgo), source: "k8s-audit", rule: "Exec into a sandbox pod not by the API", rule_id: "", command_seq: null, detail: "create pods/exec on sandbox/sc-network-tool-0a1b2c not by the API, response 101", ...(count ? { count } : {}) });
+  const op = (id: string, sAgo: number, count?: number, over: Record<string, unknown> = {}) =>
+    incident({ id, kind: "exec-outside-api", severity: "low", title: `Operator test run: exec into sandbox/sc-network-tool-${id.slice(-6)}`, first_at: at(sAgo), last_at: at(sAgo), operator_test: true, steps: [execStep(sAgo, count)], ...over });
+
+  it("the flag is read only as a literal true on an exec-outside-api incident", () => {
+    const flag = (over: Record<string, unknown>) => parseCorrelation(answer({ incidents: [op("0b5e7a10c0ffee01", 10, undefined, over)] })).incidents[0].operator_test;
+    expect(flag({})).toBe(true);
+    for (const bad of ["true", 1, null, false, {}, [true]]) expect(flag({ operator_test: bad }), String(bad)).toBe(false);
+    expect(flag({ operator_test: undefined })).toBe(false);
+    expect(flag({ kind: "dns-exfil" })).toBe(false);
+    expect(parseCorrelation(answer()).incidents[0].operator_test).toBe(false);
+  });
+
+  it("folds them into one line that counts their sessions and opens to list them; the rest of the board is as before", () => {
+    const c = parseCorrelation(answer({ incidents: [op("0b5e7a10c0ffee01", 5, 2), incident({ id: "d15e0f17a1b2c3d4", kind: "dns-exfil", first_at: at(60), last_at: at(59) }), incident(), op("0b5e7a10c0ffee02", 900)] }));
+    const board = renderBoard(c, ctx(c));
+    expect([...board.querySelectorAll(".incident")].map((e) => e.getAttribute("data-incident"))).toEqual(["d15e0f17a1b2c3d4", "c0a1b2c3d4e5f607"]);
+    const fold = board.querySelector<HTMLDetailsElement>("details.corr-optests");
+    expect(fold?.open).toBe(false);
+    expect(fold?.querySelector("summary")?.textContent).toBe("3 operator test-suite execs in the last 24 h");
+    expect([...(fold?.querySelectorAll("li[data-incident]") ?? [])].map((e) => e.getAttribute("data-incident"))).toEqual(["0b5e7a10c0ffee01", "0b5e7a10c0ffee02"]);
+    expect(fold?.textContent).toContain("Operator test run: exec into sandbox/sc-network-tool-ffee01");
+    // Still counted with the board's incidents.
+    expect(board.querySelector(".panel-title")?.textContent).toBe("Incidents, newest first (4 in the last 24 h)");
+    expect(board.querySelector(".corr-older")).toBeNull();
+  });
+
+  it("one session reads singular; a board of test runs only says so and still lists them", () => {
+    const c = parseCorrelation(answer({ incidents: [op("0b5e7a10c0ffee01", 5)] }));
+    const board = renderBoard(c, ctx(c));
+    expect(board.querySelector(".corr-optests summary")?.textContent).toBe("1 operator test-suite exec in the last 24 h");
+    expect(board.querySelectorAll(".incident")).toHaveLength(0);
+    expect(board.querySelector(".empty")?.textContent).toContain("besides the operator's own test runs");
+    expect(board.querySelectorAll(".corr-optests li")).toHaveLength(1);
+  });
+
+  it("a board without test runs has no fold", () => {
+    const c = parseCorrelation(answer({ incidents: [op("0b5e7a10c0ffee01", 5, undefined, { operator_test: "true" })] }));
+    const board = renderBoard(c, ctx(c));
+    expect(board.querySelector(".corr-optests")).toBeNull();
+    expect(board.querySelectorAll(".incident")).toHaveLength(1);
+  });
+});
+
 describe("parseRuleIndex", () => {
   it("keeps valid rules only, links only repository paths", () => {
     const idx = parseRuleIndex({
