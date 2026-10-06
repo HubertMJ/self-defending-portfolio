@@ -319,7 +319,8 @@ is not generated yet:
 - `steps[].source`: `falco|talon|hubble|k8s-audit|api` (monitor steps: `k8s-audit` for policy probing,
   `api` for the two sdp-api/sdp-falco monitors). `rule`: the Sigma rule's title from the finding (or the
   monitor name), "" for a document without a finding. `rule_id`: the rule's Sigma id, looked up by title in
-  the embedded rule index, "" when not found.
+  the embedded rule index, "" when not found. `count`: the records the step stands for, omitted for one
+  (amendment 2026-10-06).
 - `evidence[]`: correlations first (so the cap of 50 never cuts them), then each step's finding(s) or
   document. `evidence[].type`: `finding` (SA finding id), `alert` (Alerting alert id), `correlation` (the SA
   correlation rule id that paired two of the incident's findings - the correlations list has no id of its
@@ -368,3 +369,26 @@ or not the SIEM is reachable:
   synced and before the old generation is unmapped (docs/bootstrap.md 9.8).
 - The rule index is generated from `siem/` and embedded; until it is regenerated, a rule's `rule_id` is
   empty and `/api/correlation/rules` lists nothing new.
+
+## Amendment 2026-10-06: the same evidence is one step, with a count
+
+**Context.** Live, a dns-exfil incident listed about twelve identical steps "Hubble - flag-shaped DNS
+lookup": every Hubble flow of the lookup is a record - the request and the response, as a trace event
+(type 4) and as an L7 event (type 129), in both directions - and every record was a step. The board
+read as a flood, and repeated sessions or Falco findings did the same to the other kinds.
+
+**Decision.** For every kind, records that are the same evidence are one step: the same source, rule
+title, pod, `command_seq` and kind, where the kind is the published detail without the traffic
+direction (section 3's allow-list otherwise). The step is at the earliest record's time, keeps the
+place of that record in the time order (ties keep their order), and carries `count`, the number of
+records it stands for: an integer >= 1, omitted when it is 1. Its detail lists the directions seen,
+sorted and joined by `+` ("FORWARDED egress+ingress udp/53"). It cites the ids of its records, earliest
+first, at most five (the cap of one document's findings in section 2); every record still counts for
+`falco_events`, for the ATT&CK ids and for pairing findings with an SA correlation. `last_at` is the
+latest record of the steps kept, not the latest step's time. Steps that are not records (monitor alerts,
+"policy enforced", the twin's dwell) are not merged. An `exec-outside-api` incident's sessions that
+publish the same evidence are one step with a count (the principal is never published); the title still
+counts the sessions.
+
+**Consequences.** Fewer steps, so the cap of 50 cuts later; the evidence list of a flood is five ids
+instead of one per record. A client that ignores `count` reads the step as before.
