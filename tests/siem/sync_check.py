@@ -145,9 +145,11 @@ def main():
         sigma_of = {sa: sid for sid, sas in snap["rules"].items() for sa in sas}
         out = {"rules": {}, "monitors": {}, "correlations": 0}
         types = {h["_source"]["detector_type"] for h in c.hits(f"{SA}/detectors/_search")}
+        # At most 1000 findings per log type (ADR 0034 amendment of 2026-10-06: siem01's heap), oldest
+        # first (SA's default sort), so the canaries written right after `since` are among them.
         for lt in sorted(types):
             code, res = c.req("GET", f"{SA}/findings/_search?detectorType={lt}&startTime={since}"
-                                     f"&endTime=9999999999999&size=10000")
+                                     f"&endTime=9999999999999&size=1000")
             for f in res.get("findings", []) if code == 200 else []:
                 for q in f.get("queries", []):
                     sid = sigma_of.get(q["id"])
