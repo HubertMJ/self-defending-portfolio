@@ -7,6 +7,6 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 python3 ansible/roles/siem_sync/files/siem_lint.py siem
-python3 tests/siem/lint_test.py | tail -n 1
-python3 tests/siem/sync_unit_test.py | tail -n 1
+python3 tests/siem/lint_test.py | grep -E "^FAIL|passed, [0-9]+ failed$"
+python3 tests/siem/sync_unit_test.py | grep -E "^FAIL|passed, [0-9]+ failed$"
 python3 tests/siem/talon_slugs_test.py
