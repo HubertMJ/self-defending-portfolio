@@ -3,6 +3,7 @@ package incidents
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"regexp"
@@ -169,6 +170,16 @@ func TestDNSExfilUnderQuarantine(t *testing.T) {
 	inc := one(t, tr.View(), KindDNSExfil)
 	if inc.FlagMatch != nil || inc.Severity != "medium" || !strings.Contains(inc.Title, "under quarantine") || len(inc.Steps) != 2 {
 		t.Fatalf("incident %+v", inc)
+	}
+	// A dropped L7 DNS event carrying the query, read by the drop search, is that drop too: no rule
+	// fired on a searched document, so it is never a lookup finding.
+	l7 := dropDoc("h1", t0.Add(19200*time.Millisecond), termRef, 53)
+	l7.Source["dns.query"], l7.Source["hubble.event_type"], l7.Source["hubble.l7.type"] = "sdp-"+flagHex+".x.exfil.sdp.test.", float64(129), "REQUEST"
+	f.hits["sdp-hubble"] = []siem.Hit{l7}
+	tr = newTracker(t, f, &clock{t: t0.Add(time.Minute)})
+	tr.Poll(context.Background())
+	if inc := one(t, tr.View(), KindDNSExfil); inc.Severity != "medium" || len(inc.Steps) != 2 {
+		t.Fatalf("L7 drop: %+v", inc)
 	}
 	// A drop to another port, or one too late, is not the lookup.
 	f.hits["sdp-hubble"] = []siem.Hit{dropDoc("h2", t0.Add(19200*time.Millisecond), termRef, 9), dropDoc("h3", t0.Add(40*time.Second), termRef, 53)}
@@ -419,7 +430,10 @@ func TestExecOutsideAPI(t *testing.T) {
 		t.Fatalf("%d exec-outside-api incidents, want 3 (one per pod): %v", len(byTitle), byTitle)
 	}
 	two := byTitle["2 exec/attach/port-forward sessions into sandbox/network-tool-b2c3d4e5f6 outside the API"]
-	if len(two.Steps) != 2 || two.Steps[0].Detail != "create pods/exec on sandbox/network-tool-b2c3d4e5f6 not by the API, response 101" || len(two.Evidence) != 3 {
+	// The two sessions publish the same evidence (the principal never is): one step, counted twice,
+	// at the first session's time; last_at is the second's.
+	if len(two.Steps) != 1 || two.Steps[0].Detail != "create pods/exec on sandbox/network-tool-b2c3d4e5f6 not by the API, response 101" ||
+		two.Steps[0].Count != 2 || !two.Steps[0].At.Equal(t0) || !two.LastAt.Equal(t0.Add(5*time.Second)) || len(two.Evidence) != 3 {
 		t.Fatalf("two sessions: %+v", two)
 	}
 	if _, ok := byTitle["Attach to sandbox/shell-in-container-a1b2c3d4e5 outside the API"]; !ok {
@@ -535,8 +549,9 @@ func TestCaps(t *testing.T) {
 		f.findings["sdp_k8s_audit"] = append(f.findings["sdp_k8s_audit"], finding(fmt.Sprintf("ex-%d", i), t0.Add(time.Duration(i)*time.Second),
 			"Exec", nil, map[string]any{"audit.object.subresource": "exec", "audit.object.resource": "pods", "k8s.pod.ref": fmt.Sprintf("sandbox_p-%d", i), "user.name": "system:admin"}))
 	}
+	// 70 different Falco rules: steps that are not the same evidence, so none collapses.
 	for i := 0; i < 70; i++ {
-		f.findings["sdp_falco"] = append(f.findings["sdp_falco"], falcoFinding(fmt.Sprintf("fa-%d", i), t0.Add(time.Duration(i)*time.Second), cmpRef, "Terminal shell in container"))
+		f.findings["sdp_falco"] = append(f.findings["sdp_falco"], falcoFinding(fmt.Sprintf("fa-%d", i), t0.Add(time.Duration(i)*time.Second), cmpRef, fmt.Sprintf("Terminal shell %d", i)))
 	}
 	f.findings["sdp_talon"] = []siem.Finding{talonFinding("ta", t0.Add(time.Second), cmpRef, "Terminate Pod", "kubernetes:terminate")}
 	tr := newTracker(t, f, &clock{t: t0.Add(time.Hour)})
@@ -656,13 +671,23 @@ func TestViewLeaksNothing(t *testing.T) {
 		"SDP{" + flagHex + "} sdp-" + flagHex + " hm1:0011223344556677 system:serviceaccount:portfolio-api:portfolio-api ServiceAccount " +
 		"https://10.43.0.1:443/api node_k3s01 siem01-data service-account service_account"
 	f.findings["sdp_falco"] = append(f.findings["sdp_falco"], finding("f-poison", t0.Add(25*time.Second), "Falco "+poison, []string{"attack.t1059"},
-		map[string]any{"falco.rule": poison, "proc.name": poison, "k8s.pod.ref": termRef, "user.name": "operator", "source.ip": "10.1.1.250",
+		map[string]any{"falco.rule": poison, "proc.name": poison, "k8s.pod.ref": termRef, "user.name": "op-jdoe", "source.ip": "10.1.1.250",
 			"hostname": "k3s01", "dns.query": "sdp-" + flagHex + ".x.exfil.sdp.test."}))
 	f.findings["sdp_talon"] = append(f.findings["sdp_talon"], talonFinding("f-talon-p", t0.Add(26*time.Second), termRef, poison, poison))
 	f.hits["sdp-k8s-audit"] = append(f.hits["sdp-k8s-audit"], hit("sdp-k8s-audit", "a9", t0.Add(27*time.Second), map[string]any{
 		"audit.verb": "patch " + poison, "audit.object.resource": "pods", "k8s.pod.ref": termRef, "user.name": talonUser, "source.ip": "hm1:aabbccddeeff0011"}))
 	f.hits["sdp-hubble"] = append(f.hits["sdp-hubble"], hit("sdp-hubble", "h9", t0.Add(28*time.Second), map[string]any{
 		"hubble.verdict": "DROPPED", "hubble.drop_reason": poison, "k8s.pod.ref": termRef, "dns.query": "sdp-" + flagHex + ".x.exfil.sdp.test."}))
+	// A second lookup of the run's DNS query, its direction poisoned: one step with f-dns-1, whose
+	// detail lists both directions.
+	f.findings["sdp_hubble"] = append(f.findings["sdp_hubble"], finding("f-dns-p", t0.Add(20200*time.Millisecond), dnsRule, nil,
+		map[string]any{"dns.query": "sdp-" + flagHex + ".x.exfil.sdp.test.", "hubble.verdict": "FORWARDED", "hubble.traffic_direction": poison,
+			"hubble.event_type": 129, "hubble.l7.type": "RESPONSE",
+			"hubble.l4.protocol": "udp", "hubble.l4.destination_port": 53, "k8s.pod.ref": termRef}))
+	// An operator test run: the principal is read, never published.
+	f.findings["sdp_k8s_audit"] = append(f.findings["sdp_k8s_audit"], finding("f-op", t0.Add(29*time.Second), "Exec "+poison, nil, map[string]any{
+		"audit.verb": "create", "audit.object.resource": "pods", "audit.object.subresource": "exec", "audit.response.code": 101,
+		"k8s.pod.ref": "sandbox_sc-terminal-0a1b2c", "user.name": "system:admin", "source.ip": "10.1.1.250"}))
 	f.alerts = []siem.Alert{{ID: "al-p", MonitorName: "sdp-git: policy probing " + poison, State: "ACTIVE", StartTime: ptrInt(t0.UnixMilli()),
 		Agg: &siem.AlertAgg{BucketKeys: []any{"hm1:0011223344556677", "system:serviceaccount:x:y"}}}}
 	clk := &clock{t: t0}
@@ -673,6 +698,12 @@ func TestViewLeaksNothing(t *testing.T) {
 	v := tr.View()
 	if len(v.Incidents) < 6 {
 		t.Fatalf("only %d incidents: the leak test must see every kind", len(v.Incidents))
+	}
+	if op := incidentsOf(v, KindExecOutsideAPI); len(op) != 1 || !op[0].OperatorTest {
+		t.Fatalf("the leak test must see an operator test run: %+v", op)
+	}
+	if dx := one(t, v, KindDNSExfil); !hasStep(dx, "DNS query under the exfil zone") || dx.Steps[len(dx.Steps)-1].Count != 2 {
+		t.Fatalf("the leak test must see a collapsed step: %+v", dx.Steps)
 	}
 	b, _ := json.Marshal(v)
 	for _, ip := range ipv4.FindAllString(string(b), -1) {
@@ -685,7 +716,7 @@ func TestViewLeaksNothing(t *testing.T) {
 			t.Errorf("published %q (pattern %s)", m, re)
 		}
 	}
-	for _, s := range []string{"operator", "10.1.1.250", "/etc/shadow", "/srv/shop/.flag", "exfil.sdp.test"} {
+	for _, s := range []string{"op-jdoe", "system:admin", "10.1.1.250", "/etc/shadow", "/srv/shop/.flag", "exfil.sdp.test"} {
 		if strings.Contains(string(b), s) {
 			t.Errorf("published %q", s)
 		}
@@ -1042,6 +1073,112 @@ func TestOneDocumentOneEvent(t *testing.T) {
 	}
 }
 
+// Records that are the same evidence (source, rule, pod, command, kind) are one step with a count:
+// a DNS lookup's request and response, both directions, at the earliest record's time, citing the
+// earliest maxStepEvidence ids; another verdict, another command or another rule is a step of its own.
+func TestSameEvidenceOneStep(t *testing.T) {
+	f := newFake()
+	terminalRun(f, "sdp-"+flagHex) // f-dns-1: FORWARDED EGRESS at 20.101 s, under command 3
+	lookup := func(id string, at time.Time, verdict, dir string) siem.Finding {
+		// Live shape: the query goes to port 53, the response back to the client's ephemeral port.
+		l7, port := "REQUEST", 53
+		if dir == "INGRESS" {
+			l7, port = "RESPONSE", 40000+int(at.Sub(t0)/time.Millisecond)%20000
+		}
+		return finding(id, at, dnsRule, []string{"sdp_hubble", "attack.t1048.003"}, map[string]any{
+			"dns.query": "sdp-" + flagHex + ".x.exfil.sdp.test.", "hubble.verdict": verdict, "hubble.traffic_direction": dir,
+			"hubble.event_type": 129, "hubble.l7.type": l7, "hubble.l4.protocol": "udp", "hubble.l4.destination_port": port, "k8s.pod.ref": termRef})
+	}
+	// The earliest record is a response (INGRESS): the directions are listed sorted, not first seen.
+	f.findings["sdp_hubble"] = append(f.findings["sdp_hubble"], lookup("f-dns-0", t0.Add(20050*time.Millisecond), "FORWARDED", "INGRESS"))
+	for i := 2; i <= 11; i++ {
+		dir := "EGRESS"
+		if i%2 == 0 {
+			dir = "INGRESS"
+		}
+		f.findings["sdp_hubble"] = append(f.findings["sdp_hubble"], lookup(fmt.Sprintf("f-dns-%d", i), t0.Add(20*time.Second+time.Duration(i)*100*time.Millisecond), "FORWARDED", dir))
+	}
+	f.findings["sdp_hubble"] = append(f.findings["sdp_hubble"],
+		lookup("f-dns-drop", t0.Add(20350*time.Millisecond), "DROPPED", "EGRESS"),
+		lookup("f-dns-late", t0.Add(41*time.Second), "FORWARDED", "EGRESS"))
+	f.hits["sdp-api"] = append(f.hits["sdp-api"], apiCommand("c5", t0.Add(40*time.Second), termRun, termRef, 4, "dns-exfil", "T1048.003", "exfiltration", "started"))
+	compareRun(f)
+	quarantineRun(f)
+	// Another rule over the same Falco event is another step; the same rule again is the same step.
+	other := falcoFinding("f-falco-g3", t0.Add(time.Hour+1900*time.Millisecond), cmpRef, "Terminal shell in container")
+	other.Queries[0].Name = "Falco shell, another rule"
+	f.findings["sdp_falco"] = append(f.findings["sdp_falco"], other,
+		falcoFinding("f-falco-g4", t0.Add(time.Hour+2*time.Second), cmpRef, "Terminal shell in container"))
+	clk := &clock{t: t0}
+	tr := newTracker(t, f, clk)
+	registerTerminalFlag(tr, flagHex)
+	clk.Set(t0.Add(3 * time.Hour))
+	tr.Poll(context.Background())
+	v := tr.View()
+	// Every kind's steps stay in time order (a check adds its records in its own order).
+	for _, inc := range v.Incidents {
+		for i := 1; i < len(inc.Steps); i++ {
+			if inc.Steps[i].At.Before(inc.Steps[i-1].At) {
+				t.Errorf("%s: step %d before step %d", inc.Kind, i, i-1)
+			}
+		}
+	}
+	inc := one(t, v, KindDNSExfil)
+	b, _ := json.MarshalIndent(inc.Steps, "", " ")
+	type want struct {
+		at     time.Duration
+		source string
+		seq    int
+		count  int
+		detail string
+	}
+	pod := "sandbox/terminal-3755e65530"
+	wants := []want{
+		{9 * time.Second, "api", 2, 0, "command read-flag (T1552.001, credentials) started on " + pod},
+		{19 * time.Second, "api", 3, 0, "command dns-exfil (T1048.003, exfiltration) started on " + pod},
+		{20050 * time.Millisecond, "hubble", 3, 12, "DNS query under the exfil zone from " + pod + ", FORWARDED egress+ingress udp/53"},
+		{20350 * time.Millisecond, "hubble", 3, 0, "DNS query under the exfil zone from " + pod + ", DROPPED egress udp/53"},
+		{41 * time.Second, "hubble", 4, 0, "DNS query under the exfil zone from " + pod + ", FORWARDED egress udp/53"},
+	}
+	if len(inc.Steps) != len(wants) {
+		t.Fatalf("%d steps, want %d: %s", len(inc.Steps), len(wants), b)
+	}
+	for i, w := range wants {
+		st := inc.Steps[i]
+		if !st.At.Equal(t0.Add(w.at)) || st.Source != w.source || st.CommandSeq == nil || *st.CommandSeq != w.seq || st.Count != w.count || st.Detail != w.detail {
+			t.Errorf("step %d: %+v, want %+v", i, st, w)
+		}
+	}
+	// "count" is published for a collapsed step only.
+	if one, _ := json.Marshal(inc.Steps[2]); !strings.Contains(string(one), `"count":12`) {
+		t.Errorf("collapsed step JSON %s", one)
+	}
+	if single, _ := json.Marshal(inc.Steps[3]); strings.Contains(string(single), `"count"`) {
+		t.Errorf("single step JSON %s", single)
+	}
+	var ids []string
+	for _, e := range inc.Evidence {
+		ids = append(ids, e.ID)
+	}
+	if got := strings.Join(ids, ","); got != "c2,c3,f-dns-0,f-dns-1,f-dns-2,f-dns-3,f-dns-4,f-dns-drop,f-dns-late" {
+		t.Errorf("evidence %s", got)
+	}
+	if !inc.FirstAt.Equal(t0.Add(9*time.Second)) || !inc.LastAt.Equal(t0.Add(41*time.Second)) {
+		t.Errorf("times %v %v", inc.FirstAt, inc.LastAt)
+	}
+	var falco []string
+	for _, ci := range incidentsOf(v, KindContainedIntrusion) {
+		for _, st := range ci.Steps {
+			if st.Source == "falco" && st.At.Before(t0.Add(2*time.Hour)) {
+				falco = append(falco, fmt.Sprintf("%s ×%d", st.Rule, st.Count))
+			}
+		}
+	}
+	if got := strings.Join(falco, " | "); got != "Falco Terminal shell in container ×2 | Falco shell, another rule ×0" {
+		t.Errorf("falco steps: %s", got)
+	}
+}
+
 // hookSource runs a hook inside the correlations read (a slow SIEM) or fails that read alone.
 type hookSource struct {
 	*fakeSource
@@ -1328,4 +1465,427 @@ func TestRulesStaleFromHeartbeat(t *testing.T) {
 	stray.Source["applied_at"] = t0.Add(-time.Minute).Format(time.RFC3339)
 	stray.Source["status"] = "failed"
 	check("heartbeat in the records search", rules(t, applied, stray), "applied")
+}
+
+// Live shapes (2026-10-06): Cilium's static exporter, with its field mask, leaves a stale
+// l7.dns.query on ordinary flows - trace events (type 4) such as tcp/8080 replies and tcp/9200 drops -
+// so the flag-shaped DNS rule fires on documents that are no DNS lookup. Only a finding of that rule on
+// an L7 DNS event (type 129 with an l7 type) is a lookup; the rest are flows, read as flows.
+func TestStaleDNSQueryIsNotALookup(t *testing.T) {
+	f := newFake()
+	stale := "sdp-" + flagHex + ".x.exfil.sdp.test."
+	flow := func(ref string, eventType int, l7, verdict, dir, proto string, port int) map[string]any {
+		doc := map[string]any{"dns.query": stale, "hubble.verdict": verdict, "hubble.traffic_direction": dir, "hubble.event_type": eventType,
+			"hubble.l4.protocol": proto, "hubble.l4.destination_port": port, "k8s.pod.ref": ref}
+		if verdict == "DROPPED" {
+			doc["hubble.drop_reason"] = "POLICY_DENIED"
+		}
+		if l7 != "" {
+			doc["hubble.l7.type"] = l7
+		}
+		return doc
+	}
+	const dropRule = "Hubble - sandbox traffic dropped by policy"
+	l3, iso, iso2, sc := "sandbox_l3probe", "sandbox_rt-iso-1a2b3c", "sandbox_rt-iso-4d5e6f", "sandbox_sc-network-tool-7a8b9c"
+	at := t0.Add(time.Hour)
+	// l3probe, quarantined: a tcp/9200 drop (trace event) that both rules matched - one document.
+	drop := finding("f-l3-drop", at.Add(2600*time.Millisecond), dropRule, []string{"sdp_hubble"}, flow(l3, 4, "", "DROPPED", "EGRESS", "tcp", 9200))
+	dropDNS := finding("f-l3-dns", at.Add(2600*time.Millisecond), dnsRule, []string{"sdp_hubble", "attack.t1048.003"}, map[string]any{})
+	dropDNS.Documents = drop.Documents
+	f.findings["sdp_hubble"] = []siem.Finding{drop, dropDNS,
+		// rt-iso: a tcp/8080 reply (trace event) the DNS rule fired on, its l7 type left stale as well.
+		finding("f-iso-reply", at, dnsRule, nil, flow(iso, 4, "RESPONSE", "FORWARDED", "INGRESS", "tcp", 8080)),
+		// rt-iso: an L7 event the drop rule fired on - not the DNS rule.
+		finding("f-iso-l7", at, dropRule, nil, flow(iso2, 129, "REQUEST", "DROPPED", "EGRESS", "udp", 53)),
+		// sc-network-tool: event type 129 without an l7 type.
+		finding("f-sc", at, dnsRule, nil, flow(sc, 129, "", "FORWARDED", "EGRESS", "udp", 53)),
+	}
+	f.findings["sdp_falco"] = []siem.Finding{falcoFinding("f-l3-falco", at.Add(2*time.Second), l3, "SDP network tool in sandbox")}
+	f.findings["sdp_talon"] = []siem.Finding{talonFinding("f-l3-talon", at.Add(2400*time.Millisecond), l3, "Quarantine Pod", "kubernetes:label")}
+	f.hits["sdp-k8s-audit"] = []siem.Hit{auditDoc("a-l3", at.Add(2300*time.Millisecond), l3, talonUser, "patch", 200)}
+	compareRun(f)
+	tr := newTracker(t, f, &clock{t: t0.Add(3 * time.Hour)})
+	tr.Poll(context.Background())
+	v := tr.View()
+	if dx := incidentsOf(v, KindDNSExfil); len(dx) != 0 {
+		t.Fatalf("dns-exfil from flows that are no lookup: %+v", dx)
+	}
+	b, _ := json.Marshal(v)
+	if strings.Contains(string(b), "DNS query under the exfil zone") {
+		t.Fatalf("a flow reads as a DNS query: %s", b)
+	}
+	// The stale drop is a drop: the quarantine's "policy enforced" step, as a flow.
+	var l3ci, cmp Incident
+	for _, inc := range incidentsOf(v, KindContainedIntrusion) {
+		switch inc.RunID {
+		case cmpRun:
+			cmp = inc
+		default:
+			l3ci = inc
+		}
+	}
+	if !hasStep(l3ci, "policy enforced +300 ms: Hubble: DROPPED egress tcp/9200 (POLICY_DENIED) on sandbox/l3probe") {
+		b, _ := json.MarshalIndent(l3ci.Steps, "", " ")
+		t.Fatalf("no policy-enforced drop: %s", b)
+	}
+	// An audit document no rule fired on is named: Talon's label patch and delete.
+	rules := map[string]string{}
+	for _, inc := range []Incident{l3ci, cmp} {
+		for _, st := range inc.Steps {
+			if st.Source == "k8s-audit" {
+				rules[st.Detail] = st.Rule
+			}
+		}
+	}
+	want := map[string]string{
+		"patch pods on sandbox/l3probe by Talon, response 200":                        "Kubernetes audit - pod labelled by the response engine",
+		"delete pods on sandbox/shell-in-container-a1b2c3d4e5 by Talon, response 200": "Kubernetes audit - pod deleted by the response engine",
+	}
+	for detail, rule := range want {
+		if rules[detail] != rule {
+			t.Errorf("%q: rule %q, want %q (all: %v)", detail, rules[detail], rule, rules)
+		}
+	}
+	tw := one(t, v, KindTwinDwell)
+	var twin []string
+	for _, st := range tw.Steps {
+		if st.Source == "k8s-audit" && st.Rule != "" {
+			twin = append(twin, st.Rule)
+		}
+	}
+	if got := strings.Join(twin, " | "); got != "Kubernetes audit - pod created by the API | Kubernetes audit - pod deleted by the API" {
+		t.Errorf("twin audit steps: %s", got)
+	}
+}
+
+// Live (2026-10-06): records at 05:06:06-09 preceded the run's dns-exfil command at 05:06:29.5 and
+// the step cap cut the command. A dns-exfil incident is anchored on the command before the first
+// lookup matching the run's flag; a lookup before that command is a step only when it carries the
+// run's flag.
+func TestDNSExfilAnchoredAfterCommand(t *testing.T) {
+	poll := func(f *fakeSource) Incident {
+		t.Helper()
+		clk := &clock{t: t0}
+		tr := newTracker(t, f, clk)
+		registerTerminalFlag(tr, flagHex)
+		clk.Set(t0.Add(10 * time.Minute))
+		tr.Poll(context.Background())
+		return one(t, tr.View(), KindDNSExfil)
+	}
+	steps := func(inc Incident) string {
+		var out []string
+		for _, st := range inc.Steps {
+			seq := 0
+			if st.CommandSeq != nil {
+				seq = *st.CommandSeq
+			}
+			out = append(out, fmt.Sprintf("%s %s %d", st.At.Sub(t0), st.Source, seq))
+		}
+		return strings.Join(out, ", ")
+	}
+	readFlag := apiCommand("c2", t0.Add(20*time.Second), termRun, termRef, 2, "read-flag", "T1552.001", "credentials", "started")
+	exfil := func(id string, at time.Duration, seq int) siem.Hit {
+		return apiCommand(id, t0.Add(at), termRun, termRef, seq, "dns-exfil", "T1048.003", "exfiltration", "started")
+	}
+
+	f := newFake()
+	f.hits["sdp-api"] = []siem.Hit{readFlag, exfil("c3", 29500*time.Millisecond, 3)}
+	// 50 lookups before the command, of another label (the flag's lookups are never dropped: below).
+	for i := 0; i < 50; i++ {
+		f.findings["sdp_hubble"] = append(f.findings["sdp_hubble"], dnsFinding(fmt.Sprintf("f-pre-%02d", i), t0.Add(6*time.Second+time.Duration(i)*60*time.Millisecond), termRef, "sdp-"+otherHex))
+	}
+	f.findings["sdp_hubble"] = append(f.findings["sdp_hubble"], dnsFinding("f-dns", t0.Add(30200*time.Millisecond), termRef, "sdp-"+flagHex))
+	inc := poll(f)
+	if got := steps(inc); got != "20s api 2, 29.5s api 3, 30.2s hubble 3" {
+		t.Fatalf("steps %s", got)
+	}
+	if inc.Severity != "critical" || !inc.FirstAt.Equal(t0.Add(20*time.Second)) {
+		t.Fatalf("incident %+v", inc)
+	}
+	for _, e := range inc.Evidence {
+		if strings.HasPrefix(e.ID, "f-pre-") {
+			t.Fatalf("a lookup before the command is cited: %v", inc.Evidence)
+		}
+	}
+
+	// A first command followed by another run's label, a second by this run's flag: the second anchors.
+	f = newFake()
+	f.hits["sdp-api"] = []siem.Hit{readFlag, exfil("c3", 29500*time.Millisecond, 3), exfil("c4", 60*time.Second, 4)}
+	f.findings["sdp_hubble"] = []siem.Finding{
+		dnsFinding("f-other", t0.Add(30*time.Second), termRef, "sdp-"+otherHex),
+		dnsFinding("f-flag", t0.Add(60500*time.Millisecond), termRef, "sdp-"+flagHex),
+	}
+	inc = poll(f)
+	if got := steps(inc); got != "20s api 2, 1m0s api 4, 1m0.5s hubble 4" {
+		t.Fatalf("steps %s", got)
+	}
+	if inc.FlagMatch == nil || !*inc.FlagMatch || inc.Severity != "critical" {
+		t.Fatalf("incident %+v", inc)
+	}
+
+	// Review M1: this run's flag looked up with no command before it, then a command followed by another
+	// label. The command still anchors; the flag's lookup is never dropped and decides the match.
+	f = newFake()
+	f.hits["sdp-api"] = []siem.Hit{readFlag, exfil("c4", 60*time.Second, 4)}
+	f.findings["sdp_hubble"] = []siem.Finding{
+		dnsFinding("f-flag-early", t0.Add(10*time.Second), termRef, "sdp-"+flagHex),
+		dnsFinding("f-other-late", t0.Add(60500*time.Millisecond), termRef, "sdp-"+otherHex),
+	}
+	inc = poll(f)
+	if got := steps(inc); got != "10s hubble 0, 20s api 2, 1m0s api 4, 1m0.5s hubble 4" {
+		t.Fatalf("steps %s", got)
+	}
+	if inc.FlagMatch == nil || !*inc.FlagMatch || inc.Severity != "critical" || !strings.Contains(inc.Title, "this run's secret") {
+		t.Fatalf("incident %+v", inc)
+	}
+	cited := false
+	for _, e := range inc.Evidence {
+		cited = cited || e.ID == "f-flag-early"
+	}
+	if !cited {
+		t.Fatalf("the flag's lookup is not cited: %v", inc.Evidence)
+	}
+}
+
+// Review M2: under deploy skew (the rules synced to the SIEM before the API's index is rebuilt) a
+// finding's rule title is unknown to the index. Such a finding on an L7 DNS event whose query has the
+// flag's shape is still a lookup - fail-safe, not fail-open - and the unknown titles are logged once.
+func TestUnknownRuleFlagShapedLookup(t *testing.T) {
+	const renamed = "Hubble - flag-shaped DNS lookup (renamed)"
+	l7 := func(id string, at time.Time, rule string, eventType int, query string) siem.Finding {
+		doc := map[string]any{"dns.query": query, "hubble.verdict": "FORWARDED", "hubble.traffic_direction": "EGRESS", "hubble.event_type": eventType,
+			"hubble.l4.protocol": "udp", "hubble.l4.destination_port": 53, "k8s.pod.ref": termRef}
+		if eventType == hubbleL7 {
+			doc["hubble.l7.type"] = "REQUEST"
+		}
+		return finding(id, at, rule, []string{"sdp_hubble"}, doc)
+	}
+	flagQ := "sdp-" + flagHex + ".x.exfil.sdp.test."
+	run := func(fs ...siem.Finding) ([]Incident, string) {
+		t.Helper()
+		f := newFake()
+		f.hits["sdp-api"] = []siem.Hit{apiCommand("c3", t0.Add(19*time.Second), termRun, termRef, 3, "dns-exfil", "T1048.003", "exfiltration", "started")}
+		f.findings["sdp_hubble"] = fs
+		var buf strings.Builder
+		var mu sync.Mutex
+		clk := &clock{t: t0}
+		tr := New(Config{Source: f, Rules: rulesIndex(t), Namespace: "sandbox", UnguardedNamespace: "sandbox-unguarded", Now: clk.Now,
+			Log: slog.New(slog.NewTextHandler(&lockedWriter{w: &buf, mu: &mu}, nil))})
+		registerTerminalFlag(tr, flagHex)
+		clk.Set(t0.Add(time.Minute))
+		tr.Poll(context.Background())
+		mu.Lock()
+		defer mu.Unlock()
+		return incidentsOf(tr.View(), KindDNSExfil), buf.String()
+	}
+	dx, log := run(l7("f-u", t0.Add(20*time.Second), renamed, hubbleL7, flagQ))
+	if len(dx) != 1 || dx[0].Severity != "critical" || dx[0].FlagMatch == nil || !*dx[0].FlagMatch {
+		t.Fatalf("unknown rule, L7 flag-shaped lookup: %+v", dx)
+	}
+	if !strings.Contains(log, "rule title the embedded index does not know") || !strings.Contains(log, "findings=1") {
+		t.Fatalf("unknown rule not logged: %s", log)
+	}
+	for name, fd := range map[string]siem.Finding{
+		"a trace flow":        l7("f-u4", t0.Add(20*time.Second), renamed, 4, flagQ),
+		"another label shape": l7("f-up", t0.Add(20*time.Second), renamed, hubbleL7, "probe-0a1b2c3d.x.exfil.sdp.test."),
+		"a flag-like prefix":  l7("f-ux", t0.Add(20*time.Second), renamed, hubbleL7, "x"+flagQ),
+		"a flag-like suffix":  l7("f-uy", t0.Add(20*time.Second), renamed, hubbleL7, flagQ+"evil."),
+		"a known other rule":  l7("f-uk", t0.Add(20*time.Second), "Hubble - sandbox traffic dropped by policy", hubbleL7, flagQ),
+	} {
+		if dx, _ := run(fd); len(dx) != 0 {
+			t.Errorf("%s made a dns-exfil incident: %+v", name, dx)
+		}
+	}
+	if _, log := run(l7("f-k", t0.Add(20*time.Second), dnsRule, hubbleL7, flagQ)); strings.Contains(log, "does not know") {
+		t.Errorf("a known rule logged as unknown: %s", log)
+	}
+}
+
+// The live test suites exec into the pods they create with the admin kubeconfig: an operator test
+// run - its own incident, low, flagged - only when the principal is exactly system:admin and the pod
+// name is wholly one of the suites' (ADR 0036 amendment 2026-10-06). Anything else stays high.
+func TestOperatorTestRun(t *testing.T) {
+	f := newFake()
+	exec := func(id string, at time.Time, ref, user, auditID, stage string) siem.Finding {
+		return finding(id, at, "Exec into a sandbox pod not by the API", []string{"sdp_k8s_audit", "attack.t1609"}, map[string]any{
+			"audit.id": auditID, "audit.stage": stage, "audit.verb": "create", "audit.object.resource": "pods",
+			"audit.object.subresource": "exec", "audit.response.code": 101, "k8s.pod.ref": ref, "user.name": user})
+	}
+	attach := func(id string, at time.Time, ref, user, auditID string) siem.Finding {
+		fd := exec(id, at, ref, user, auditID, "ResponseComplete")
+		fd.Documents[0].Document = strings.Replace(fd.Documents[0].Document, `"audit.object.subresource":"exec"`, `"audit.object.subresource":"attach"`, 1)
+		return fd
+	}
+	const admin = "system:admin"
+	sc := "sandbox_sc-network-tool-a1b2c3"
+	f.findings["sdp_k8s_audit"] = []siem.Finding{
+		// The scenario suite: pre_exec and exec into its pod, the first audited at both stages.
+		exec("o-1a", t0, sc, admin, "aud-1", "ResponseStarted"),
+		exec("o-1b", t0, sc, admin, "aud-1", "ResponseComplete"),
+		exec("o-2", t0.Add(time.Second), sc, admin, "aud-2", "ResponseComplete"),
+		// Someone else in the same pod: not a test run.
+		exec("p-1", t0.Add(2*time.Second), sc, "hm1:8899aabbccddeeff", "aud-3", "ResponseComplete"),
+		exec("o-3", t0, "sandbox_rt-iso-ab12c", admin, "aud-4", "ResponseComplete"),
+		attach("o-3b", t0.Add(time.Second), "sandbox_rt-iso-ab12c", admin, "aud-4b"),
+		exec("o-4", t0, "sandbox_rt-shell-x9y8z", admin, "aud-5", "ResponseComplete"),
+		// l3probe is no committed suite's pod (a manual probe): not a test run.
+		exec("n-0", t0, "sandbox_l3probe", admin, "aud-16", "ResponseComplete"),
+		exec("n-9", t0, "sandbox_rt-shell-abcdef", admin, "aud-17", "ResponseComplete"),
+		exec("o-5", t0, "sandbox_sdp-probe-0a1b2c", admin, "aud-6", "ResponseComplete"),
+		exec("o-6", t0, "sandbox-unguarded_sc-terminal-d4e5f6", admin, "aud-7", "ResponseComplete"),
+		// Principals that are not exactly the admin certificate's.
+		exec("n-1", t0, "sandbox_sc-terminal-0a1b2c", "system:admin-x", "aud-8", "ResponseComplete"),
+		exec("n-2", t0, "sandbox_sc-terminal-1a1b2c", "system:administrator", "aud-9", "ResponseComplete"),
+		// Pod names that only contain, extend or bend a suite's.
+		exec("n-3", t0, "sandbox_my-sc-network-tool-a1b2c3", admin, "aud-10", "ResponseComplete"),
+		exec("n-4", t0, "sandbox_l3probe2", admin, "aud-11", "ResponseComplete"),
+		exec("n-5", t0, "sandbox_rt-iso-abcde1", admin, "aud-12", "ResponseComplete"),
+		exec("n-6", t0, "sandbox_sc-network-tool-a1b2c", admin, "aud-13", "ResponseComplete"),
+		exec("n-7", t0, "sandbox_sc-network-tool-a1b2cz", admin, "aud-14", "ResponseComplete"),
+		exec("n-8", t0, "sandbox_xl3probe", admin, "aud-15", "ResponseComplete"),
+	}
+	tr := newTracker(t, f, &clock{t: t0.Add(time.Minute)})
+	tr.Poll(context.Background())
+	v := tr.View()
+	byTitle := map[string]Incident{}
+	for _, inc := range incidentsOf(v, KindExecOutsideAPI) {
+		byTitle[inc.Title] = inc
+	}
+	tests := []string{
+		"Operator test run: exec into sandbox/sc-network-tool-a1b2c3 (2 sessions)",
+		"Operator test run: 2 sessions into sandbox/rt-iso-ab12c",
+		"Operator test run: exec into sandbox/rt-shell-x9y8z",
+		"Operator test run: exec into sandbox/sdp-probe-0a1b2c",
+		"Operator test run: exec into sandbox-unguarded/sc-terminal-d4e5f6",
+	}
+	high := []string{
+		"Exec into sandbox/sc-network-tool-a1b2c3 outside the API",
+		"Exec into sandbox/sc-terminal-0a1b2c outside the API",
+		"Exec into sandbox/sc-terminal-1a1b2c outside the API",
+		"Exec into sandbox/my-sc-network-tool-a1b2c3 outside the API",
+		"Exec into sandbox/l3probe2 outside the API",
+		"Exec into sandbox/rt-iso-abcde1 outside the API",
+		"Exec into sandbox/sc-network-tool-a1b2c outside the API",
+		"Exec into sandbox/sc-network-tool-a1b2cz outside the API",
+		"Exec into sandbox/xl3probe outside the API",
+		"Exec into sandbox/l3probe outside the API",
+		"Exec into sandbox/rt-shell-abcdef outside the API",
+	}
+	if len(byTitle) != len(tests)+len(high) {
+		t.Errorf("%d exec-outside-api incidents, want %d: %v", len(byTitle), len(tests)+len(high), byTitle)
+	}
+	for _, title := range tests {
+		inc, ok := byTitle[title]
+		if !ok || !inc.OperatorTest || inc.Severity != "low" {
+			t.Errorf("%q: %+v", title, inc)
+		}
+	}
+	for _, title := range high {
+		inc, ok := byTitle[title]
+		if !ok || inc.OperatorTest || inc.Severity != "high" {
+			t.Errorf("%q: %+v", title, inc)
+		}
+	}
+	// Both incidents of the shared pod keep their own evidence and id; the test run's is still counted.
+	op, other := byTitle[tests[0]], byTitle[high[0]]
+	if op.ID == other.ID || len(op.Evidence) != 3 || len(other.Evidence) != 1 || other.Evidence[0].ID != "p-1" {
+		t.Errorf("shared pod: %+v / %+v", op, other)
+	}
+	if v.Metrics.Incidents != len(v.Incidents) || len(v.Incidents) != len(tests)+len(high) {
+		t.Errorf("metrics count %d of %d incidents", v.Metrics.Incidents, len(v.Incidents))
+	}
+	b, _ := json.Marshal(v)
+	if strings.Contains(string(b), "system:admin") || !strings.Contains(string(b), `"operator_test":true`) {
+		t.Errorf("published principal or no flag: %s", b)
+	}
+}
+
+// health.evidence_rewritten (ADR 0036 section 7, siem contract F1) reads true while any document of
+// the six streams ingested in the last 24 h carries event.overwrite: true - a document rewritten under
+// an id it already had - and false when none does; a failed count keeps the previous value.
+func TestEvidenceRewrittenFromOverwriteCount(t *testing.T) {
+	f := newFake()
+	now := t0.Add(time.Hour)
+	tr := newTracker(t, f, &clock{t: now})
+	rewritten := func() bool {
+		t.Helper()
+		tr.Poll(context.Background())
+		v := tr.View()
+		if !v.Available {
+			t.Fatal("not available")
+		}
+		return v.Health.EvidenceRewritten
+	}
+	if rewritten() {
+		t.Fatal("rewritten with no overwritten document")
+	}
+	if fmt.Sprint(f.countIdx) != fmt.Sprint(siem.Streams) || f.countQ.TimeField != "event.ingested" ||
+		!f.countQ.Since.Equal(now.Add(-24*time.Hour)) || !f.countQ.Until.Equal(now) {
+		t.Fatalf("count over %v: %+v", f.countIdx, f.countQ)
+	}
+	f.rewrite = 1
+	if !rewritten() {
+		t.Fatal("not rewritten with one overwritten document")
+	}
+	f.countErr = errors.New("count refused")
+	if !rewritten() {
+		t.Fatal("a failed count cleared the alarm")
+	}
+	f.countErr, f.rewrite = nil, 0
+	if rewritten() {
+		t.Fatal("still rewritten once no overwritten document is left in the window")
+	}
+}
+
+// Review L4: an audit document is named only for a pod itself - not a subresource, not another
+// resource - and only for the response engine or the API.
+func TestAuditTitle(t *testing.T) {
+	pod := func(verb, resource, sub, actor string) *record {
+		return &record{source: "k8s-audit", verb: verb, resource: resource, subresource: sub, actor: actor}
+	}
+	for r, want := range map[*record]string{
+		pod("delete", "pods", "", actorTalon):                                                      "Kubernetes audit - pod deleted by the response engine",
+		pod("patch", "pods", "", actorTalon):                                                       "Kubernetes audit - pod labelled by the response engine",
+		pod("create", "pods", "", actorAPI):                                                        "Kubernetes audit - pod created by the API",
+		pod("create", "pods", "eviction", actorTalon):                                              "",
+		pod("patch", "pods", "status", actorTalon):                                                 "",
+		pod("delete", "configmaps", "", actorAPI):                                                  "",
+		pod("delete", "pods", "", actorOther):                                                      "",
+		pod("get", "pods", "", actorAPI):                                                           "",
+		{source: "k8s-audit", findingID: "f", verb: "delete", resource: "pods", actor: actorTalon}: "",
+		{source: "hubble", verb: "delete", resource: "pods", actor: actorTalon}:                    "",
+	} {
+		if got := auditTitle(r); got != want {
+			t.Errorf("%+v: %q, want %q", *r, got, want)
+		}
+	}
+}
+
+// Review M1, the match itself: it is taken over every lookup on the ref, not only those kept as steps.
+// A lookup before the command known not to be this run's flag (read after the run registered) and a
+// lookup after it whose match is unavailable (read before) make "not this run's flag", not
+// "unavailable". Built from records directly: the read order is what decides each flag.
+func TestFlagMatchOverEveryLookup(t *testing.T) {
+	tr := newTracker(t, newFake(), &clock{t: t0})
+	no := false
+	recs := []*record{
+		{key: "finding:pre", findingID: "pre", docID: "d-pre", source: "hubble", at: t0.Add(10 * time.Second), ref: termRef, dns: true, flag: &no, rule: dnsRule},
+		{key: "doc:c4", docID: "c4", source: "api", at: t0.Add(20 * time.Second), ref: termRef, apiAction: "siem.command", state: "started",
+			commandID: "dns-exfil", runID: termRun, seq: 4},
+		{key: "finding:post", findingID: "post", docID: "d-post", source: "hubble", at: t0.Add(21 * time.Second), ref: termRef, dns: true, rule: dnsRule},
+	}
+	incs, _ := tr.build(evidence{records: recs, now: t0.Add(time.Minute)})
+	var dx []Incident
+	for _, inc := range incs {
+		if inc.Kind == KindDNSExfil {
+			dx = append(dx, inc)
+		}
+	}
+	if len(dx) != 1 || dx[0].FlagMatch == nil || *dx[0].FlagMatch || !strings.Contains(dx[0].Title, "not this run's flag") {
+		t.Fatalf("%+v", dx)
+	}
+	// The earlier lookup is not this incident's step: it is not this run's flag.
+	if len(dx[0].Steps) != 2 {
+		t.Fatalf("steps %+v", dx[0].Steps)
+	}
 }

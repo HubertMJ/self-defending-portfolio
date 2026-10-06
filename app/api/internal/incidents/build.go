@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -31,6 +32,8 @@ const (
 	maxEvidence  = 50
 	// maxExtraFindings: more finding ids kept for one document beyond its first.
 	maxExtraFindings = 4
+	// maxStepEvidence: ids one step cites - a document's findings, or a collapsed step's records.
+	maxStepEvidence = 1 + maxExtraFindings
 )
 
 // Windows of the checks.
@@ -358,9 +361,18 @@ func (ix *index) dnsExfil(ref string) *draft {
 		}))
 		return d
 	}
-	d0 := dnsFindings[0]
-	cmd := latest(all, d0.at, func(r *record) bool { return isExfilCmd(r) && !r.at.Before(d0.at.Add(-dnsJoinWindow)) })
-	anchor := d0.at
+	// The anchor is the run's dns-exfil command that a lookup follows within dnsJoinWindow - the one
+	// before the first lookup matching the run's flag, else before the first lookup that follows any
+	// command. The flag match is taken over every lookup on the ref.
+	var cmd, q *record
+	for _, r := range dnsFindings {
+		c := latest(all, r.at, func(x *record) bool { return isExfilCmd(x) && !x.at.Before(r.at.Add(-dnsJoinWindow)) })
+		if c != nil && (q == nil || (r.flag != nil && *r.flag && (q.flag == nil || !*q.flag))) {
+			cmd, q = c, r
+		}
+	}
+	anchor := dnsFindings[0].at
+	lookups := dnsFindings
 	if cmd != nil {
 		anchor = cmd.at
 		if rf := latest(all, cmd.at, func(r *record) bool {
@@ -369,8 +381,16 @@ func (ix *index) dnsExfil(ref string) *draft {
 			d.add(rf)
 		}
 		d.add(cmd)
+		// A lookup before the command is not this incident's - unless it carries the run's flag:
+		// that is never dropped.
+		lookups = nil
+		for _, r := range dnsFindings {
+			if !r.at.Before(cmd.at) || (r.flag != nil && *r.flag) {
+				lookups = append(lookups, r)
+			}
+		}
 	}
-	d.add(dnsFindings...)
+	d.add(lookups...)
 	var match *bool
 	for _, r := range dnsFindings {
 		if r.flag != nil && (match == nil || *r.flag) {
@@ -407,12 +427,14 @@ func (ix *index) dnsExfil(ref string) *draft {
 // execOutsideAPI: audited exec/attach/portforward sessions into a sandbox pod by anyone but the API,
 // one incident per pod with each session a step. A session is audited once per stage
 // (ResponseStarted, then ResponseComplete) under one audit id: the stages are one step, both
-// findings cited.
+// findings cited. Sessions by operatorUser into a pod the test suites create are an operator test
+// run: an incident of their own, low, flagged operator_test; every other session stays high.
 func (ix *index) execOutsideAPI(ref string) []*draft {
-	d := &draft{key: ref, refs: []string{ref}}
-	d.Kind, d.Severity = KindExecOutsideAPI, "high"
-	seen := map[string]bool{}
-	var first *record
+	_, podName, _ := ix.t.splitRef(ref)
+	testPod := operatorPod.MatchString(podName)
+	var out []*draft
+	drafts := map[bool]*draft{}
+	owner := map[string]*draft{} // a session's draft, by audit id
 	for _, r := range ix.on(ref, isFinding("k8s-audit")) {
 		if r.actor == actorAPI || (r.subresource != "exec" && r.subresource != "attach" && r.subresource != "portforward") {
 			continue
@@ -421,27 +443,48 @@ func (ix *index) execOutsideAPI(ref string) []*draft {
 		if key == "" {
 			key = r.subresource + "@" + r.at.Format(time.RFC3339Nano)
 		}
-		if seen[key] {
+		if d := owner[key]; d != nil {
 			d.ev = append(d.ev, evidenceOf(r))
 			continue
 		}
-		seen[key] = true
-		if first == nil {
-			first = r
+		test := testPod && r.operator
+		d := drafts[test]
+		if d == nil {
+			d = &draft{key: ref, refs: []string{ref}}
+			d.Kind, d.Severity = KindExecOutsideAPI, "high"
+			if test {
+				d.key, d.Severity, d.OperatorTest = "operator-test:"+ref, "low", true
+			}
+			drafts[test] = d
+			out = append(out, d)
 		}
+		owner[key] = d
 		d.add(r)
 	}
-	if first == nil {
-		return nil
-	}
 	pod := ix.t.publicRef(ref)
-	if len(d.recs) == 1 {
-		verb := map[string]string{"exec": "Exec into", "attach": "Attach to", "portforward": "Port-forward to"}[first.subresource]
-		d.Title = verb + " " + pod + " outside the API"
-	} else {
-		d.Title = fmt.Sprintf("%d exec/attach/port-forward sessions into %s outside the API", len(d.recs), pod)
+	for _, d := range out {
+		first := d.recs[0] // a draft exists only with a session
+		mixed := false
+		for _, r := range d.recs {
+			mixed = mixed || r.subresource != first.subresource
+		}
+		switch {
+		case d.OperatorTest && mixed:
+			d.Title = fmt.Sprintf("Operator test run: %d sessions into %s", len(d.recs), pod)
+		case d.OperatorTest:
+			verb := map[string]string{"exec": "exec into", "attach": "attach to", "portforward": "port-forward to"}[first.subresource]
+			d.Title = "Operator test run: " + verb + " " + pod
+			if len(d.recs) > 1 {
+				d.Title += fmt.Sprintf(" (%d sessions)", len(d.recs))
+			}
+		case len(d.recs) == 1:
+			verb := map[string]string{"exec": "Exec into", "attach": "Attach to", "portforward": "Port-forward to"}[first.subresource]
+			d.Title = verb + " " + pod + " outside the API"
+		default:
+			d.Title = fmt.Sprintf("%d exec/attach/port-forward sessions into %s outside the API", len(d.recs), pod)
+		}
 	}
-	return []*draft{d}
+	return out
 }
 
 // stagedAttack: in one run, a recon step, then a credentials step, then an exfiltration attempt, by
@@ -653,15 +696,32 @@ func (ix *index) finish(d *draft) Incident {
 	}
 
 	var findings []string
+	// Records that are the same evidence - same source, rule, pod, command and kind (the published
+	// detail without the traffic direction: a Hubble DNS lookup's request and response, seen as trace
+	// and L7 events) - are one step with a count, at the earliest record's time, citing at most
+	// maxStepEvidence ids. Groups keep the order of their first record.
+	type group struct {
+		seq  int
+		recs []*record
+	}
+	var groups []*group
+	byKey := map[string]*group{}
 	for _, r := range d.recs {
-		st := Step{At: r.at, Source: r.source, Rule: clean(r.rule, maxRule), Detail: clean(ix.t.detail(r), maxDetail)}
-		if r.rule != "" {
-			st.RuleID = ix.t.cfg.Rules.RuleID(r.rule)
+		seq := ix.commandSeq(r)
+		kind := *r
+		kind.direction = ""
+		if r.dns {
+			// A lookup's response goes to the client's ephemeral port, its query to 53.
+			kind.port = 0
 		}
-		if seq := ix.commandSeq(r); seq > 0 {
-			st.CommandSeq = &seq
+		k := strings.Join([]string{r.source, r.rule, r.ref, strconv.Itoa(seq), ix.t.detail(&kind)}, "\x00")
+		g := byKey[k]
+		if g == nil {
+			g = &group{seq: seq}
+			byKey[k] = g
+			groups = append(groups, g)
 		}
-		inc.Steps = append(inc.Steps, st)
+		g.recs = append(g.recs, r)
 		for _, a := range r.attack {
 			inc.Attack = appendUnique(inc.Attack, a)
 		}
@@ -672,18 +732,62 @@ func (ix *index) finish(d *draft) Incident {
 			findings = append(findings, r.findingID)
 		}
 		findings = append(findings, r.extraFindings...)
-		inc.Evidence = append(inc.Evidence, evidenceOf(r))
-		for _, id := range r.extraFindings {
-			inc.Evidence = append(inc.Evidence, Evidence{Type: "finding", ID: id})
-		}
 		if r.source == "falco" && d.Kind != KindDNSExfil {
 			inc.FalcoEvents++
 		}
 	}
+	// last: the latest record of a step, for last_at.
+	type timedStep struct {
+		Step
+		last time.Time
+	}
+	var steps []timedStep
+	for _, g := range groups {
+		sort.SliceStable(g.recs, func(i, j int) bool { return g.recs[i].at.Before(g.recs[j].at) })
+		r0 := g.recs[0]
+		shown := *r0
+		var dirs []string
+		var ev []Evidence
+		for _, r := range g.recs {
+			if r.direction != "" {
+				dirs = appendUnique(dirs, strings.ToLower(r.direction))
+			}
+			if r.dns && r.port == 53 {
+				shown.port = 53 // a lookup reads as its query's port
+			}
+			ev = append(ev, evidenceOf(r))
+			for _, id := range r.extraFindings {
+				ev = append(ev, Evidence{Type: "finding", ID: id})
+			}
+		}
+		if len(dirs) > 1 {
+			sort.Strings(dirs)
+			shown.direction = strings.Join(dirs, "+")
+		}
+		st := Step{At: r0.at, Source: r0.source, Rule: clean(r0.rule, maxRule), Detail: clean(ix.t.detail(&shown), maxDetail)}
+		if st.Rule == "" {
+			st.Rule = auditTitle(r0)
+		}
+		if r0.rule != "" {
+			st.RuleID = ix.t.cfg.Rules.RuleID(r0.rule)
+		}
+		if g.seq > 0 {
+			seq := g.seq
+			st.CommandSeq = &seq
+		}
+		if len(g.recs) > 1 {
+			st.Count = len(g.recs)
+		}
+		if len(ev) > maxStepEvidence {
+			ev = ev[:maxStepEvidence]
+		}
+		inc.Evidence = append(inc.Evidence, ev...)
+		steps = append(steps, timedStep{st, g.recs[len(g.recs)-1].at})
+	}
 	for _, st := range d.extra {
 		st.Rule = clean(st.Rule, maxRule)
 		st.Detail = clean(st.Detail, maxDetail)
-		inc.Steps = append(inc.Steps, st)
+		steps = append(steps, timedStep{st, st.At})
 	}
 	inc.Evidence = append(inc.Evidence, d.ev...)
 	for _, e := range d.ev {
@@ -707,16 +811,17 @@ func (ix *index) finish(d *draft) Incident {
 	if len(inc.Evidence) > maxEvidence {
 		inc.Evidence = inc.Evidence[:maxEvidence]
 	}
-	sort.SliceStable(inc.Steps, func(i, j int) bool { return inc.Steps[i].At.Before(inc.Steps[j].At) })
-	if len(inc.Steps) > maxSteps {
-		inc.Steps = inc.Steps[:maxSteps]
+	sort.SliceStable(steps, func(i, j int) bool { return steps[i].At.Before(steps[j].At) })
+	if len(steps) > maxSteps {
+		steps = steps[:maxSteps]
 	}
-	if len(inc.Steps) > 0 {
-		inc.FirstAt, inc.LastAt = inc.Steps[0].At, inc.Steps[0].At
-		for _, st := range inc.Steps {
-			if st.At.After(inc.LastAt) {
-				inc.LastAt = st.At
-			}
+	if len(steps) > 0 {
+		inc.FirstAt, inc.LastAt = steps[0].At, steps[0].At
+	}
+	for _, st := range steps {
+		inc.Steps = append(inc.Steps, st.Step)
+		if st.last.After(inc.LastAt) {
+			inc.LastAt = st.last
 		}
 	}
 	return inc

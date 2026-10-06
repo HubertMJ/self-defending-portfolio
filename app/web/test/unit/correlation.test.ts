@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Result } from "../../src/lib/api";
-import { type Correlation, MAX_INCIDENTS, MAX_STEPS, type RuleIndex, parseCorrelation, parseRuleIndex, publishable } from "../../src/lib/contract";
+import { type Correlation, MAX_INCIDENTS, MAX_STEPS, MAX_STEP_COUNT, type RuleIndex, parseCorrelation, parseRuleIndex, publishable } from "../../src/lib/contract";
 import { RULE_INDEX, correlation as fixtureCorrelation, shiftTimes } from "../../src/lib/fixtures";
 import { BOARD_INCIDENTS, POLL_404_MS, POLL_MS, coverage, kindLabel, mountCorrelation, percentile, renderBoard, renderHealth, renderIncident, renderMetrics, renderRuleLibrary } from "../../src/ui/correlation";
 import { CORRELATION_PATHS, renderVerifyPanel } from "../../src/ui/verify";
@@ -223,6 +223,63 @@ describe("parseCorrelation", () => {
   });
 });
 
+describe("a step's count (ADR 0036 amendment 2026-10-06)", () => {
+  const step = (count: unknown) => ({ at: at(1), source: "hubble", rule: "Hubble - flag-shaped DNS lookup", rule_id: "", command_seq: 3, detail: "DNS query under the exfil zone from sandbox/terminal-7e57000001, FORWARDED egress+ingress udp/53", count });
+  const parsed = (count: unknown) => parseCorrelation(answer({ incidents: [incident({ steps: [step(count)] })] })).incidents[0].steps[0].count;
+
+  it("keeps an integer from 1 to MAX_STEP_COUNT, ignores anything else", () => {
+    for (const ok of [1, 2, 12, MAX_STEP_COUNT]) expect(parsed(ok), String(ok)).toBe(ok);
+    for (const bad of [0, -1, 1.5, MAX_STEP_COUNT + 1, Number.NaN, Number.POSITIVE_INFINITY, "12", null, true, [12], { n: 12 }]) expect(parsed(bad), String(bad)).toBeUndefined();
+    expect(parseCorrelation(answer()).incidents[0].steps.every((s) => !("count" in s))).toBe(true);
+  });
+});
+
+describe("operator test runs (ADR 0036 amendment 2026-10-06)", () => {
+  const ctx = (c: Correlation) => ({ now: NOW, rules: new Map(index().rules.map((r) => [r.id, r])), commit: COMMIT, c });
+  const execStep = (sAgo: number, count?: number) => ({ at: at(sAgo), source: "k8s-audit", rule: "Exec into a sandbox pod not by the API", rule_id: "", command_seq: null, detail: "create pods/exec on sandbox/sc-network-tool-0a1b2c not by the API, response 101", ...(count ? { count } : {}) });
+  const op = (id: string, sAgo: number, count?: number, over: Record<string, unknown> = {}) =>
+    incident({ id, kind: "exec-outside-api", severity: "low", title: `Operator test run: exec into sandbox/sc-network-tool-${id.slice(-6)}`, first_at: at(sAgo), last_at: at(sAgo), operator_test: true, steps: [execStep(sAgo, count)], ...over });
+
+  it("the flag is read only as a literal true on an exec-outside-api incident", () => {
+    const flag = (over: Record<string, unknown>) => parseCorrelation(answer({ incidents: [op("0b5e7a10c0ffee01", 10, undefined, over)] })).incidents[0].operator_test;
+    expect(flag({})).toBe(true);
+    for (const bad of ["true", 1, null, false, {}, [true]]) expect(flag({ operator_test: bad }), String(bad)).toBe(false);
+    expect(flag({ operator_test: undefined })).toBe(false);
+    expect(flag({ kind: "dns-exfil" })).toBe(false);
+    expect(parseCorrelation(answer()).incidents[0].operator_test).toBe(false);
+  });
+
+  it("folds them into one line that counts their sessions and opens to list them; the rest of the board is as before", () => {
+    const c = parseCorrelation(answer({ incidents: [op("0b5e7a10c0ffee01", 5, 2), incident({ id: "d15e0f17a1b2c3d4", kind: "dns-exfil", first_at: at(60), last_at: at(59) }), incident(), op("0b5e7a10c0ffee02", 900)] }));
+    const board = renderBoard(c, ctx(c));
+    expect([...board.querySelectorAll(".incident")].map((e) => e.getAttribute("data-incident"))).toEqual(["d15e0f17a1b2c3d4", "c0a1b2c3d4e5f607"]);
+    const fold = board.querySelector<HTMLDetailsElement>("details.corr-optests");
+    expect(fold?.open).toBe(false);
+    expect(fold?.querySelector("summary")?.textContent).toBe("3 operator test-suite execs in the last 24 h");
+    expect([...(fold?.querySelectorAll("li[data-incident]") ?? [])].map((e) => e.getAttribute("data-incident"))).toEqual(["0b5e7a10c0ffee01", "0b5e7a10c0ffee02"]);
+    expect(fold?.textContent).toContain("Operator test run: exec into sandbox/sc-network-tool-ffee01");
+    // Still counted with the board's incidents.
+    expect(board.querySelector(".panel-title")?.textContent).toBe("Incidents, newest first (4 in the last 24 h)");
+    expect(board.querySelector(".corr-older")).toBeNull();
+  });
+
+  it("one session reads singular; a board of test runs only says so and still lists them", () => {
+    const c = parseCorrelation(answer({ incidents: [op("0b5e7a10c0ffee01", 5)] }));
+    const board = renderBoard(c, ctx(c));
+    expect(board.querySelector(".corr-optests summary")?.textContent).toBe("1 operator test-suite exec in the last 24 h");
+    expect(board.querySelectorAll(".incident")).toHaveLength(0);
+    expect(board.querySelector(".empty")?.textContent).toContain("besides the operator's own test runs");
+    expect(board.querySelectorAll(".corr-optests li")).toHaveLength(1);
+  });
+
+  it("a board without test runs has no fold", () => {
+    const c = parseCorrelation(answer({ incidents: [op("0b5e7a10c0ffee01", 5, undefined, { operator_test: "true" })] }));
+    const board = renderBoard(c, ctx(c));
+    expect(board.querySelector(".corr-optests")).toBeNull();
+    expect(board.querySelectorAll(".incident")).toHaveLength(1);
+  });
+});
+
 describe("parseRuleIndex", () => {
   it("keeps valid rules only, links only repository paths", () => {
     const idx = parseRuleIndex({
@@ -329,6 +386,21 @@ describe("the section's parts", () => {
     expect(el.querySelector("img")).toBeNull();
     expect(el.querySelector(".incident__title")?.textContent).toBe(evil);
     expect(el.querySelector(".corr-step__detail")?.textContent).toBe(` · ${evil}`);
+  });
+
+  it("a counted step reads ×N after its rule; a count of one, or none, shows nothing", () => {
+    const steps = [
+      { at: at(3), source: "hubble", rule: "Hubble - flag-shaped DNS lookup", rule_id: "", command_seq: 3, detail: "FORWARDED egress+ingress udp/53", count: 12 },
+      { at: at(2), source: "falco", rule: "Credential file read", rule_id: "", command_seq: null, detail: "cat", count: 1 },
+      { at: at(1), source: "k8s-audit", rule: "", rule_id: "", command_seq: null, detail: "create pods/exec on sandbox/terminal-7e57000001 not by the API, response 101", count: 2 },
+    ];
+    const c = parseCorrelation(answer({ incidents: [incident({ steps })] }));
+    const items = [...renderIncident(c.incidents[0], ctx(c)).querySelectorAll(".corr-step")];
+    expect(items.map((li) => li.querySelector(".corr-step__count")?.textContent ?? null)).toEqual(["×12", null, "×2"]);
+    expect(items[0].querySelector(".corr-step__count")?.getAttribute("title")).toBe("12 records of the same evidence");
+    expect(items[0].textContent).toContain("Hubble - flag-shaped DNS lookup ×12 · command 3 · FORWARDED");
+    // Without a rule the count leads, and the detail is still set apart.
+    expect(items[2].textContent).toMatch(/audit ×2 · create pods\/exec/);
   });
 
   it("a withheld detail says so, a withheld title falls back to the kind", () => {
@@ -579,6 +651,29 @@ describe("mountCorrelation", () => {
     expect(section.querySelector(".incident")).toBe(incident);
     expect(section.querySelector('.corr-lag__ms[data-source="falco"]')).toBe(falco);
     expect(falco?.textContent).toBe("2.5 s");
+  });
+
+  it("a step's count moving between polls is rewritten in place; a count appearing redraws", async () => {
+    vi.useFakeTimers();
+    const counted = (count?: number) =>
+      ok({ incidents: [incident({ steps: [{ at: at(600), source: "hubble", rule: "Hubble - flag-shaped DNS lookup", rule_id: "", command_seq: 3, detail: "FORWARDED egress udp/53", ...(count === undefined ? {} : { count }) }] })] });
+    const { section } = setup([counted(12), counted(14), counted(), counted(2)]);
+    await vi.advanceTimersByTimeAsync(0);
+    const incident0 = section.querySelector(".incident");
+    const count = section.querySelector(".corr-step__count");
+    expect(count?.textContent).toBe("×12");
+    await vi.advanceTimersByTimeAsync(POLL_MS);
+    expect(section.querySelector(".incident")).toBe(incident0);
+    expect(section.querySelector(".corr-step__count")).toBe(count);
+    expect(count?.textContent).toBe("×14");
+    expect(count?.getAttribute("title")).toBe("14 records of the same evidence");
+    await vi.advanceTimersByTimeAsync(POLL_MS);
+    expect(section.querySelector(".incident")).not.toBe(incident0);
+    expect(section.querySelector(".corr-step__count")).toBeNull();
+    const incident2 = section.querySelector(".incident");
+    await vi.advanceTimersByTimeAsync(POLL_MS);
+    expect(section.querySelector(".incident")).not.toBe(incident2);
+    expect(section.querySelector(".corr-step__count")?.textContent).toBe("×2");
   });
 
   it("an ingest lag crossing zero (clock skew) keeps its row and redraws nothing: an open <details> stays open", async () => {

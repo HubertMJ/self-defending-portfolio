@@ -52,7 +52,7 @@ func TestCorrelationShape(t *testing.T) {
 		Metrics: incidents.MetricsView{Since: &at, Incidents: 1, MedianTTDMs: &ttd, IngestLagMs: map[string]*int64{"falco": &ttd, "api": nil}},
 		Incidents: []incidents.Incident{{ID: "5f0c3d2a9b7e4c11", Kind: "dns-exfil", Severity: "critical", Title: "x", RunID: "3755e65530aa11bb",
 			FirstAt: at, LastAt: at, Attack: []string{"T1048.003"}, FlagMatch: &yes, TTDMs: &ttd,
-			Steps:    []incidents.Step{{At: at, Source: "api", CommandSeq: &seq, Detail: "command dns-exfil started"}},
+			Steps:    []incidents.Step{{At: at, Source: "api", CommandSeq: &seq, Detail: "command dns-exfil started", Count: 2}},
 			Evidence: []incidents.Evidence{{Type: "finding", ID: "f1"}}}}}
 	ts := httptest.NewServer(New(Config{Correlation: stubCorrelation{v}}).Public())
 	defer ts.Close()
@@ -72,17 +72,18 @@ func TestCorrelationShape(t *testing.T) {
 		"metrics.median_twin_dwell_ms": "null", "metrics.host_findings": "number", "metrics.ingest_lag_ms": "object", "metrics.ingest_lag_ms.falco": "number", "metrics.ingest_lag_ms.api": "null", "incidents": "array",
 		"incidents.[].id": "string", "incidents.[].kind": "string", "incidents.[].severity": "string", "incidents.[].title": "string",
 		"incidents.[].run_id": "string", "incidents.[].arm": "string", "incidents.[].first_at": "string", "incidents.[].last_at": "string",
-		"incidents.[].attack": "array", "incidents.[].falco_events": "number", "incidents.[].flag_match": "bool",
+		"incidents.[].attack": "array", "incidents.[].falco_events": "number", "incidents.[].flag_match": "bool", "incidents.[].operator_test": "bool",
 		"incidents.[].ttd_ms": "number", "incidents.[].tti_ms": "null", "incidents.[].steps": "array", "incidents.[].evidence": "array",
 		"incidents.[].steps.[].at": "string", "incidents.[].steps.[].source": "string", "incidents.[].steps.[].rule": "string",
 		"incidents.[].steps.[].rule_id": "string", "incidents.[].steps.[].command_seq": "number", "incidents.[].steps.[].detail": "string",
+		"incidents.[].steps.[].count":   "number",
 		"incidents.[].evidence.[].type": "string", "incidents.[].evidence.[].id": "string",
 	})
 	// Nothing beyond the contract's fields.
 	var doc map[string]any
 	_ = json.Unmarshal([]byte(raw), &doc)
 	inc := doc["incidents"].([]any)[0].(map[string]any)
-	if len(doc) != 6 || len(inc) != 15 || len(inc["steps"].([]any)[0].(map[string]any)) != 6 {
+	if len(doc) != 6 || len(inc) != 16 || len(inc["steps"].([]any)[0].(map[string]any)) != 7 {
 		t.Fatalf("unexpected fields: %d top, %d incident, step %v", len(doc), len(inc), inc["steps"])
 	}
 }

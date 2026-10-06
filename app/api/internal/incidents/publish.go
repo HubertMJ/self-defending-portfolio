@@ -50,24 +50,27 @@ type MetricsView struct {
 
 // Incident is one assembled incident; FlagMatch is set for dns-exfil only.
 type Incident struct {
-	ID          string     `json:"id"`
-	Kind        string     `json:"kind"`
-	Severity    string     `json:"severity"`
-	Title       string     `json:"title"`
-	RunID       string     `json:"run_id"`
-	Arm         string     `json:"arm"`
-	FirstAt     time.Time  `json:"first_at"`
-	LastAt      time.Time  `json:"last_at"`
-	Attack      []string   `json:"attack"`
-	FalcoEvents int        `json:"falco_events"`
-	FlagMatch   *bool      `json:"flag_match"`
-	TTDMs       *int64     `json:"ttd_ms"`
-	TTIMs       *int64     `json:"tti_ms"`
-	Steps       []Step     `json:"steps"`
-	Evidence    []Evidence `json:"evidence"`
+	ID          string    `json:"id"`
+	Kind        string    `json:"kind"`
+	Severity    string    `json:"severity"`
+	Title       string    `json:"title"`
+	RunID       string    `json:"run_id"`
+	Arm         string    `json:"arm"`
+	FirstAt     time.Time `json:"first_at"`
+	LastAt      time.Time `json:"last_at"`
+	Attack      []string  `json:"attack"`
+	FalcoEvents int       `json:"falco_events"`
+	FlagMatch   *bool     `json:"flag_match"`
+	// OperatorTest: an exec-outside-api incident of the live test suites (ADR 0036 amendment 2026-10-06).
+	OperatorTest bool       `json:"operator_test"`
+	TTDMs        *int64     `json:"ttd_ms"`
+	TTIMs        *int64     `json:"tti_ms"`
+	Steps        []Step     `json:"steps"`
+	Evidence     []Evidence `json:"evidence"`
 }
 
-// Step is one piece of an incident's evidence in time order.
+// Step is one piece of an incident's evidence in time order. Count is the number of records that are
+// the same evidence (ADR 0036 section 4), omitted for one.
 type Step struct {
 	At         time.Time `json:"at"`
 	Source     string    `json:"source"`
@@ -75,6 +78,7 @@ type Step struct {
 	RuleID     string    `json:"rule_id"`
 	CommandSeq *int      `json:"command_seq"`
 	Detail     string    `json:"detail"`
+	Count      int       `json:"count,omitempty"`
 }
 
 // Evidence is an id in the SIEM an incident is built from.
@@ -170,6 +174,20 @@ func (t *Tracker) detail(r *record) string {
 		return "run " + r.state + " on " + pod
 	}
 	return ""
+}
+
+// auditTitle names an audit document no rule fired on - Talon's response, the twin's create and
+// delete - so its step does not read as a bare detail; "" for anything else.
+func auditTitle(r *record) string {
+	if r.source != "k8s-audit" || r.findingID != "" || r.resource != "pods" || r.subresource != "" {
+		return ""
+	}
+	what := map[string]string{"patch": "pod labelled", "delete": "pod deleted", "create": "pod created"}[r.verb]
+	by := map[string]string{actorTalon: "the response engine", actorAPI: "the API"}[r.actor]
+	if what == "" || by == "" {
+		return ""
+	}
+	return "Kubernetes audit - " + what + " by " + by
 }
 
 func msPtr(d time.Duration) *int64 {

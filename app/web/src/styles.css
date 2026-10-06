@@ -4061,6 +4061,13 @@ html[data-terminal="off"] .needs-terminal {
   font-size: 0.78rem;
 }
 
+.corr-step__count {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  white-space: nowrap;
+}
+
 .corr-step__detail {
   color: var(--text-muted);
 }
@@ -4093,11 +4100,13 @@ html[data-terminal="off"] .needs-terminal {
   margin: 0.7rem 0 0;
 }
 
-.corr-older {
+.corr-older,
+.corr-optests {
   margin-top: 1rem;
 }
 
 .corr-older summary,
+.corr-optests summary,
 .corr-rulelist summary {
   cursor: pointer;
   font-weight: 600;

@@ -22,16 +22,17 @@ import (
 var t0 = time.Date(2026, 10, 4, 10, 0, 0, 0, time.UTC)
 
 const (
-	termRun   = "3755e65530aa11bb"
-	termRef   = "sandbox_terminal-3755e65530"
-	flagHex   = "0123456789abcdef"
-	otherHex  = "fedcba9876543210"
-	cmpRun    = "a1b2c3d4e5f60718"
-	cmpRef    = "sandbox_shell-in-container-a1b2c3d4e5"
-	twinRef   = "sandbox-unguarded_shell-in-container-a1b2c3d4e5-u"
-	quarRun   = "b2c3d4e5f6071829"
-	quarRef   = "sandbox_network-tool-b2c3d4e5f6"
-	dnsRuleID = "9c41d2e7-8b3a-4f60-a1c5-0e7d6b2f9a48"
+	termRun  = "3755e65530aa11bb"
+	termRef  = "sandbox_terminal-3755e65530"
+	flagHex  = "0123456789abcdef"
+	otherHex = "fedcba9876543210"
+	cmpRun   = "a1b2c3d4e5f60718"
+	cmpRef   = "sandbox_shell-in-container-a1b2c3d4e5"
+	twinRef  = "sandbox-unguarded_shell-in-container-a1b2c3d4e5-u"
+	quarRun  = "b2c3d4e5f6071829"
+	quarRef  = "sandbox_network-tool-b2c3d4e5f6"
+	// dnsRule: siem/rules/hubble-dns-exfil.yml's title, the one rule whose finding is a DNS lookup.
+	dnsRule = "Hubble - flag-shaped DNS lookup"
 )
 
 // fakeSource answers like the SIEM: findings by detection time, hits by event.ingested, each list cut
@@ -44,6 +45,10 @@ type fakeSource struct {
 	hits     map[string][]siem.Hit
 	sync     []siem.Hit
 	rewrite  int
+	// countQ: the last count request (size 0); countErr fails it alone.
+	countIdx []string
+	countQ   siem.Query
+	countErr error
 	fail     error
 	calls    []call
 }
@@ -126,6 +131,14 @@ func (f *fakeSource) Search(_ context.Context, indices []string, q siem.Query) (
 		return siem.SearchResult{Total: len(out), Hits: out}, nil
 	}
 	if q.Size == 0 {
+		f.countIdx, f.countQ = indices, q
+		if f.countErr != nil {
+			return siem.SearchResult{}, f.countErr
+		}
+		// The SIEM counts what the query asks for: without the overwrite filter, every document.
+		if len(q.Filters) != 1 || fmt.Sprint(q.Filters[0]) != fmt.Sprint(map[string]any{"term": map[string]any{"event.overwrite": true}}) {
+			return siem.SearchResult{Total: 1000}, nil
+		}
 		return siem.SearchResult{Total: f.rewrite}, nil
 	}
 	var out []siem.Hit
@@ -251,8 +264,9 @@ func talonFinding(id string, at time.Time, ref, action, actionner string) siem.F
 }
 
 func dnsFinding(id string, at time.Time, ref, label string) siem.Finding {
-	return finding(id, at, "DNS query carries an exfil label", []string{"sdp_hubble", "attack.t1048.003", "attack.t1071.004"}, map[string]any{
+	return finding(id, at, dnsRule, []string{"sdp_hubble", "attack.t1048.003", "attack.t1071.004"}, map[string]any{
 		"dns.query": label + ".x.exfil.sdp.test.", "dns.rcode": 3, "hubble.verdict": "FORWARDED", "hubble.traffic_direction": "EGRESS",
+		"hubble.event_type": 129, "hubble.l7.type": "REQUEST",
 		"hubble.l4.protocol": "udp", "hubble.l4.destination_port": 53, "k8s.pod.ref": ref})
 }
 

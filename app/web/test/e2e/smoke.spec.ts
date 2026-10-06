@@ -1137,7 +1137,19 @@ test.describe("correlation (ADR 0036; serve.mjs --terminal-api --siem / --no-sie
     await expect(contained.locator(".incident__evidence")).toContainText("correlation contained-intrusion");
     await expect(contained.locator(".incident__evidence")).toContainText("document aB3dE5fG7hJ9kL1mN3pQ");
     // Nine valid incidents: six in full, the older three one line each; the two malformed ones are dropped.
-    await expect(s.locator(".corr-older__item")).toHaveCount(3);
+    await expect(s.locator(".corr-older .corr-older__item")).toHaveCount(3);
+    // The live test suites' two exec incidents (three sessions), the newest of the board among them, are
+    // folded into one line, closed, and listed when it is opened (ADR 0036 amendment 2026-10-06).
+    const optests = s.locator("details.corr-optests");
+    await expect(optests.locator("summary")).toHaveText("3 operator test-suite execs in the last 24 h");
+    await expect(s.locator('.incident[data-incident^="0b5e7a10c0ffee"]')).toHaveCount(0);
+    // The leaky exec incident is no test run: it stays on the board in full.
+    await expect(s.locator('.incident[data-kind="exec-outside-api"]')).toHaveCount(1);
+    await expect(optests.locator('[data-incident="0b5e7a10c0ffee01"]')).toBeHidden();
+    await optests.locator("summary").click();
+    await expect(optests.locator(".corr-older__item")).toHaveCount(2);
+    await expect(optests.locator('[data-incident="0b5e7a10c0ffee01"]')).toContainText("Operator test run: exec into sandbox/sc-network-tool-0a1b2c (2 sessions)");
+    await expect(optests.locator('[data-incident="0b5e7a10c0ffee02"]')).toBeVisible();
 
     // What the page withholds although the API sent it (ADR 0021): the title and two details of the leaky incident.
     const leaky = s.locator('[data-incident="e8ec0a7e1de0b0b0"]');

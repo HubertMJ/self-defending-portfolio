@@ -16,7 +16,7 @@
   },
   "metrics": {
    "since": "2026-10-03T12:00:00.000Z",
-   "incidents": 8,
+   "incidents": 10,
    "median_ttd_ms": 840,
    "median_tti_ms": 212,
    "median_twin_dwell_ms": 61000,
@@ -83,6 +83,41 @@
      {
       "type": "document",
       "id": "Zx3kQ5gBf2mP0aL1rT9e"
+     }
+    ]
+   },
+   {
+    "id": "0b5e7a10c0ffee01",
+    "kind": "exec-outside-api",
+    "severity": "low",
+    "title": "Operator test run: exec into sandbox/sc-network-tool-0a1b2c (2 sessions)",
+    "run_id": "",
+    "arm": "",
+    "first_at": "2026-10-04T11:55:00.000Z",
+    "last_at": "2026-10-04T11:55:04.000Z",
+    "attack": [
+     "T1609"
+    ],
+    "falco_events": 0,
+    "flag_match": null,
+    "operator_test": true,
+    "ttd_ms": null,
+    "tti_ms": null,
+    "steps": [
+     {
+      "at": "2026-10-04T11:55:00.000Z",
+      "source": "k8s-audit",
+      "rule": "Exec into a sandbox pod not by the API",
+      "rule_id": "",
+      "command_seq": null,
+      "detail": "create pods/exec on sandbox/sc-network-tool-0a1b2c not by the API, response 101",
+      "count": 2
+     }
+    ],
+    "evidence": [
+     {
+      "type": "finding",
+      "id": "0b5e7a10-ee01"
      }
     ]
    },
@@ -412,6 +447,40 @@
      {
       "type": "finding",
       "id": "4f9a1b32-7c6d-4e5f-a041-3c2d1e0f9a8b"
+     }
+    ]
+   },
+   {
+    "id": "0b5e7a10c0ffee02",
+    "kind": "exec-outside-api",
+    "severity": "low",
+    "title": "Operator test run: exec into sandbox/rt-iso-ab12c",
+    "run_id": "",
+    "arm": "",
+    "first_at": "2026-10-03T21:00:00.000Z",
+    "last_at": "2026-10-03T21:00:00.000Z",
+    "attack": [
+     "T1609"
+    ],
+    "falco_events": 0,
+    "flag_match": null,
+    "operator_test": true,
+    "ttd_ms": null,
+    "tti_ms": null,
+    "steps": [
+     {
+      "at": "2026-10-03T21:00:00.000Z",
+      "source": "k8s-audit",
+      "rule": "Exec into a sandbox pod not by the API",
+      "rule_id": "",
+      "command_seq": null,
+      "detail": "create pods/exec on sandbox/rt-iso-ab12c not by the API, response 101"
+     }
+    ],
+    "evidence": [
+     {
+      "type": "finding",
+      "id": "0b5e7a10-ee02"
      }
     ]
    }
