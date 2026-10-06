@@ -14,7 +14,9 @@ opensearch_dashboards_apt_repo_url: https://artifacts.opensearch.org/releases/bu
 opensearch_cluster_name: sdp-siem
 opensearch_node_name: "{{ inventory_hostname_short }}"
 opensearch_node_ip: "{{ siem_node_ip }}"
-opensearch_heap: 3g
+opensearch_heap: 4g
+# Memory the heap assertion measures against (tests/smoke.sh sets siem01's).
+opensearch_host_memory_mb: "{{ ansible_facts['memtotal_mb'] }}"
 
 # Hourly snapshots go to the data disk siem_disk mounts here (path.repo).
 opensearch_snapshot_path: /var/lib/opensearch-snapshots

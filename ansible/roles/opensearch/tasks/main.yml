@@ -78,17 +78,53 @@
       logger.sdp_audit.additivity = false
   notify: Restart opensearch
 
-- name: Size the heap
+# ADR 0034 amendment of 2026-10-06. Measured on siem01 with a 3 GB heap: the JVM's RSS is ~0.9 GB
+# above its heap, Dashboards ~0.25 GB, Fluent Bit and the sync are capped at 192 and 512 MB, and
+# there is no swap. 3 GB beside the heap keep the JVM's direct memory (1 GB, below), the rest and
+# some page cache for Lucene.
+- name: Assert the heap leaves 3 GB of the host's memory to everything else
+  ansible.builtin.assert:
+    that:
+      - opensearch_heap | human_to_bytes + 3 * 1024 ** 3 <= (opensearch_host_memory_mb | int) * 1024 ** 2
+    fail_msg: >-
+      A heap of {{ opensearch_heap }} leaves less than 3 GB of {{ opensearch_host_memory_mb }} MB to the JVM's own
+      memory, Dashboards, the shippers and the page cache; the host has no swap.
+    success_msg: A heap of {{ opensearch_heap }} leaves 3 GB or more of {{ opensearch_host_memory_mb }} MB.
+  tags: [opensearch_service]
+
+# The JVM reads jvm.options, then jvm.options.d/*.options, and the last occurrence of an option wins.
+# The package's own heap (-Xms1g/-Xmx1g) and heap dump lines are commented out so sdp-heap.options
+# holds the only setting of each.
+- name: Leave the heap and heap dumps to sdp-heap.options
+  ansible.builtin.replace:
+    path: /etc/opensearch/jvm.options
+    regexp: '^(-Xm[sx]\S*|-XX:\+HeapDumpOnOutOfMemoryError)[ \t]*$'
+    replace: '## sdp (Ansible, role opensearch): set in jvm.options.d/sdp-heap.options: \1'
+  notify: Restart opensearch
+  tags: [opensearch_service]
+
+# ExitOnOutOfMemoryError: the first OutOfMemoryError ends the JVM (exit 3) and systemd restarts it
+# (sdp-restart.conf) instead of a node that may limp on with dead threads. No heap dump: a dump is
+# the whole heap (~heap size on /var/lib/opensearch per crash, 4.35 GB on 2026-10-06) and holds
+# whatever the heap held - documents, request bodies, key material - in a file outside every
+# OpenSearch permission. Direct memory is capped at 1 GB (OpenSearch's own choice would be half the
+# heap; it adds none when the option is set), so the JVM stays near 5.5 GB at a 4 GB heap.
+- name: Size the heap and direct memory, exit on OutOfMemoryError, no heap dump
   ansible.builtin.copy:
     dest: /etc/opensearch/jvm.options.d/sdp-heap.options
     content: |
-      # Managed by Ansible (role: opensearch). ADR 0034: 3 GB of the VM's 8 GB.
+      # Managed by Ansible (role: opensearch). ADR 0034 amendment of 2026-10-06: 4 GB of the VM's 8 GB,
+      # the only heap setting (the package's lines in jvm.options are commented out).
       -Xms{{ opensearch_heap }}
       -Xmx{{ opensearch_heap }}
+      -XX:+ExitOnOutOfMemoryError
+      -XX:-HeapDumpOnOutOfMemoryError
+      -XX:MaxDirectMemorySize=1g
     owner: root
     group: opensearch
     mode: "0640"
   notify: Restart opensearch
+  tags: [opensearch_service]
 
 # ADR 0034: Performance Analyzer is off. Its agent unit ships disabled and stays masked; the plugin
 # itself is switched off over REST below (its files stay, so the watched plugins directory remains
@@ -99,11 +135,47 @@
     enabled: false
     masked: true
 
+# ADR 0034 amendment of 2026-10-06: the package's unit never restarts, so the OOM exit of 2026-10-06
+# left the node down. After a failure it restarts 30 s later, the delay growing over six restarts to
+# an hour, and it never gives up (StartLimitIntervalSec=0; RestartSteps needs systemd >= 254, Debian
+# 13 has 257). The package's TimeoutStartSec=75 stays: OpenSearch's systemd module extends it by 30 s
+# every 15 s once it loads, and a start took 14 s. The drop-in takes effect with the daemon-reload
+# below, without a restart of the node. The tag opensearch_service runs the JVM options and the unit
+# on their own (tests/smoke.sh).
+- name: Create the unit's drop-in directory
+  ansible.builtin.file:
+    path: /etc/systemd/system/opensearch.service.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  tags: [opensearch_service]
+
+- name: Restart OpenSearch after a failure, backing off to an hour, never giving up
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/opensearch.service.d/sdp-restart.conf
+    content: |
+      # Managed by Ansible (role: opensearch). ADR 0034 amendment of 2026-10-06.
+      [Unit]
+      StartLimitIntervalSec=0
+
+      [Service]
+      Restart=on-failure
+      RestartSec=30
+      RestartSteps=6
+      RestartMaxDelaySec=1h
+    owner: root
+    group: root
+    mode: "0644"
+  tags: [opensearch_service]
+
 - name: Enable and start OpenSearch
   ansible.builtin.systemd_service:
     name: opensearch
     enabled: true
     state: started
+    daemon_reload: true
+  tags: [opensearch_service]
 
 - name: Apply configuration changes before talking to the node
   ansible.builtin.meta: flush_handlers

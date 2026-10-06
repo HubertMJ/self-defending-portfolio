@@ -2,7 +2,9 @@
 # Smoke-test the host playbooks twice against throwaway systemd containers.
 # Proves: roles apply on a clean Debian 13, and the second run is idempotent (changed=0) - for the k3s
 # host (hardening.yml) and for the SIEM host (siem.yml --tags base,ssh,firewall,patching, where the
-# group switches the shared roles to their non-k3s shape).
+# group switches the shared roles to their non-k3s shape). Then the opensearch role's JVM options and
+# unit (--tags opensearch_service) on the SIEM container, against a stand-in for the package: a unit
+# that sleeps and the package's jvm.options as installed on siem01 (tests/siem/fixtures).
 # Kernel-level tags (sysctl, auditd) are skipped here and need a real VM; their output is checked by
 # tests/golden/render.sh and on the hosts by verify.yml.
 set -euo pipefail
@@ -47,3 +49,36 @@ twice() { # <label> <ansible-playbook arguments>
 twice k3s "playbooks/hardening.yml --limit sdp-smoke --skip-tags '$SKIP_TAGS'"
 # hostname: containers own no UTS namespace we can write to (as SKIP_TAGS above).
 twice siem "playbooks/siem.yml --limit sdp-smoke-siem --tags '$SIEM_TAGS' --skip-tags hostname"
+
+# The stand-in for the OpenSearch package: its group, its jvm.options and a unit of the same name.
+$DOCKER exec -i sdp-smoke-siem sh -ec '
+  groupadd -r opensearch
+  mkdir -p /etc/opensearch/jvm.options.d
+  cat > /etc/opensearch/jvm.options
+  sed -i "s/^-Xmx1g\$/-Xmx1g \t/" /etc/opensearch/jvm.options  # trailing blanks must not hide a heap line
+  printf "[Service]\nExecStart=/bin/sleep infinity\n\n[Install]\nWantedBy=multi-user.target\n" \
+    > /usr/lib/systemd/system/opensearch.service
+  systemctl daemon-reload' < tests/siem/fixtures/opensearch-jvm.options
+# The heap assertion measures siem01's memory (7880 MB), not the build host's.
+twice opensearch "playbooks/siem.yml --limit sdp-smoke-siem --tags opensearch_service -e opensearch_host_memory_mb=7880"
+# What the JVM gets is jvm.options followed by jvm.options.d/*.options, the last occurrence winning.
+# shellcheck disable=SC2016  # the quoted block runs inside the container
+$DOCKER exec sdp-smoke-siem sh -ec '
+  fail() { echo "opensearch: $*"; exit 1; }
+  # systemd-analyze verify exits 0 on an unknown key; it only prints it.
+  out=$(systemd-analyze verify opensearch.service 2>&1) && [ -z "$out" ] || fail "systemd-analyze verify: $out"
+  [ "$(systemctl show opensearch -p Restart -p RestartUSec -p RestartSteps -p RestartMaxDelayUSec -p StartLimitIntervalUSec \
+    | sort | tr "\n" " ")" = "Restart=on-failure RestartMaxDelayUSec=1h RestartSteps=6 RestartUSec=30s StartLimitIntervalUSec=0 " ] \
+    || fail "restart policy: $(systemctl show opensearch -p Restart -p RestartUSec -p RestartSteps -p RestartMaxDelayUSec \
+      -p StartLimitIntervalUSec | tr "\n" " ")"
+  [ "$(stat -c "%U:%G %a" /etc/systemd/system/opensearch.service.d/sdp-restart.conf)" = "root:root 644" ] \
+    || fail "the drop-in is not root:root 0644"
+  opts=$(cat /etc/opensearch/jvm.options /etc/opensearch/jvm.options.d/*.options | grep -E "^-")
+  [ "$(printf "%s\n" "$opts" | grep -E "^-Xm[sx]")" = "$(printf -- "-Xms4g\n-Xmx4g")" ] \
+    || fail "heap settings are not exactly -Xms4g and -Xmx4g: $(printf "%s\n" "$opts" | grep -E "^-Xm[sx]" | tr "\n" " ")"
+  printf "%s\n" "$opts" | grep -qx -- "-XX:+ExitOnOutOfMemoryError" || fail "no -XX:+ExitOnOutOfMemoryError"
+  [ "$(printf "%s\n" "$opts" | grep -E "HeapDumpOnOutOfMemoryError")" = "-XX:-HeapDumpOnOutOfMemoryError" ] \
+    || fail "heap dumps are not off exactly once"
+  [ "$(printf "%s\n" "$opts" | grep -E "MaxDirectMemorySize")" = "-XX:MaxDirectMemorySize=1g" ] \
+    || fail "direct memory is not capped at 1g exactly once"
+  echo "opensearch: restart on failure with backoff and no start limit, one heap setting (4g), direct memory 1g, exit on OOM, no heap dump"'
