@@ -24,7 +24,8 @@ FINAL = {"finished", "failed", "timeout"}
 
 
 def call(base, method, path, body=None, token=None):
-    headers = {"Content-Type": "application/json", "Origin": base}
+    # Cloudflare answers 403 to urllib's default "Python-urllib/x.y" user agent.
+    headers = {"Content-Type": "application/json", "Origin": base, "User-Agent": "sdp-canaries/1 (operator)"}
     if token:
         headers["Authorization"] = f"Bearer {token}"
     data = None if body is None else json.dumps(body).encode()
