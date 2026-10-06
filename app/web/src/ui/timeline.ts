@@ -6,7 +6,7 @@ import { h, replace, timeEl, plClock } from "../lib/dom";
 import { humanAction } from "../lib/pipeline";
 import type { ConnectionState } from "../lib/sse";
 import { type NoDetection, type RunView, type TimelineView, buildTimeline, formatDuration, guardedFalco, guardedTalon, noDetection, publishedPod, ts } from "../lib/timeline";
-import { type Focus, ALL, scopedRuns, whose } from "../lib/scope";
+import { type Focus, ALL, exampleRun, scopedRuns, whose } from "../lib/scope";
 import { CONNECTION_LONG, extLink } from "./common";
 
 // A run with victim probes every 500 ms produces a few hundred events; keep a handful of runs' worth.
@@ -288,7 +288,7 @@ export function mountTimeline(
       replace(root, h("p", { class: "empty" }, "No runs yet. Launch an attack and it appears here as it happens."));
     } else if (runs.length === 0) {
       // This session, and nothing in it: the prompt, then one earlier visitor's run, labelled.
-      const example = view.runs[0];
+      const example = exampleRun(view.runs) ?? view.runs[0];
       replace(root, nothingYet(), h("ol", { class: "runs runs--example", role: "list" }, card(example, "example")), hiddenNote(view.runs.length - 1, ["more run", "more runs"]));
     } else {
       const rest = runs.slice(HISTORY_SHOWN);

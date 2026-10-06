@@ -580,7 +580,28 @@ describe("what the terminal tells the visitor (review 2, item 12)", () => {
     expect(stat(t.root, "Killed after your Enter")).toBeUndefined();
   });
 
-  it("a failed or timed-out run says why", async () => {
+  it("the visitor's own session from before a reload is read-only and says so: theirs, not another visitor's", async () => {
+    const t = await harness({ start: false, hooks: { isOwn: (id) => id === RUN } });
+    const f = new Feed().open();
+    t.show(f);
+    expect(text(t.root.querySelector(".term__status"))).toBe("your session from before the reload — read-only");
+    const banner = text(t.root.querySelector(".term__out .term__line--sys"));
+    expect(banner).toContain("Your session from before the reload, read-only: the page lost its key");
+    expect(banner).not.toContain("Another visitor");
+    expect(text(t.root.querySelector(".thisrun__title"))).toBe("This run (yours, read-only)");
+    // Still no input: the key is gone with the reload.
+    expect(t.root.querySelector<HTMLFormElement>(".term__form")?.hidden).toBe(true);
+    killedBy(f, 1, 3000);
+    t.show(f);
+    expect(text(t.root.querySelector(".term__sumlead"))).toContain("under you");
+    expect(stat(t.root, "Killed after your Enter")).toBe("150 ms");
+    // Another tab's run is still someone else's.
+    const u = await harness({ start: false, hooks: { isOwn: () => false } });
+    u.show(new Feed().open());
+    expect(text(u.root.querySelector(".term__status"))).toBe("watching another visitor — read-only");
+  });
+
+    it("a failed or timed-out run says why", async () => {
     const t = await harness();
     const f = new Feed();
     f.run("queued", 0);

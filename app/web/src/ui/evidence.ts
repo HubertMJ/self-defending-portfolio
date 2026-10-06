@@ -479,7 +479,9 @@ export function mountEvidence(
 
   const drawTicker = () => {
     const items = tickerItems(scopedView());
-    const hidden = focus.all ? undefined : Math.max(0, tickerItems(view, Infinity).length - tickerItems(scopedView(), Infinity).length);
+    // Counted as other visitors' only what belongs to a run; an event no run claims is no visitor's.
+    const kept = new Set(scopedView().runs.map((r) => r.runId));
+    const hidden = focus.all ? undefined : tickerItems(view, Infinity).filter((i) => i.run !== undefined && !kept.has(i.run)).length;
     const now = Date.now();
     // The list is rebuilt only when what it lists changes. Otherwise (a tick, a reconnect, the clock)
     // only its texts change in place, so a screen reader, a selection or a focused link is left alone.

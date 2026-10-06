@@ -88,6 +88,11 @@ export function mountTerminal(
     blockedEndsIn?: () => number | undefined;
     /** A start of the visitor's own is in flight (true) or settled (false): its run's first events may come before its id. */
     onStarting?: (pending: boolean) => void;
+    /**
+     * Whether a run id is one this tab started (lib/scope.ts, kept over a reload): a live session of
+     * the visitor's from before a reload is shown read-only as theirs, not as another visitor's.
+     */
+    isOwn?: (runId: string) => boolean;
   } = {},
 ): TerminalHandle {
   const reduced = prefersReducedMotion();
@@ -105,6 +110,10 @@ export function mountTerminal(
   // up read-only (the 202 with its key never arrived), and the page says why.
   let startTimedOutAt: number | undefined;
   const ownRunLost = () => startTimedOutAt !== undefined && Date.now() - startTimedOutAt < 60_000;
+  /** The run read-only here is the visitor's own from before a reload: the page lost its key, not its owner. */
+  const reloadedOwn = () => watching !== undefined && hooks.isOwn?.(watching) === true;
+  /** The run read-only here is someone else's: the words say "the visitor", "their". */
+  const someoneElse = () => watching !== undefined && !reloadedOwn();
   let mode: "idle" | "session" | "unavailable" = "unavailable";
 
 
@@ -404,7 +413,7 @@ export function mountTerminal(
     const panel = h(
       "div",
       { class: "thisrun", "data-open": "false" },
-      h("div", { class: "thisrun__head" }, h("h3", { class: "thisrun__title", id: "thisrun-title" }, watching ? "This run (watching)" : "This run"), more),
+      h("div", { class: "thisrun__head" }, h("h3", { class: "thisrun__title", id: "thisrun-title" }, reloadedOwn() ? "This run (yours, read-only)" : watching ? "This run (watching)" : "This run"), more),
       h("dl", { class: "thisrun__rows" }, detection.el, response.el, siem.el),
       sideBody,
     );
@@ -475,7 +484,9 @@ export function mountTerminal(
 
   const bannerLine = () =>
     watching
-      ? h("p", { class: "term__line term__line--sys" }, ownRunLost() ? "Read-only: this may be the run you just started — its start timed out before the page got the key to type into it. " : "Another visitor's session, read-only. ", "Their pod runs as uid 10001, non-root, with no network and a read-only root filesystem; each command and its output appears here as they type.")
+      ? reloadedOwn()
+        ? h("p", { class: "term__line term__line--sys" }, "Your session from before the reload, read-only: the page lost its key to type into it when it reloaded. The pod runs as uid 10001, non-root, with no network and a read-only root filesystem; it ends at its idle or session limit.")
+        : h("p", { class: "term__line term__line--sys" }, ownRunLost() ? "Read-only: this may be the run you just started — its start timed out before the page got the key to type into it. " : "Another visitor's session, read-only. ", "Their pod runs as uid 10001, non-root, with no network and a read-only root filesystem; each command and its output appears here as they type.")
       : h("p", { class: "term__line term__line--sys" }, "Pod starting. You will be uid 10001, non-root, no network, read-only root filesystem. When it is ready, try ", h("code", {}, "id"), " or tap a command below.");
 
   /** The banner's ready moment: "Pod starting…" does not stay at the top of the session. */
@@ -736,7 +747,7 @@ export function mountTerminal(
       case "deadline":
         return `reached ${sessionLimit()}`;
       case "left":
-        return watching ? "the visitor left" : "you left";
+        return someoneElse() ? "the visitor left" : "you left";
       case "killed":
         return "the cluster deleted the pod";
     }
@@ -798,7 +809,7 @@ export function mountTerminal(
         const costly = c.killed || (run !== undefined && responseOf(run, "terminate")?.cmd?.seq === c.seq);
         foot.push(
           costly
-            ? h("p", { class: "term__line term__line--costly" }, `✓ objective reached: ${title} — and it cost ${watching ? "the visitor" : "you"} the pod`)
+            ? h("p", { class: "term__line term__line--costly" }, `✓ objective reached: ${title} — and it cost ${someoneElse() ? "the visitor" : "you"} the pod`)
             : h("p", { class: "term__line term__line--win" }, `✓ objective reached: ${title}`),
         );
       }
@@ -845,7 +856,9 @@ export function mountTerminal(
       : watching
         ? ownRunLost()
           ? "read-only — the start timed out"
-          : "watching another visitor — read-only"
+          : reloadedOwn()
+            ? "your session from before the reload — read-only"
+            : "watching another visitor — read-only"
         : run.quarantinedAt !== undefined
           ? "quarantined — still yours, but cut off"
           : !ready
@@ -871,7 +884,7 @@ export function mountTerminal(
     if (!els) return;
     const alert = lastAlert(run);
     const resp = lastResponse(run);
-    const enter = watching ? "their Enter" : "your Enter";
+    const enter = someoneElse() ? "their Enter" : "your Enter";
     if (alert) setRow(els.rows.detection, "detect", `a:${alert.rule}:${alert.afterEnterMs}`, "Falco: ", h("strong", {}, alert.rule), alert.afterEnterMs !== undefined ? `, ${formatDuration(alert.afterEnterMs)} after ${enter}` : "");
     else setRow(els.rows.detection, "idle", `n:${run.active}`, run.active ? "Falco: nothing yet" : "Falco: no alert this run");
     if (resp) setRow(els.rows.response, "respond", `r:${resp.action}:${resp.afterAlertMs}`, "Talon: ", h("strong", {}, resp.action === "terminate" ? "deleted the pod" : "quarantined the pod"), resp.afterAlertMs !== undefined ? `, ${formatDuration(resp.afterAlertMs)} after the alert` : "");
@@ -1036,7 +1049,7 @@ export function mountTerminal(
     const quarantine = responseOf(run, "quarantine");
     const input = (c?: CommandRun) => (c ? h("code", {}, breakable(catalogue?.commands.find((x) => x.id === c.id)?.input ?? c.id)) : null);
     // A watcher reads the same summary about someone else: "the visitor", not "you".
-    const other = watching !== undefined;
+    const other = someoneElse();
     const you = other ? "the visitor" : "you";
     const You = other ? "The visitor" : "You";
     const failed = run.current === "failed" || run.current === "timeout";

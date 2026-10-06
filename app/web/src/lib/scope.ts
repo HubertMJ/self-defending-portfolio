@@ -83,7 +83,14 @@ export function scopedRuns<T extends { runId: string; active: boolean }>(runs: r
  * the visitor's own run in progress, else another visitor's run in progress, else the visitor's newest,
  * else the newest run of anyone as a labelled example.
  */
-export function focusRun<T extends { runId: string; active: boolean }>(runs: readonly T[], f: Focus): { run: T; whose: Whose | "example" } | undefined {
+type ExampleCandidate = { runId: string; active: boolean; states?: { responded?: number } };
+
+/** The run shown as an earlier visitor's example: the newest the cluster answered, else the newest. */
+export function exampleRun<T extends ExampleCandidate>(runs: readonly T[]): T | undefined {
+  return runs.find((r) => !r.active && r.states?.responded !== undefined) ?? runs[0];
+}
+
+export function focusRun<T extends ExampleCandidate>(runs: readonly T[], f: Focus): { run: T; whose: Whose | "example" } | undefined {
   if (f.all) return runs[0] ? { run: runs[0], whose: whose(runs[0], f.own) } : undefined;
   const own = runs.filter((r) => f.own.has(r.runId));
   const ownLive = own.find((r) => r.active);
@@ -91,10 +98,16 @@ export function focusRun<T extends { runId: string; active: boolean }>(runs: rea
   const live = runs.find((r) => r.active);
   if (live) return { run: live, whose: "live" };
   if (own[0]) return { run: own[0], whose: "own" };
-  return runs[0] ? { run: runs[0], whose: "example" } : undefined;
+  const example = exampleRun(runs);
+  return example ? { run: example, whose: "example" } : undefined;
 }
 
 /** The incidents of the visitor's own runs and of the run in progress now (`live`). */
+/** Incidents of other visitors' runs the default view leaves out: attributed to a run, not an operator's test. */
+export function otherVisitors(incidents: readonly CorrelationIncident[], shown: readonly CorrelationIncident[]): number {
+  return incidents.filter((i) => !i.operator_test && !!i.run_id && !shown.includes(i)).length;
+}
+
 export function scopedIncidents(incidents: readonly CorrelationIncident[], own: ReadonlySet<string>, live?: string): CorrelationIncident[] {
   return incidents.filter((i) => !!i.run_id && (own.has(i.run_id) || i.run_id === live));
 }
@@ -102,10 +115,10 @@ export function scopedIncidents(incidents: readonly CorrelationIncident[], own: 
 /**
  * The one incident shown as an example of an earlier visitor's run when the visitor has none: the
  * newest critical DNS exfil (the incident the SIEM exists for), else the newest critical, else the
- * newest; never an operator's test exec.
+ * newest; never an operator's test exec, nor one tied to no run (it is no visitor's).
  */
 export function exampleIncident(incidents: readonly CorrelationIncident[]): CorrelationIncident | undefined {
-  const real = incidents.filter((i) => !i.operator_test);
+  const real = incidents.filter((i) => !i.operator_test && !!i.run_id);
   const newest = (list: CorrelationIncident[]) => [...list].sort((a, b) => Date.parse(b.last_at) - Date.parse(a.last_at))[0];
   return newest(real.filter((i) => i.kind === "dns-exfil" && i.severity === "critical")) ?? newest(real.filter((i) => i.severity === "critical")) ?? newest(real);
 }

@@ -15,7 +15,7 @@ import { type Correlation, type CorrelationIncident, type CorrelationStep, type 
 import { h, refreshRelative, replace, setText, timeEl, plClock, when, whenEl } from "../lib/dom";
 import { commitUrl } from "../lib/provenance";
 import { type ScenarioState, kindLabel } from "../lib/runstatus";
-import { type Focus, ALL, exampleIncident, scopedIncidents } from "../lib/scope";
+import { type Focus, ALL, exampleIncident, otherVisitors, scopedIncidents } from "../lib/scope";
 import { formatDuration } from "../lib/timeline";
 import { attackUrl, extLink, pulse, sourceUrl } from "./common";
 import { type Tone, statusChip } from "./posture";
@@ -442,8 +442,11 @@ export function renderSessionBoard(c: Correlation, ctx: BoardContext & { live?: 
   const mine = bySeverity(c.incidents.filter((i) => !!i.run_id && own.has(i.run_id)));
   const live = bySeverity(scopedIncidents(c.incidents, new Set(), ctx.live).filter((i) => !mine.includes(i)));
   const example = mine.length || live.length ? undefined : exampleIncident(c.incidents);
-  const shown = mine.length + live.length + (example ? 1 : 0);
-  const rest = c.incidents.length - shown;
+  const shownList = [...mine, ...live, ...(example ? [example] : [])];
+  const shown = shownList.length;
+  // Only other visitors' runs are counted as theirs: an operator's test exec or an incident tied to no
+  // run is no visitor's (both are under "All activity" all the same).
+  const rest = otherVisitors(c.incidents, shownList);
   const tier = (cls: string, id: string, title: string, list: CorrelationIncident[], kind: "own" | "live" | "example") =>
     h("section", { class: `corr-tier corr-tier--${cls}`, "aria-labelledby": id }, h("h4", { class: "corr-tier__title", id }, title), h("div", { class: "corr-incidents" }, list.map((i) => renderIncident(i, ctx, kind))));
   return h(

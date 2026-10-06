@@ -99,6 +99,16 @@ describe("what this session shows", () => {
     expect(focusRun(ended, session())).toMatchObject({ run: { runId: MINE }, whose: "example" });
     expect(focusRun(ended, ALL)).toMatchObject({ run: { runId: MINE }, whose: "other" });
     expect(focusRun([], session())).toBeUndefined();
+    // The example is the newest run the cluster answered, before a newer one it did not.
+    let id = 100;
+    const answered = buildTimeline(
+      [
+        ...feed(),
+        toStreamEvent("run", { run_id: OTHER, scenario: "network-tool", state: "responded", at: iso(595_000), detail: "terminate" }, ++id) as StreamEvent,
+      ],
+      NOW,
+    ).runs.filter((r) => r.runId !== LIVE);
+    expect(focusRun(answered, session())).toMatchObject({ run: { runId: OTHER }, whose: "example" });
   });
 
   it("the incidents: own and live only; the example is the newest critical DNS exfil, never a test exec", () => {
@@ -115,6 +125,10 @@ describe("what this session shows", () => {
     expect(exampleIncident(c)?.id).toBe("e200000000000002");
     expect(exampleIncident(c.filter((i) => i.kind !== "dns-exfil"))?.id).toBe("c100000000000001");
     expect(exampleIncident(c.filter((i) => i.operator_test))).toBeUndefined();
+    // An incident tied to no run is no visitor's: never the example, however severe or new.
+    const orphan = answer([incident({ id: "e400000000000004", kind: "dns-exfil", severity: "critical", run_id: "", last_at: iso(1000) }), incident({ id: "e200000000000002", kind: "dns-exfil", severity: "critical", last_at: iso(100_000) })]).incidents;
+    expect(exampleIncident(orphan)?.id).toBe("e200000000000002");
+    expect(exampleIncident(orphan.filter((i) => !i.run_id))).toBeUndefined();
   });
 });
 
@@ -199,7 +213,14 @@ describe("the SIEM's board, scoped", () => {
   });
 
   it("nothing of the visitor's: the prompt and exactly one example, labelled", () => {
-    const c = answer([incident({ id: "a300000000000003" }), incident({ id: "e300000000000003", kind: "dns-exfil", severity: "critical" }), incident({ id: "f100000000000001", kind: "policy-probing", severity: "medium" })]);
+    const c = answer([
+      incident({ id: "a300000000000003" }),
+      incident({ id: "e300000000000003", kind: "dns-exfil", severity: "critical" }),
+      incident({ id: "f100000000000001", kind: "policy-probing", severity: "medium" }),
+      // Neither an operator's test nor an incident tied to no run counts as another visitor's.
+      incident({ id: "0b5e7a10c0ff0001", kind: "exec-outside-api", severity: "low", operator_test: true, run_id: "" }),
+      incident({ id: "9001abcdef012345", kind: "policy-probing", severity: "medium", run_id: "" }),
+    ]);
     const el = renderSessionBoard(c, { ...ctx, own: new Set() });
     expect(el.querySelector(".scope-empty")?.textContent).toBe("Nothing from you yet — launch an attack, or run the DNS exfiltration above.");
     expect(titles(el)).toEqual(["Example: from an earlier visitor’s run"]);
@@ -260,17 +281,25 @@ describe("the control", () => {
     const seen: string[] = [];
     const s = mountScope((x) => seen.push(x));
     expect(s.scope).toBe("session");
-    const a = s.control();
-    const b = s.control();
+    const a = s.control("runs");
+    const b = s.control("incidents");
+    // Each copy is named for what it scopes.
+    expect([a, b].map((c) => c.getAttribute("aria-label"))).toEqual(["Which runs to show", "Which incidents to show"]);
+    const live = document.querySelector(".scope-live");
+    expect(live?.getAttribute("aria-live")).toBe("polite");
+    expect(live?.textContent).toBe("");
     document.body.append(a, b);
     const pressed = (el: HTMLElement) => [...el.querySelectorAll<HTMLElement>(".scope__opt")].map((o) => `${o.textContent}:${o.getAttribute("aria-pressed")}`);
     expect(pressed(a)).toEqual(["This session:true", "All activity, last 24 h:false"]);
     a.querySelector<HTMLButtonElement>('[data-scope="all"]')?.click();
     expect(pressed(b)).toEqual(["This session:false", "All activity, last 24 h:true"]);
     expect(localStorage.getItem(SCOPE_KEY)).toBe("all");
+    // One polite line says what the page now shows, once per change.
+    expect(live?.textContent).toBe("Showing all activity of the last 24 hours, every visitor's.");
     expect(mountScope(() => {}).scope).toBe("all");
     b.querySelector<HTMLButtonElement>('[data-scope="session"]')?.click();
     expect(localStorage.getItem(SCOPE_KEY)).toBeNull();
     expect(seen).toEqual(["all", "session"]);
+    expect(live?.textContent).toBe("Showing this session: your runs and any run in progress now.");
   });
 });

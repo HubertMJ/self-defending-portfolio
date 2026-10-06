@@ -131,6 +131,8 @@ function main(): void {
     const fresh = ids.filter((id) => isRunId(id) && !ownIds.includes(id));
     if (!fresh.length) return;
     ownIds.push(...fresh);
+    // The run is the visitor's now, not someone else's live one.
+    if (liveRun !== undefined && fresh.includes(liveRun)) liveRun = undefined;
     ownIds.splice(0, Math.max(0, ownIds.length - OWN_RUNS_MAX));
     saveOwnRuns(ownIds, tabStore);
     applyFocus();
@@ -232,6 +234,8 @@ function main(): void {
       applyQuiet();
     },
     onSession: (s) => runStatus.setSession(s),
+    // A live session of this tab's from before a reload is the visitor's, read-only (its key is gone).
+    isOwn: (id) => ownIds.includes(id),
     onLit: (lit) => defenceMap.setLit(lit),
     // A 429 starting the terminal sets the shared cooldown, so the blocked state shows on both the
     // terminal's button and the one-click launcher (review item 11).
@@ -354,9 +358,9 @@ function main(): void {
   events.start();
 
   // The one control, drawn beside each list it scopes; then every scoped part is told the choice.
-  byId("timeline-panel").before(scope.control());
-  byId("ticker").before(scope.control());
-  byId("correlation-board").before(scope.control());
+  byId("timeline-panel").before(scope.control("runs"));
+  byId("ticker").before(scope.control("events"));
+  byId("correlation-board").before(scope.control("incidents"));
   focusReady = true;
   applyFocus();
 
