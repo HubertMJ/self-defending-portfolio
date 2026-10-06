@@ -6,7 +6,7 @@
 
 import type { ApiClient } from "../lib/api";
 import type { Objective, Stats } from "../lib/contract";
-import { h, relativeTime, replace, timeEl, utcClock, when } from "../lib/dom";
+import { h, relativeTime, replace, timeEl, plClock, when } from "../lib/dom";
 import { humanSpeed } from "./console";
 
 const REPO_ISSUES = "https://github.com/HubertMJ/self-defending-portfolio/issues";
@@ -30,8 +30,8 @@ export function renderStats(s: Stats, objectives: Objective[], last?: LastRun, n
   const ago = (t: number) => relativeTime(new Date(t).toISOString(), now);
   const list = [
     // The last run names what ran; how fast the answer came is the API's one figure, the tile below.
-    // Absolute UTC first, how long ago beside it.
-    lastAt !== undefined ? statTile(timeEl(lastAt, utcClock(lastAt, now)), "last run", last ? `${ago(lastAt)} · ${last.title}` : ago(lastAt)) : null,
+    // The absolute time (Polish) first, how long ago beside it.
+    lastAt !== undefined ? statTile(timeEl(lastAt, plClock(lastAt, now)), "last run", last ? `${ago(lastAt)} · ${last.title}` : ago(lastAt)) : null,
     statTile(String(s.runs), "attacks, all visitors", s.since ? `since ${when(s.since, now)}` : ""),
     // Both counts are runs: of the runs Falco detected, how many Talon answered at least once; and how
     // many ran out of time with a detection still unanswered (a terminal run can be both).

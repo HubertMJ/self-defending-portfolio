@@ -13,7 +13,7 @@
 //   gone         the pod no longer exists: Talon deleted it
 
 import type { VictimStatus } from "../lib/contract";
-import { h, utcClock } from "../lib/dom";
+import { h, plClock, timeEl } from "../lib/dom";
 import type { RunView, VictimSpan } from "../lib/timeline";
 
 export type VictimView = VictimStatus | "fresh" | "waiting" | "none";
@@ -135,7 +135,7 @@ export function renderVictim(run: RunView, readOnly: boolean): HTMLElement {
       { class: "browser__status" },
       h("span", { class: "browser__code" }, STATUS_LINE[state]),
       last && last.probe_ms >= 0 && state !== "gone" ? h("span", {}, `probe ${last.probe_ms} ms`) : null,
-      last ? h("span", {}, `seen ${utcClock(last.until, Date.now(), { ms: true })}`) : null,
+      last ? h("span", {}, "seen ", timeEl(last.until, plClock(last.until, Date.now(), { ms: true }))) : null,
       readOnly ? h("span", { class: "browser__ro" }, "read-only") : null,
     ),
     h("figcaption", { class: "browser__caption" }, h("strong", {}, `${labelOf(state)}. `), CAPTION[state]),

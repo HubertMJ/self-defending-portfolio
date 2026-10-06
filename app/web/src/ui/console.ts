@@ -6,7 +6,7 @@
 //   * the pod as the API server saw it: name, UID, image digest, phases, the quarantine label;
 //   * what was executed and under which restrictions (GET /api/scenarios/{id}/details);
 //   * for a quarantine, the proof that the pod was isolated rather than killed;
-//   * "verify it yourself": ids, UTC timestamps, the raw run as JSON, the rules at the commit, and the
+//   * "verify it yourself": ids, the raw timestamps, the raw run as JSON, the rules at the commit, and the
 //     cosign command for the scenario image;
 //   * in Technical Mode (.tech-only), the raw events, Falco's output fields, Talon's parameters and
 //     the policies involved.
@@ -18,7 +18,7 @@
 
 import type { ApiClient, Result } from "../lib/api";
 import type { Scenario, ScenarioDetails } from "../lib/contract";
-import { type Child, h, prefersReducedMotion, replace, utcClock } from "../lib/dom";
+import { type Child, h, prefersReducedMotion, replace, plClock } from "../lib/dom";
 import { type Hop, type Schedule, TIMER_END, TIMER_START, humanAction, runHops, scheduleHops, timerReading } from "../lib/pipeline";
 import { type RunView, type TimelineView, QUARANTINE_LABEL, formatDuration, guardedFalco, guardedTalon, publishedPod, ts } from "../lib/timeline";
 import { cosignVerifyCommand, isPinnedImageRef, oneLine } from "../lib/provenance";
@@ -69,8 +69,8 @@ interface Panels {
 
 type Kids = (Child | Child[])[];
 
-/** Every clock time on the console is UTC with milliseconds, like the raw records (ADR 0035). */
-const utcMs = (ms: number): string => utcClock(ms, Date.now(), { ms: true });
+/** Every clock time on the console is Polish time with milliseconds; the raw records stay UTC (ADR 0035). */
+const clockMs = (ms: number): string => plClock(ms, Date.now(), { ms: true });
 
 const shortDigest = (image: string): string => {
   const at = image.indexOf("@sha256:");
@@ -337,11 +337,11 @@ export function mountConsole(root: HTMLElement, api: ApiClient, onDetails?: (sce
   const hopTime = (hops: Hop[], i: number): string => {
     const hp = hops[i];
     if (hp.at === undefined) return "";
-    if (i === 0) return utcMs(hp.at);
+    if (i === 0) return clockMs(hp.at);
     const zero = hops[TIMER_START].at;
     if (i < TIMER_START || zero === undefined) {
       const create = hops[0].at;
-      return create !== undefined ? `+${formatDuration(hp.at - create)}` : utcMs(hp.at);
+      return create !== undefined ? `+${formatDuration(hp.at - create)}` : clockMs(hp.at);
     }
     if (i === TIMER_START) return "t = 0";
     const d = hp.at - zero;
@@ -475,7 +475,7 @@ export function mountConsole(root: HTMLElement, api: ApiClient, onDetails?: (sce
       return h(
         "li",
         { class: "phase", "data-phase": p.deleted ? "deleted" : p.phase.toLowerCase() },
-        h("time", { datetime: p.at }, utcMs(Date.parse(p.at))),
+        h("time", { datetime: p.at }, clockMs(Date.parse(p.at))),
         h("span", { class: "phase__name" }, p.deleted ? "Deleted" : p.phase),
         p.reason && p.reason !== p.phase ? h("span", { class: "phase__reason" }, p.reason) : null,
         changes.map(([k, v]) => h("span", { class: `phase__label${k === QUARANTINE_LABEL ? " phase__label--q" : ""}` }, v === null ? `− ${k}` : `${k}=${v}`)),
@@ -582,7 +582,7 @@ export function mountConsole(root: HTMLElement, api: ApiClient, onDetails?: (sce
         { class: "proof" },
         check(run.quarantinedAt !== undefined, "Label set by Talon", [
           h("code", {}, `${QUARANTINE_LABEL}: false → true`),
-          run.quarantinedAt !== undefined ? ` at ${utcMs(run.quarantinedAt)}` : "",
+          run.quarantinedAt !== undefined ? ` at ${clockMs(run.quarantinedAt)}` : "",
         ]),
         check(stillRunning, "Pod still running", [stillRunning ? "phase Running after the label: isolated, not deleted" : lastPod ? `last phase seen: ${lastPod.phase}` : "waiting for the pod watch"]),
         check(after !== undefined, "Cilium dropped the probe", [
@@ -590,7 +590,7 @@ export function mountConsole(root: HTMLElement, api: ApiClient, onDetails?: (sce
           after ? `after it, no answer within ${after.probe_ms > 0 ? `${after.probe_ms} ms` : "its full timeout"} — the quarantine policy cut the pod off` : "waiting for the next probe",
         ]),
       ),
-      lastPod?.deleted ? h("p", { class: "small" }, `The API deleted the quarantined pod at the end of the run (${utcMs(Date.parse(lastPod.at))}).`) : null,
+      lastPod?.deleted ? h("p", { class: "small" }, `The API deleted the quarantined pod at the end of the run (${clockMs(Date.parse(lastPod.at))}).`) : null,
     ];
   };
 
@@ -627,8 +627,8 @@ export function mountConsole(root: HTMLElement, api: ApiClient, onDetails?: (sce
             ? h(
                 "table",
                 { class: "utc" },
-                h("caption", {}, "Timestamps, UTC, as reported"),
-                h("thead", {}, h("tr", {}, h("th", { scope: "col" }, "Hop"), h("th", { scope: "col" }, "UTC"), h("th", { scope: "col" }, "Source"))),
+                h("caption", {}, "Timestamps as reported (raw, UTC)"),
+                h("thead", {}, h("tr", {}, h("th", { scope: "col" }, "Hop"), h("th", { scope: "col" }, "Raw (UTC)"), h("th", { scope: "col" }, "Source"))),
                 h(
                   "tbody",
                   {},

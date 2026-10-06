@@ -4,10 +4,10 @@
 // the API published (the stream, or GET /api/runs/{id} for the newest run when the replay held none)
 // and from server timestamps. Nothing is synthesised, looped or padded: when nothing happened, the
 // page says since when, and the only thing that changes on its own is the server's clock (the opt-in
-// SSE tick) and "x minutes ago" next to an absolute UTC time.
+// SSE tick) and "x minutes ago" next to an absolute time (Polish, CET/CEST).
 
 import { type CatalogueCommand, type CommandOutcome, FALCO_FIELDS, type RunSummary, type FalcoEvent, type Posture, type ScenarioDetails, type StreamEvent, type TalonEvent, type Tick, isRunId } from "../lib/contract";
-import { h, refreshRelative, relativeTime, replace, setText, timeEl, utc, utcClock, whenEl } from "../lib/dom";
+import { h, refreshRelative, relativeTime, replace, setText, timeEl, plTime, plClock, whenEl } from "../lib/dom";
 import { humanAction } from "../lib/pipeline";
 import { cosignVerifyCommand, digestOf, isPinnedImageRef, oneLine, shortDigest } from "../lib/provenance";
 import type { ConnectionState } from "../lib/sse";
@@ -82,8 +82,8 @@ function answerItem(a: Answer, now: number): HTMLElement {
       armTag(f.namespace),
       h("strong", {}, f.rule),
       ` (${f.priority}) at `,
-      timeEl(f.at, utcClock(f.at, now, { ms: true })),
-      f.api_received_at ? [", received ", timeEl(f.api_received_at, utcClock(f.api_received_at, now, { ms: true }))] : null,
+      timeEl(f.at, plClock(f.at, now, { ms: true })),
+      f.api_received_at ? [", received ", timeEl(f.api_received_at, plClock(f.api_received_at, now, { ms: true }))] : null,
       delay !== undefined && delay >= 0 ? `, delivered in ${formatDuration(delay)}` : null,
     );
   }
@@ -99,7 +99,7 @@ function answerItem(a: Answer, now: number): HTMLElement {
     code(t.actionner ?? t.action),
     // Talon's own status word only when it is not plain success.
     `${t.status === "success" ? "" : ` (${t.status})`} at `,
-    timeEl(t.at, utcClock(t.at, now, { ms: true })),
+    timeEl(t.at, plClock(t.at, now, { ms: true })),
   );
 }
 
@@ -130,7 +130,7 @@ function ruleLink(ctx: EvidenceContext): HTMLElement | null {
 
 const runStart = (run: RunView) => run.states.started ?? run.states.queued ?? Math.min(...Object.values(run.states).filter((x): x is number => x !== undefined));
 
-/** The hero card for one run: expanded, capped, every time absolute UTC. */
+/** The hero card for one run: expanded, capped, every time absolute, in Polish time. */
 export function renderEvidenceCard(run: RunView, ctx: EvidenceContext): HTMLElement {
   const { now } = ctx;
   const all = answers(run);
@@ -309,7 +309,7 @@ export function renderTicker(items: TickerItem[], opts: { now: number; since?: s
       { class: "ticker__empty" },
       opts.since !== undefined ? ["No events since ", timeEl(opts.since), "; "] : "No events yet; ",
       opts.connected ? "the stream is connected" : "the stream is not connected",
-      opts.connected && opts.tickAt ? [" (server time ", timeEl(opts.tickAt, utc(opts.tickAt), { class: "ticker__server" }), ")"] : null,
+      opts.connected && opts.tickAt ? [" (server time ", timeEl(opts.tickAt, plTime(opts.tickAt), { class: "ticker__server" }), ")"] : null,
       ".",
     );
   }
@@ -320,7 +320,7 @@ export function renderTicker(items: TickerItem[], opts: { now: number; since?: s
       h(
         "li",
         { class: "ticker__item", "data-type": i.type, "data-new": opts.fresh?.has(i.key) ? "true" : null },
-        timeEl(i.at, utcClock(i.at, opts.now, { ms: true })),
+        timeEl(i.at, plClock(i.at, opts.now, { ms: true })),
         h("span", { class: "ticker__ago", "data-ago": String(i.at) }, ` (${relativeTime(new Date(i.at).toISOString(), opts.now)})`),
         " ",
         h("span", { class: "ticker__text" }, i.text),
@@ -351,7 +351,7 @@ export interface Liveness {
 export function renderLiveness(l: Liveness, now: number): HTMLElement {
   const parts: (Node | string)[][] = [];
   if (l.apiStartedAt) parts.push([`API up ${uptime((l.tickAt ? Date.parse(l.tickAt) : now) - Date.parse(l.apiStartedAt))} (since `, timeEl(l.apiStartedAt), ")"]);
-  if (l.tickAt) parts.push(["server time ", timeEl(l.tickAt, utc(l.tickAt), { class: "liveness__server" })]);
+  if (l.tickAt) parts.push(["server time ", timeEl(l.tickAt, plTime(l.tickAt), { class: "liveness__server" })]);
   if (l.postureAt) parts.push(["posture refreshed ", whenEl(l.postureAt, now)]);
   if (l.kubeBench) parts.push(["kube-bench ", whenEl(l.kubeBench, now)]);
   if (l.trivy) parts.push(["Trivy ", whenEl(l.trivy, now)]);
@@ -450,7 +450,7 @@ export function mountEvidence(
       refreshRelative(section.ticker, now);
       const server = section.ticker.querySelector<HTMLTimeElement>(".ticker__server");
       if (server && live.tickAt) {
-        setText(server, utc(live.tickAt));
+        setText(server, plTime(live.tickAt));
         server.dateTime = new Date(live.tickAt).toISOString();
       }
       return;

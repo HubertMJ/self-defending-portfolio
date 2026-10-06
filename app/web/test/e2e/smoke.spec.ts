@@ -902,7 +902,7 @@ test.describe("credibility on the production bundle (ADR 0035; serve.mjs --termi
     await expect(page.locator('#verify-panel [data-image="api"]')).toContainText("0448cff");
     await expect(card).toBeVisible();
     await hasNoProvenance(page);
-    await expect(card.locator(".evlist__item").first()).toContainText("UTC");
+    await expect(card.locator(".evlist__item").first()).toContainText(/\d\d:\d\d:\d\d\.\d{3} CES?T/);
     await expect(page.locator("#hero-stats")).toBeVisible();
     // The card is never folded away.
     expect(await card.evaluate((el) => el.closest("details:not([open])") === null)).toBe(true);
@@ -944,9 +944,15 @@ test.describe("credibility on the production bundle (ADR 0035; serve.mjs --termi
     const server = page.locator("#liveness .liveness__server");
     await expect(server).toBeVisible();
     const first = await server.getAttribute("datetime");
-    // The tick's `at`, rendered as UTC: the attribute is the instant, the text its UTC form.
+    // The tick's `at`, rendered in Polish time: the attribute is the UTC instant, the text its Warsaw
+    // wall clock with CET or CEST, whatever the zone of the browser or the host (ADR 0035, 2026-10-06).
+    expect(first).toMatch(/Z$/);
     expect(Math.abs(Date.parse(first as string) - Date.now())).toBeLessThan(5000);
-    await expect(server).toHaveText(/^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d UTC$/);
+    await expect(server).toHaveText(/^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d CES?T$/);
+    const [iso, text] = await server.evaluate((el) => [(el as HTMLTimeElement).dateTime, el.textContent ?? ""]);
+    const wall = new Intl.DateTimeFormat("sv-SE", { timeZone: "Europe/Warsaw", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" }).format(new Date(iso));
+    const offsetH = Math.round((Date.parse(`${wall.replace(" ", "T")}Z`) - Math.floor(Date.parse(iso) / 1000) * 1000) / 3_600_000);
+    expect(text).toBe(`${wall} ${offsetH === 2 ? "CEST" : "CET"}`);
     await expect.poll(() => server.getAttribute("datetime"), { timeout: 6000 }).not.toBe(first);
     await expect(page.locator("#liveness")).toContainText("API up");
     await expect(page.locator("#ticker .ticker__item").first()).toBeVisible();
@@ -1099,7 +1105,7 @@ test.describe("correlation (ADR 0036; serve.mjs --terminal-api --siem / --no-sie
     await expect(health).toContainText("ingest ok");
     await expect(health).toContainText("evidence not rewritten");
     await expect(health).toContainText("disk ok");
-    await expect(health.locator(".corr-health__checked time")).toHaveText(/\d\d:\d\d:\d\d UTC \(.+ ago\)/);
+    await expect(health.locator(".corr-health__checked time")).toHaveText(/\d\d:\d\d:\d\d CES?T \(.+ ago\)/);
 
     // SOC metrics: the API's medians, the page's p95 saying what it is over.
     const tiles = s.locator(".corr-metrics .tile");
@@ -1123,7 +1129,8 @@ test.describe("correlation (ADR 0036; serve.mjs --terminal-api --siem / --no-sie
     await expect(dns.locator('a[href="/api/runs/7e57000000000001"]')).toHaveCount(1);
     const steps = dns.locator(".corr-step");
     await expect(steps).toHaveCount(3);
-    await expect(steps.first().locator("time")).toHaveText(/^\d\d:\d\d:\d\d\.\d{3} UTC$/);
+    await expect(steps.first().locator("time")).toHaveText(/^\d\d:\d\d:\d\d\.\d{3} CES?T$/);
+    await expect(steps.first().locator("time")).toHaveAttribute("datetime", /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/);
     // A command line without a finding has no rule; the hubble finding's rule links to its Sigma file at
     // the API's commit (serve.mjs's provenance: 0448cff…).
     await expect(steps.first()).toContainText("command read-flag (T1552.001, credentials) started on sandbox/terminal-7e57000001");
