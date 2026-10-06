@@ -3,7 +3,7 @@
 // drift between the two), the same cache headers, and the same text/plain 404 for /api/*. Used by
 // `npm run serve`, the dev loop and the Playwright suite. Not used in the image.
 //
-//   node scripts/serve.mjs [--port 4173] [--dir dist|dist-mock] [--stub-events | --live-api | --terminal-api]
+//   node scripts/serve.mjs [--port 4173] [--dir dist|dist-mock] [--stub-events | --live-api | --terminal-api] [--siem | --no-siem]
 //   then open http://localhost:4173/?mock=1 for mock mode (with --dir dist-mock, the `npm run build:mock`
 //   output: the production dist/ has no mock, ADR 0035), or / for the offline state.
 //
@@ -39,6 +39,14 @@
 // /api/stats of today's shape (no `last_run_at`, no `last_24h`), none of the rest, no tick (a new
 // page on the API deployed today).
 //
+// --siem answers what ADR 0036 added: GET /api/correlation with `available: true` (the incidents, the
+// SOC metrics and the SIEM's health of src/lib/correlation-fixture.json, its times moved to now, plus
+// one incident whose title and two of whose steps are not publishable - a pod outside the sandbox, an
+// address, a ServiceAccount - which the page must withhold, and two malformed incidents it must drop)
+// and GET /api/correlation/rules (the fixture's rule index). --no-siem is the same API with the SIEM
+// down or not configured: `available: false` and everything else empty. Without either, both paths
+// are a JSON 404 (an API before ADR 0036) under --live-api/--terminal-api, a text/plain one otherwise.
+//
 // `--terminal-api --twin` replays, instead of the terminal session, a one-click run started side by
 // side (ADR 0031): the guarded pod in `sandbox`, answered by Talon, and its twin in
 // `sandbox-unguarded`, detected by Falco with nothing answering. The run is contained and still going
@@ -65,6 +73,8 @@ const cred = terminalApi && !process.argv.includes("--no-cred");
 // This stub API "started" when the server did; the provenance and the ticks say so.
 const startedAt = new Date().toISOString();
 const stubEvents = liveApi || terminalApi || process.argv.includes("--stub-events");
+const siem = process.argv.includes("--siem");
+const noSiem = process.argv.includes("--no-siem");
 
 // One finished "shell-in-container" run, as the extended API replays it: [event name, payload].
 function replayedRun() {
@@ -283,6 +293,41 @@ function credAnswer(method, path) {
   return undefined;
 }
 
+const CORRELATION = JSON.parse(await readFile(join(root, "src", "lib", "correlation-fixture.json"), "utf8"));
+const TIME_KEYS = new Set(["at", "first_at", "last_at", "since", "checked_at", "applied_at"]);
+/** lib/fixtures.ts shiftTimes: every time field moved by `delta` ms. */
+const shiftTimes = (v, delta) =>
+  Array.isArray(v)
+    ? v.map((x) => shiftTimes(x, delta))
+    : typeof v === "object" && v !== null
+      ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, TIME_KEYS.has(k) && typeof x === "string" ? new Date(Date.parse(x) + delta).toISOString() : shiftTimes(x, delta)]))
+      : v;
+
+/** What ADR 0036 added, as --siem / --no-siem answer it; undefined for anything else. */
+function siemAnswer(method, path) {
+  if (method !== "GET" || !(siem || noSiem)) return undefined;
+  const now = Date.now();
+  if (path === "/api/correlation/rules") return [200, CORRELATION.rules];
+  if (path !== "/api/correlation") return undefined;
+  if (noSiem) {
+    return [200, { available: false, checked_at: new Date(now).toISOString(), rules: { commit: "", applied_at: null, status: "unknown" }, health: { ingest: "unknown", evidence_rewritten: false, disk: "unknown" }, metrics: { since: new Date(now - 86_400_000).toISOString(), incidents: 0, median_ttd_ms: null, median_tti_ms: null, median_twin_dwell_ms: null, host_findings: 0 }, incidents: [] }];
+  }
+  const c = shiftTimes(CORRELATION.correlation, now - Date.parse(CORRELATION.anchor));
+  const at = (ms) => new Date(now - ms).toISOString();
+  // What an API that slipped would publish: the page withholds the title and the two details, keeps the rest.
+  const leaky = {
+    id: "e8ec0a7e1de0b0b0", kind: "exec-outside-api", severity: "high", title: "exec by system:serviceaccount:kube-system:replicaset-controller", run_id: "", arm: "",
+    first_at: at(9_000_000), last_at: at(8_999_000), attack: ["T1609"], falco_events: 0, flag_match: null, ttd_ms: null, tti_ms: null,
+    steps: [
+      { at: at(9_000_000), source: "k8s-audit", rule: "Exec into a sandbox pod not by the API", rule_id: "a0617283-94a5-4fb6-90c7-e8f90a1b2c34", command_seq: null, detail: "get pods/exec on kube-system/coredns-5d78c9869d-x7k2p not by the API, response 101" },
+      { at: at(8_999_500), source: "hubble", rule: "", rule_id: "", command_seq: null, detail: "Hubble: FORWARDED egress UDP/53 to 10.43.0.10 on sandbox/terminal-7e57000005" },
+      { at: at(8_999_000), source: "k8s-audit", rule: "Exec into a sandbox pod not by the API", rule_id: "a0617283-94a5-4fb6-90c7-e8f90a1b2c34", command_seq: null, detail: "get pods/exec on sandbox/terminal-7e57000005 not by the API, response 101" },
+    ],
+    evidence: [{ type: "finding", id: "5d0a2c43-8e7f-4061-b152-4d3e2f1a0b9c" }],
+  };
+  return [200, { ...c, metrics: { ...c.metrics, incidents: c.metrics.incidents + 1 }, incidents: [...c.incidents, leaky, { id: "not-hex", kind: "dns-exfil", first_at: at(1000), last_at: at(1000) }, "junk"] }];
+}
+
 /** The interactive API of --terminal-api (what the page reads while watching), else undefined. */
 function terminalApiAnswer(method, path) {
   const added = credAnswer(method, path);
@@ -369,7 +414,7 @@ const server = createServer(async (req, res) => {
   };
   if (stubEvents && url.pathname === "/api/events") return eventStream(req, res, cred && url.searchParams.get("tick") === "1");
   if (slowDetails && url.pathname === "/api/scenarios/terminal/details") await new Promise((r) => setTimeout(r, 1500));
-  const answer = terminalApi ? terminalApiAnswer(req.method, url.pathname) : liveApi ? liveApiAnswer(req.method, url.pathname) : undefined;
+  const answer = siemAnswer(req.method, url.pathname) ?? (terminalApi ? terminalApiAnswer(req.method, url.pathname) : liveApi ? liveApiAnswer(req.method, url.pathname) : undefined);
   if (answer) return send(answer[0], JSON.stringify(answer[1]), { "Content-Type": "application/json", "Cache-Control": "no-store" });
   if (req.method !== "GET" && req.method !== "HEAD") return send(405, "method not allowed\n", { "Content-Type": "text/plain" });
   if (url.pathname === "/api" || url.pathname.startsWith("/api/")) {

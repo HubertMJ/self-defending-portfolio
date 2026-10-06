@@ -1,0 +1,9 @@
+# The Security Analytics detector of the sdp-talon data stream (ADR 0034 "Rules from git"): every rule of
+# log type sdp_talon runs here once a minute, and each finding raises an alert through the one trigger
+# the sync adds. A rule belongs to exactly one detector, the one of its source (siem_lint.py).
+name: sdp-talon-rules
+source: talon
+interval_minutes: 1
+rules:
+  - ab2bc6ee-e717-4b7a-a69e-92acb304903e  # talon-quarantine
+  - ba58109c-e0e4-4409-9c4c-0a80bfca3dce  # talon-terminate

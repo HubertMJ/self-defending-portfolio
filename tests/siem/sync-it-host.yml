@@ -1,0 +1,8 @@
+---
+# tests/siem/sync-it.sh: the siem_sync role alone on the systemd container standing in for siem01
+# (siem.yml needs every pin of the real inventory for its other roles; this role needs none).
+- name: The rules sync on a container shaped like siem01
+  hosts: all
+  gather_facts: true
+  roles:
+    - role: siem_sync

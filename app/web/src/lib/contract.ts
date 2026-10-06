@@ -1059,3 +1059,328 @@ export function parseTick(raw: string): Tick | null {
   if (!isObj(v) || !isTime(v.at)) return null;
   return definedOnly({ at: v.at, started_at: isTime(v.started_at) ? v.started_at : undefined });
 }
+
+// ---------- correlation (ADR 0034 section "Correlation", ADR 0036) ----------
+//
+// GET /api/correlation and GET /api/correlation/rules: incidents the API correlated from the SIEM's
+// evidence, the SOC metrics over them, the SIEM's health, and the rule library from git. Lenient like
+// the stats: a malformed incident, step or rule is dropped, a malformed figure becomes "unknown", and
+// only an answer that says `available: true` in so many words shows the section at all.
+//
+// The API builds every published field from an allow-list and scrubs free text (ADR 0021); the page
+// checks again, because what it shows it vouches for: a text that still looks like an address, a
+// cluster-internal name, a ServiceAccount, a pseudonym or a pod outside the sandbox namespaces is
+// withheld here, never shown.
+
+export const SEVERITIES = ["low", "medium", "high", "critical"] as const;
+export type Severity = (typeof SEVERITIES)[number];
+
+export const CORRELATION_SOURCES = ["falco", "talon", "hubble", "k8s-audit", "api"] as const;
+export type CorrelationSource = (typeof CORRELATION_SOURCES)[number];
+
+/** ADR 0036 §9: `document` is the `_id` of a stream document an incident is measured on (TTI, dwell). */
+export const EVIDENCE_TYPES = ["finding", "alert", "correlation", "document"] as const;
+export type EvidenceType = (typeof EVIDENCE_TYPES)[number];
+
+export interface CorrelationStep {
+  at: string;
+  source: CorrelationSource;
+  /** The rule's title. */
+  rule: string;
+  /** The Sigma rule's UUID, "" for a step no rule produced (a command document, an audited response). */
+  rule_id: string;
+  /** The terminal command this step belongs to, when the API could tie it to one. */
+  command_seq: number | null;
+  /** Scrubbed and capped by the API (200); "" when the page withheld it. */
+  detail: string;
+  /** Set by the parser when it withheld the detail (see `publishable`). */
+  withheld?: true;
+}
+
+export interface CorrelationIncident {
+  /** 16 hex. */
+  id: string;
+  kind: string;
+  severity: Severity | "unknown";
+  title: string;
+  /** "" when the incident belongs to no run. */
+  run_id: string;
+  arm: Arm | "";
+  first_at: string;
+  last_at: string;
+  /** ATT&CK technique ids, e.g. T1048.003. */
+  attack: string[];
+  /** null: not counted (an API that sends no number). */
+  falco_events: number | null;
+  /** dns-exfil only: true/false; null when the match is unavailable (the API restarted since the run). */
+  flag_match: boolean | null;
+  ttd_ms: number | null;
+  tti_ms: number | null;
+  steps: CorrelationStep[];
+  /** What the incident is built from: Security Analytics finding, Alerting alert, SA correlation rule or stream document ids. */
+  evidence: { type: EvidenceType; id: string }[];
+}
+
+/** "stale": the rules sync has not checked in for over 30 minutes (a value the API is to add); any other word reads as "unknown". */
+export type RulesStatus = "applied" | "refused" | "failed" | "stale" | "unknown";
+export type IngestHealth = "ok" | "silent" | "unknown";
+export type DiskHealth = "ok" | "high" | "unknown";
+
+export interface CorrelationMetrics {
+  since: string;
+  incidents: number;
+  median_ttd_ms: number | null;
+  median_tti_ms: number | null;
+  median_twin_dwell_ms: number | null;
+  host_findings: number;
+  /**
+   * How far behind each source's newest document is when the API reads it, by source; null when the
+   * source has sent nothing to measure. Absent from an API that does not publish it.
+   */
+  ingest_lag_ms?: [source: string, ms: number | null][];
+}
+
+export interface Correlation {
+  available: boolean;
+  checked_at: string;
+  rules: { commit: string; applied_at: string | null; status: RulesStatus };
+  /** evidence_rewritten: null when the API sent no boolean (unknown, never "fine"). */
+  health: { ingest: IngestHealth; evidence_rewritten: boolean | null; disk: DiskHealth };
+  metrics: CorrelationMetrics;
+  incidents: CorrelationIncident[];
+}
+
+export interface SiemRule {
+  id: string;
+  title: string;
+  level: string;
+  status: string;
+  source: string;
+  attack: string[];
+  file: string;
+  line: number;
+  /** The canary that proves the rule fires ("" when the index names none). */
+  canary: string;
+}
+
+export interface SiemMonitor {
+  name: string;
+  file: string;
+  canary: string;
+}
+
+export interface SiemCorrelationRule {
+  name: string;
+  file: string;
+  canary: string;
+}
+
+export interface RuleIndex {
+  rules: SiemRule[];
+  monitors: SiemMonitor[];
+  correlations: SiemCorrelationRule[];
+}
+
+/** The page keeps no more than the API promises to send. */
+export const MAX_INCIDENTS = 200;
+export const MAX_STEPS = 50;
+const MAX_RULES = 300;
+
+/** The namespaces whose pod names may be published (ADR 0021, 0031); lib/timeline.ts's SANDBOX_NAMESPACES. */
+const SANDBOX_NS: ReadonlySet<string> = new Set(["sandbox", "sandbox-unguarded"]);
+
+/**
+ * Patterns ADR 0021 never publishes, as the API's leak test and redactions list them (P4 tests,
+ * app/api/internal/incidents publish.go): an IPv4 address other than loopback, an IPv6 address, a
+ * cluster-internal DNS name, the node names, a ServiceAccount, a token, a user pseudonym, a dns-exfil
+ * query label, the flag, and a Kubernetes API path into a pod outside the sandbox namespaces.
+ */
+const NEVER_PUBLISHED: readonly RegExp[] = [
+  // An address at the end of a sentence ("to 10.43.0.10.") is still one.
+  /(?<![\d.])(?!127\.)(?:\d{1,3}\.){3}\d{1,3}(?!\.?\d)/,
+  // IPv6, conservatively: eight groups, or a "::" with a group on its left (so "12:00:00" and "::1" are not).
+  /(?<![\w:])(?:[0-9a-f]{1,4}:){7}[0-9a-f]{1,4}(?![\w:])/i,
+  /(?<![\w:])(?:[0-9a-f]{1,4}:){1,6}:(?:[0-9a-f]{1,4}(?::[0-9a-f]{1,4}){0,5})?(?![\w:])/i,
+  /\.svc\b|cluster\.local/i,
+  /k3s01|siem01/i,
+  /service[\s_-]?account/i,
+  /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]+/,
+  /bearer\s+\S{16,}/i,
+  /hm1:/i,
+  /sdp-[0-9a-f]{16}/i,
+  /sdp\{/i,
+  /namespaces\/(?!sandbox(?:-unguarded)?\/)[a-z0-9-]+\/pods\//i,
+];
+
+/**
+ * `a/b` or `a_b` that does not start inside a path or a word ("/etc/shadow", "sdp_falco" are not one):
+ * a candidate `<namespace>/<pod>`, or the SIEM's own `<namespace>_<pod>` (S0-#1).
+ */
+const SLASHED = /(?<![\w./-])([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)([/_])([a-z0-9](?:[a-z0-9.-]*[a-z0-9])?)(?![\w])/g;
+
+/** The cluster's other namespaces (cluster/ manifests and the Kubernetes defaults): a ref into one is never shown. */
+const CLUSTER_NS: ReadonlySet<string> = new Set(["argocd", "cert-manager", "cloudflared", "default", "falco", "falco-response", "gateway", "hello", "kube-bench", "kube-node-lease", "kube-public", "kube-system", "kyverno", "policy-reporter", "portfolio-api", "trivy-system"]);
+
+/**
+ * Whether a text from the SIEM path may be shown: none of the never-published patterns, and no
+ * `<ns>/<pod>` reference outside the sandbox namespaces (ADR 0021: pod names only for the sandbox).
+ * An `a/b` is taken for a pod reference when `a` is one of the cluster's namespaces or `b` looks like
+ * a controller's pod name (it has a hyphen); "pods/exec" and "UDP/53", which the API's details carry,
+ * are not.
+ */
+export function publishable(text: string): boolean {
+  // Compatibility forms first: a fullwidth "ｋ３ｓ０１" or a ligature must not slip past an ASCII pattern.
+  const s = text.normalize("NFKC");
+  if (NEVER_PUBLISHED.some((re) => re.test(s))) return false;
+  for (const [, ns, sep, pod] of s.matchAll(SLASHED)) {
+    if (SANDBOX_NS.has(ns)) continue;
+    // `ns_x` is a ref only with a controller's pod name ("default_value", "read_shadow" are words).
+    if (sep === "/" ? CLUSTER_NS.has(ns) || pod.includes("-") : pod.includes("-")) return false;
+  }
+  return true;
+}
+
+const isTechnique = (v: unknown): v is string => isStr(v) && /^T\d{4}(?:\.\d{3})?$/.test(v);
+const techniques = (v: unknown): string[] => (Array.isArray(v) ? [...new Set(v.filter(isTechnique))].slice(0, 20) : []);
+const isSigmaId = (v: unknown): v is string => isStr(v) && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(v);
+const optMs = (v: unknown): number | null => (isCount(v) ? v : null);
+const oneOf = <T extends string>(list: readonly T[], v: unknown, fallback: T): T => ((list as readonly unknown[]).includes(v) ? (v as T) : fallback);
+/** Free text from the SIEM path: the whole text is checked before it is capped (a cap could cut a leak in half). */
+const siemText = (v: unknown, max: number): string => {
+  const s = isStr(v) ? stripControl(v) : "";
+  return publishable(s) ? cap(s, max) : "";
+};
+
+function parseStep(v: unknown): CorrelationStep | null {
+  if (!isObj(v) || !isTime(v.at) || !(CORRELATION_SOURCES as readonly unknown[]).includes(v.source)) return null;
+  const full = isStr(v.detail) ? stripControl(v.detail) : "";
+  const detail = publishable(full) ? cap(full, 200) : "";
+  return {
+    at: v.at,
+    source: v.source as CorrelationSource,
+    rule: siemText(v.rule, 200),
+    rule_id: isSigmaId(v.rule_id) ? v.rule_id : "",
+    command_seq: typeof v.command_seq === "number" && Number.isInteger(v.command_seq) && v.command_seq > 0 ? v.command_seq : null,
+    detail,
+    ...(full && !detail ? { withheld: true as const } : {}),
+  };
+}
+
+function parseIncident(v: unknown): CorrelationIncident | null {
+  if (!isObj(v) || !isStr(v.id) || !/^[0-9a-f]{16}$/.test(v.id) || !isStr(v.kind) || !/^[a-z][a-z-]{0,39}$/.test(v.kind)) return null;
+  if (!isTime(v.first_at) || !isTime(v.last_at)) return null;
+  const steps = Array.isArray(v.steps) ? v.steps.slice(0, MAX_STEPS).map(parseStep).filter((s): s is CorrelationStep => s !== null) : [];
+  return {
+    id: v.id,
+    kind: v.kind,
+    severity: oneOf<Severity | "unknown">(SEVERITIES, v.severity, "unknown"),
+    title: siemText(v.title, 200),
+    run_id: isRunId(v.run_id) ? v.run_id : "",
+    arm: optArm(v.arm) ?? "",
+    first_at: v.first_at,
+    last_at: v.last_at,
+    attack: techniques(v.attack),
+    falco_events: isCount(v.falco_events) && Number.isInteger(v.falco_events) ? v.falco_events : null,
+    flag_match: isBool(v.flag_match) ? v.flag_match : null,
+    ttd_ms: optMs(v.ttd_ms),
+    tti_ms: optMs(v.tti_ms),
+    steps: steps.sort((a, b) => Date.parse(a.at) - Date.parse(b.at)),
+    evidence: Array.isArray(v.evidence)
+      ? v.evidence
+          .filter((e): e is Obj => isObj(e) && (EVIDENCE_TYPES as readonly unknown[]).includes(e.type) && isStr(e.id) && /^[A-Za-z0-9_-]{1,64}$/.test(e.id) && publishable(e.id))
+          .slice(0, 20)
+          .map((e) => ({ type: e.type as EvidenceType, id: e.id as string }))
+      : [],
+  };
+}
+
+/**
+ * metrics.ingest_lag_ms: source -> ms or null; a bad key or value is dropped, an empty or absent map is
+ * undefined. A negative lag (clock skew between the hosts) is kept as the API publishes it (ADR 0036 §5).
+ */
+function ingestLag(v: unknown): CorrelationMetrics["ingest_lag_ms"] {
+  if (!isObj(v)) return undefined;
+  const rows = Object.entries(v)
+    .filter((e): e is [string, number | null] => /^[a-z0-9-]{1,30}$/.test(e[0]) && publishable(e[0]) && (e[1] === null || (typeof e[1] === "number" && Number.isFinite(e[1]))))
+    .slice(0, 12);
+  return rows.length ? rows : undefined;
+}
+
+const EMPTY_METRICS: CorrelationMetrics = { since: "", incidents: 0, median_ttd_ms: null, median_tti_ms: null, median_twin_dwell_ms: null, host_findings: 0 };
+
+/**
+ * GET /api/correlation. Throws only when the answer is not an object; `available` is true only for a
+ * literal `true`, and an unavailable answer carries nothing else (whatever the API sent with it).
+ */
+export function parseCorrelation(v: unknown): Correlation {
+  if (!isObj(v)) throw new TypeError("correlation: expected an object");
+  const checked_at = isTime(v.checked_at) ? v.checked_at : "";
+  if (v.available !== true) {
+    return { available: false, checked_at, rules: { commit: "", applied_at: null, status: "unknown" }, health: { ingest: "unknown", evidence_rewritten: null, disk: "unknown" }, metrics: EMPTY_METRICS, incidents: [] };
+  }
+  const r = isObj(v.rules) ? v.rules : {};
+  const hl = isObj(v.health) ? v.health : {};
+  const m = isObj(v.metrics) ? v.metrics : {};
+  const seen = new Set<string>();
+  const incidents = (Array.isArray(v.incidents) ? v.incidents.slice(0, MAX_INCIDENTS) : [])
+    .map(parseIncident)
+    .filter((i): i is CorrelationIncident => i !== null && !seen.has(i.id) && (seen.add(i.id), true))
+    // Newest first by first_at, as the API orders them (ADR 0036 §9), whatever order arrived.
+    .sort((a, b) => Date.parse(b.first_at) - Date.parse(a.first_at));
+  return {
+    available: true,
+    checked_at,
+    rules: {
+      commit: isStr(r.commit) && /^[0-9a-f]{40}$/.test(r.commit) ? r.commit : "",
+      applied_at: isTime(r.applied_at) ? r.applied_at : null,
+      status: oneOf<RulesStatus>(["applied", "refused", "failed", "stale", "unknown"], r.status, "unknown"),
+    },
+    health: {
+      ingest: oneOf<IngestHealth>(["ok", "silent", "unknown"], hl.ingest, "unknown"),
+      evidence_rewritten: isBool(hl.evidence_rewritten) ? hl.evidence_rewritten : null,
+      disk: oneOf<DiskHealth>(["ok", "high", "unknown"], hl.disk, "unknown"),
+    },
+    metrics: {
+      since: isTime(m.since) ? m.since : "",
+      incidents: isCount(m.incidents) ? m.incidents : incidents.length,
+      median_ttd_ms: optMs(m.median_ttd_ms),
+      median_tti_ms: optMs(m.median_tti_ms),
+      median_twin_dwell_ms: optMs(m.median_twin_dwell_ms),
+      host_findings: isCount(m.host_findings) ? m.host_findings : 0,
+      ...definedOnly({ ingest_lag_ms: ingestLag(m.ingest_lag_ms) }),
+    },
+    incidents,
+  };
+}
+
+const canaryOf = (v: unknown): string => (isStr(v) ? siemText(v, 80) : v === true ? "yes" : "");
+
+/** GET /api/correlation/rules: the index generated from siem/ in git. Malformed entries dropped. */
+export function parseRuleIndex(v: unknown): RuleIndex {
+  if (!isObj(v) || !Array.isArray(v.rules)) throw new TypeError("rules: expected {rules: [...]}");
+  const named = (x: unknown, max: number) =>
+    (Array.isArray(x) ? x.slice(0, max) : [])
+      .filter((o): o is Obj => isObj(o) && isStr(o.name) && o.name.length > 0)
+      .map((o) => ({ name: siemText(o.name, 120), file: isRepoPath(o.file) ? o.file : "", canary: canaryOf(o.canary) }))
+      .filter((o) => o.name);
+  const seen = new Set<string>();
+  return {
+    rules: v.rules
+      .slice(0, MAX_RULES)
+      .filter((o): o is Obj => isObj(o) && isSigmaId(o.id) && isStr(o.title) && !seen.has(o.id) && (seen.add(o.id), true))
+      .map((o) => ({
+        id: o.id as string,
+        title: siemText(o.title, 200),
+        level: oneOf<string>(["informational", ...SEVERITIES], o.level, ""),
+        status: isStr(o.status) && /^[a-z]{1,20}$/.test(o.status) ? o.status : "",
+        source: isStr(o.source) && /^[a-z0-9-]{1,30}$/.test(o.source) && publishable(o.source) ? o.source : "",
+        attack: techniques(o.attack),
+        file: isRepoPath(o.file) ? o.file : "",
+        line: isRepoPath(o.file) && isLine(o.line) ? o.line : 0,
+        canary: canaryOf(o.canary),
+      }))
+      .filter((r) => r.title),
+    monitors: named(v.monitors, 100),
+    correlations: named(v.correlations, 100),
+  };
+}

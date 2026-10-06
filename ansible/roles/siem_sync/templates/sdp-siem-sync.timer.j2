@@ -1,0 +1,12 @@
+# {{ ansible_managed }}
+# Runs the rules sync a minute after the timer starts, then {{ siem_sync_interval }} after each run ends.
+[Unit]
+Description=Run the rules sync every {{ siem_sync_interval }}
+
+[Timer]
+OnActiveSec=1min
+OnUnitInactiveSec={{ siem_sync_interval }}
+RandomizedDelaySec=30
+
+[Install]
+WantedBy=timers.target

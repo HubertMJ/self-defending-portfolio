@@ -24,6 +24,9 @@ src/lib/backfill.ts    when to fetch a run's history from /api/runs/{id} (mid-se
 src/ui/console.ts      the live run console: pipeline, kill-timer, pod, what was executed, proof, verify
 src/ui/terminal.ts     the attacker's terminal (ADR 0033): type commands, stream output, objectives, summary
 src/ui/defencemap.ts   the seven-layer defence map; also the terminal's result view
+src/ui/correlation.ts  "Correlation" (ADR 0036): the SIEM's incidents, SOC metrics, health line and rule library;
+                       hidden unless GET /api/correlation says available
+src/lib/correlation-fixture.json  /api/correlation and /rules for ?mock=1 and serve.mjs --siem (times shifted to now)
 src/ui/twin.ts         the unguarded twin: two shop windows side by side for a ?compare=1 run
 src/ui/stats.ts        the hero's live counters and objectives (GET /api/stats)
 src/ui/victim.ts       the victim app as a browser window, drawn from the probe's fields (text only)
@@ -57,12 +60,15 @@ from index.html, the banner's styles live in `src/mock.css` (mock build only), a
 (another visitor starts a quarantine run after 500 ms, watched read-only), `&mock-term-visitor=500`
 (another visitor starts a *terminal* run, watched read-only), `&mock-no-response=1` (Talon never
 answers a terminal command, so `sh -i` runs into its 10 s bound) and `&mock-details=0`
-(no /api/scenarios/{id}/details, as an API without the extension). `serve.mjs --stub-events` replays
+(no /api/scenarios/{id}/details, as an API without the extension) and `&mock-siem=0` (/api/correlation
+says `available: false`: the Correlation section stays hidden). `serve.mjs --stub-events` replays
 one full run with every event type over a real event stream; `--live-api` answers like the API
 deployed today (a JSON 404 for the terminal and `/api/stats`, `?compare=1` ignored); `--terminal-api` replays another
 visitor's terminal session joined mid-way, exactly as the interactive API publishes it (with
 `--slow-details`, its catalogue answers 1.5 s late; with `--twin`, a side-by-side run instead, contained
-while the twin is still held).
+while the twin is still held). `--siem` adds ADR 0036's /api/correlation and /api/correlation/rules (the
+fixture plus one incident the page must partly withhold and two malformed ones it must drop); `--no-siem`
+answers `available: false`.
 
 The terminal, the unguarded twin (a one-click card's main button, "Launch side by side", whenever the
 API knows `?compare=1`; "Guarded pod only" beside it runs the one defended pod) and
@@ -75,7 +81,7 @@ interactive front end runs without a cluster.
 npm run lint        # tsc --noEmit + no HTML/code DOM sinks in src/
 npm test            # unit tests
 npm run test:e2e    # both builds + Playwright (Chromium) against scripts/serve.mjs: the ?mock suite on
-                    # dist-mock/ (port 4173), the stub-API suites on the production dist/ (4174-4179)
+                    # dist-mock/ (port 4173), the stub-API suites on the production dist/ (4174-4181)
 npm run todo-content  # placeholder copy still to be written (add --strict to fail on it)
 npm run catalogue -- <path to cluster/infra/sandbox/scenarios/scenarios.yaml>   # regenerate the mock catalogue
 SDP_SCENARIOS_YAML=<that path> npm test                                         # ...and fail if it drifted

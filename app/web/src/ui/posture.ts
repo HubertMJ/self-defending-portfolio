@@ -7,12 +7,14 @@ import { h, replace, timeEl, when } from "../lib/dom";
 import { extLink, offlinePanel, sourceUrl } from "./common";
 
 const REFRESH_MS = 60_000;
+// How long an unfolded panel's live region stays off: past the accessibility tree's update of the draw.
+const LIVE_RESTORE_MS = 250;
 /** Rows of the per-image breakdown shown; the rest are summarised in the caption. */
 const TOP_OFFENDERS = 5;
 
-type Tone = "good" | "warning" | "critical" | "neutral";
+export type Tone = "good" | "warning" | "critical" | "neutral";
 
-function statusChip(tone: Tone, label: string): HTMLElement {
+export function statusChip(tone: Tone, label: string): HTMLElement {
   const glyph = tone === "good" ? "✓" : tone === "neutral" ? "•" : "!";
   return h("span", { class: `chip chip--${tone}` }, h("span", { "aria-hidden": "true" }, glyph), label);
 }
@@ -337,6 +339,12 @@ export interface PostureHandle {
   refresh: () => Promise<void>;
   /** The API's build commit, once known: the policy links point at it. */
   setCommit(commit: string): void;
+  /**
+   * Whether the panel can be seen (its section is not folded away). While it cannot, the posture is
+   * still fetched and passed to `onData` (the liveness line reads it), but not drawn; it is drawn on
+   * the way back.
+   */
+  setActive(active: boolean): void;
 }
 
 /** `onData`: every fresh posture, for the liveness line (its generated_at, kube-bench, Trivy times). */
@@ -344,16 +352,19 @@ export function mountPosture(root: HTMLElement, api: ApiClient, onData?: (p: Pos
   let timer: ReturnType<typeof setTimeout> | undefined;
   let last: Posture | undefined;
   let commit = "";
+  let active = true;
+  // The answer not drawn yet because the panel could not be seen.
+  let pending: Result<Posture> | undefined;
 
-  const show = (res: Result<Posture>) => {
-    root.setAttribute("aria-busy", "false");
+  const draw = (res: Result<Posture>) => {
+    if (!active) {
+      pending = res;
+      return;
+    }
+    pending = undefined;
     if (res.ok) {
-      root.dataset.state = "live";
-      last = res.value;
       replace(root, renderPostureData(res.value, Date.now(), commit));
-      onData?.(res.value);
     } else {
-      root.dataset.state = "offline";
       replace(
         root,
         offlinePanel({
@@ -364,6 +375,14 @@ export function mountPosture(root: HTMLElement, api: ApiClient, onData?: (p: Pos
         }),
       );
     }
+  };
+
+  const show = (res: Result<Posture>) => {
+    root.setAttribute("aria-busy", "false");
+    root.dataset.state = res.ok ? "live" : "offline";
+    if (res.ok) last = res.value;
+    draw(res);
+    if (res.ok) onData?.(res.value);
   };
 
   const refresh = async () => {
@@ -379,7 +398,16 @@ export function mountPosture(root: HTMLElement, api: ApiClient, onData?: (p: Pos
     setCommit(c) {
       if (c === commit) return;
       commit = c;
-      if (last && root.dataset.state === "live") replace(root, renderPostureData(last, Date.now(), commit));
+      if (last && root.dataset.state === "live") draw({ ok: true, value: last });
+    },
+    setActive(on) {
+      active = on;
+      if (!on || !pending) return;
+      // The panel is a polite live region (a refresh is announced), but the visitor who unfolds it
+      // asked to see it: drawn with the region off, which comes back once the new content is in.
+      root.setAttribute("aria-live", "off");
+      draw(pending);
+      setTimeout(() => root.setAttribute("aria-live", "polite"), LIVE_RESTORE_MS);
     },
   };
 }

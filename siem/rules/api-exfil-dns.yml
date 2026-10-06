@@ -1,0 +1,26 @@
+# The portfolio API's own record of a catalogue command it started in a visitor's terminal (sdp-api,
+# siem.command). The command id is fixed by the catalogue, so the technique is the catalogue's claim; the SIEM
+# evidence that it happened comes from the other sources.
+title: Terminal exfiltration - flag over DNS
+id: f4c0703b-e8a3-4540-a944-bfcc86783dc1
+status: experimental
+level: high
+description: >-
+  A visitor ran dns-exfil in the attacker terminal (catalogue T1048.003): the flag turned into a DNS label.
+  Only the SIEM sees the lookup (sdp-hubble); this is the API side of the dns-exfil correlation.
+author: Hubert Jabłoński
+date: 2026/10/04
+logsource:
+  product: sdp
+  service: api
+detection:
+  selection:
+    event.action: siem.command
+    api.state: started
+    api.technique: T1048.003
+  condition: selection
+tags:
+  - attack.exfiltration
+  - attack.t1048.003
+falsepositives:
+  - "A visitor (or the canary) running this catalogue command on the public page - that is the point"

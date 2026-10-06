@@ -374,6 +374,12 @@ export interface EvidenceHandle {
   setLoading(loading: boolean): void;
   /** The newest run GET /api/runs knows, named on the card until its events arrive. */
   setLatest(summary: RunSummary): void;
+  /**
+   * Whether #evidence can be seen (its section is not folded away). While it cannot, only the hero's
+   * card is drawn; the ticker, the liveness line and the full record are drawn on the way back, and
+   * what arrived meanwhile is not announced as new.
+   */
+  setActive(active: boolean): void;
 }
 
 const LIVENESS_FALLBACK_MS = 3000;
@@ -407,6 +413,7 @@ export function mountEvidence(
   // New items are marked and spoken only once the replay is in: replayed history stays silent.
   let primed = false;
   let lastKey = "";
+  let active = true;
 
   const ctxFor = (run: RunView, now: number): EvidenceContext => ({ title: titles.get(run.scenario) ?? run.scenario, now, details: details.get(run.scenario), commands });
 
@@ -417,13 +424,16 @@ export function mountEvidence(
     lastKey = key;
     const now = Date.now();
     card.dataset.state = run ? "run" : "empty";
-    if (run) {
-      replace(card, renderEvidenceCard(run, ctxFor(run, now)));
-      replace(section.detail, renderEvidenceDetail(run, ctxFor(run, now)));
-    } else if (decided) {
-      replace(card, renderNoAttack({ apiStartedAt: live.apiStartedAt, lastRunAt, latest, now, loading }));
-      replace(section.detail, h("p", { class: "small" }, "The full record of the next attack appears here as it happens."));
-    }
+    if (run) replace(card, renderEvidenceCard(run, ctxFor(run, now)));
+    else if (decided) replace(card, renderNoAttack({ apiStartedAt: live.apiStartedAt, lastRunAt, latest, now, loading }));
+    drawDetail();
+  };
+
+  const drawDetail = () => {
+    if (!active) return;
+    const run = view.runs[0];
+    if (run) replace(section.detail, renderEvidenceDetail(run, ctxFor(run, Date.now())));
+    else if (decided) replace(section.detail, h("p", { class: "small" }, "The full record of the next attack appears here as it happens."));
   };
 
   const drawTicker = () => {
@@ -435,6 +445,7 @@ export function mountEvidence(
     const shape = items.length ? items.map((i) => i.key).join("\n") : `empty|${connected}|${since}|${live.tickAt !== undefined}`;
     const wasPrimed = primed;
     primed ||= decided;
+    if (!active) return;
     if (shape === tickerShape) {
       refreshRelative(section.ticker, now);
       const server = section.ticker.querySelector<HTMLTimeElement>(".ticker__server");
@@ -454,7 +465,7 @@ export function mountEvidence(
   };
 
   const drawLiveness = () => {
-    if (!livenessShown) return;
+    if (!livenessShown || !active) return;
     replace(section.liveness, renderLiveness(live, Date.now()));
   };
 
@@ -473,7 +484,7 @@ export function mountEvidence(
   // timer, so a link focused in the card keeps its focus.
   setInterval(() => {
     const now = Date.now();
-    for (const el of [card, section.detail, section.ticker, section.liveness]) refreshRelative(el, now);
+    for (const el of active ? [card, section.detail, section.ticker, section.liveness] : [card]) refreshRelative(el, now);
   }, RELATIVE_REFRESH_MS);
 
   return {
@@ -528,6 +539,17 @@ export function mountEvidence(
       latest = summary;
       loading = false;
       drawRun();
+    },
+    setActive(on) {
+      if (on === active) return;
+      active = on;
+      if (!on) return;
+      // Whatever reached the ticker while it was folded is on it now, but not "new".
+      seen = new Set(tickerItems(view).map((i) => i.key));
+      tickerShape = "";
+      drawTicker();
+      drawLiveness();
+      drawDetail();
     },
   };
 }

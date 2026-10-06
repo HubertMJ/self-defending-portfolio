@@ -1,0 +1,17 @@
+# The Security Analytics detector of the sdp-api data stream (ADR 0034 "Rules from git"): every rule of
+# log type sdp_api runs here once a minute, and each finding raises an alert through the one trigger
+# the sync adds. A rule belongs to exactly one detector, the one of its source (siem_lint.py).
+name: sdp-api-rules
+source: api
+interval_minutes: 1
+rules:
+  - c688437b-f1eb-4c1b-af13-13738b0fce91  # api-credentials-flag
+  - 8e8c5e64-5298-46cb-bb6f-45d11ff9f40b  # api-credentials-shadow
+  - 9f000f47-2f12-40b1-b04a-06319e1ef425  # api-exec-dropped-binary
+  - c78e8dde-6c3b-4410-8425-bd3ccf82bd1a  # api-exec-shell
+  - f4c0703b-e8a3-4540-a944-bfcc86783dc1  # api-exfil-dns
+  - a3480924-d541-4ad0-acd5-61487b20547e  # api-exfil-web
+  - 344dca25-2ac6-4a93-b5b3-7db61552f229  # api-recon-files
+  - e73b1008-1ef3-4438-b3df-a60e9251ac9b  # api-recon-process
+  - 03ffcde5-3de6-4626-93dd-dd98f1d8cde3  # api-recon-system
+  - 43a02cd0-4943-4c88-9eed-b8ff82d541a9  # api-recon-user

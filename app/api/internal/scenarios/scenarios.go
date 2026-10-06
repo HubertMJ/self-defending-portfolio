@@ -276,6 +276,11 @@ func (s *Scenario) validate() error {
 	if !idPattern.MatchString(s.ID) {
 		return errors.New("id must be a DNS-1123 label of at most 40 characters")
 	}
+	// A pod is named <id>-<run>: an id starting p3c- would give a real run the SIEM canary marker,
+	// and its incidents would be dropped as test data (ADR 0036).
+	if strings.HasPrefix(s.ID, "p3c-") {
+		return errors.New("id must not start with p3c- (the SIEM canary marker)")
+	}
 	if strings.TrimSpace(s.Title) == "" {
 		return errors.New("title is empty")
 	}

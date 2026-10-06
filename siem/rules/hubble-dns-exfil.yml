@@ -1,0 +1,27 @@
+# SA's |re is a Lucene regular expression matched against the whole value (implicitly anchored, no ^ or $,
+# backslashes unusable), unlike Sigma's search semantics (siem contract S0-#3, S0-k). sdp.lua lower-cases
+# dns.query and keeps the trailing dot, hence the optional [.] at the end.
+title: Hubble - flag-shaped DNS lookup
+id: fa0bd074-18fc-4827-834c-705c707a94f9
+status: experimental
+level: critical
+description: >-
+  A sandbox pod looked up sdp-<16 hex>.x.exfil.sdp.test - the shape of the run flag turned into a DNS label
+  (terminal command dns-exfil). The cluster's sinkhole answers NXDOMAIN and never forwards the zone; Falco has
+  no rule for name lookups, so only the SIEM sees it.
+author: Hubert Jabłoński
+date: 2026/10/04
+logsource:
+  product: sdp
+  service: hubble
+detection:
+  selection:
+    dns.query|re: 'sdp-[0-9a-f]{16}[.]x[.]exfil[.]sdp[.]test[.]?'
+  condition: selection
+tags:
+  - attack.exfiltration
+  - attack.t1048.003
+  - attack.command_and_control
+  - attack.t1071.004
+falsepositives:
+  - "None known: no legitimate name has this shape"

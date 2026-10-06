@@ -1,0 +1,24 @@
+# A Falco alert shipped from k3s01 (sdp-falco). Rule names have spaces and SA never matches a value with a
+# space, so the rule matches the slug sdp.lua writes next to the name (siem contract S0-#4).
+title: Falco - network tool in the sandbox
+id: d546021b-1d62-4dfa-b2d3-7e94822640d4
+status: experimental
+level: high
+description: >-
+  Falco rule "SDP network tool in sandbox" (custom) fired: wget, curl or nc started in a sandbox container
+  (scenario network-tool, terminal command beacon).
+author: Hubert Jabłoński
+date: 2026/10/04
+logsource:
+  product: sdp
+  service: falco
+detection:
+  selection:
+    event.kind: alert
+    falco.rule_slug: sdp-network-tool-in-sandbox
+  condition: selection
+tags:
+  - attack.command_and_control
+  - attack.t1071.001
+falsepositives:
+  - "A scenario or terminal command on the public page, or tests/scenarios/run.sh - each is a real attack on a sandbox pod"

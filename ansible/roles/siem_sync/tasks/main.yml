@@ -1,0 +1,162 @@
+---
+# The rules sync (ADR 0034 "Rules from git", siem contract P3). Order: packages, user and directories,
+# the program, the unit and the timer - the timer is enabled last, so no run starts half installed.
+- name: Look for the rules-sync certificate and key
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  loop: ["{{ siem_sync_cert }}", "{{ siem_sync_key }}", "{{ siem_sync_ca }}"]
+  register: siem_sync_identity
+
+# The opensearch role makes the rules-sync identity on siem01 (it never passes the remote entry
+# point); a check run before that role has run once cannot have it yet.
+- name: Assert the rules-sync identity exists
+  ansible.builtin.assert:
+    that:
+      - siem_sync_identity.results | rejectattr('stat.exists') | list | length == 0
+    fail_msg: >-
+      {{ siem_sync_identity.results | rejectattr('stat.exists') | map(attribute='item') | join(', ') }} missing:
+      the opensearch role makes the rules-sync identity, run it first.
+    success_msg: The rules-sync identity is in place.
+  when: not ansible_check_mode
+
+- name: Install git and PyYAML
+  ansible.builtin.apt:
+    name: [git, python3-yaml]
+    state: present
+    install_recommends: false
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Create the system group the sync runs as
+  ansible.builtin.group:
+    name: "{{ siem_sync_user }}"
+    system: true
+
+- name: Create the system user the sync runs as
+  ansible.builtin.user:
+    name: "{{ siem_sync_user }}"
+    group: "{{ siem_sync_user }}"
+    system: true
+    shell: /usr/sbin/nologin
+    home: "{{ siem_sync_state_dir }}"
+    create_home: false
+
+- name: Create the program and state directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: "{{ item.owner }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: "{{ siem_sync_lib_dir }}", owner: root, mode: "0755"}
+    - {path: "{{ siem_sync_state_dir }}", owner: "{{ siem_sync_user }}", mode: "0750"}
+  loop_control:
+    label: "{{ item.path }}"
+
+# From the operator's checkout, pinned by this role: the fetched tree is only ever read as data.
+- name: Install the sync program, the lint and the flag remover
+  ansible.builtin.copy:
+    src: "{{ item }}"
+    dest: "{{ siem_sync_lib_dir }}/{{ item }}"
+    owner: root
+    group: root
+    mode: "0755"
+  loop: [sdp_siem_sync.py, siem_lint.py, consume-flags, siem-sync-index.json]
+
+# The index of the sync's records (the API reads it, ADR 0036) is created and extended here with the
+# admin certificate: rules-sync may write records but not change mappings, and an index made by an
+# older version (dynamic: false) would keep new fields such as the heartbeat's kind unsearchable.
+- name: Read the siem-sync index
+  ansible.builtin.uri:
+    url: "{{ siem_sync_url }}/siem-sync/_mapping"
+    ca_path: "{{ siem_sync_ca }}"
+    client_cert: "{{ siem_sync_admin_cert }}"
+    client_key: "{{ siem_sync_admin_key }}"
+    status_code: [200, 404]
+  register: siem_sync_index
+  check_mode: false
+
+- name: Note the wanted and the live fields of siem-sync
+  ansible.builtin.set_fact:
+    siem_sync_index_want: "{{ lookup('ansible.builtin.file', 'siem-sync-index.json') | from_json }}"
+    siem_sync_index_live: >-
+      {{ (siem_sync_index.json | default({})).get('siem-sync', {}).get('mappings', {}).get('properties', {}) }}
+
+- name: Create the siem-sync index with its mapping
+  ansible.builtin.uri:
+    url: "{{ siem_sync_url }}/siem-sync"
+    method: PUT
+    body: "{{ siem_sync_index_want }}"
+    body_format: json
+    ca_path: "{{ siem_sync_ca }}"
+    client_cert: "{{ siem_sync_admin_cert }}"
+    client_key: "{{ siem_sync_admin_key }}"
+  changed_when: true
+  when: siem_sync_index.status == 404
+
+- name: Find siem-sync fields mapped with another type
+  ansible.builtin.set_fact:
+    siem_sync_index_mismatch: >-
+      {%- set m = [] -%}
+      {%- for k, v in siem_sync_index_live.items() -%}
+      {%-   if k in siem_sync_index_want.mappings.properties
+            and v.get('type', 'object') != siem_sync_index_want.mappings.properties[k].get('type', 'object') -%}
+      {%-     set _ = m.append(k) -%}
+      {%-   endif -%}
+      {%- endfor -%}
+      {{ m }}
+
+- name: Assert no existing field of siem-sync has another type
+  ansible.builtin.assert:
+    that:
+      - siem_sync_index_mismatch | length == 0
+    fail_msg: "siem-sync maps {{ siem_sync_index_mismatch | join(', ') }} with another type; that needs a new index."
+    success_msg: Existing siem-sync fields keep their types.
+
+- name: Add the missing fields to siem-sync
+  ansible.builtin.uri:
+    url: "{{ siem_sync_url }}/siem-sync/_mapping"
+    method: PUT
+    body:
+      properties: >-
+        {{ siem_sync_index_want.mappings.properties | dict2items
+           | rejectattr('key', 'in', siem_sync_index_live) | items2dict }}
+    body_format: json
+    ca_path: "{{ siem_sync_ca }}"
+    client_cert: "{{ siem_sync_admin_cert }}"
+    client_key: "{{ siem_sync_admin_key }}"
+  changed_when: true
+  when:
+    - siem_sync_index.status == 200
+    - siem_sync_index_want.mappings.properties | dict2items | rejectattr('key', 'in', siem_sync_index_live) | list | length > 0
+
+- name: Write the sync's settings
+  ansible.builtin.template:
+    src: sync.env.j2
+    dest: /etc/sdp-siem/sync.env
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Install the unit and the timer
+  ansible.builtin.template:
+    src: "{{ item }}.j2"
+    dest: /etc/systemd/system/{{ item }}
+    owner: root
+    group: root
+    mode: "0644"
+  loop: [sdp-siem-sync.service, sdp-siem-sync.timer]
+  register: siem_sync_units
+  notify: Reload systemd
+
+- name: Load the unit files before the timer is touched
+  ansible.builtin.meta: flush_handlers
+
+# A check run before the first apply has no unit to look at.
+- name: Start and enable the timer, or stop and disable it
+  ansible.builtin.systemd_service:
+    name: sdp-siem-sync.timer
+    enabled: "{{ siem_sync_timer_enabled | bool }}"
+    state: "{{ 'started' if siem_sync_timer_enabled | bool else 'stopped' }}"
+  when: not (ansible_check_mode and siem_sync_units is changed)

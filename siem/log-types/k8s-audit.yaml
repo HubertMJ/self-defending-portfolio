@@ -1,0 +1,6 @@
+# Security Analytics log type of the sdp-k8s-audit data stream (ADR 0034 "Rules from git"). The name has no
+# hyphen: SA's correlation list truncates hyphenated log-type names (siem contract S0-#2); the data
+# stream keeps its hyphen. Detectors and correlation rules use the name as their category.
+name: sdp_k8s_audit
+source: k8s-audit
+description: Kubernetes API server audit events of k3s01, data stream sdp-k8s-audit

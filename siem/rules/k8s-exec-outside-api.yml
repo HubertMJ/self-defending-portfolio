@@ -1,0 +1,29 @@
+# A Kubernetes audit event (sdp-k8s-audit). Cluster identities starting with system: are kept verbatim inside
+# the SIEM (F3), so the API's ServiceAccount can be named; kubectl's exec arrives as verb get (websocket), the
+# API's as create, so the verb is not matched.
+title: Kubernetes - exec into a sandbox pod, not by the API
+id: bcef7457-e973-4d34-a82b-e7705623bdc5
+status: experimental
+level: high
+description: >-
+  Someone other than the portfolio API's ServiceAccount opened an exec session into a pod in sandbox or
+  sandbox-unguarded. Visitors only ever reach those pods through the API; anyone else is an operator or an
+  intruder.
+author: Hubert Jabłoński
+date: 2026/10/04
+logsource:
+  product: sdp
+  service: k8s-audit
+detection:
+  exec:
+    audit.object.resource: pods
+    audit.object.subresource: exec
+    k8s.ns.name|startswith: sandbox
+  api:
+    user.name: system:serviceaccount:portfolio-api:portfolio-api
+  condition: exec and not api
+tags:
+  - attack.execution
+  - attack.t1609
+falsepositives:
+  - "The operator running tests/scenarios/run.sh, which execs with kubectl (the canary)"

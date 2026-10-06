@@ -81,12 +81,13 @@ describe("stripTodoContent on src/index.html (review 2, item 9)", () => {
     expect(sectionIds(out)).not.toContain("about");
     expect(navLinks(out)).not.toContain("about");
     // Everything else stays: the sections, the skills list, the real project card, every other link.
-    // ADR 0035, amended 2026-10-04: the evidence comes right after the hero, the verify panel is the last
-    // section of the page and the one link to it is in the footer, not the hero.
-    expect(sectionIds(out)).toEqual(["top", "evidence", "posture", "attack", "console", "how", "skills", "projects", "verify"]);
+    // ADR 0035, amended 2026-10-05: the attack, its response and the SIEM's correlation come right after
+    // the hero; the evidence, the posture and the verify panel follow How it works, above the skills; the
+    // one link to the verify panel is in the footer, not the hero.
+    expect(sectionIds(out)).toEqual(["top", "attack", "console", "correlation", "how", "evidence", "posture", "verify", "skills", "projects"]);
     expect([...out.matchAll(/href="#verify"/g)]).toHaveLength(1);
     expect(out.slice(out.indexOf("<footer"))).toContain('<a href="#verify">Verify the running images</a>');
-    expect(navLinks(out)).toEqual(["posture", "attack", "how"]);
+    expect(navLinks(out)).toEqual(["attack", "how", "posture"]);
     expect(out).toContain("<li>Kubernetes (k3s)</li>");
     expect(out).toContain("self-defending-portfolio</a></h3>");
     expect(out).not.toContain("[TODO");
@@ -103,7 +104,7 @@ describe("stripTodoContent on src/index.html (review 2, item 9)", () => {
 
   it("keeps a project card's written lines and drops its unwritten tag line", () => {
     const out = stripTodoContent(
-      page.replace("<h3>[TODO-CONTENT: project name]</h3>\n          <p>[TODO-CONTENT: what it does and what you did]</p>", "<h3>edge-proxy</h3>\n          <p>A proxy I wrote.</p>"),
+      page.replace("<h3>[TODO-CONTENT: project name]</h3>\n            <p>[TODO-CONTENT: what it does and what you did]</p>", "<h3>edge-proxy</h3>\n            <p>A proxy I wrote.</p>"),
     );
     expect(out).toContain("<h3>edge-proxy</h3>");
     expect(out).toContain("<p>A proxy I wrote.</p>");

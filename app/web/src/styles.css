@@ -653,6 +653,123 @@ main {
   color: var(--text-muted);
 }
 
+/* Each section below the hero folds under its heading (ui/sections.ts): the h2's text is a button,
+   the chevron points down while open and right while folded. A folded section keeps its eyebrow (and
+   with it its number) and its title, and nothing else. The title wraps like any heading: nothing in
+   the button may widen a 320 px page. */
+.section__toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5em;
+  max-width: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  text-align: left;
+  white-space: normal;
+  cursor: pointer;
+}
+
+.section__label {
+  min-width: 0;
+  overflow-wrap: break-word;
+}
+
+.section__chevron {
+  flex: none;
+  width: 0.38em;
+  height: 0.38em;
+  margin-inline: 0.1em;
+  border-right: 0.1em solid currentColor;
+  border-bottom: 0.1em solid currentColor;
+  color: var(--text-faint);
+  transform: translateY(-0.12em) rotate(45deg);
+}
+
+.section__toggle[aria-expanded="false"] .section__chevron {
+  transform: rotate(-45deg);
+}
+
+.section__toggle:hover .section__chevron {
+  color: var(--accent);
+}
+
+.section__toggle:focus-visible {
+  outline-offset: 4px;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  html:not(.reduced-motion) .section__chevron {
+    transition: transform 0.18s ease;
+  }
+}
+
+.section--collapsed {
+  padding-block: clamp(1.5rem, 4vw, 2.25rem);
+}
+
+.section--collapsed .section__head {
+  margin-bottom: 0;
+}
+
+.section--collapsed .section__head h2 {
+  margin-bottom: 0;
+}
+
+.section--collapsed .section__head > :not(.eyebrow, h2) {
+  display: none;
+}
+
+/* Before ui/sections.ts mounts, theme.ts names the sections a visitor folded in html[data-folded]
+   (from localStorage, before first paint): they look folded already, so nothing jumps when the buttons
+   arrive. sections.ts drops the attribute once it has folded them itself. One line per foldable section;
+   a unit test checks the list against index.html. */
+:is(
+html[data-folded~="attack"] #attack,
+html[data-folded~="correlation"] #correlation,
+html[data-folded~="how"] #how,
+html[data-folded~="about"] #about,
+html[data-folded~="evidence"] #evidence,
+html[data-folded~="posture"] #posture,
+html[data-folded~="verify"] #verify,
+html[data-folded~="skills"] #skills,
+html[data-folded~="projects"] #projects
+) {
+  padding-block: clamp(1.5rem, 4vw, 2.25rem);
+}
+
+:is(
+html[data-folded~="attack"] #attack,
+html[data-folded~="correlation"] #correlation,
+html[data-folded~="how"] #how,
+html[data-folded~="about"] #about,
+html[data-folded~="evidence"] #evidence,
+html[data-folded~="posture"] #posture,
+html[data-folded~="verify"] #verify,
+html[data-folded~="skills"] #skills,
+html[data-folded~="projects"] #projects
+) :is(.section__head, .section__head h2) {
+  margin-bottom: 0;
+}
+
+:is(
+html[data-folded~="attack"] #attack,
+html[data-folded~="correlation"] #correlation,
+html[data-folded~="how"] #how,
+html[data-folded~="about"] #about,
+html[data-folded~="evidence"] #evidence,
+html[data-folded~="posture"] #posture,
+html[data-folded~="verify"] #verify,
+html[data-folded~="skills"] #skills,
+html[data-folded~="projects"] #projects
+) :is(.section__head > :not(.eyebrow, h2), .section__body) {
+  display: none;
+}
+
 .panel-title {
   font: 600 0.8rem/1.4 var(--font-mono);
   letter-spacing: 0.1em;
@@ -3801,4 +3918,267 @@ html[data-terminal="off"] .needs-terminal {
 
 .tile__remedy p {
   margin: 0.2rem 0 0;
+}
+
+/* ---------- correlation (ADR 0036) ---------- */
+
+/* The section is hidden in the HTML and shown by ui/correlation.ts only while the SIEM answers; a
+   hidden section takes no part in the stylesheet's numbering, so "How it works" keeps its number. */
+.section--correlation {
+  background: linear-gradient(180deg, color-mix(in srgb, var(--detect) 3%, transparent), transparent 35%);
+}
+
+/* Five tiles fit one row on a desktop: none is left alone on a second one. */
+.corr-metrics {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 11rem), 1fr));
+}
+
+.corr-health-wrap,
+.corr-metrics-wrap,
+.corr-board-wrap {
+  margin-bottom: 2rem;
+}
+
+.corr-health__list {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.88rem;
+}
+
+.corr-health__list li {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.corr-health .chip {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.corr-health__checked {
+  margin: 0.6rem 0 0;
+}
+
+.corr-incidents {
+  display: grid;
+  gap: 1rem;
+}
+
+@media (min-width: 900px) {
+  .corr-incidents {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.incident {
+  min-width: 0;
+  padding: 1rem 1.1rem;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--neutral);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.incident[data-severity="critical"],
+.incident[data-severity="high"] {
+  border-left-color: var(--critical);
+}
+
+.incident[data-severity="medium"] {
+  border-left-color: var(--warning);
+}
+
+.incident__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+
+.incident .chip {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.incident__title {
+  margin: 0;
+  min-width: 0;
+  font-size: 1rem;
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+
+.incident__kind {
+  margin: 0.4rem 0 0;
+  font-size: 0.88rem;
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+.incident__when {
+  margin: 0.2rem 0 0.7rem;
+}
+
+.incident__when time,
+.corr-step__at {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+}
+
+.incident__facts div {
+  grid-template-columns: 7.5rem minmax(0, 1fr);
+}
+
+.corr-nofalco {
+  font-weight: 650;
+  color: var(--detect);
+}
+
+/* The evidence timeline: one line per step, a rule down the left like the run history's stages. */
+.corr-steps {
+  display: grid;
+  gap: 0.35rem;
+  margin: 0;
+  padding: 0 0 0 0.9rem;
+  list-style: none;
+  font-size: 0.84rem;
+  border-left: 2px solid var(--border-strong);
+}
+
+.corr-step {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.corr-step__delta {
+  color: var(--text-faint);
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+}
+
+.corr-step__detail {
+  color: var(--text-muted);
+}
+
+.incident__evidence code {
+  overflow-wrap: anywhere;
+}
+
+.corr-step__detail--withheld {
+  font-style: italic;
+}
+
+.tag--src {
+  color: var(--text-muted);
+}
+
+.tag--falco {
+  color: var(--detect);
+}
+
+.tag--talon {
+  color: var(--respond);
+}
+
+.tag--api {
+  color: var(--attack);
+}
+
+.incident__evidence {
+  margin: 0.7rem 0 0;
+}
+
+.corr-older {
+  margin-top: 1rem;
+}
+
+.corr-older summary,
+.corr-rulelist summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.corr-older__list,
+.corr-rulelist__list,
+.corr-named__list {
+  display: grid;
+  gap: 0.4rem;
+  margin: 0.6rem 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.86rem;
+}
+
+.corr-older__item,
+.corr-rule,
+.corr-named__list li {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.corr-older__item time {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+}
+
+.corr-matrix {
+  margin: 1rem 0;
+}
+
+.corr-matrix th,
+.corr-matrix td {
+  text-align: center;
+  white-space: nowrap;
+}
+
+.corr-cell {
+  color: var(--respond);
+  font-weight: 650;
+}
+
+.corr-cell--none {
+  color: var(--text-faint);
+  font-weight: 400;
+}
+
+.corr-cell--gap {
+  color: var(--critical);
+  font-weight: 650;
+}
+
+.corr-rulelist {
+  margin: 1rem 0;
+}
+
+.tag--level {
+  color: var(--text-muted);
+}
+
+.tag--level[data-level="critical"],
+.tag--level[data-level="high"] {
+  color: var(--critical);
+}
+
+.tag--level[data-level="medium"] {
+  color: var(--warning);
+}
+
+.corr-named h4 {
+  margin: 1rem 0 0;
+  font-size: 0.92rem;
+}
+
+.corr-lag {
+  margin: 0.75rem 0 0;
+  overflow-wrap: anywhere;
+}
+
+.corr-lag__ms {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
 }

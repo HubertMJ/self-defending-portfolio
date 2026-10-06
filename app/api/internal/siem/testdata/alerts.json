@@ -1,0 +1,28 @@
+{
+  "alerts": [
+    {
+      "id": "Ub0aBaEBGESM_NsHy43d",
+      "version": 1,
+      "monitor_id": "U9K3BaEBGESM_NsHx43B",
+      "schema_version": 5,
+      "monitor_version": 1,
+      "monitor_name": "sdp-git: prevented-not-detected (S0)",
+      "monitor_user": {"name": "rules-sync-g1", "backend_roles": [], "roles": ["sdp_rules_sync"], "custom_attribute_names": [], "user_requested_tenant": null},
+      "trigger_id": "UtK3BaEBGESM_NsHx428",
+      "trigger_name": "prevented without falco",
+      "finding_ids": [],
+      "related_doc_ids": [],
+      "state": "ACTIVE",
+      "error_message": null,
+      "alert_history": [],
+      "severity": "2",
+      "action_execution_results": [],
+      "agg_alert_content": {"parent_bucket_path": "composite_agg", "bucket_keys": ["sandbox_g2-silent"]},
+      "start_time": 1791097352733,
+      "last_notification_time": 1791097352733,
+      "end_time": null,
+      "acknowledged_time": null
+    }
+  ],
+  "totalAlerts": 1
+}

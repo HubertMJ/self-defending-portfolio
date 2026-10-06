@@ -1,0 +1,15 @@
+---
+galaxy_info:
+  role_name: siem_sync
+  author: self-defending-portfolio
+  description: The rules sync on siem01 - a timer applies siem/ from git to OpenSearch, fast-forward only, as data.
+  license: MIT
+  min_ansible_version: "2.17"
+  platforms:
+    - name: Debian
+      versions:
+        - trixie
+  galaxy_tags:
+    - opensearch
+    - siem
+dependencies: []

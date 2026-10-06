@@ -1,0 +1,41 @@
+---
+# The rules sync on siem01 (ADR 0034 "Rules from git", siem contract P3): every few minutes it fetches
+# a branch of the public repository over HTTPS - the trust Argo CD gives the same repository - and
+# applies siem/ to OpenSearch with the rules-sync certificate, as data only. The program and its lint
+# come from this role (files/), never from the fetched tree.
+
+# What is fetched. Only fast-forwards from the last applied commit are applied (accept a new base
+# after a force-push by writing its commit into <flag dir>/accept-commit).
+siem_sync_repo_url: https://github.com/HubertMJ/self-defending-portfolio.git
+siem_sync_branch: main
+# Transports git may use (GIT_ALLOW_PROTOCOL); the offline test serves a file:// repository.
+siem_sync_git_protocols: https
+
+# OpenSearch on the loopback, and the rules-sync identity the opensearch role made (CN=rules-sync-g<N>).
+# The files reach the unit as systemd credentials; the program never opens them by path.
+siem_sync_url: https://127.0.0.1:9200
+siem_sync_ca: /etc/opensearch/certs/ca.crt
+siem_sync_cert: /etc/sdp-siem/pki/rules-sync.crt
+siem_sync_key: /etc/sdp-siem/pki/rules-sync.key
+# The admin identity (opensearch role) creates and extends the siem-sync index at install time.
+siem_sync_admin_cert: /etc/sdp-siem/pki/admin.crt
+siem_sync_admin_key: /etc/sdp-siem/pki/admin.key
+
+# More managed deletions than this in one run are refused unless <flag dir>/allow-mass-delete exists
+# (removed again after the next successful run).
+siem_sync_delete_cap: 5
+# Likewise for updates of rules and monitors (a rewritten detection is as consequential as a removed
+# one), gated by <flag dir>/allow-mass-change.
+siem_sync_change_cap: 5
+# The fetched repository may not grow past this (MiB); objects are fsck-checked on fetch.
+siem_sync_repo_max_mb: 1024
+siem_sync_flag_dir: /etc/sdp-siem
+
+# How often the timer runs the sync, and whether it runs at all: false stops and disables the timer
+# (the rollback; what was applied stays, it only detects).
+siem_sync_interval: 5min
+siem_sync_timer_enabled: true
+
+siem_sync_lib_dir: /usr/local/lib/sdp-siem-sync
+siem_sync_state_dir: /var/lib/sdp-siem-sync
+siem_sync_user: sdp-sync

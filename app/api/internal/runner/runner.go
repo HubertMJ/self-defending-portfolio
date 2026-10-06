@@ -32,6 +32,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -142,6 +143,18 @@ type Config struct {
 	// it): if the pod has not been deleted by then, the exec is cancelled (ADR 0029: 10 s). Without
 	// it a shell nobody answers would hold the run, and the global slot, until the run's deadline.
 	TTYCommandTimeout time.Duration
+	// Flags gets a terminal run's flag MAC at its start and the run's end, for the SIEM's dns-exfil
+	// flag match (ADR 0036, "Flag match"). FlagMAC is applied here, so the flag itself never leaves
+	// the runner; only `HMAC(process key, "sdp-<16 hex>")` does. Either nil: nothing is handed on.
+	Flags   FlagSink
+	FlagMAC func(label string) []byte
+}
+
+// FlagSink receives the MAC of a terminal run's flag label with the run's pod ref (`<ns>_<pod>`, as
+// the SIEM stores it), and later the time the run ended (*incidents.Tracker).
+type FlagSink interface {
+	RegisterFlag(runID, podRef string, mac []byte)
+	EndFlag(runID string, at time.Time)
 }
 
 // Runner runs scenarios. Safe for concurrent use.
@@ -352,6 +365,9 @@ func (r *Runner) StartTerminal(sc scenarios.Scenario, release func()) (string, s
 	rn.sc = sc
 	rn.token = newToken()
 	rn.flag = newFlag()
+	if r.cfg.Flags != nil && r.cfg.FlagMAC != nil {
+		r.cfg.Flags.RegisterFlag(rn.id, rn.namespace+"_"+rn.pod, r.cfg.FlagMAC(flagLabel(rn.flag)))
+	}
 	rn.cmds = make(chan commandReq)
 	rn.loopDone = make(chan struct{})
 	rn.answered = make(chan struct{}, 1)
@@ -386,6 +402,9 @@ func (r *Runner) launch(rn *run, sc scenarios.Scenario, release func()) {
 				r.markEndedLocked(rn.id)
 			}
 			r.mu.Unlock()
+			if rn.terminal && r.cfg.Flags != nil && r.cfg.FlagMAC != nil {
+				r.cfg.Flags.EndFlag(rn.id, r.now())
+			}
 		}()
 		r.execute(rn, sc)
 	}()
@@ -939,6 +958,11 @@ func newToken() string { return randomHex(16) }
 
 // newFlag is the run's SDP_FLAG: "SDP{" + 16 hex + "}".
 func newFlag() string { return "SDP{" + randomHex(8) + "}" }
+
+// flagLabel is the DNS label dns-exfil turns the flag into (ADR 0034): "SDP{<hex>}" -> "sdp-<hex>".
+func flagLabel(flag string) string {
+	return "sdp-" + strings.TrimSuffix(strings.TrimPrefix(flag, "SDP{"), "}")
+}
 
 func randomHex(n int) string {
 	b := make([]byte, n)

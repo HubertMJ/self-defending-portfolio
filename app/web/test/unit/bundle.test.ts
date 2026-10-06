@@ -28,7 +28,11 @@ const tree = (dir: string): { file: string; text: string }[] =>
 // Nothing of the mock anywhere in dist/: the banner (markup, styles, the script that moves it), the
 // two data markers, and the words the page uses only for the mock.
 // (esbuild writes the "·" of the header's "mock ·" as \xB7.)
-const TREE_MARKERS: (string | RegExp)[] = ["mock-banner", MOCK_MARKER, FIXTURE_MARKER, /mock (·|\\xB7)/, "Mock data"];
+// The correlation fixture (src/lib/correlation-fixture.json, ADR 0036) carries no marker of its own:
+// its first incident's id and first rule's Sigma id stand for it, values nothing real would carry.
+const CORRELATION_FIXTURE = JSON.parse(readFileSync(join(process.cwd(), "src/lib/correlation-fixture.json"), "utf8"));
+const CORRELATION_MARKERS: string[] = [CORRELATION_FIXTURE.correlation.incidents[0].id, CORRELATION_FIXTURE.rules.rules[0].id];
+const TREE_MARKERS: (string | RegExp)[] = ["mock-banner", MOCK_MARKER, FIXTURE_MARKER, /mock (·|\\xB7)/, "Mock data", ...CORRELATION_MARKERS];
 const has = (text: string, m: string | RegExp) => (typeof m === "string" ? text.includes(m) : m.test(text));
 
 describe("the production bundle has no mock (ADR 0035)", () => {

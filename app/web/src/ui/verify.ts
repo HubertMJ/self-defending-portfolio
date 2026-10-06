@@ -1,5 +1,5 @@
-// "Verify it yourself" for the site itself (ADR 0035, B3; amended 2026-10-04). The #verify panel,
-// the last section of the page: which commit each running image was built from, by which CI run, its
+// "Verify it yourself" for the site itself (ADR 0035, B3; amended 2026-10-04 and 2026-10-05). The #verify
+// panel, below the evidence and the posture, above the skills: which commit each running image was built from, by which CI run, its
 // digests, the cosign command to check each one, the digest's Rekor search, and a copyable curl for
 // every public endpoint. The footer carries one link to it; the evidence card is the above-the-fold proof.
 // The api's commit, CI run and digests come from GET /api/provenance; the web's commit and CI run
@@ -31,7 +31,12 @@ export interface VerifyData {
   provenance?: Provenance | null;
   build?: BuildInfo | null;
   latestRunId?: string;
+  /** GET /api/correlation answers `available: true` (ADR 0036): its two endpoints are listed too. */
+  correlation?: boolean;
 }
+
+/** Listed only while the correlation section is shown: an API without a SIEM answers them with nothing to see. */
+export const CORRELATION_PATHS = ["/api/correlation", "/api/correlation/rules"] as const;
 
 interface ImageRow {
   name: "api" | "web";
@@ -102,6 +107,7 @@ export function renderVerifyPanel(d: VerifyData, now: number = Date.now()): HTML
       "ul",
       { class: "vraw", role: "list" },
       RAW_PATHS.map((path) => curlLine(path)),
+      d.correlation ? CORRELATION_PATHS.map((path) => curlLine(path)) : null,
       d.latestRunId ? curlLine(`/api/runs/${encodeURIComponent(d.latestRunId)}`) : null,
       curlLine("/api/events", true),
     ),

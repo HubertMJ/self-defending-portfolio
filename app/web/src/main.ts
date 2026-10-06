@@ -10,10 +10,12 @@ import { type ConnectionState, type EventSourceFactory, EventStream } from "./li
 import type { TimelineView } from "./lib/timeline";
 import { CONNECTION_WORD } from "./ui/common";
 import { mountConsole } from "./ui/console";
+import { mountCorrelation } from "./ui/correlation";
 import { mountDefenceMap } from "./ui/defencemap";
 import { mountEvidence } from "./ui/evidence";
 import { mountPosture } from "./ui/posture";
 import { mountScenarios } from "./ui/scenarios";
+import { mountSections, sectionTitle } from "./ui/sections";
 import { mountStats } from "./ui/stats";
 import { mountTerminal } from "./ui/terminal";
 import { mountLimits, setupTechMode } from "./ui/tech";
@@ -56,7 +58,7 @@ function setupThemeToggle(): void {
 function degradeToOneClick(): void {
   document.documentElement.dataset.terminal = "off";
   replace(byId("hero-cta"), "Launch an attack");
-  replace(byId("attack-title"), "Launch a real attack");
+  replace(sectionTitle(byId("attack-title")), "Launch a real attack");
   replace(
     byId("attack-lead"),
     "Each attack starts a throwaway pod in an isolated ",
@@ -99,10 +101,18 @@ function main(): void {
 
   const verify = mountVerify(byId("verify-panel"));
   const posture = mountPosture(byId("posture-panel"), api, (p) => evidence.setPosture(p));
+  // The SIEM's section (ADR 0036): shown only while GET /api/correlation says available.
+  const correlation = mountCorrelation(
+    byId("correlation"),
+    { health: byId("correlation-health"), metrics: byId("correlation-metrics"), board: byId("correlation-board"), rules: byId("correlation-rules") },
+    api,
+    (available) => verify.set({ correlation: available }),
+  );
   pollProvenance(() => api.provenance(), {
     data: (p) => {
       verify.set({ provenance: p });
       posture.setCommit(p.api.commit);
+      correlation.setCommit(p.api.commit);
       if (p.api.started_at) evidence.setApiStart(p.api.started_at);
     },
     unavailable: () => verify.set({ provenance: null }),
@@ -246,6 +256,15 @@ function main(): void {
   });
   stream = events;
   events.start();
+
+  // Each section below the hero folds under its heading; a folded one's panels stop redrawing (the
+  // posture is still fetched for the liveness line, the correlation still polled for shown/hidden).
+  // The attack section's terminal, launcher, console and history keep running folded or not.
+  mountSections((id, open) => {
+    if (id === "evidence") evidence.setActive(open);
+    else if (id === "posture") posture.setActive(open);
+    else if (id === "correlation") correlation.setActive(open);
+  });
 
   // One open SSE connection per forgotten background tab adds up; the server replays the last 50
   // events on reconnect, so dropping it while hidden loses nothing the timeline shows.

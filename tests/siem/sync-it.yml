@@ -1,0 +1,41 @@
+---
+# tests/siem/sync-it.sh: the throwaway OpenSearch gets what siem01 has before the rules sync runs -
+# the sdp-final pipeline and the template and data stream of all seven sources - from the
+# opensearch_config role's own task files and the repository's siem/fields, with the test's admin
+# certificate (siem contract P3: data streams exist before detectors).
+- name: Prepare the throwaway OpenSearch like siem01
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    opensearch_config_url: "{{ sync_it_url }}"
+    opensearch_config_ca: /pki/ca.crt
+    opensearch_config_admin_cert: /pki/admin.crt
+    opensearch_config_admin_key: /pki/admin.key
+    opensearch_config_state_dir: /tmp/sync-it-state
+    opensearch_config_fields_dir: /work/siem/fields
+    opensearch_config_sources_pending: []
+  tasks:
+    - name: Create the state directory
+      ansible.builtin.file:
+        path: "{{ opensearch_config_state_dir }}"
+        state: directory
+        mode: "0700"
+
+    - name: Write the sdp-final pipeline
+      ansible.builtin.include_role:
+        name: opensearch_config
+        tasks_from: rest_object
+      vars:
+        opensearch_config_obj_key: pipeline-sdp-final
+        opensearch_config_obj_path: /_ingest/pipeline/sdp-final
+        opensearch_config_obj_body: >-
+          {{ lookup('ansible.builtin.file', '/work/ansible/roles/opensearch_config/files/pipeline-sdp-final.json') }}
+
+    - name: Write the template and create the data stream of each source
+      ansible.builtin.include_role:
+        name: opensearch_config
+        tasks_from: stream
+      loop: [falco, talon, hubble, k8s-audit, api, host, siem01]
+      loop_control:
+        loop_var: opensearch_config_source

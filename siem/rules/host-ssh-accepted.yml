@@ -1,0 +1,24 @@
+# A login record of the host's own journal. User names and addresses are pseudonymised before they leave the
+# host and host findings are published as counts only (ADR 0034).
+title: Cluster node - SSH login accepted
+id: 0ee27053-8f8c-4740-a990-98d398477490
+status: experimental
+level: low
+description: >-
+  An SSH login to the cluster node succeeded. Only the ansible user may log in, with a key; the count belongs on the
+  page, the pseudonym does not.
+author: Hubert Jabłoński
+date: 2026/10/04
+logsource:
+  product: sdp
+  service: host
+detection:
+  selection:
+    host.log: ssh
+    ssh.event: accepted
+  condition: selection
+tags:
+  - attack.lateral_movement
+  - attack.t1021.004
+falsepositives:
+  - "The operator or Ansible logging in (the canary: an operator login)"

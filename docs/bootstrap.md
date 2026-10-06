@@ -1550,7 +1550,10 @@ git add cluster/infra/portfolio-api/siem-client.sops.yaml
 ```
 
 The key exists in plaintext only in `.siem-tmp/` (git-ignored, shredded on exit). For a rotation see
-9.4 (map the next generation first).
+9.4 (map the next generation first). The API reads the certificate once, at start (ADR 0036): after
+Argo has synced the new Secret, restart it (`kubectl -n portfolio-api rollout restart
+deploy/portfolio-api`) before the old generation is unmapped, or the Correlation section goes
+unavailable.
 
 ## Rebuild from zero
 
