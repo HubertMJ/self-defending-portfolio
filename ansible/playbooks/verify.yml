@@ -394,12 +394,20 @@
       register: verify_os_unit
       check_mode: true
 
-    - name: Assert OpenSearch restarts after a failure
+    - name: Assert OpenSearch restarts after a failure, backing off, and never gives up
       ansible.builtin.assert:
         that:
           - verify_os_unit.status.Restart == 'on-failure'
-        fail_msg: "The OpenSearch unit has Restart={{ verify_os_unit.status.Restart }}, not on-failure."
-        success_msg: The OpenSearch unit restarts on failure.
+          - verify_os_unit.status.RestartUSec == '30s'
+          - verify_os_unit.status.RestartSteps == '6'
+          - verify_os_unit.status.RestartMaxDelayUSec == '1h'
+          - verify_os_unit.status.StartLimitIntervalUSec == '0'
+        fail_msg: >-
+          The OpenSearch unit has Restart={{ verify_os_unit.status.Restart }}, RestartUSec={{ verify_os_unit.status.RestartUSec }},
+          RestartSteps={{ verify_os_unit.status.RestartSteps | default('') }},
+          RestartMaxDelayUSec={{ verify_os_unit.status.RestartMaxDelayUSec | default('') }},
+          StartLimitIntervalUSec={{ verify_os_unit.status.StartLimitIntervalUSec }}.
+        success_msg: The OpenSearch unit restarts on failure after 30 s, backing off to 1 h, without a start limit.
 
     - name: Read the JVM arguments of the node
       ansible.builtin.uri:
@@ -416,17 +424,18 @@
       register: verify_hprof
 
     # The running JVM's arguments, so a package file that sets its own heap again is caught too.
-    - name: Assert one heap setting, exit on OutOfMemoryError and no heap dump
+    - name: Assert one heap setting, 1 GB of direct memory, exit on OutOfMemoryError and no heap dump
       ansible.builtin.assert:
         that:
           - verify_jvm_args | select('match', '-Xm[sx]') | sort == ['-Xms' ~ verify_os_heap, '-Xmx' ~ verify_os_heap]
           - "'-XX:+ExitOnOutOfMemoryError' in verify_jvm_args"
           - verify_jvm_args | select('search', 'HeapDumpOnOutOfMemoryError') | list == ['-XX:-HeapDumpOnOutOfMemoryError']
+          - verify_jvm_args | select('match', '-XX:MaxDirectMemorySize=') | list == ['-XX:MaxDirectMemorySize=1g']
           - verify_hprof.matched == 0
         fail_msg: >-
-          JVM heap and OOM arguments {{ verify_jvm_args | select('search', '^-Xm[sx]|OutOfMemoryError') | list }},
+          JVM memory and OOM arguments {{ verify_jvm_args | select('search', '^-Xm[sx]|OutOfMemoryError|MaxDirectMemorySize') | list }},
           heap dumps {{ verify_hprof.files | map(attribute='path') | list }}.
-        success_msg: "Heap -Xms/-Xmx{{ verify_os_heap }} set once, exit on OutOfMemoryError, heap dumps off and none on disk."
+        success_msg: "Heap -Xms/-Xmx{{ verify_os_heap }} set once, direct memory 1g, exit on OOM, heap dumps off and none on disk."
       vars:
         verify_jvm_args: "{{ (verify_jvm.json.nodes | dict2items | first).value.jvm.input_arguments }}"
 

@@ -612,12 +612,18 @@ drop-in was then put on the host by hand. The running JVM also carried the packa
 next to the role's 3 GB: the last occurrence won, but there were two heap settings.
 
 **Decision.** The role (`ansible/roles/opensearch`) now owns:
-- **`Restart=on-failure`**, `RestartSec=30`, at most three starts in 600 s
-  (`/etc/systemd/system/opensearch.service.d/sdp-restart.conf`, the hand-made drop-in's settings). A
-  crash, whether a non-zero exit or the kernel's OOM kill, brings the node back after 30 s. A stop
-  stays a stop: SIGTERM's exit 143 counts as success. A node that dies on every start gives up after
-  three tries and is left failed for the operator (`systemctl reset-failed opensearch`), instead of
-  looping. Restart= takes effect with a daemon-reload and does not restart the node.
+- **`Restart=on-failure` with backoff and no start limit**: `RestartSec=30`, `RestartSteps=6`,
+  `RestartMaxDelaySec=1h`, `StartLimitIntervalSec=0`
+  (`/etc/systemd/system/opensearch.service.d/sdp-restart.conf`, replacing the hand-made drop-in's
+  three starts in 600 s). A crash, whether a non-zero exit or the kernel's OOM kill, brings the node
+  back after 30 s. If it keeps failing, the delay grows geometrically over six restarts to an hour
+  (30 s, ~1, ~2.5, ~5.5, ~12, ~27 min, then hourly). It never stops trying: a unit that gives up after
+  a burst stays down until someone notices, which is what happened on 2026-10-06, while a node that
+  dies once an hour costs little on this VM. A stop stays a stop, because SIGTERM's exit 143 counts as
+  success. RestartSteps and RestartMaxDelaySec need systemd 254 or later; siem01 runs 257, and
+  `systemd-analyze verify` accepts the drop-in. The package's `TimeoutStartSec=75` stays: OpenSearch's
+  systemd module extends it by 30 s every 15 s once the module has loaded, and a start took 14 s. The
+  drop-in takes effect with a daemon-reload, without restarting the node.
 - **`-XX:+ExitOnOutOfMemoryError`**: the first OutOfMemoryError ends the JVM at once (exit 3), so the
   node never limps on with threads the error killed, and systemd restarts it.
 - **No heap dumps** (`-XX:-HeapDumpOnOutOfMemoryError`; the package's line is commented out). A dump
@@ -630,17 +636,21 @@ next to the role's 3 GB: the last occurrence won, but there were two heap settin
   so `jvm.options.d/sdp-heap.options` holds the only heap setting. Measured with the 3 GB heap: the
   JVM's RSS was 3.85 GB, Dashboards used 0.23 GB, Fluent Bit stayed under its 192 MB cap and the sync
   under its 512 MB cap; the VM has no swap. At 4 GB, ~5.8 GB of the 7.7 GB are in use and the rest is
-  page cache. OpenSearch caps direct memory at half the heap, so the worst case is tighter. The role
-  asserts that the heap leaves at least 3 GB of the host's memory, which rules out 5 GB on this VM.
+  page cache. **Direct memory is capped at 1 GB** (`-XX:MaxDirectMemorySize=1g`). OpenSearch would
+  otherwise choose half the heap, 2 GB, and it adds nothing when the option is set; the pinned
+  image's `JvmOptionsParser` emits ours once. That bounds the JVM at ~5.5 GB of the 8 GB with no swap.
+  The role asserts that the heap leaves at least 3 GB of the host's memory, which rules out 5 GB on
+  this VM.
   Going a little over the usual "half the RAM" is accepted: the data set is small (L13: ≤ 300 MB of
   ingest a day, 30 days), and SA needs the heap more than Lucene needs the cache.
 - The tests ask for less at a time: `tests/siem/sync_check.py` caps its findings query at 1000 per
-  log type (it asked for 10000).
+  log type (it asked for 10000), oldest first (`sortOrder=asc`).
 
-`make siem-verify` checks `Restart=on-failure`, the running JVM's arguments (one `-Xms`/`-Xmx` at the
-role's heap, exit on OutOfMemoryError, heap dumps off) and that no `*.hprof` is in
-`/var/lib/opensearch`. `tests/smoke.sh` applies the JVM and unit tasks (tag `opensearch_service`)
-twice to a stand-in for the package; the second run must change nothing.
+`make siem-verify` checks the restart policy, the running JVM's arguments (one `-Xms`/`-Xmx` at the
+role's heap, direct memory 1 GB, exit on OutOfMemoryError, heap dumps off) and that no `*.hprof` is
+in `/var/lib/opensearch`. `tests/smoke.sh` applies the JVM and unit tasks (tag `opensearch_service`)
+twice to a stand-in for the package, measuring the heap against siem01's memory rather than the build
+host's. The second run must change nothing, and `systemd-analyze verify` must print nothing.
 
 **Not done.** This limits what an OutOfMemoryError costs, not what causes it: the correlation fan-out
 itself is not bounded here.
