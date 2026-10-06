@@ -174,6 +174,20 @@ func (t *Tracker) detail(r *record) string {
 	return ""
 }
 
+// auditTitle names an audit document no rule fired on - Talon's response, the twin's create and
+// delete - so its step does not read as a bare detail; "" for anything else.
+func auditTitle(r *record) string {
+	if r.source != "k8s-audit" || r.findingID != "" {
+		return ""
+	}
+	what := map[string]string{"patch": "pod labelled", "delete": "pod deleted", "create": "pod created"}[r.verb]
+	by := map[string]string{actorTalon: "the response engine", actorAPI: "the API"}[r.actor]
+	if what == "" || by == "" {
+		return ""
+	}
+	return "Kubernetes audit - " + what + " by " + by
+}
+
 func msPtr(d time.Duration) *int64 {
 	v := d.Milliseconds()
 	return &v

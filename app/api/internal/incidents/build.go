@@ -361,9 +361,18 @@ func (ix *index) dnsExfil(ref string) *draft {
 		}))
 		return d
 	}
-	d0 := dnsFindings[0]
-	cmd := latest(all, d0.at, func(r *record) bool { return isExfilCmd(r) && !r.at.Before(d0.at.Add(-dnsJoinWindow)) })
-	anchor := d0.at
+	// The anchor is the run's dns-exfil command that a lookup follows within dnsJoinWindow - the one
+	// before the first lookup matching the run's flag, else before the first lookup that follows any
+	// command. Lookups before that command are not this incident's.
+	var cmd, q *record
+	for _, r := range dnsFindings {
+		c := latest(all, r.at, func(x *record) bool { return isExfilCmd(x) && !x.at.Before(r.at.Add(-dnsJoinWindow)) })
+		if c != nil && (q == nil || (r.flag != nil && *r.flag && (q.flag == nil || !*q.flag))) {
+			cmd, q = c, r
+		}
+	}
+	anchor := dnsFindings[0].at
+	lookups := dnsFindings
 	if cmd != nil {
 		anchor = cmd.at
 		if rf := latest(all, cmd.at, func(r *record) bool {
@@ -372,10 +381,16 @@ func (ix *index) dnsExfil(ref string) *draft {
 			d.add(rf)
 		}
 		d.add(cmd)
+		lookups = nil
+		for _, r := range dnsFindings {
+			if !r.at.Before(cmd.at) {
+				lookups = append(lookups, r)
+			}
+		}
 	}
-	d.add(dnsFindings...)
+	d.add(lookups...)
 	var match *bool
-	for _, r := range dnsFindings {
+	for _, r := range lookups {
 		if r.flag != nil && (match == nil || *r.flag) {
 			v := *r.flag
 			match = &v
@@ -718,6 +733,9 @@ func (ix *index) finish(d *draft) Incident {
 			shown.direction = strings.Join(dirs, "+")
 		}
 		st := Step{At: r0.at, Source: r0.source, Rule: clean(r0.rule, maxRule), Detail: clean(ix.t.detail(&shown), maxDetail)}
+		if st.Rule == "" {
+			st.Rule = auditTitle(r0)
+		}
 		if r0.rule != "" {
 			st.RuleID = ix.t.cfg.Rules.RuleID(r0.rule)
 		}

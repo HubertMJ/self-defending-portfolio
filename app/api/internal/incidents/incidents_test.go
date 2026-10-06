@@ -170,6 +170,16 @@ func TestDNSExfilUnderQuarantine(t *testing.T) {
 	if inc.FlagMatch != nil || inc.Severity != "medium" || !strings.Contains(inc.Title, "under quarantine") || len(inc.Steps) != 2 {
 		t.Fatalf("incident %+v", inc)
 	}
+	// A dropped L7 DNS event carrying the query, read by the drop search, is that drop too: no rule
+	// fired on a searched document, so it is never a lookup finding.
+	l7 := dropDoc("h1", t0.Add(19200*time.Millisecond), termRef, 53)
+	l7.Source["dns.query"], l7.Source["hubble.event_type"], l7.Source["hubble.l7.type"] = "sdp-"+flagHex+".x.exfil.sdp.test.", float64(129), "REQUEST"
+	f.hits["sdp-hubble"] = []siem.Hit{l7}
+	tr = newTracker(t, f, &clock{t: t0.Add(time.Minute)})
+	tr.Poll(context.Background())
+	if inc := one(t, tr.View(), KindDNSExfil); inc.Severity != "medium" || len(inc.Steps) != 2 {
+		t.Fatalf("L7 drop: %+v", inc)
+	}
 	// A drop to another port, or one too late, is not the lookup.
 	f.hits["sdp-hubble"] = []siem.Hit{dropDoc("h2", t0.Add(19200*time.Millisecond), termRef, 9), dropDoc("h3", t0.Add(40*time.Second), termRef, 53)}
 	tr = newTracker(t, f, &clock{t: t0.Add(time.Minute)})
@@ -669,8 +679,9 @@ func TestViewLeaksNothing(t *testing.T) {
 		"hubble.verdict": "DROPPED", "hubble.drop_reason": poison, "k8s.pod.ref": termRef, "dns.query": "sdp-" + flagHex + ".x.exfil.sdp.test."}))
 	// A second lookup of the run's DNS query, its direction poisoned: one step with f-dns-1, whose
 	// detail lists both directions.
-	f.findings["sdp_hubble"] = append(f.findings["sdp_hubble"], finding("f-dns-p", t0.Add(20200*time.Millisecond), "DNS query carries an exfil label", nil,
+	f.findings["sdp_hubble"] = append(f.findings["sdp_hubble"], finding("f-dns-p", t0.Add(20200*time.Millisecond), dnsRule, nil,
 		map[string]any{"dns.query": "sdp-" + flagHex + ".x.exfil.sdp.test.", "hubble.verdict": "FORWARDED", "hubble.traffic_direction": poison,
+			"hubble.event_type": 129, "hubble.l7.type": "RESPONSE",
 			"hubble.l4.protocol": "udp", "hubble.l4.destination_port": 53, "k8s.pod.ref": termRef}))
 	f.alerts = []siem.Alert{{ID: "al-p", MonitorName: "sdp-git: policy probing " + poison, State: "ACTIVE", StartTime: ptrInt(t0.UnixMilli()),
 		Agg: &siem.AlertAgg{BucketKeys: []any{"hm1:0011223344556677", "system:serviceaccount:x:y"}}}}
@@ -1056,32 +1067,39 @@ func TestOneDocumentOneEvent(t *testing.T) {
 
 // Records that are the same evidence (source, rule, pod, command, kind) are one step with a count:
 // a DNS lookup's request and response, both directions, at the earliest record's time, citing the
-// earliest maxStepEvidence ids; another rule, another verdict or another command is a step of its own.
+// earliest maxStepEvidence ids; another verdict, another command or another rule is a step of its own.
 func TestSameEvidenceOneStep(t *testing.T) {
 	f := newFake()
 	terminalRun(f, "sdp-"+flagHex) // f-dns-1: FORWARDED EGRESS at 20.101 s, under command 3
-	lookup := func(id string, at time.Time, rule, verdict, dir string) siem.Finding {
-		return finding(id, at, rule, []string{"sdp_hubble", "attack.t1048.003"}, map[string]any{
+	lookup := func(id string, at time.Time, verdict, dir string) siem.Finding {
+		l7 := "REQUEST"
+		if dir == "INGRESS" {
+			l7 = "RESPONSE"
+		}
+		return finding(id, at, dnsRule, []string{"sdp_hubble", "attack.t1048.003"}, map[string]any{
 			"dns.query": "sdp-" + flagHex + ".x.exfil.sdp.test.", "hubble.verdict": verdict, "hubble.traffic_direction": dir,
-			"hubble.l4.protocol": "udp", "hubble.l4.destination_port": 53, "k8s.pod.ref": termRef})
+			"hubble.event_type": 129, "hubble.l7.type": l7, "hubble.l4.protocol": "udp", "hubble.l4.destination_port": 53, "k8s.pod.ref": termRef})
 	}
-	const rule = "DNS query carries an exfil label"
 	// The earliest record is a response (INGRESS): the directions are listed sorted, not first seen.
-	f.findings["sdp_hubble"] = append(f.findings["sdp_hubble"], lookup("f-dns-0", t0.Add(20050*time.Millisecond), rule, "FORWARDED", "INGRESS"))
+	f.findings["sdp_hubble"] = append(f.findings["sdp_hubble"], lookup("f-dns-0", t0.Add(20050*time.Millisecond), "FORWARDED", "INGRESS"))
 	for i := 2; i <= 11; i++ {
 		dir := "EGRESS"
 		if i%2 == 0 {
 			dir = "INGRESS"
 		}
-		f.findings["sdp_hubble"] = append(f.findings["sdp_hubble"], lookup(fmt.Sprintf("f-dns-%d", i), t0.Add(20*time.Second+time.Duration(i)*100*time.Millisecond), rule, "FORWARDED", dir))
+		f.findings["sdp_hubble"] = append(f.findings["sdp_hubble"], lookup(fmt.Sprintf("f-dns-%d", i), t0.Add(20*time.Second+time.Duration(i)*100*time.Millisecond), "FORWARDED", dir))
 	}
 	f.findings["sdp_hubble"] = append(f.findings["sdp_hubble"],
-		lookup("f-dns-rule", t0.Add(20250*time.Millisecond), "Hubble - flag-shaped DNS lookup", "FORWARDED", "EGRESS"),
-		lookup("f-dns-drop", t0.Add(20350*time.Millisecond), rule, "DROPPED", "EGRESS"),
-		lookup("f-dns-late", t0.Add(41*time.Second), rule, "FORWARDED", "EGRESS"))
+		lookup("f-dns-drop", t0.Add(20350*time.Millisecond), "DROPPED", "EGRESS"),
+		lookup("f-dns-late", t0.Add(41*time.Second), "FORWARDED", "EGRESS"))
 	f.hits["sdp-api"] = append(f.hits["sdp-api"], apiCommand("c5", t0.Add(40*time.Second), termRun, termRef, 4, "dns-exfil", "T1048.003", "exfiltration", "started"))
 	compareRun(f)
 	quarantineRun(f)
+	// Another rule over the same Falco event is another step; the same rule again is the same step.
+	other := falcoFinding("f-falco-g3", t0.Add(time.Hour+1900*time.Millisecond), cmpRef, "Terminal shell in container")
+	other.Queries[0].Name = "Falco shell, another rule"
+	f.findings["sdp_falco"] = append(f.findings["sdp_falco"], other,
+		falcoFinding("f-falco-g4", t0.Add(time.Hour+2*time.Second), cmpRef, "Terminal shell in container"))
 	clk := &clock{t: t0}
 	tr := newTracker(t, f, clk)
 	registerTerminalFlag(tr, flagHex)
@@ -1110,7 +1128,6 @@ func TestSameEvidenceOneStep(t *testing.T) {
 		{9 * time.Second, "api", 2, 0, "command read-flag (T1552.001, credentials) started on " + pod},
 		{19 * time.Second, "api", 3, 0, "command dns-exfil (T1048.003, exfiltration) started on " + pod},
 		{20050 * time.Millisecond, "hubble", 3, 12, "DNS query under the exfil zone from " + pod + ", FORWARDED egress+ingress udp/53"},
-		{20250 * time.Millisecond, "hubble", 3, 0, "DNS query under the exfil zone from " + pod + ", FORWARDED egress udp/53"},
 		{20350 * time.Millisecond, "hubble", 3, 0, "DNS query under the exfil zone from " + pod + ", DROPPED egress udp/53"},
 		{41 * time.Second, "hubble", 4, 0, "DNS query under the exfil zone from " + pod + ", FORWARDED egress udp/53"},
 	}
@@ -1123,9 +1140,6 @@ func TestSameEvidenceOneStep(t *testing.T) {
 			t.Errorf("step %d: %+v, want %+v", i, st, w)
 		}
 	}
-	if inc.Steps[3].Rule != "Hubble - flag-shaped DNS lookup" {
-		t.Errorf("rule step: %+v", inc.Steps[3])
-	}
 	// "count" is published for a collapsed step only.
 	if one, _ := json.Marshal(inc.Steps[2]); !strings.Contains(string(one), `"count":12`) {
 		t.Errorf("collapsed step JSON %s", one)
@@ -1137,11 +1151,22 @@ func TestSameEvidenceOneStep(t *testing.T) {
 	for _, e := range inc.Evidence {
 		ids = append(ids, e.ID)
 	}
-	if got := strings.Join(ids, ","); got != "c2,c3,f-dns-0,f-dns-1,f-dns-2,f-dns-3,f-dns-4,f-dns-rule,f-dns-drop,f-dns-late" {
+	if got := strings.Join(ids, ","); got != "c2,c3,f-dns-0,f-dns-1,f-dns-2,f-dns-3,f-dns-4,f-dns-drop,f-dns-late" {
 		t.Errorf("evidence %s", got)
 	}
 	if !inc.FirstAt.Equal(t0.Add(9*time.Second)) || !inc.LastAt.Equal(t0.Add(41*time.Second)) {
 		t.Errorf("times %v %v", inc.FirstAt, inc.LastAt)
+	}
+	var falco []string
+	for _, ci := range incidentsOf(v, KindContainedIntrusion) {
+		for _, st := range ci.Steps {
+			if st.Source == "falco" && st.At.Before(t0.Add(2*time.Hour)) {
+				falco = append(falco, fmt.Sprintf("%s ×%d", st.Rule, st.Count))
+			}
+		}
+	}
+	if got := strings.Join(falco, " | "); got != "Falco Terminal shell in container ×2 | Falco shell, another rule ×0" {
+		t.Errorf("falco steps: %s", got)
 	}
 }
 
@@ -1431,4 +1456,159 @@ func TestRulesStaleFromHeartbeat(t *testing.T) {
 	stray.Source["applied_at"] = t0.Add(-time.Minute).Format(time.RFC3339)
 	stray.Source["status"] = "failed"
 	check("heartbeat in the records search", rules(t, applied, stray), "applied")
+}
+
+// Live shapes (2026-10-06): Cilium's static exporter, with its field mask, leaves a stale
+// l7.dns.query on ordinary flows - trace events (type 4) such as tcp/8080 replies and tcp/9200 drops -
+// so the flag-shaped DNS rule fires on documents that are no DNS lookup. Only a finding of that rule on
+// an L7 DNS event (type 129 with an l7 type) is a lookup; the rest are flows, read as flows.
+func TestStaleDNSQueryIsNotALookup(t *testing.T) {
+	f := newFake()
+	stale := "sdp-" + flagHex + ".x.exfil.sdp.test."
+	flow := func(ref string, eventType int, l7, verdict, dir, proto string, port int) map[string]any {
+		doc := map[string]any{"dns.query": stale, "hubble.verdict": verdict, "hubble.traffic_direction": dir, "hubble.event_type": eventType,
+			"hubble.l4.protocol": proto, "hubble.l4.destination_port": port, "k8s.pod.ref": ref}
+		if verdict == "DROPPED" {
+			doc["hubble.drop_reason"] = "POLICY_DENIED"
+		}
+		if l7 != "" {
+			doc["hubble.l7.type"] = l7
+		}
+		return doc
+	}
+	const dropRule = "Hubble - sandbox traffic dropped by policy"
+	l3, iso, iso2, sc := "sandbox_l3probe", "sandbox_rt-iso-1a2b3c", "sandbox_rt-iso-4d5e6f", "sandbox_sc-network-tool-7a8b9c"
+	at := t0.Add(time.Hour)
+	// l3probe, quarantined: a tcp/9200 drop (trace event) that both rules matched - one document.
+	drop := finding("f-l3-drop", at.Add(2600*time.Millisecond), dropRule, []string{"sdp_hubble"}, flow(l3, 4, "", "DROPPED", "EGRESS", "tcp", 9200))
+	dropDNS := finding("f-l3-dns", at.Add(2600*time.Millisecond), dnsRule, []string{"sdp_hubble", "attack.t1048.003"}, map[string]any{})
+	dropDNS.Documents = drop.Documents
+	f.findings["sdp_hubble"] = []siem.Finding{drop, dropDNS,
+		// rt-iso: a tcp/8080 reply (trace event) the DNS rule fired on, its l7 type left stale as well.
+		finding("f-iso-reply", at, dnsRule, nil, flow(iso, 4, "RESPONSE", "FORWARDED", "INGRESS", "tcp", 8080)),
+		// rt-iso: an L7 event the drop rule fired on - not the DNS rule.
+		finding("f-iso-l7", at, dropRule, nil, flow(iso2, 129, "REQUEST", "DROPPED", "EGRESS", "udp", 53)),
+		// sc-network-tool: event type 129 without an l7 type.
+		finding("f-sc", at, dnsRule, nil, flow(sc, 129, "", "FORWARDED", "EGRESS", "udp", 53)),
+	}
+	f.findings["sdp_falco"] = []siem.Finding{falcoFinding("f-l3-falco", at.Add(2*time.Second), l3, "SDP network tool in sandbox")}
+	f.findings["sdp_talon"] = []siem.Finding{talonFinding("f-l3-talon", at.Add(2400*time.Millisecond), l3, "Quarantine Pod", "kubernetes:label")}
+	f.hits["sdp-k8s-audit"] = []siem.Hit{auditDoc("a-l3", at.Add(2300*time.Millisecond), l3, talonUser, "patch", 200)}
+	compareRun(f)
+	tr := newTracker(t, f, &clock{t: t0.Add(3 * time.Hour)})
+	tr.Poll(context.Background())
+	v := tr.View()
+	if dx := incidentsOf(v, KindDNSExfil); len(dx) != 0 {
+		t.Fatalf("dns-exfil from flows that are no lookup: %+v", dx)
+	}
+	b, _ := json.Marshal(v)
+	if strings.Contains(string(b), "DNS query under the exfil zone") {
+		t.Fatalf("a flow reads as a DNS query: %s", b)
+	}
+	// The stale drop is a drop: the quarantine's "policy enforced" step, as a flow.
+	var l3ci, cmp Incident
+	for _, inc := range incidentsOf(v, KindContainedIntrusion) {
+		switch inc.RunID {
+		case cmpRun:
+			cmp = inc
+		default:
+			l3ci = inc
+		}
+	}
+	if !hasStep(l3ci, "policy enforced +300 ms: Hubble: DROPPED egress tcp/9200 (POLICY_DENIED) on sandbox/l3probe") {
+		b, _ := json.MarshalIndent(l3ci.Steps, "", " ")
+		t.Fatalf("no policy-enforced drop: %s", b)
+	}
+	// An audit document no rule fired on is named: Talon's label patch and delete.
+	rules := map[string]string{}
+	for _, inc := range []Incident{l3ci, cmp} {
+		for _, st := range inc.Steps {
+			if st.Source == "k8s-audit" {
+				rules[st.Detail] = st.Rule
+			}
+		}
+	}
+	want := map[string]string{
+		"patch pods on sandbox/l3probe by Talon, response 200":                        "Kubernetes audit - pod labelled by the response engine",
+		"delete pods on sandbox/shell-in-container-a1b2c3d4e5 by Talon, response 200": "Kubernetes audit - pod deleted by the response engine",
+	}
+	for detail, rule := range want {
+		if rules[detail] != rule {
+			t.Errorf("%q: rule %q, want %q (all: %v)", detail, rules[detail], rule, rules)
+		}
+	}
+	tw := one(t, v, KindTwinDwell)
+	var twin []string
+	for _, st := range tw.Steps {
+		if st.Source == "k8s-audit" && st.Rule != "" {
+			twin = append(twin, st.Rule)
+		}
+	}
+	if got := strings.Join(twin, " | "); got != "Kubernetes audit - pod created by the API | Kubernetes audit - pod deleted by the API" {
+		t.Errorf("twin audit steps: %s", got)
+	}
+}
+
+// Live (2026-10-06): lookups at 05:06:06-09 preceded the run's dns-exfil command at 05:06:29.5 and
+// the step cap cut the command. A dns-exfil incident is anchored on the command before the first
+// lookup matching the run's flag; no lookup before that command is a step.
+func TestDNSExfilAnchoredAfterCommand(t *testing.T) {
+	poll := func(f *fakeSource) Incident {
+		t.Helper()
+		clk := &clock{t: t0}
+		tr := newTracker(t, f, clk)
+		registerTerminalFlag(tr, flagHex)
+		clk.Set(t0.Add(10 * time.Minute))
+		tr.Poll(context.Background())
+		return one(t, tr.View(), KindDNSExfil)
+	}
+	steps := func(inc Incident) string {
+		var out []string
+		for _, st := range inc.Steps {
+			seq := 0
+			if st.CommandSeq != nil {
+				seq = *st.CommandSeq
+			}
+			out = append(out, fmt.Sprintf("%s %s %d", st.At.Sub(t0), st.Source, seq))
+		}
+		return strings.Join(out, ", ")
+	}
+	readFlag := apiCommand("c2", t0.Add(20*time.Second), termRun, termRef, 2, "read-flag", "T1552.001", "credentials", "started")
+	exfil := func(id string, at time.Duration, seq int) siem.Hit {
+		return apiCommand(id, t0.Add(at), termRun, termRef, seq, "dns-exfil", "T1048.003", "exfiltration", "started")
+	}
+
+	f := newFake()
+	f.hits["sdp-api"] = []siem.Hit{readFlag, exfil("c3", 29500*time.Millisecond, 3)}
+	for i := 0; i < 50; i++ {
+		f.findings["sdp_hubble"] = append(f.findings["sdp_hubble"], dnsFinding(fmt.Sprintf("f-pre-%02d", i), t0.Add(6*time.Second+time.Duration(i)*60*time.Millisecond), termRef, "sdp-"+flagHex))
+	}
+	f.findings["sdp_hubble"] = append(f.findings["sdp_hubble"], dnsFinding("f-dns", t0.Add(30200*time.Millisecond), termRef, "sdp-"+flagHex))
+	inc := poll(f)
+	if got := steps(inc); got != "20s api 2, 29.5s api 3, 30.2s hubble 3" {
+		t.Fatalf("steps %s", got)
+	}
+	if inc.Severity != "critical" || !inc.FirstAt.Equal(t0.Add(20*time.Second)) {
+		t.Fatalf("incident %+v", inc)
+	}
+	for _, e := range inc.Evidence {
+		if strings.HasPrefix(e.ID, "f-pre-") {
+			t.Fatalf("a lookup before the command is cited: %v", inc.Evidence)
+		}
+	}
+
+	// A first command followed by another run's label, a second by this run's flag: the second anchors.
+	f = newFake()
+	f.hits["sdp-api"] = []siem.Hit{readFlag, exfil("c3", 29500*time.Millisecond, 3), exfil("c4", 60*time.Second, 4)}
+	f.findings["sdp_hubble"] = []siem.Finding{
+		dnsFinding("f-other", t0.Add(30*time.Second), termRef, "sdp-"+otherHex),
+		dnsFinding("f-flag", t0.Add(60500*time.Millisecond), termRef, "sdp-"+flagHex),
+	}
+	inc = poll(f)
+	if got := steps(inc); got != "20s api 2, 1m0s api 4, 1m0.5s hubble 4" {
+		t.Fatalf("steps %s", got)
+	}
+	if inc.FlagMatch == nil || !*inc.FlagMatch || inc.Severity != "critical" {
+		t.Fatalf("incident %+v", inc)
+	}
 }

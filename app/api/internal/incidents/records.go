@@ -25,6 +25,13 @@ const (
 	actorOther = "other"
 )
 
+// dnsExfilRule is the Sigma id of siem/rules/hubble-dns-exfil.yml ("Hubble - flag-shaped DNS lookup"),
+// looked up by a finding's rule title in the embedded index: the one rule whose finding is a DNS lookup.
+const dnsExfilRule = "fa0bd074-18fc-4827-834c-705c707a94f9"
+
+// hubbleL7 is Hubble's event type of an L7 (DNS proxy) flow; 1 is a drop, 4 a trace.
+const hubbleL7 = 129
+
 // logTypes maps a detector log type (siem contract S0-#2) to its source. sdp_siem01 is not read: the
 // API's role has no access to the SIEM host's own records (ADR 0034 amendment P1).
 var logTypes = []struct{ logType, source string }{
@@ -55,7 +62,7 @@ type record struct {
 
 	verdict, dropReason, direction, proto string
 	port                                  int
-	dns                                   bool  // a Hubble DNS query
+	dns                                   bool  // a DNS lookup: an L7 DNS event the flag-shaped DNS rule fired on
 	flag                                  *bool // DNS findings: the flag match when first read
 
 	verb, resource, subresource, actor string
@@ -167,7 +174,10 @@ func (t *Tracker) fill(r *record, m map[string]any) (dnsQuery string) {
 		r.proto = str(m, "hubble.l4.protocol")
 		r.port, _ = num(m, "hubble.l4.destination_port")
 		dnsQuery = str(m, "dns.query")
-		r.dns = dnsQuery != ""
+		// Only an L7 DNS event is a lookup: the exporter's field mask can leave a stale l7.dns.query on
+		// an ordinary flow (a trace event, a drop to another port).
+		eventType, _ := num(m, "hubble.event_type")
+		r.dns = dnsQuery != "" && eventType == hubbleL7 && str(m, "hubble.l7.type") != ""
 	case "k8s-audit":
 		r.verb, r.resource, r.subresource = str(m, "audit.verb"), str(m, "audit.object.resource"), str(m, "audit.object.subresource")
 		r.auditID = str(m, "audit.id")
@@ -208,7 +218,9 @@ func (t *Tracker) fromFinding(f siem.Finding, source string) (r record, dnsQuery
 	if len(f.Queries) > 0 {
 		r.rule = f.Queries[0].Name
 	}
+	dnsRule := false
 	for _, q := range f.Queries {
+		dnsRule = dnsRule || t.cfg.Rules.RuleID(q.Name) == dnsExfilRule
 		for _, tag := range q.Tags {
 			if m := tagPat.FindStringSubmatch(strings.ToLower(tag)); m != nil {
 				r.attack = appendUnique(r.attack, strings.ToUpper(m[1]))
@@ -224,6 +236,11 @@ func (t *Tracker) fromFinding(f siem.Finding, source string) (r record, dnsQuery
 		dnsQuery = t.fill(&r, m)
 		break
 	}
+	// A DNS lookup is a finding of the flag-shaped DNS rule on an L7 DNS event, nothing else.
+	r.dns = r.dns && dnsRule
+	if !r.dns {
+		dnsQuery = ""
+	}
 	return r, dnsQuery, r.ref != "" && r.docID != "" && !r.synthetic
 }
 
@@ -234,6 +251,7 @@ func (t *Tracker) fromHit(h siem.Hit, source string) (record, bool) {
 	}
 	r := record{key: "doc:" + h.Index + "/" + h.ID, docID: h.ID, source: source}
 	t.fill(&r, h.Source)
+	r.dns = false // no rule fired on a document read by a search
 	return r, r.ref != "" && !r.at.IsZero() && !r.synthetic
 }
 
