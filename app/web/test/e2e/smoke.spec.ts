@@ -35,7 +35,7 @@ async function wideFonts(page: Page) {
  * The hero shows no provenance data (ADR 0035, amended 2026-10-04): its copy has no commit, digest,
  * cosign or Rekor, and nothing in it (the evidence card included, which shows the attacked pod's own
  * image) names the api or web image or the commit they were built from. Nor does it link to #verify:
- * the owner moved that link to the footer, with the panel at the very bottom of the page.
+ * the owner moved that link to the footer, with the panel far down the page, above the skills.
  */
 async function hasNoProvenance(page: Page) {
   const hero = page.locator("#top");
@@ -47,6 +47,12 @@ async function hasNoProvenance(page: Page) {
   await expect(hero).not.toContainText(/0448cff|sha256:b{8}|sha256:1{8}|self-defending-portfolio\/(api|web)@/);
   await expect(hero.locator('a[href="#verify"]')).toHaveCount(0);
 }
+
+/**
+ * The page's sections in order (ADR 0035, amended 2026-10-05), as every build ships them: About is
+ * stripped while unwritten, the console is inside #attack.
+ */
+const PAGE_ORDER = ["top", "attack", "correlation", "how", "evidence", "posture", "verify", "skills", "projects"];
 
 async function noHorizontalScroll(page: Page) {
   const [scroll, client] = await page.evaluate(() => [document.documentElement.scrollWidth, document.documentElement.clientWidth]);
@@ -128,6 +134,145 @@ test.describe("API offline (nothing behind /api)", () => {
     await noHorizontalScroll(page);
     expect(problems).toEqual([]);
   });
+});
+
+test.describe("layout (ADR 0035, amended 2026-10-05; ?mock=1)", () => {
+  test("the attack, its response and the correlation come first; evidence, posture and verify sit above the skills", async ({ page }) => {
+    await page.goto("/?mock=1");
+    await expect(page.locator("#correlation")).toBeVisible();
+    expect(await page.evaluate(() => [...document.querySelectorAll("main > section")].map((el) => el.id))).toEqual(PAGE_ORDER);
+    // The live run is part of the attack section, before the correlation.
+    expect(await page.evaluate(() => document.querySelector("#attack #console") !== null)).toBe(true);
+    // The navigation follows the page; the one link to #verify is the footer's.
+    expect(await page.locator(".site-nav a").evaluateAll((as) => as.map((a) => a.getAttribute("href")))).toEqual(["#attack", "#how", "#posture"]);
+    await expect(page.locator('a[href="#verify"]')).toHaveCount(1);
+    await expect(page.locator('footer.site-footer a[href="#verify"]')).toHaveCount(1);
+  });
+
+  test("a section's heading folds it: the body hides, aria-expanded flips, the choice survives a reload; by keyboard too", async ({ page }) => {
+    const problems = guardConsole(page);
+    await page.goto("/?mock=1");
+    const btn = page.locator("#posture-title > button.section__toggle");
+    await expect(btn).toHaveAttribute("aria-expanded", "true");
+    await expect(btn).toHaveAttribute("aria-controls", "posture-body");
+    await expect(page.locator("#posture-panel .tile").first()).toBeVisible();
+    await btn.click();
+    await expect(btn).toHaveAttribute("aria-expanded", "false");
+    await expect(page.locator("#posture-body")).toBeHidden();
+    await expect(page.locator("#posture .section__lead")).toBeHidden();
+    // Folded keeps the eyebrow (the section's number) and the title.
+    await expect(page.locator("#posture .eyebrow")).toBeVisible();
+    await expect(btn).toBeVisible();
+    await page.reload();
+    await expect(btn).toHaveAttribute("aria-expanded", "false");
+    await expect(page.locator("#posture-body")).toBeHidden();
+    await expect(page.locator("#how-body")).toBeVisible();
+    // Unfolded, the posture that was fetched while folded is drawn.
+    await btn.focus();
+    await page.keyboard.press("Enter");
+    await expect(btn).toHaveAttribute("aria-expanded", "true");
+    await expect(page.locator("#posture-panel .tile").first()).toBeVisible();
+    await page.keyboard.press("Space");
+    await expect(btn).toHaveAttribute("aria-expanded", "false");
+    await page.reload();
+    await expect(page.locator("#posture-body")).toBeHidden();
+    // The attack section folds and unfolds with its terminal intact.
+    const attack = page.locator("#attack-title > button");
+    await attack.click();
+    await expect(page.locator("#terminal")).toBeHidden();
+    await attack.click();
+    await expect(page.locator("#terminal .term-start__btn")).toBeVisible();
+    expect(problems).toEqual([]);
+  });
+
+  test("a link to a folded section opens it: the footer's #verify, the hero's #attack, a typed hash, a page opened at one", async ({ page }) => {
+    const problems = guardConsole(page);
+    await page.goto("/?mock=1");
+    for (const id of ["verify", "attack", "evidence", "posture"]) await page.locator(`#${id}-title > button`).click();
+    await page.reload();
+    for (const id of ["verify", "attack", "evidence", "posture"]) await expect(page.locator(`#${id}-body`)).toBeHidden();
+    // The page has its full height first: a smooth scroll does not follow the correlation appearing above it.
+    await expect(page.locator("#correlation .corr-matrix")).toBeVisible();
+    await expect(page.locator("#hero-stats .herostats__tile").first()).toBeVisible();
+    await page.locator('footer.site-footer a[href="#verify"]').click();
+    await expect(page.locator("#verify-title > button")).toHaveAttribute("aria-expanded", "true");
+    await expect(page.locator("#verify-panel")).toBeVisible();
+    await expect(page.locator("#verify-title")).toBeInViewport();
+    await page.locator("#hero-cta").click();
+    await expect(page.locator("#attack-body")).toBeVisible();
+    await expect(page.locator("#attack-title")).toBeInViewport();
+    await page.evaluate(() => (location.hash = "#evidence"));
+    await expect(page.locator("#evidence-body")).toBeVisible();
+    await expect(page.locator("#evidence-title")).toBeInViewport();
+    await page.goto("/?mock=1#posture");
+    await expect(page.locator("#posture-body")).toBeVisible();
+    await expect(page.locator("#posture-title")).toBeInViewport();
+    expect(problems).toEqual([]);
+  });
+
+  test("folded at first paint: with the module script held back, theme.ts and the stylesheet fold a folded section alone", async ({ page }) => {
+    await page.goto("/?mock=1");
+    await page.locator("#posture-title > button").click();
+    await page.route(/\/assets\/main-[^/]*\.js$/, (route) => route.abort());
+    await page.reload();
+    expect(await page.evaluate(() => document.documentElement.dataset.folded)).toBe("posture");
+    await expect(page.locator("#posture-body")).toBeHidden();
+    await expect(page.locator("#posture .section__lead")).toBeHidden();
+    await expect(page.locator("#posture-title")).toBeVisible();
+    await expect(page.locator("#how-body")).toBeVisible();
+  });
+
+  test("a reload keeps the visitor's scroll position: no jump to the hash because a section above it is folded", async ({ page }) => {
+    await page.goto("/?mock=1#posture");
+    await expect(page.locator("#correlation .corr-matrix")).toBeVisible();
+    await page.locator("#evidence-title > button").click();
+    await expect(page.locator("#evidence-body")).toBeHidden();
+    await page.evaluate(() => window.scrollTo(0, (document.getElementById("skills") as HTMLElement).getBoundingClientRect().top + scrollY - 200));
+    const y = await page.evaluate(() => scrollY);
+    await page.reload();
+    await expect(page.locator("#evidence-body")).toBeHidden();
+    await expect(page.locator("#correlation .corr-matrix")).toBeVisible();
+    // theme.ts's stand-in is gone once the buttons fold the section themselves.
+    expect(await page.evaluate(() => document.documentElement.dataset.folded)).toBeUndefined();
+    // The browser restores what it can (the mock's panels arrive after the load, so it may fall short of
+    // y), and the visitor is not left at #posture. The browser's restoration comes after the module here,
+    // so the unit test (a reload faked) is what pins sections.ts's own decision.
+    await page.waitForTimeout(1500);
+    const at = await page.evaluate(() => ({ y: scrollY, posture: (document.getElementById("posture") as HTMLElement).getBoundingClientRect().top }));
+    expect(at.y).toBeGreaterThan(0);
+    expect(Math.abs(at.posture)).toBeGreaterThan(300);
+    expect(y).toBeGreaterThan(0);
+  });
+
+  for (const wide of [false, true]) {
+    const fonts = wide ? " (a wide font forced in)" : "";
+
+    test(`the section toggles fit 360 and 320 px, open and folded${fonts}`, async ({ page }) => {
+      if (wide) await wideFonts(page);
+      const past = () =>
+        page.evaluate(() =>
+          [...document.querySelectorAll(".section__toggle, .section__toggle *")]
+            .filter((e) => {
+              const r = e.getBoundingClientRect();
+              return r.width > 0 && (r.left < -1 || r.right > document.documentElement.clientWidth + 1);
+            })
+            .map((e) => e.closest("section")?.id),
+        );
+      for (const width of [360, 320]) {
+        await page.setViewportSize({ width, height: 780 });
+        await page.goto("/?mock=1");
+        if (wide) expect(await page.evaluate(() => getComputedStyle(document.body).fontFamily)).toContain("DejaVu Sans");
+        await expect(page.locator("#correlation")).toBeVisible();
+        const toggles = page.locator(".section__toggle");
+        await expect(toggles).toHaveCount(8);
+        expect(await past()).toEqual([]);
+        await noHorizontalScroll(page);
+        for (const t of await toggles.all()) await t.click();
+        expect(await past()).toEqual([]);
+        await noHorizontalScroll(page);
+      }
+    });
+  }
 });
 
 test.describe("mock mode", () => {
@@ -748,7 +893,7 @@ test.describe("accessibility basics", () => {
 test.describe("credibility on the production bundle (ADR 0035; serve.mjs --terminal-api, not ?mock)", () => {
   const CRED = "http://127.0.0.1:4176/";
 
-  test("above the fold: the evidence card, no provenance data and no link to #verify in the hero, the panel last and linked from the footer; on a phone the card follows the counters", async ({ page, isMobile }) => {
+  test("above the fold: the evidence card, no provenance data and no link to #verify in the hero, the panel far down and linked from the footer; on a phone the card follows the counters", async ({ page, isMobile }) => {
     const problems = guardConsole(page);
     if (!isMobile) await page.setViewportSize({ width: 1280, height: 720 });
     await page.goto(CRED);
@@ -774,9 +919,10 @@ test.describe("credibility on the production bundle (ADR 0035; serve.mjs --termi
       expect(box.card).toBeGreaterThanOrEqual(box.stats);
       expect(box.card - box.stats).toBeLessThan(80);
     }
-    // The order the owner asked for (ADR 0035, amended 2026-10-04): the proof first, the verify panel the
-    // last section of the page (About is stripped in production while unwritten).
-    expect(await page.evaluate(() => [...document.querySelectorAll("main > section")].map((el) => el.id))).toEqual(["top", "evidence", "posture", "attack", "correlation", "how", "skills", "projects", "verify"]);
+    // The order the owner asked for (ADR 0035, amended 2026-10-05): the attack, its response and the
+    // correlation first; the evidence, the posture and the verify panel after How it works, above the
+    // skills (About is stripped in production while unwritten).
+    expect(await page.evaluate(() => [...document.querySelectorAll("main > section")].map((el) => el.id))).toEqual(PAGE_ORDER);
     // The one way to it is a footer link.
     await expect(page.locator('a[href="#verify"]')).toHaveCount(1);
     const link = page.locator('footer.site-footer a[href="#verify"]');
@@ -941,9 +1087,9 @@ test.describe("correlation (ADR 0036; serve.mjs --terminal-api --siem / --no-sie
     await page.goto(SIEM);
     const s = section(page);
     await expect(s).toBeVisible();
-    expect(await page.evaluate(() => [...document.querySelectorAll("main > section")].map((el) => el.id))).toEqual(["top", "evidence", "posture", "attack", "correlation", "how", "skills", "projects", "verify"]);
-    // "04 · Correlation", and How it works becomes 05.
-    expect((await numbered(page)).slice(0, 5)).toEqual(["evidence", "posture", "attack", "correlation", "how"]);
+    expect(await page.evaluate(() => [...document.querySelectorAll("main > section")].map((el) => el.id))).toEqual(PAGE_ORDER);
+    // "02 · Correlation", and How it works becomes 03.
+    expect((await numbered(page)).slice(0, 5)).toEqual(["attack", "correlation", "how", "evidence", "posture"]);
     await expect(s.locator(".section__head .eyebrow")).toHaveText("Correlation");
 
     // The health line (decision D1): the applied commit linked, each check named.
@@ -1070,7 +1216,7 @@ test.describe("correlation (ADR 0036; serve.mjs --terminal-api --siem / --no-sie
     await expect(page.locator("#verify-panel [data-image=\"api\"]")).toContainText("0448cff");
     await expect(section(page)).toBeHidden();
     await expect(section(page).locator(".incident, .tile")).toHaveCount(0);
-    expect((await numbered(page)).slice(0, 4)).toEqual(["evidence", "posture", "attack", "how"]);
+    expect((await numbered(page)).slice(0, 4)).toEqual(["attack", "how", "evidence", "posture"]);
     await expect(page.locator("#verify-panel")).not.toContainText("/api/correlation");
     expect(problems).toEqual([]);
   });

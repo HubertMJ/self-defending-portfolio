@@ -519,6 +519,22 @@ describe("mountCorrelation", () => {
     expect(calls.correlation).toBe(n + 1);
   });
 
+  it("folded (collapsed, not hidden): still polled and shown, drawn only once unfolded", async () => {
+    vi.useFakeTimers();
+    const { section, calls, handle } = setup([ok()]);
+    handle.setActive(false);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(calls.correlation).toBe(1);
+    expect(section.hidden).toBe(false);
+    expect(calls.available).toEqual([true]);
+    expect(section.querySelectorAll(".incident")).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(POLL_MS);
+    expect(calls.correlation).toBe(2);
+    expect(section.querySelectorAll(".incident")).toHaveLength(0);
+    handle.setActive(true);
+    expect(section.querySelectorAll(".incident")).toHaveLength(1);
+  });
+
   it("an unchanged answer redraws nothing (an open <details> survives); the checked time is rewritten in place", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(NOW);

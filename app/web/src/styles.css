@@ -653,6 +653,123 @@ main {
   color: var(--text-muted);
 }
 
+/* Each section below the hero folds under its heading (ui/sections.ts): the h2's text is a button,
+   the chevron points down while open and right while folded. A folded section keeps its eyebrow (and
+   with it its number) and its title, and nothing else. The title wraps like any heading: nothing in
+   the button may widen a 320 px page. */
+.section__toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5em;
+  max-width: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  text-align: left;
+  white-space: normal;
+  cursor: pointer;
+}
+
+.section__label {
+  min-width: 0;
+  overflow-wrap: break-word;
+}
+
+.section__chevron {
+  flex: none;
+  width: 0.38em;
+  height: 0.38em;
+  margin-inline: 0.1em;
+  border-right: 0.1em solid currentColor;
+  border-bottom: 0.1em solid currentColor;
+  color: var(--text-faint);
+  transform: translateY(-0.12em) rotate(45deg);
+}
+
+.section__toggle[aria-expanded="false"] .section__chevron {
+  transform: rotate(-45deg);
+}
+
+.section__toggle:hover .section__chevron {
+  color: var(--accent);
+}
+
+.section__toggle:focus-visible {
+  outline-offset: 4px;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  html:not(.reduced-motion) .section__chevron {
+    transition: transform 0.18s ease;
+  }
+}
+
+.section--collapsed {
+  padding-block: clamp(1.5rem, 4vw, 2.25rem);
+}
+
+.section--collapsed .section__head {
+  margin-bottom: 0;
+}
+
+.section--collapsed .section__head h2 {
+  margin-bottom: 0;
+}
+
+.section--collapsed .section__head > :not(.eyebrow, h2) {
+  display: none;
+}
+
+/* Before ui/sections.ts mounts, theme.ts names the sections a visitor folded in html[data-folded]
+   (from localStorage, before first paint): they look folded already, so nothing jumps when the buttons
+   arrive. sections.ts drops the attribute once it has folded them itself. One line per foldable section;
+   a unit test checks the list against index.html. */
+:is(
+html[data-folded~="attack"] #attack,
+html[data-folded~="correlation"] #correlation,
+html[data-folded~="how"] #how,
+html[data-folded~="about"] #about,
+html[data-folded~="evidence"] #evidence,
+html[data-folded~="posture"] #posture,
+html[data-folded~="verify"] #verify,
+html[data-folded~="skills"] #skills,
+html[data-folded~="projects"] #projects
+) {
+  padding-block: clamp(1.5rem, 4vw, 2.25rem);
+}
+
+:is(
+html[data-folded~="attack"] #attack,
+html[data-folded~="correlation"] #correlation,
+html[data-folded~="how"] #how,
+html[data-folded~="about"] #about,
+html[data-folded~="evidence"] #evidence,
+html[data-folded~="posture"] #posture,
+html[data-folded~="verify"] #verify,
+html[data-folded~="skills"] #skills,
+html[data-folded~="projects"] #projects
+) :is(.section__head, .section__head h2) {
+  margin-bottom: 0;
+}
+
+:is(
+html[data-folded~="attack"] #attack,
+html[data-folded~="correlation"] #correlation,
+html[data-folded~="how"] #how,
+html[data-folded~="about"] #about,
+html[data-folded~="evidence"] #evidence,
+html[data-folded~="posture"] #posture,
+html[data-folded~="verify"] #verify,
+html[data-folded~="skills"] #skills,
+html[data-folded~="projects"] #projects
+) :is(.section__head > :not(.eyebrow, h2), .section__body) {
+  display: none;
+}
+
 .panel-title {
   font: 600 0.8rem/1.4 var(--font-mono);
   letter-spacing: 0.1em;

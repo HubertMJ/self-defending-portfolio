@@ -25,10 +25,10 @@
     </a>
     <nav class="site-nav" aria-label="Sections">
       <ul>
-        <li><a href="#posture">Posture</a></li>
         <li><a href="#attack">Attack it</a></li>
         <li><a href="#how">How it works</a></li>
         <li><a href="#about">About</a></li>
+        <li><a href="#posture">Posture</a></li>
       </ul>
     </nav>
     <div class="site-header__tools">
@@ -57,9 +57,9 @@
         <h1 id="hero-title">Hubert Jabłoński</h1>
         <p class="hero__lead">
           This page runs on a hardened single-node k3s cluster that watches itself.
-          Look at its security posture, then <a href="#attack">launch a real attack</a> against
-          a sandboxed pod and watch <strong>Falco</strong> detect it and <strong>Falco Talon</strong>
-          shut it down, live.
+          <a href="#attack">Launch a real attack</a> against a sandboxed pod and watch
+          <strong>Falco</strong> detect it and <strong>Falco Talon</strong> shut it down, live.
+          The cluster's security posture and the full record of every attack follow further down.
         </p>
         <p class="hero__lead hero__lead--sub todo-content" data-todo-content="hero-intro">
           <!-- TODO-CONTENT: one or two sentences in your own words: who you are, what you work on, what you are looking for. -->
@@ -84,36 +84,6 @@
     </div>
   </section>
 
-  <section class="section section--evidence" id="evidence" aria-labelledby="evidence-title">
-    <div class="wrap">
-      <header class="section__head">
-        <p class="eyebrow">Evidence</p>
-        <h2 id="evidence-title">What the cluster recorded</h2>
-        <p class="section__lead">The latest events as the API published them, newest first, with absolute times in UTC. Nothing here is generated in your browser: when nothing happens, it says since when.</p>
-      </header>
-      <p class="liveness" id="liveness"></p>
-      <p class="visually-hidden" id="ticker-live" role="status"></p>
-      <div class="ticker-wrap" id="ticker">
-        <noscript><p class="offline__body">The live evidence needs JavaScript. The rest of this page does not.</p></noscript>
-      </div>
-      <div class="evdetail-wrap" id="evidence-detail"></div>
-    </div>
-  </section>
-
-  <section class="section" id="posture" aria-labelledby="posture-title">
-    <div class="wrap">
-      <header class="section__head">
-        <p class="eyebrow">Posture</p>
-        <h2 id="posture-title">Live security posture</h2>
-        <p class="section__lead">What admission control, image scanning, the CIS benchmark and runtime detection report about this cluster right now.</p>
-      </header>
-      <div class="panel" id="posture-panel" aria-live="polite" aria-busy="true" data-state="loading">
-        <p class="loading">Loading posture…</p>
-        <noscript><p class="offline__body">The live panels need JavaScript. The rest of this page does not.</p></noscript>
-      </div>
-    </div>
-  </section>
-
   <section class="section section--attack" id="attack" aria-labelledby="attack-title">
     <div class="wrap">
       <header class="section__head">
@@ -126,37 +96,38 @@
           ends your session when it has seen enough. One run at a time, a few per visitor.
         </p>
       </header>
-
-      <div class="terminal-wrap">
-        <div id="terminal" class="panel panel--flush" data-state="loading">
-          <p class="loading">Loading the terminal…</p>
-          <noscript><p class="offline__body">The terminal needs JavaScript. The rest of this page does not.</p></noscript>
+      <div class="section__body" id="attack-body">
+        <div class="terminal-wrap">
+          <div id="terminal" class="panel panel--flush" data-state="loading">
+            <p class="loading">Loading the terminal…</p>
+            <noscript><p class="offline__body">The terminal needs JavaScript. The rest of this page does not.</p></noscript>
+          </div>
         </div>
-      </div>
 
-      <div class="launcher">
-        <header class="section__head launcher__head">
-          <h3 id="justshowme-title">Just show me</h3>
-          <p class="section__lead">Prefer one click? Each of these starts the same kind of pod and runs one fixed attack, then plays the detection and response out below. Or run one <strong>with and without the response</strong> to see the difference the cluster makes.</p>
-        </header>
-        <p class="launch-status" id="launch-status" role="status" aria-live="polite"></p>
-        <div class="panel panel--flush" id="scenario-panel" aria-busy="true" data-state="loading">
-          <p class="loading">Loading scenarios…</p>
+        <div class="launcher">
+          <header class="section__head launcher__head">
+            <h3 id="justshowme-title">Just show me</h3>
+            <p class="section__lead">Prefer one click? Each of these starts the same kind of pod and runs one fixed attack, then plays the detection and response out below. Or run one <strong>with and without the response</strong> to see the difference the cluster makes.</p>
+          </header>
+          <p class="launch-status" id="launch-status" role="status" aria-live="polite"></p>
+          <div class="panel panel--flush" id="scenario-panel" aria-busy="true" data-state="loading">
+            <p class="loading">Loading scenarios…</p>
+          </div>
+          <div class="limits-panel tech-only" id="limits-panel" aria-live="polite"></div>
         </div>
-        <div class="limits-panel tech-only" id="limits-panel" aria-live="polite"></div>
-      </div>
 
-      <section class="console" id="console" aria-labelledby="console-title" data-state="empty">
-        <noscript><p class="offline__body">The live run panel needs JavaScript.</p></noscript>
-      </section>
+        <section class="console" id="console" aria-labelledby="console-title" data-state="empty">
+          <noscript><p class="offline__body">The live run panel needs JavaScript.</p></noscript>
+        </section>
 
-      <div class="timeline" id="timeline" aria-labelledby="timeline-title">
-        <div class="timeline__head">
-          <h3 class="panel-title" id="timeline-title">Run history</h3>
-          <p class="conn" id="timeline-conn" data-state="connecting"><span class="conn__dot" aria-hidden="true"></span>Waiting for JavaScript…</p>
+        <div class="timeline" id="timeline" aria-labelledby="timeline-title">
+          <div class="timeline__head">
+            <h3 class="panel-title" id="timeline-title">Run history</h3>
+            <p class="conn" id="timeline-conn" data-state="connecting"><span class="conn__dot" aria-hidden="true"></span>Waiting for JavaScript…</p>
+          </div>
+          <p class="visually-hidden" id="timeline-live" aria-live="polite" aria-atomic="true"></p>
+          <div class="panel panel--flush" id="timeline-panel"></div>
         </div>
-        <p class="visually-hidden" id="timeline-live" aria-live="polite" aria-atomic="true"></p>
-        <div class="panel panel--flush" id="timeline-panel"></div>
       </div>
     </div>
   </section>
@@ -168,10 +139,12 @@
         <h2 id="correlation-title">What the SIEM made of it</h2>
         <p class="section__lead">Every Falco alert, Talon action, audited API call, network flow and terminal command is also shipped to a SIEM on its own VM, which the cluster can append to but not rewrite. Sigma rules from this repository run there, and the API joins their findings into incidents, one to three minutes after the event. Every time below is the SIEM's record, in UTC.</p>
       </header>
-      <div class="corr-health-wrap" id="correlation-health"></div>
-      <div class="corr-metrics-wrap" id="correlation-metrics"></div>
-      <div class="corr-board-wrap" id="correlation-board"></div>
-      <div class="corr-rules-wrap" id="correlation-rules"></div>
+      <div class="section__body" id="correlation-body">
+        <div class="corr-health-wrap" id="correlation-health"></div>
+        <div class="corr-metrics-wrap" id="correlation-metrics"></div>
+        <div class="corr-board-wrap" id="correlation-board"></div>
+        <div class="corr-rules-wrap" id="correlation-rules"></div>
+      </div>
     </div>
   </section>
 
@@ -182,20 +155,22 @@
         <h2 id="how-title">Defence in layers, all from git</h2>
         <p class="section__lead">Seven layers an attack has to pass. Nothing here was clicked together: every layer is a reviewed commit, reconciled by Argo CD.<span class="needs-terminal"> In the terminal above, each command lights the layer that answered it.</span></p>
       </header>
-      <div id="defence-map" class="defence-map-wrap">
-        <noscript>
-          <ol class="layers">
-            <li class="layer"><h3>Edge</h3><p>Cloudflare Tunnel: the cluster opens no inbound port. TLS, HSTS and WAF at the edge.</p></li>
-            <li class="layer"><h3>Host</h3><p>Debian VM hardened by Ansible: SSH lockdown, nftables default-deny, sysctl, auditd.</p></li>
-            <li class="layer"><h3>Network</h3><p>Cilium CNI, default-deny between pods, a quarantine policy that cuts a pod off entirely.</p></li>
-            <li class="layer"><h3>Supply chain</h3><p>Images built in CI, Trivy-gated, SBOM attested and cosign keyless signed. Kyverno refuses anything unsigned.</p></li>
-            <li class="layer"><h3>Admission</h3><p>Pod Security <code>restricted</code>, pinned digests, no <code>:latest</code>, mandatory resource limits.</p></li>
-            <li class="layer"><h3>Pod security</h3><p>Non-root, read-only root filesystem, every capability dropped, no service-account token.</p></li>
-            <li class="layer"><h3>Runtime</h3><p>Falco (modern eBPF) detects, Falcosidekick fans out, Falco Talon terminates or quarantines.</p></li>
-          </ol>
-        </noscript>
+      <div class="section__body" id="how-body">
+        <div id="defence-map" class="defence-map-wrap">
+          <noscript>
+            <ol class="layers">
+              <li class="layer"><h3>Edge</h3><p>Cloudflare Tunnel: the cluster opens no inbound port. TLS, HSTS and WAF at the edge.</p></li>
+              <li class="layer"><h3>Host</h3><p>Debian VM hardened by Ansible: SSH lockdown, nftables default-deny, sysctl, auditd.</p></li>
+              <li class="layer"><h3>Network</h3><p>Cilium CNI, default-deny between pods, a quarantine policy that cuts a pod off entirely.</p></li>
+              <li class="layer"><h3>Supply chain</h3><p>Images built in CI, Trivy-gated, SBOM attested and cosign keyless signed. Kyverno refuses anything unsigned.</p></li>
+              <li class="layer"><h3>Admission</h3><p>Pod Security <code>restricted</code>, pinned digests, no <code>:latest</code>, mandatory resource limits.</p></li>
+              <li class="layer"><h3>Pod security</h3><p>Non-root, read-only root filesystem, every capability dropped, no service-account token.</p></li>
+              <li class="layer"><h3>Runtime</h3><p>Falco (modern eBPF) detects, Falcosidekick fans out, Falco Talon terminates or quarantines.</p></li>
+            </ol>
+          </noscript>
+        </div>
+        <p class="section__more">Every decision has an Architecture Decision Record: <a href="https://github.com/HubertMJ/self-defending-portfolio/tree/main/docs/adr" rel="noopener noreferrer">docs/adr</a>.</p>
       </div>
-      <p class="section__more">Every decision has an Architecture Decision Record: <a href="https://github.com/HubertMJ/self-defending-portfolio/tree/main/docs/adr" rel="noopener noreferrer">docs/adr</a>.</p>
     </div>
   </section>
 
@@ -205,67 +180,47 @@
         <p class="eyebrow">About</p>
         <h2 id="about-title">About me</h2>
       </header>
-      <div class="prose todo-content" data-todo-content="about">
-        <!-- TODO-CONTENT: 2-3 short paragraphs: background, what you are good at, what kind of role or work you want. No claims you cannot back up in an interview. -->
-        <p>[TODO-CONTENT: background and current focus]</p>
-        <p>[TODO-CONTENT: what kind of work or role you are looking for]</p>
+      <div class="section__body" id="about-body">
+        <div class="prose todo-content" data-todo-content="about">
+          <!-- TODO-CONTENT: 2-3 short paragraphs: background, what you are good at, what kind of role or work you want. No claims you cannot back up in an interview. -->
+          <p>[TODO-CONTENT: background and current focus]</p>
+          <p>[TODO-CONTENT: what kind of work or role you are looking for]</p>
+        </div>
       </div>
     </div>
   </section>
 
-  <section class="section" id="skills" aria-labelledby="skills-title">
+  <section class="section section--evidence" id="evidence" aria-labelledby="evidence-title">
     <div class="wrap">
       <header class="section__head">
-        <p class="eyebrow">Skills</p>
-        <h2 id="skills-title">Skills shown in this repository</h2>
+        <p class="eyebrow">Evidence</p>
+        <h2 id="evidence-title">What the cluster recorded</h2>
+        <p class="section__lead">The latest events as the API published them, newest first, with absolute times in UTC. Nothing here is generated in your browser: when nothing happens, it says since when.</p>
       </header>
-      <ul class="skills" role="list">
-        <li>Kubernetes (k3s)</li>
-        <li>Cilium &amp; Gateway API</li>
-        <li>Argo CD / GitOps</li>
-        <li>Ansible</li>
-        <li>Kyverno</li>
-        <li>Falco &amp; Falco Talon</li>
-        <li>Trivy</li>
-        <li>Sigstore cosign</li>
-        <li>GitHub Actions</li>
-        <li>SOPS + age</li>
-        <li>nftables</li>
-        <li>Go</li>
-        <li>TypeScript</li>
-      </ul>
-      <p class="todo-content small" data-todo-content="skills-extra">
-        <!-- TODO-CONTENT: add skills that are not visible in this repository, or delete this line. -->
-        [TODO-CONTENT: other skills, languages, tools]
-      </p>
+      <div class="section__body" id="evidence-body">
+        <p class="liveness" id="liveness"></p>
+        <p class="visually-hidden" id="ticker-live" role="status"></p>
+        <div class="ticker-wrap" id="ticker">
+          <noscript><p class="offline__body">The live evidence needs JavaScript. The rest of this page does not.</p></noscript>
+        </div>
+        <div class="evdetail-wrap" id="evidence-detail"></div>
+      </div>
     </div>
   </section>
 
-  <section class="section" id="projects" aria-labelledby="projects-title" data-todo-section>
+  <section class="section" id="posture" aria-labelledby="posture-title">
     <div class="wrap">
       <header class="section__head">
-        <p class="eyebrow">Projects</p>
-        <h2 id="projects-title">Projects</h2>
+        <p class="eyebrow">Posture</p>
+        <h2 id="posture-title">Live security posture</h2>
+        <p class="section__lead">What admission control, image scanning, the CIS benchmark and runtime detection report about this cluster right now.</p>
       </header>
-      <ul class="projects" role="list">
-        <li class="project">
-          <h3><a href="https://github.com/HubertMJ/self-defending-portfolio" rel="noopener noreferrer">self-defending-portfolio</a></h3>
-          <p>This site: a hardened k3s cluster that publishes its own security posture and invites visitors to attack it, with detection and automatic response streamed live.</p>
-          <p class="project__tags">k3s · Cilium · Argo CD · Kyverno · Falco · cosign</p>
-        </li>
-        <li class="project todo-content" data-todo-content="project-2">
-          <!-- TODO-CONTENT: a second project: name, one-sentence outcome, link, stack. Delete this card if there is none to show. -->
-          <h3>[TODO-CONTENT: project name]</h3>
-          <p>[TODO-CONTENT: what it does and what you did]</p>
-          <p class="project__tags">[TODO-CONTENT: stack]</p>
-        </li>
-        <li class="project todo-content" data-todo-content="project-3">
-          <!-- TODO-CONTENT: a third project, or delete this card. -->
-          <h3>[TODO-CONTENT: project name]</h3>
-          <p>[TODO-CONTENT: what it does and what you did]</p>
-          <p class="project__tags">[TODO-CONTENT: stack]</p>
-        </li>
-      </ul>
+      <div class="section__body" id="posture-body">
+        <div class="panel" id="posture-panel" aria-live="polite" aria-busy="true" data-state="loading">
+          <p class="loading">Loading posture…</p>
+          <noscript><p class="offline__body">The live panels need JavaScript. The rest of this page does not.</p></noscript>
+        </div>
+      </div>
     </div>
   </section>
 
@@ -276,8 +231,70 @@
         <h2 id="verify-title">Verify it yourself</h2>
         <p class="section__lead">Which commit each running image was built from, by which CI run, the cosign command to check its signature, and every public endpoint this page reads.</p>
       </header>
-      <div class="panel" id="verify-panel">
-        <p class="small">Every image is built and signed in CI from <a href="https://github.com/HubertMJ/self-defending-portfolio" rel="noopener noreferrer">the public repository</a>; with JavaScript this panel names the exact commits and digests.</p>
+      <div class="section__body" id="verify-body">
+        <div class="panel" id="verify-panel">
+          <p class="small">Every image is built and signed in CI from <a href="https://github.com/HubertMJ/self-defending-portfolio" rel="noopener noreferrer">the public repository</a>; with JavaScript this panel names the exact commits and digests.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section" id="skills" aria-labelledby="skills-title">
+    <div class="wrap">
+      <header class="section__head">
+        <p class="eyebrow">Skills</p>
+        <h2 id="skills-title">Skills shown in this repository</h2>
+      </header>
+      <div class="section__body" id="skills-body">
+        <ul class="skills" role="list">
+          <li>Kubernetes (k3s)</li>
+          <li>Cilium &amp; Gateway API</li>
+          <li>Argo CD / GitOps</li>
+          <li>Ansible</li>
+          <li>Kyverno</li>
+          <li>Falco &amp; Falco Talon</li>
+          <li>Trivy</li>
+          <li>Sigstore cosign</li>
+          <li>GitHub Actions</li>
+          <li>SOPS + age</li>
+          <li>nftables</li>
+          <li>Go</li>
+          <li>TypeScript</li>
+        </ul>
+        <p class="todo-content small" data-todo-content="skills-extra">
+          <!-- TODO-CONTENT: add skills that are not visible in this repository, or delete this line. -->
+          [TODO-CONTENT: other skills, languages, tools]
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <section class="section" id="projects" aria-labelledby="projects-title" data-todo-section>
+    <div class="wrap">
+      <header class="section__head">
+        <p class="eyebrow">Projects</p>
+        <h2 id="projects-title">Projects</h2>
+      </header>
+      <div class="section__body" id="projects-body">
+        <ul class="projects" role="list">
+          <li class="project">
+            <h3><a href="https://github.com/HubertMJ/self-defending-portfolio" rel="noopener noreferrer">self-defending-portfolio</a></h3>
+            <p>This site: a hardened k3s cluster that publishes its own security posture and invites visitors to attack it, with detection and automatic response streamed live.</p>
+            <p class="project__tags">k3s · Cilium · Argo CD · Kyverno · Falco · cosign</p>
+          </li>
+          <li class="project todo-content" data-todo-content="project-2">
+            <!-- TODO-CONTENT: a second project: name, one-sentence outcome, link, stack. Delete this card if there is none to show. -->
+            <h3>[TODO-CONTENT: project name]</h3>
+            <p>[TODO-CONTENT: what it does and what you did]</p>
+            <p class="project__tags">[TODO-CONTENT: stack]</p>
+          </li>
+          <li class="project todo-content" data-todo-content="project-3">
+            <!-- TODO-CONTENT: a third project, or delete this card. -->
+            <h3>[TODO-CONTENT: project name]</h3>
+            <p>[TODO-CONTENT: what it does and what you did]</p>
+            <p class="project__tags">[TODO-CONTENT: stack]</p>
+          </li>
+        </ul>
       </div>
     </div>
   </section>
