@@ -45,6 +45,10 @@ type fakeSource struct {
 	hits     map[string][]siem.Hit
 	sync     []siem.Hit
 	rewrite  int
+	// countQ: the last count request (size 0); countErr fails it alone.
+	countIdx []string
+	countQ   siem.Query
+	countErr error
 	fail     error
 	calls    []call
 }
@@ -127,6 +131,14 @@ func (f *fakeSource) Search(_ context.Context, indices []string, q siem.Query) (
 		return siem.SearchResult{Total: len(out), Hits: out}, nil
 	}
 	if q.Size == 0 {
+		f.countIdx, f.countQ = indices, q
+		if f.countErr != nil {
+			return siem.SearchResult{}, f.countErr
+		}
+		// The SIEM counts what the query asks for: without the overwrite filter, every document.
+		if len(q.Filters) != 1 || fmt.Sprint(q.Filters[0]) != fmt.Sprint(map[string]any{"term": map[string]any{"event.overwrite": true}}) {
+			return siem.SearchResult{Total: 1000}, nil
+		}
 		return siem.SearchResult{Total: f.rewrite}, nil
 	}
 	var out []siem.Hit

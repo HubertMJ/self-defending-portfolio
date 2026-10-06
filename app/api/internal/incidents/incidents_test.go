@@ -3,6 +3,7 @@ package incidents
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"regexp"
@@ -1705,5 +1706,42 @@ func TestOperatorTestRun(t *testing.T) {
 	b, _ := json.Marshal(v)
 	if strings.Contains(string(b), "system:admin") || !strings.Contains(string(b), `"operator_test":true`) {
 		t.Errorf("published principal or no flag: %s", b)
+	}
+}
+
+// health.evidence_rewritten (ADR 0036 section 7, siem contract F1) reads true while any document of
+// the six streams ingested in the last 24 h carries event.overwrite: true - a document rewritten under
+// an id it already had - and false when none does; a failed count keeps the previous value.
+func TestEvidenceRewrittenFromOverwriteCount(t *testing.T) {
+	f := newFake()
+	now := t0.Add(time.Hour)
+	tr := newTracker(t, f, &clock{t: now})
+	rewritten := func() bool {
+		t.Helper()
+		tr.Poll(context.Background())
+		v := tr.View()
+		if !v.Available {
+			t.Fatal("not available")
+		}
+		return v.Health.EvidenceRewritten
+	}
+	if rewritten() {
+		t.Fatal("rewritten with no overwritten document")
+	}
+	if fmt.Sprint(f.countIdx) != fmt.Sprint(siem.Streams) || f.countQ.TimeField != "event.ingested" ||
+		!f.countQ.Since.Equal(now.Add(-24*time.Hour)) || !f.countQ.Until.Equal(now) {
+		t.Fatalf("count over %v: %+v", f.countIdx, f.countQ)
+	}
+	f.rewrite = 1
+	if !rewritten() {
+		t.Fatal("not rewritten with one overwritten document")
+	}
+	f.countErr = errors.New("count refused")
+	if !rewritten() {
+		t.Fatal("a failed count cleared the alarm")
+	}
+	f.countErr, f.rewrite = nil, 0
+	if rewritten() {
+		t.Fatal("still rewritten once no overwritten document is left in the window")
 	}
 }
