@@ -2710,6 +2710,11 @@ p.small {
   .runs {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+
+  /* A lone card (the visitor's one run, the one example) takes the whole row, not half of it. */
+  .runs > .run:only-child {
+    grid-column: 1 / -1;
+  }
 }
 
 .run__show {
@@ -4951,7 +4956,7 @@ html[data-terminal="off"] .needs-terminal {
 }
 
 .scope-hidden {
-  margin: 0.75rem 0 0;
+  margin: 0.75rem 0 1rem;
   color: var(--text-muted);
 }
 
@@ -5038,4 +5043,17 @@ html[data-terminal="off"] .needs-terminal {
   font-size: 0.8rem;
   overflow-wrap: anywhere;
   word-break: break-all;
+}
+
+/* The connection line: the dot keeps to its words, which wrap inside their own span. */
+.conn__dot {
+  flex: none;
+}
+
+.conn__text {
+  min-width: 0;
+}
+
+.evdetail__whose {
+  margin: 0 0 0.25rem;
 }

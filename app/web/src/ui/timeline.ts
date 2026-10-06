@@ -7,6 +7,7 @@ import { humanAction } from "../lib/pipeline";
 import type { ConnectionState } from "../lib/sse";
 import { type NoDetection, type RunView, type TimelineView, buildTimeline, formatDuration, guardedFalco, guardedTalon, noDetection, publishedPod, ts } from "../lib/timeline";
 import { type Focus, ALL, exampleRun, scopedRuns, whose } from "../lib/scope";
+import { hiddenNote } from "./scope";
 import { CONNECTION_LONG, extLink } from "./common";
 
 // A run with victim probes every 500 ms produces a few hundred events; keep a handful of runs' worth.
@@ -58,10 +59,6 @@ export function nothingYet(lead = "Nothing from you yet — "): HTMLElement {
   return h("p", { class: "scope-empty" }, lead, h("a", { href: "#attack" }, "launch an attack"), ".");
 }
 
-/** "3 more by other visitors under “All activity, last 24 h”." when the default view leaves some out. */
-export function hiddenNote(n: number, what: [string, string]): HTMLElement | null {
-  return n > 0 ? h("p", { class: "scope-hidden small" }, `${n} ${n === 1 ? what[0] : what[1]} by other visitors under “All activity, last 24 h”.`) : null;
-}
 
 /**
  * A stage's dot: "true" reached, "false" not (yet), "na" not applicable to this run (a neutral mark,
@@ -289,12 +286,12 @@ export function mountTimeline(
     } else if (runs.length === 0) {
       // This session, and nothing in it: the prompt, then one earlier visitor's run, labelled.
       const example = exampleRun(view.runs) ?? view.runs[0];
-      replace(root, nothingYet(), h("ol", { class: "runs runs--example", role: "list" }, card(example, "example")), hiddenNote(view.runs.length - 1, ["more run", "more runs"]));
+      replace(root, nothingYet(), h("ol", { class: "runs runs--example", role: "list" }, card(example, "example")), hiddenNote(view.runs.length - 1, "more run", "more runs"));
     } else {
       const rest = runs.slice(HISTORY_SHOWN);
       const more = rest.length ? h("details", { class: "runs-more", open: moreOpen }, h("summary", {}, `${rest.length} earlier run${rest.length === 1 ? "" : "s"}`), h("ol", { class: "runs", role: "list" }, rest.map((r) => card(r)))) : null;
       more?.addEventListener("toggle", () => (moreOpen = (more as HTMLDetailsElement).open));
-      replace(root, h("ol", { class: "runs", role: "list" }, runs.slice(0, HISTORY_SHOWN).map((r) => card(r))), more, focus.all ? null : hiddenNote(view.runs.length - runs.length, ["run", "runs"]));
+      replace(root, h("ol", { class: "runs", role: "list" }, runs.slice(0, HISTORY_SHOWN).map((r) => card(r))), more, focus.all ? null : hiddenNote(view.runs.length - runs.length, "run", "runs"));
     }
     if (focusKey) [...root.querySelectorAll<HTMLElement>("[data-focus-key]")].find((el) => el.dataset.focusKey === focusKey)?.focus();
     // Announce transitions of the newest run while it is active, plus the terminal state of a run
@@ -336,7 +333,11 @@ export function mountTimeline(
       }
       connEl.dataset.state = state;
       const label = gaveUp ? "Offline: the live feed gave up retrying" : CONNECTION_LONG[state];
-      const children: (Node | string)[] = [h("span", { class: "conn__dot", "aria-hidden": "true" }), label];
+      // The words in their own span, so the dot never wraps onto a line by itself.
+      const children: (Node | string)[] = [
+        h("span", { class: "conn__dot", "aria-hidden": "true" }),
+        h("span", { class: "conn__text" }, label, state === "open" && !gaveUp ? h("span", { class: "visually-hidden" }, ": events appear as the cluster reports them") : null),
+      ];
       if (state === "offline" || state === "reconnecting") {
         if (retryInMs !== undefined) {
           // The deadline is fixed once, here; each tick only renders deadline - now.

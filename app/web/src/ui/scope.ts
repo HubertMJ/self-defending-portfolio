@@ -7,6 +7,18 @@
 import { h, replace } from "../lib/dom";
 import { type Scope, SCOPE_WORD, loadScope, saveScope } from "../lib/scope";
 
+/** The attribute a "show all activity" button carries: main.ts turns a press into the choice "all". */
+export const SHOW_ALL_ATTR = "data-scope-set";
+
+/**
+ * "3 more runs by other visitors: show all activity, last 24 h" when the default view leaves some
+ * out; the words after the colon are a button that makes the choice.
+ */
+export function hiddenNote(n: number, one: string, many: string): HTMLElement | null {
+  if (n <= 0) return null;
+  return h("p", { class: "scope-hidden small" }, `${n} ${n === 1 ? one : many} by other visitors: `, h("button", { type: "button", class: "linkish", [SHOW_ALL_ATTR]: "all" }, "show all activity, last 24 h"));
+}
+
 export interface ScopeHandle {
   readonly scope: Scope;
   /** A new copy of the control, in step with every other; `what` names what it scopes ("runs"). */

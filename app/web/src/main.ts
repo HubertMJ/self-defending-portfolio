@@ -17,7 +17,7 @@ import { mountPosture } from "./ui/posture";
 import { mountRunStatus } from "./ui/runstatus";
 import { SIEM_COMMAND, runEndsWithin } from "./lib/runstatus";
 import { mountScenarios } from "./ui/scenarios";
-import { mountScope } from "./ui/scope";
+import { SHOW_ALL_ATTR, mountScope } from "./ui/scope";
 import { type Focus, OWN_RUNS_MAX, loadOwnRuns, saveOwnRuns } from "./lib/scope";
 import { mountSections, sectionTitle } from "./ui/sections";
 import { mountStats } from "./ui/stats";
@@ -358,6 +358,15 @@ function main(): void {
   events.start();
 
   // The one control, drawn beside each list it scopes; then every scoped part is told the choice.
+  // "N more by other visitors: show all activity" buttons, wherever a scoped list draws one: the choice
+  // is made, and the focus goes to that section's control, since the button itself is redrawn away.
+  document.addEventListener("click", (e) => {
+    const b = e.target instanceof Element ? e.target.closest(`[${SHOW_ALL_ATTR}]`) : null;
+    if (!b) return;
+    const section = b.closest("main > .section");
+    scope.set("all");
+    section?.querySelector<HTMLButtonElement>('.scope__opt[data-scope="all"]')?.focus();
+  });
   byId("timeline-panel").before(scope.control("runs"));
   byId("ticker").before(scope.control("events"));
   byId("correlation-board").before(scope.control("incidents"));

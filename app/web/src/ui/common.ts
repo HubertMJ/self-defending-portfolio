@@ -90,7 +90,7 @@ export const CONNECTION_WORD: Record<ConnectionState, string> = {
 
 export const CONNECTION_LONG: Record<ConnectionState, string> = {
   connecting: "Connecting to the cluster’s event stream…",
-  open: "Live: events appear as the cluster reports them",
+  open: "live",
   reconnecting: "Reconnecting: the event stream dropped",
   offline: "Offline: the event stream is unreachable",
 };

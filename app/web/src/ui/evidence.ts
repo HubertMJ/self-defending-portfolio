@@ -14,6 +14,7 @@ import type { ConnectionState } from "../lib/sse";
 import { type RunView, type TimelineView, formatDuration, noDetection, publishedPod, ts } from "../lib/timeline";
 import { type Focus, type Whose, ALL, focusRun, scopedRuns } from "../lib/scope";
 import { copyButton, extLink, sourceUrl } from "./common";
+import { hiddenNote } from "./scope";
 
 /** The card shows this many Falco/Talon events and terminal commands; the rest are in #evidence and the raw JSON. */
 export const CARD_EVENTS = 3;
@@ -228,7 +229,9 @@ export function renderEvidenceDetail(run: RunView, ctx: EvidenceContext): HTMLEl
   return h(
     "div",
     { class: "evdetail", "data-run": run.runId },
-    h("h3", { class: "panel-title" }, `${ctx.whose && RECORD_WHOSE[ctx.whose] ? `${RECORD_WHOSE[ctx.whose]}: ` : ""}${ctx.title}: the full record`),
+    // Whose run it is, on its own line as on the history's cards; the heading stays the run's.
+    ctx.whose && RECORD_WHOSE[ctx.whose] ? h("p", { class: `run__who run__who--${ctx.whose} evdetail__whose` }, RECORD_WHOSE[ctx.whose]) : null,
+    h("h3", { class: "panel-title" }, `${ctx.title}: the full record`),
     h(
       "dl",
       { class: "facts facts--wide facts--mono" },
@@ -328,18 +331,26 @@ export function tickerItems(view: TimelineView, max = TICKER_ITEMS): TickerItem[
  * out; with none of the visitor's own, the list says so and sends them to the terminal.
  */
 export function renderTicker(items: TickerItem[], opts: { now: number; since?: string | number; connected: boolean; tickAt?: string; fresh?: ReadonlySet<string>; hidden?: number }): HTMLElement {
-  const note = opts.hidden ? h("p", { class: "scope-hidden small" }, `${opts.hidden} more event${opts.hidden === 1 ? "" : "s"} by other visitors under “All activity, last 24 h”.`) : null;
+  const note = hiddenNote(opts.hidden ?? 0, "more event", "more events");
   if (items.length === 0) {
-    const empty = h(
+    if (opts.hidden !== undefined) {
+      // This session: the prompt says there is nothing yet; the line under it only says the stream is there.
+      const stream = h(
+        "p",
+        { class: "ticker__empty" },
+        opts.connected ? "Stream connected" : "Stream not connected",
+        opts.connected && opts.tickAt ? [" · server time ", timeEl(opts.tickAt, plTime(opts.tickAt), { class: "ticker__server" })] : null,
+      );
+      return h("div", { class: "ticker-scoped" }, h("p", { class: "scope-empty" }, "Nothing from you yet — ", h("a", { href: "#attack" }, "launch an attack"), "."), stream, note);
+    }
+    return h(
       "p",
       { class: "ticker__empty" },
-      opts.hidden !== undefined ? "No event from your runs yet; " : opts.since !== undefined ? ["No events since ", timeEl(opts.since), "; "] : "No events yet; ",
+      opts.since !== undefined ? ["No events since ", timeEl(opts.since), "; "] : "No events yet; ",
       opts.connected ? "the stream is connected" : "the stream is not connected",
       opts.connected && opts.tickAt ? [" (server time ", timeEl(opts.tickAt, plTime(opts.tickAt), { class: "ticker__server" }), ")"] : null,
       ".",
     );
-    if (opts.hidden === undefined) return empty;
-    return h("div", { class: "ticker-scoped" }, h("p", { class: "scope-empty" }, "Nothing from you yet — ", h("a", { href: "#attack" }, "launch an attack"), "."), empty, note);
   }
   const list = h(
     "ol",

@@ -1521,7 +1521,7 @@ test.describe("this session first (mock, ADR 0035 amendment 2026-10-06)", () => 
     await expect(board(page).locator(".incident")).toHaveCount(1);
     await expect(board(page).locator(".corr-tier--example .corr-tier__title")).toHaveText("Example: from an earlier visitor’s run");
     await expect(board(page).locator(".corr-tier--example .incident")).toHaveAttribute("data-incident", EXAMPLE);
-    await expect(board(page).locator(".scope-hidden")).toHaveText(/^\d+ more incidents by other visitors under “All activity, last 24 h”\.$/);
+    await expect(board(page).locator(".scope-hidden")).toHaveText(/^\d+ more incidents by other visitors: show all activity, last 24 h$/);
     // The aggregates say whose they are.
     await expect(page.locator("#correlation .corr-metrics__title")).toHaveText("SOC figures · last 24 h, all visitors");
     await expect(page.locator("#hero-stats .herostats__label")).toContainText("all visitors, not only yours");
@@ -1536,7 +1536,7 @@ test.describe("this session first (mock, ADR 0035 amendment 2026-10-06)", () => 
     await expect(mine.locator(".run__who")).toHaveText("Your run");
     await expect(hist(page).locator('.run[data-who="example"]')).toHaveCount(0);
     await expect(hist(page).locator(".scope-empty")).toHaveCount(0);
-    await expect(hist(page).locator(".scope-hidden")).toHaveText("1 run by other visitors under “All activity, last 24 h”.");
+    await expect(hist(page).locator(".scope-hidden")).toHaveText("1 run by other visitors: show all activity, last 24 h");
     await expect(mine.locator(".chip--state")).toHaveText("Finished", { timeout: 15_000 });
     await expect(page.locator("#evidence-card .evcard")).toHaveAttribute("data-whose", "own");
     await expect(page.locator("#evidence-card .evcard__eyebrow")).toHaveText("Your latest attack, as recorded");
@@ -1604,7 +1604,38 @@ test.describe("this session first (mock, ADR 0035 amendment 2026-10-06)", () => 
     await expect(page.locator("#evidence-card .evcard")).toHaveAttribute("data-whose", "example");
   });
 
-  test("a reload keeps the tab's own runs: their incidents under the own tier, no example; a bad id is ignored", async ({ page }) => {
+  test("after the visitor's terminal session the live run panel points to the terminal, not 'no run of yours'", async ({ page }) => {
+    await page.goto("/?mock=1&mock-speed=0.2");
+    await expect(page.locator("#console .empty")).toContainText("No run of yours yet");
+    await page.locator("#terminal").getByRole("button", { name: /Open the terminal/ }).click();
+    await expect(page.locator("#term-input")).toBeEnabled({ timeout: 10_000 });
+    await expect(hist(page).locator('.run[data-who="own"]')).toHaveCount(1);
+    await expect(page.locator("#console .empty")).toHaveText("Your terminal session is told beside the terminal above; one-click attacks play out here, hop by hop.");
+    await expect(page.locator("#console")).not.toContainText("No run of yours yet");
+  });
+
+  test("'show all activity' in a hidden-count line makes the choice and focuses that section's control", async ({ page }) => {
+    await page.goto("/?mock=1");
+    const btn = board(page).locator('.scope-hidden button[data-scope-set="all"]');
+    await expect(btn).toHaveText("show all activity, last 24 h");
+    await btn.click();
+    await expect(page.locator('.scope__opt[data-scope="all"][aria-pressed="true"]')).toHaveCount(3);
+    await expect(page.locator('#correlation .scope__opt[data-scope="all"]')).toBeFocused();
+    await expect(page.locator("#correlation .corr-tier--pinned .incident")).toHaveCount(3);
+    await expect(page.locator(".scope-live")).toHaveText("Showing all activity of the last 24 hours, every visitor's.");
+  });
+
+  test("on a phone the history's connection line is a dot and 'live', on one line", async ({ page }) => {
+    await page.setViewportSize({ width: 360, height: 760 });
+    await page.goto("/?mock=1");
+    const conn = page.locator("#timeline-conn");
+    await expect(conn).toHaveAttribute("data-state", "open");
+    await expect(conn.locator(".conn__text")).toContainText("live");
+    const [dot, text] = await Promise.all([conn.locator(".conn__dot").boundingBox(), conn.locator(".conn__text").boundingBox()]);
+    expect(dot && text && Math.abs(dot.y + dot.height / 2 - (text.y + text.height / 2))).toBeLessThan(6);
+  });
+
+    test("a reload keeps the tab's own runs: their incidents under the own tier, no example; a bad id is ignored", async ({ page }) => {
     await page.addInitScript(() => sessionStorage.setItem("sdp:own-runs", JSON.stringify(["7e57000000000001", "<img src=x>", 42])));
     await page.goto("/?mock=1");
     await expect(board(page).locator(".corr-tier--own .corr-tier__title")).toHaveText("From your run on this page");

@@ -150,7 +150,7 @@ describe("the run history, scoped", () => {
       [LIVE, "live", "Someone else is attacking right now"],
       [MINE, "own", "Your run"],
     ]);
-    expect(root.querySelector(".scope-hidden")?.textContent).toBe("1 run by other visitors under “All activity, last 24 h”.");
+    expect(root.querySelector(".scope-hidden")?.textContent).toBe("1 run by other visitors: show all activity, last 24 h");
     // Everything: every run, the own and live ones still labelled, nothing said to be hidden.
     t.setFocus({ all: true, own: new Set([MINE]) });
     await flush();
@@ -167,7 +167,7 @@ describe("the run history, scoped", () => {
     expect(root.querySelector(".scope-empty")?.textContent).toBe("Nothing from you yet — launch an attack.");
     expect(root.querySelector(".scope-empty a")?.getAttribute("href")).toBe("#attack");
     expect(cards(root)).toEqual([[MINE, "example", "Example: an earlier visitor’s run"]]);
-    expect(root.querySelector(".scope-hidden")?.textContent).toBe("1 more run by other visitors under “All activity, last 24 h”.");
+    expect(root.querySelector(".scope-hidden")?.textContent).toBe("1 more run by other visitors: show all activity, last 24 h");
   });
 });
 
@@ -191,10 +191,10 @@ describe("the hero's card and the ticker, scoped", () => {
     expect(new Set(tickerItems(scoped).map((i) => i.run))).toEqual(new Set([MINE, LIVE]));
     const el = renderTicker(tickerItems(scoped), { now: NOW, connected: true, hidden: 2 });
     expect(el.querySelectorAll(".ticker__item")).toHaveLength(3);
-    expect(el.querySelector(".scope-hidden")?.textContent).toBe("2 more events by other visitors under “All activity, last 24 h”.");
+    expect(el.querySelector(".scope-hidden")?.textContent).toBe("2 more events by other visitors: show all activity, last 24 h");
     const empty = renderTicker([], { now: NOW, connected: true, hidden: 5 });
     expect(empty.querySelector(".scope-empty")?.textContent).toBe("Nothing from you yet — launch an attack.");
-    expect(empty.querySelector(".ticker__empty")?.textContent).toBe("No event from your runs yet; the stream is connected.");
+    expect(empty.querySelector(".ticker__empty")?.textContent).toBe("Stream connected");
     // Everything: the list as before, no prompt, no note.
     expect(renderTicker([], { now: NOW, connected: true }).querySelector(".scope-empty")).toBeNull();
   });
@@ -207,9 +207,11 @@ describe("the SIEM's board, scoped", () => {
     const c = answer([incident({ id: "a100000000000001", run_id: MINE }), incident({ id: "a200000000000002", run_id: LIVE }), incident({ id: "a300000000000003" }), incident({ id: "e300000000000003", kind: "dns-exfil", severity: "critical" })]);
     const el = renderSessionBoard(c, { ...ctx, own: new Set([MINE]), live: LIVE });
     expect(titles(el)).toEqual(["From your run on this page", "Someone else is attacking right now"]);
+    // The own tier's heading is the board's: no second "Incidents from this session" above it.
+    expect(el.querySelector(".panel-title")).toBeNull();
     expect([...el.querySelectorAll(".incident")].map((i) => i.getAttribute("data-incident"))).toEqual(["a100000000000001", "a200000000000002"]);
     expect(el.querySelector(".incident--live")?.getAttribute("data-incident")).toBe("a200000000000002");
-    expect(el.querySelector(".scope-hidden")?.textContent).toBe("2 more incidents by other visitors under “All activity, last 24 h”.");
+    expect(el.querySelector(".scope-hidden")?.textContent).toBe("2 more incidents by other visitors: show all activity, last 24 h");
   });
 
   it("nothing of the visitor's: the prompt and exactly one example, labelled", () => {
@@ -224,9 +226,11 @@ describe("the SIEM's board, scoped", () => {
     const el = renderSessionBoard(c, { ...ctx, own: new Set() });
     expect(el.querySelector(".scope-empty")?.textContent).toBe("Nothing from you yet — launch an attack, or run the DNS exfiltration above.");
     expect(titles(el)).toEqual(["Example: from an earlier visitor’s run"]);
+    expect(el.querySelector(".panel-title")?.textContent).toBe("Incidents from this session");
+    expect(el.querySelector('.scope-hidden button[data-scope-set="all"]')?.textContent).toBe("show all activity, last 24 h");
     expect([...el.querySelectorAll(".incident")].map((i) => i.getAttribute("data-incident"))).toEqual(["e300000000000003"]);
     expect(el.querySelector(".incident--example")).not.toBeNull();
-    expect(el.querySelector(".scope-hidden")?.textContent).toBe("2 more incidents by other visitors under “All activity, last 24 h”.");
+    expect(el.querySelector(".scope-hidden")?.textContent).toBe("2 more incidents by other visitors: show all activity, last 24 h");
     // The visitor ran something the SIEM has not filed yet: the prompt says so instead.
     const waiting = renderSessionBoard(c, { ...ctx, own: new Set([MINE]) });
     expect(waiting.querySelector(".scope-empty")?.textContent).toMatch(/^Nothing filed for your runs yet/);

@@ -18,6 +18,7 @@ import { type ScenarioState, kindLabel } from "../lib/runstatus";
 import { type Focus, ALL, exampleIncident, otherVisitors, scopedIncidents } from "../lib/scope";
 import { formatDuration } from "../lib/timeline";
 import { attackUrl, extLink, pulse, sourceUrl } from "./common";
+import { hiddenNote } from "./scope";
 import { type Tone, statusChip } from "./posture";
 
 /** Polled while the page is visible; an API without the endpoint (a 404) is asked again after 10 min. */
@@ -452,7 +453,8 @@ export function renderSessionBoard(c: Correlation, ctx: BoardContext & { live?: 
   return h(
     "div",
     { class: "corr-board corr-board--session" },
-    h("h3", { class: "panel-title" }, "Incidents from this session"),
+    // The own tier's heading says it once there is one; the eyebrow is for the other cases.
+    mine.length ? null : h("h3", { class: "panel-title" }, "Incidents from this session"),
     mine.length ? tier("own", "corr-own-title", "From your run on this page", mine, "own") : null,
     live.length ? tier("live", "corr-live-title", "Someone else is attacking right now", live, "live") : null,
     example
@@ -464,7 +466,7 @@ export function renderSessionBoard(c: Correlation, ctx: BoardContext & { live?: 
         ]
       : null,
     !shown ? h("p", { class: "empty" }, "No incident in the last 24 hours. The rules run on every event the cluster ships; when one fires for your run, it appears here with its evidence.") : null,
-    rest > 0 ? h("p", { class: "scope-hidden small" }, `${rest} more incident${rest === 1 ? "" : "s"} by other visitors under “All activity, last 24 h”.`) : null,
+    hiddenNote(rest, "more incident", "more incidents"),
     h("p", { class: "small" }, "The whole board as the API publishes it: ", extLink("/api/correlation", "/api/correlation"), " (JSON)."),
   );
 }

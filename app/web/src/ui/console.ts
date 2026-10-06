@@ -718,7 +718,16 @@ export function mountConsole(root: HTMLElement, api: ApiClient, onDetails?: (sce
       root.dataset.state = "empty";
       replace(
         body,
-        h("p", { class: "empty" }, focus.all || !view.runs.some(showable) ? "No run yet. Launch an attack above and it plays out here, hop by hop." : "No run of yours yet. Launch an attack above and it plays out here, hop by hop; another visitor’s run shows here while it is live, and earlier ones are in the history below."),
+        h(
+          "p",
+          { class: "empty" },
+          // The visitor's terminal session has its own panel beside the terminal: the console is for one-click runs.
+          view.runs.some((r) => r.scenario === "terminal" && (own.has(r.runId) || focus.own.has(r.runId)))
+            ? "Your terminal session is told beside the terminal above; one-click attacks play out here, hop by hop."
+            : focus.all || !view.runs.some(showable)
+              ? "No run yet. Launch an attack above and it plays out here, hop by hop."
+              : "No run of yours yet. Launch an attack above and it plays out here, hop by hop; another visitor’s run shows here while it is live, and earlier ones are in the history below.",
+        ),
       );
       return;
     }
