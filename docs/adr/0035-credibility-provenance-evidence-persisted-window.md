@@ -354,21 +354,33 @@ that shows it.
   kill timeline* and *Run again*), "Talon quarantined the pod…", "Waiting for the SIEM (usually 1–3
   min)…" after a DNS exfil that exited 0, then "The SIEM caught your DNS exfil — CRITICAL. Falco never
   saw it." or "The SIEM filed this as <SEVERITY> — <kind>" (with *Open it*, a link to the card that opens
-  a folded section and pulses the card). A command Falco allows changes nothing. Each message is
+  a folded section and pulses the card; the card itself carries the id, so its badge and title land
+  below the sticky header). *Run again* starts the next session at once (it costs one run, as the start
+  panel says). A command Falco allows changes nothing. Each message is
   remembered with the update it first appeared in and the newest wins; messages that first appear
   together are ranked by how big the news is; a later, milder filing never replaces a more severe one
   (the strip then says how many more there are); a SIEM wait still running under a newer message is
   its second line. A new session starts from nothing. Between sessions the strip sits under the start
-  button. When it is scrolled out of view (under the sticky header counts), a slim toast at the bottom
-  of the screen says the same. Neither is a modal; both are dismissed together, and a dismissed message
-  stays away until the next one.
-- *One announcer.* The strip's message is the one polite, atomic live region for the visitor's own run.
-  The run history's and the evidence ticker's visually hidden announcers keep quiet about the visitor's
-  runs, the terminal bar's status line is live only while watching someone else, and the toast is not
-  live: nothing is read twice.
+  button. When it is scrolled well out of view (under the sticky header counts; a strip just below the
+  fold does not), a slim toast at the bottom of the screen says the same, except while the board's own
+  or pinned tier or the linked card is on screen, and not again once its *Open it* has been followed. On
+  a phone the toast is one line: the lead and *Open it*. Neither is a modal; both are dismissed together,
+  a dismissed message stays away until the next one, and the focus goes back to the terminal.
+- *One announcer.* One polite, atomic, visually hidden line outside the strip, always in the page,
+  speaks each message once (rewritten only when its words change, so the first message is heard although
+  the strip appears with it). The run history's and the evidence ticker's hidden announcers keep quiet
+  about the visitor's runs, and about any terminal run while the visitor's own start is in flight (its
+  first events can come before its id); the terminal bar's status line is live only while watching
+  someone else; the ready banner in the output is swapped for the eye only; the strip and the toast are
+  not live: nothing is read twice.
+- *The page's clock.* The SIEM waits ("waiting", then "late" after six minutes) are timed on the page's
+  own clock from the moment it first saw each expectation, never by comparing the visitor's clock with
+  the API's timestamps. The API files all three expected kinds with the run's id for a terminal run.
 - *Polling.* While a filing for the visitor's run is awaited (a DNS exfil, a Falco alert, a prevented
-  command, for up to nine minutes), `/api/correlation` is asked every 20 s instead of every minute; never
-  while the SIEM is unavailable.
+  command), `/api/correlation` is asked every 20 s instead of every minute, never while the SIEM is
+  unavailable, and never more than nine minutes after the eager polling began. Only an answer changes
+  what the page knows: `available: false` or a 404 makes the SIEM unavailable; a network error, a 5xx, a
+  429 or a malformed answer keeps the last reading.
 
 *The attack section.* Beside the terminal sits only what belongs to this session: a "This run" panel
 with three rows (detection: Falco's rule and how long after the Enter; response: Talon's action and how
@@ -376,8 +388,9 @@ long after the alert; SIEM: waiting, or the filed incident's severity and kind, 
 as compact pills, this run's own timeline event by event (pod created, ready, each command coloured by
 its outcome, Falco, Talon, the end: the visitor's kill timeline, compact) and the shop in a fold, open.
 The panel's grid cell is as tall as the terminal pane (the aside adds nothing to the row); the panel in
-it is sticky and capped at the screen, so it can never outgrow the terminal. The output has a minimum
-height, so the pane is the tallest thing in the row. The command chips leave the pane for a full-width
+it is sticky and capped at the screen, so it can never outgrow the terminal; when it would scroll, the shop folds first (unless
+the visitor chose) and a fade marks more below. The output has a minimum height, so the pane is the
+tallest thing in the row. The detection row is red, as Falco's answer is everywhere else. The command chips leave the pane for a full-width
 palette under both, grouped by objective, with a legend: grey allowed, red Falco answers, amber
 prevented, green only the SIEM sees it (an allowed command whose control names the SIEM: the
 catalogue's dns-exfil). On a phone the pane's parts become the grid's rows and the panel is one card
@@ -396,10 +409,11 @@ to your run and raises a CRITICAL incident below." Its button scrolls to the ter
 if idle (it says it costs one run), highlights the dns-exfil chip and fills it in once the pod is ready.
 A state chip follows: not run yet → running… → waiting for the SIEM (≈2 min)… → found it, with a link to
 the incident (and "the query did not go out", "still waiting", "the SIEM is not reachable" where those
-are true). The board follows in three tiers. Pinned, "Caught by correlation, not by Falco": the kinds
-dns-exfil, policy-probing and prevented-not-detected, any incident with no Falco event, and the visitor's
-own incidents of this page view, in full, own first, then by severity, with a distinct accent and the
-severity first. Folded, "Contained automatically by Falco + Talon (N)": the contained intrusions, one
+are true). The board follows. The visitor's own incidents of this page view come first, in full, under
+"From your run on this page" (one may be a contained intrusion Falco did see). Then three tiers. Pinned,
+"Caught by correlation, not by Falco": the kinds dns-exfil, policy-probing and prevented-not-detected
+and any incident with no Falco event, in full, by severity, with a distinct accent and the severity
+first. Folded, "Contained automatically by Falco + Talon (N)": the contained intrusions, one
 line each under a summary (count, median time to detect and to isolate over the ones listed). Then the
 other kinds in full as before, the operator test-suite execs and the older incidents in their folds. The
 SOC tiles follow the board, and the SIEM health pills and the ingest-lag line are one folded "SIEM
@@ -414,7 +428,10 @@ limit). A Talon step in an incident's evidence carries whole seconds: it is show
 ordered by the end of its second (Talon logs after the API server acted), and the deltas count from the
 first millisecond step. Under 760 px the header carries a compact jump bar (Attack it · SIEM · How it
 works · Posture) as a second row that scrolls sideways inside itself; the SIEM link is shown only while
-the section is; anchors land below the sticky header (`scroll-padding-top`). The verify body and small
+the section is; anchors land below the sticky header (`scroll-padding-top`). A page opened at an
+anchor lands there again each time the live parts change the page's size (the hero's counters, the
+terminal's panel, `#correlation` shown once the SIEM answers), until the visitor scrolls, touches or
+types, or for 10 s; not on a reload or back/forward. The verify body and small
 print break long hashes anywhere. The pulse is a short outline animation, a steady outline under
 `prefers-reduced-motion`. Everything stays text through `h()` (no DOM sink), with no inline script or
 style, and every published text is the API's own, already within ADR 0021.
