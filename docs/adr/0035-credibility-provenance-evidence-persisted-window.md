@@ -298,3 +298,29 @@ console and history keep running folded or not: a session must not stall because
 remain one link or scroll away. The end-to-end suite asserts the order, the toggle (aria, hidden body,
 kept over a reload, by keyboard), anchors opening a folded section, and toggles that fit 320 and 360 px
 with a wide font forced in.
+
+## Amendment 2026-10-06: times in Polish time, with CET or CEST
+
+**Context.** Section 4 made every absolute time UTC and say "UTC". The owner asked for every time on the
+page in Polish local time instead.
+
+**Decision.** The owner decided (2026-10-06) that every absolute time on the page is shown in Polish time:
+the zone is named explicitly, `Europe/Warsaw`, never the visitor's or the host's, so every visitor reads the
+same text. One helper pair in `app/web/src/lib/dom.ts`, `plTime` and `plClock`, formats with
+`Intl.DateTimeFormat` and `timeZone: "Europe/Warsaw"`, a 24-hour clock and the zone's label:
+`2026-10-06 12:34:56 CEST`, `.123` with milliseconds where the record has them, the date dropped on the same
+Polish day. The label is en-GB's short zone name (CET or CEST); an ICU without those names gives the
+offset, and `GMT+1` and `GMT+2` are mapped to CET and CEST. The label is what tells the repeated hour
+of the autumn switch apart (02:30 CEST, then 02:30 CET on 2026-10-25). Relative times ("6 hours ago") are
+unchanged and still appear only next to an absolute time.
+
+Machine-readable values stay UTC: the `datetime` attribute of every `<time>` (the ISO instant), data
+attributes, the raw JSON at `/api/runs/{id}`, anything a visitor copies (curl, cosign), and the verify
+table's raw timestamps, whose column now says "Raw (UTC)". The API is unchanged: it publishes RFC 3339
+UTC, and no text it writes for incidents or steps embeds a clock time.
+
+**Consequences.** The unit tests set the host's zone to `America/Los_Angeles` before the helpers load and
+cover both switches (2026-10-25 and 2027-03-28) on each side; the end-to-end suite runs with `TZ=UTC` and
+checks the server time's text against its `datetime`. Dropping the `timeZone` option or setting it to UTC
+fails both. A Falco output line is shown verbatim, as Falco wrote it; its own leading clock, when present,
+is Falco's and is not rewritten.

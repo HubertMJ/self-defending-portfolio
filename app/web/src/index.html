@@ -137,7 +137,7 @@
       <header class="section__head">
         <p class="eyebrow">Correlation</p>
         <h2 id="correlation-title">What the SIEM made of it</h2>
-        <p class="section__lead">Every Falco alert, Talon action, audited API call, network flow and terminal command is also shipped to a SIEM on its own VM, which the cluster can append to but not rewrite. Sigma rules from this repository run there, and the API joins their findings into incidents, one to three minutes after the event. Every time below is the SIEM's record, in UTC.</p>
+        <p class="section__lead">Every Falco alert, Talon action, audited API call, network flow and terminal command is also shipped to a SIEM on its own VM, which the cluster can append to but not rewrite. Sigma rules from this repository run there, and the API joins their findings into incidents, one to three minutes after the event. Every time below is the SIEM's record.</p>
       </header>
       <div class="section__body" id="correlation-body">
         <div class="corr-health-wrap" id="correlation-health"></div>
@@ -195,7 +195,7 @@
       <header class="section__head">
         <p class="eyebrow">Evidence</p>
         <h2 id="evidence-title">What the cluster recorded</h2>
-        <p class="section__lead">The latest events as the API published them, newest first, with absolute times in UTC. Nothing here is generated in your browser: when nothing happens, it says since when.</p>
+        <p class="section__lead">The latest events as the API published them, newest first, with absolute times in Polish time (CET/CEST). Nothing here is generated in your browser: when nothing happens, it says since when.</p>
       </header>
       <div class="section__body" id="evidence-body">
         <p class="liveness" id="liveness"></p>

@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { ApiClient, type Result } from "../../src/lib/api";
 import { type CatalogueCommand, type CommandOutcome, type Posture, type Provenance, type StreamEvent, parseBuildInfo, parsePosture, parseProvenance, parseRunList, parseStats, parseTick, toStreamEvent } from "../../src/lib/contract";
-import { utc, utcClock, when } from "../../src/lib/dom";
+import { plClock, plTime, when } from "../../src/lib/dom";
 import { posture, stats, TERMINAL_OBJECTIVES } from "../../src/lib/fixtures";
 import { COSIGN_IDENTITY_REGEXP, COSIGN_ISSUER, ciRunUrl, commitUrl, cosignVerifyCommand, isPinnedImageRef, rekorSearchUrl } from "../../src/lib/provenance";
 import { mountConsole } from "../../src/ui/console";
@@ -14,28 +14,29 @@ import { renderStats } from "../../src/ui/stats";
 import { renderRun } from "../../src/ui/timeline";
 import { mountVerify, pollProvenance, renderVerifyPanel } from "../../src/ui/verify";
 
-// ADR 0035: absolute times in UTC, the single cosign identity, the parsers of the additions, the
-// posture naming its failures, finished runs saying why nothing was detected, and the evidence card.
+// ADR 0035: absolute times in Polish time with their CET/CEST label (amendment 2026-10-06), the single
+// cosign identity, the parsers of the additions, the posture naming its failures, finished runs saying
+// why nothing was detected, and the evidence card.
 
 const T = Date.parse("2026-10-03T18:01:57.123Z");
 
-describe("utc / when (B2-2)", () => {
-  it("writes the date, the time and the UTC label, with ms when asked", () => {
-    expect(utc(T)).toBe("2026-10-03 18:01:57 UTC");
-    expect(utc("2026-10-03T18:01:57.123Z", { ms: true })).toBe("2026-10-03 18:01:57.123 UTC");
+describe("plTime / when (B2-2)", () => {
+  it("writes the date, the time and the zone label, with ms when asked", () => {
+    expect(plTime(T)).toBe("2026-10-03 20:01:57 CEST");
+    expect(plTime("2026-10-03T18:01:57.123Z", { ms: true })).toBe("2026-10-03 20:01:57.123 CEST");
     // A zone offset is converted, not dropped.
-    expect(utc("2026-10-03T20:01:57+02:00")).toBe("2026-10-03 18:01:57 UTC");
+    expect(plTime("2026-10-03T21:01:57+03:00")).toBe("2026-10-03 20:01:57 CEST");
   });
 
-  it("drops the date only on the same UTC day", () => {
-    expect(utcClock(T, T + 3600_000)).toBe("18:01:57 UTC");
-    expect(utcClock(T, Date.parse("2026-10-04T00:00:01Z"))).toBe("2026-10-03 18:01:57 UTC");
-    expect(utcClock(T, T, { ms: true })).toBe("18:01:57.123 UTC");
+  it("drops the date only on the same Polish day", () => {
+    expect(plClock(T, T + 3600_000)).toBe("20:01:57 CEST");
+    expect(plClock(T, Date.parse("2026-10-03T22:00:01Z"))).toBe("2026-10-03 20:01:57 CEST");
+    expect(plClock(T, T, { ms: true })).toBe("20:01:57.123 CEST");
   });
 
   it("puts the relative time after the absolute one", () => {
-    expect(when("2026-10-03T12:01:57Z", T)).toBe("12:01:57 UTC (6 hours ago)");
-    expect(when("2026-10-01T18:01:57Z", T)).toBe("2026-10-01 18:01:57 UTC (2 days ago)");
+    expect(when("2026-10-03T12:01:57Z", T)).toBe("14:01:57 CEST (6 hours ago)");
+    expect(when("2026-10-01T18:01:57Z", T)).toBe("2026-10-01 20:01:57 CEST (2 days ago)");
     expect(when(null, T)).toBe("never");
   });
 });
@@ -187,7 +188,7 @@ describe("posture names its failures (B2-3)", () => {
     expect(red.querySelector(".tile__value")?.textContent).toBe("7 violations");
   });
 
-  it("lists failing CIS checks with the remediation open, and dates the scans in UTC", () => {
+  it("lists failing CIS checks with the remediation open, and dates the scans in Polish time", () => {
     const p = posture(T);
     const el = renderPostureData(
       { ...p, kube_bench: { ...p.kube_bench, failing: [{ id: "1.1.9", title: "CNI file permissions", remediation: "chmod 600" }] }, trivy: { ...p.trivy, last_scan: "2026-10-03T15:10:31Z" }, falco: { ...p.falco, counted_since: "2026-10-03T17:00:00Z" } },
@@ -196,10 +197,10 @@ describe("posture names its failures (B2-3)", () => {
     const details = el.querySelector(".tile__remedy") as HTMLDetailsElement;
     expect(details.open).toBe(true);
     expect(details.closest("li")?.textContent).toContain("1.1.9 CNI file permissions");
-    expect(el.textContent).toContain("last scan 15:10:31 UTC (3 hours ago)");
-    expect(el.textContent).toContain("counted since 17:00:00 UTC");
+    expect(el.textContent).toContain("last scan 17:10:31 CEST (3 hours ago)");
+    expect(el.textContent).toContain("counted since 19:00:00 CEST");
     expect(el.textContent).not.toContain("Runtime, last 24 h");
-    expect(el.querySelector(".panel-foot time")?.textContent).toMatch(/UTC \(/);
+    expect(el.querySelector(".panel-foot time")?.textContent).toMatch(/CEST \(/);
   });
 });
 
@@ -260,9 +261,9 @@ describe("why a finished run shows no detection (B2-4)", () => {
     expect(active.respond.textContent).toContain("(pending)");
   });
 
-  it("history rows carry UTC with ms and a raw JSON link for a valid run id only", () => {
+  it("history rows carry Polish time with ms and a raw JSON link for a valid run id only", () => {
     const { el } = stages(termRun(["whoami"]));
-    expect(el.querySelector(".stage__at")?.textContent).toBe("18:01:57.133 UTC");
+    expect(el.querySelector(".stage__at")?.textContent).toBe("20:01:57.133 CEST");
     expect(el.querySelector('a[href="/api/runs/0123456789abcdef"]')?.getAttribute("target")).toBe("_blank");
     const bad = renderRun({ ...run(termRun(["whoami"])), runId: "../x" }, "t", new Set(), undefined, undefined, OUTCOMES, T + 6000);
     expect(bad.querySelector('a[href^="/api/runs/"]')).toBeNull();
@@ -288,7 +289,7 @@ describe("the evidence card, the ticker and the hero's last run (B4)", () => {
     const more = card.querySelector('a[href="/api/runs/0f0e0d0c0b0a0908"]');
     expect(more?.textContent).toContain("3 more - raw JSON");
     expect(card.textContent).toContain(POD);
-    expect(card.textContent).toContain("last attack 18:01:57 UTC");
+    expect(card.textContent).toContain("last attack 20:01:57 CEST");
     expect(card.querySelector("details")).toBeNull();
     // An invalid run id never becomes a link.
     expect(renderEvidenceCard({ ...run, runId: "a/b" }, { title: "x", now: T }).querySelector('a[href^="/api/runs/"]')).toBeNull();
@@ -309,13 +310,13 @@ describe("the evidence card, the ticker and the hero's last run (B4)", () => {
     expect(items.map((i) => i.text)).toEqual(["shell-in-container: Finished", "Talon: Talon deleted the pod", "Falco: Rule 1", "Falco: Rule 0", "shell-in-container: Attack running", "shell-in-container: Queued"]);
     expect(tickerItems(view, 3)).toHaveLength(3);
     const empty = renderTicker([], { now: T, since: T - 60_000, connected: true, tickAt: at(0) });
-    expect(empty.textContent).toBe("No events since 2026-10-03 18:00:57 UTC; the stream is connected (server time 2026-10-03 18:01:57 UTC).");
+    expect(empty.textContent).toBe("No events since 2026-10-03 20:00:57 CEST; the stream is connected (server time 2026-10-03 20:01:57 CEST).");
     expect(tickerItems(buildTimeline([], T))).toEqual([]);
   });
 
   it("no run in memory: when the API started and the last recorded attack, and a way to #attack", () => {
     const el = renderNoAttack({ apiStartedAt: "2026-10-03T17:00:00Z", lastRunAt: "2026-10-03T12:01:57Z", now: T });
-    expect(el.textContent).toContain("No attack since the API started at 2026-10-03 17:00:00 UTC - last attack recorded 12:01:57 UTC (6 hours ago).");
+    expect(el.textContent).toContain("No attack since the API started at 2026-10-03 19:00:00 CEST - last attack recorded 14:01:57 CEST (6 hours ago).");
     expect(el.querySelector('a[href="#attack"]')).not.toBeNull();
   });
 
@@ -323,9 +324,9 @@ describe("the evidence card, the ticker and the hero's last run (B4)", () => {
     const el = renderStats({ ...stats(T), last_run_at: "2026-10-03T12:01:57Z" }, TERMINAL_OBJECTIVES, undefined, T);
     const tile = el.querySelector(".herostats__tile") as HTMLElement;
     expect(tile.querySelector(".herostats__name")?.textContent).toBe("last run");
-    expect(tile.querySelector(".herostats__value")?.textContent).toBe("12:01:57 UTC");
+    expect(tile.querySelector(".herostats__value")?.textContent).toBe("14:01:57 CEST");
     expect(tile.querySelector(".herostats__foot")?.textContent).toBe("6 hours ago");
-    expect(el.textContent).toMatch(/since 2026-08-28 18:01:57 UTC \(\d+ days ago\)/);
+    expect(el.textContent).toMatch(/since 2026-08-28 20:01:57 CEST \(\d+ days ago\)/);
   });
 });
 
@@ -432,7 +433,7 @@ describe("code review (REQUEST_CHANGES) fixes", () => {
   it("the empty card names the latest recorded run from its summary, never 'No attack since'", () => {
     const latest = { run_id: "0123456789abcdef", scenario: "terminal", state: "finished" as const, started_at: "2026-10-03T12:01:57Z", detected: false, responded: false, events: 9, truncated: false };
     const el = renderNoAttack({ apiStartedAt: "2026-10-03T17:00:00Z", latest, now: T });
-    expect(el.textContent).toContain("Latest recorded run 0123456789abcdef (terminal, started 12:01:57 UTC (6 hours ago)) - raw JSON");
+    expect(el.textContent).toContain("Latest recorded run 0123456789abcdef (terminal, started 14:01:57 CEST (6 hours ago)) - raw JSON");
     expect(el.textContent).not.toContain("No attack since");
     expect(renderNoAttack({ now: T }).textContent).toContain("No attack in the stream's replay.");
   });
@@ -465,14 +466,14 @@ describe("code review (REQUEST_CHANGES) fixes", () => {
     expect(el.querySelector(".table-scroll > table.data-table--wrap")?.textContent).toContain("autogen-validate-registries");
   });
 
-  it("console and shop-window times are UTC with ms", async () => {
+  it("console and shop-window times are Polish time with ms", async () => {
     const api = new ApiClient({ fetch: async () => new Response("{}", { status: 404, headers: { "Content-Type": "application/json" } }) });
     const root = document.createElement("section");
     document.body.append(root);
     const evs = [...scripted(1), ev("pod", { run_id: "0f0e0d0c0b0a0908", pod: POD, uid: "u", phase: "Running", reason: "", container_id: "9b2e7c4d1a0f", image: GOOD, labels_delta: {}, deleted: false, at: at(100) }, 60), ev("victim", { run_id: "0f0e0d0c0b0a0908", pod: POD, at: at(200), status: "up", title: "SDP Shop", banner: "", probe_ms: 3, checksum: "" }, 61)];
     mountConsole(root, api).update(buildTimeline(evs, T + 4000));
-    expect(root.querySelector(".phase time")?.textContent).toMatch(/^(\d{4}-\d\d-\d\d )?\d\d:\d\d:\d\d\.\d{3} UTC$/);
-    expect(root.textContent).toMatch(/seen (\d{4}-\d\d-\d\d )?\d\d:\d\d:\d\d\.\d{3} UTC/);
+    expect(root.querySelector(".phase time")?.textContent).toMatch(/^(\d{4}-\d\d-\d\d )?\d\d:\d\d:\d\d\.\d{3} CEST$/);
+    expect(root.textContent).toMatch(/seen (\d{4}-\d\d-\d\d )?\d\d:\d\d:\d\d\.\d{3} CEST/);
   });
 
   it("the verify panel is not redrawn for a new generated_at, only when what it shows changes", () => {
@@ -615,7 +616,7 @@ describe("a side-by-side run on the card, in the history and in the console (ADR
     const items = [...card.querySelectorAll(".evlist__item")];
     expect(items.map((i) => i.querySelector(".tag--arm")?.textContent)).toEqual(["guarded", "twin, unguarded", "guarded"]);
     expect(items.map((i) => i.querySelector(".tag--arm")?.getAttribute("data-arm"))).toEqual(["guarded", "unguarded", "guarded"]);
-    expect(items[1].textContent).toBe(`falco twin, unguarded SDP network tool in sandbox (Warning) at 18:01:58.133 UTC`);
+    expect(items[1].textContent).toBe(`falco twin, unguarded SDP network tool in sandbox (Warning) at 20:01:58.133 CEST`);
     const detail = renderEvidenceDetail(view(true).runs[0], { title: "x", now: T + 4000 });
     expect([...detail.querySelectorAll(".tag--arm")].map((t) => t.textContent)).toEqual(["guarded", "twin, unguarded", "guarded"]);
     for (const ns of ["portfolio-api", "constructor", "__proto__", ""]) {

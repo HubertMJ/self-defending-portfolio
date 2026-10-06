@@ -2,7 +2,7 @@
 // by SSE /api/events through EventStream (reconnect + replay dedup live there).
 
 import { type CommandOutcome, type StreamEvent, isRunId } from "../lib/contract";
-import { h, replace, timeEl, utcClock } from "../lib/dom";
+import { h, replace, timeEl, plClock } from "../lib/dom";
 import { humanAction } from "../lib/pipeline";
 import type { ConnectionState } from "../lib/sse";
 import { type NoDetection, type RunView, type TimelineView, buildTimeline, formatDuration, guardedFalco, guardedTalon, noDetection, publishedPod, ts } from "../lib/timeline";
@@ -58,7 +58,7 @@ function stage(opts: {
     h("span", { class: "stage__dot", "aria-hidden": "true" }),
     h("span", { class: "stage__title" }, opts.title, opts.note ? h("span", { class: "visually-hidden" }, ` (${opts.note})`) : null),
     opts.delta ? h("span", { class: "stage__delta" }, opts.delta) : null,
-    opts.at ? timeEl(opts.at, utcClock(opts.at, opts.now, { ms: true }), { class: "stage__at" }) : null,
+    opts.at ? timeEl(opts.at, plClock(opts.at, opts.now, { ms: true }), { class: "stage__at" }) : null,
     opts.what ? h("span", { class: "stage__what" }, opts.what) : null,
   );
 }
@@ -99,10 +99,10 @@ export function renderRun(
       "ul",
       { class: "run__events" },
       run.falco.map((f) =>
-        h("li", {}, h("span", { class: "tag tag--detect" }, "falco"), " ", timeEl(f.at, utcClock(f.at, now, { ms: true })), " ", h("strong", {}, f.priority), ` ${f.rule}`, h("code", { class: "run__output" }, f.output)),
+        h("li", {}, h("span", { class: "tag tag--detect" }, "falco"), " ", timeEl(f.at, plClock(f.at, now, { ms: true })), " ", h("strong", {}, f.priority), ` ${f.rule}`, h("code", { class: "run__output" }, f.output)),
       ),
       run.talon.map((t) =>
-        h("li", {}, h("span", { class: "tag tag--respond" }, "talon"), " ", timeEl(t.at, utcClock(t.at, now, { ms: true })), ` ${humanAction(t.action, t.actionner)} `, h("code", {}, t.actionner ?? t.action), ` on ${t.namespace}/${t.pod}: `, h("strong", {}, t.status)),
+        h("li", {}, h("span", { class: "tag tag--respond" }, "talon"), " ", timeEl(t.at, plClock(t.at, now, { ms: true })), ` ${humanAction(t.action, t.actionner)} `, h("code", {}, t.actionner ?? t.action), ` on ${t.namespace}/${t.pod}: `, h("strong", {}, t.status)),
       ),
       run.falco.length + run.talon.length === 0 ? h("li", {}, "No Falco or Talon events for this run yet.") : null,
     ),

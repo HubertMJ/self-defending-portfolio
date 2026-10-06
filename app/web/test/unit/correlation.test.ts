@@ -336,18 +336,18 @@ describe("review L5: what the parsers drop and sort", () => {
 describe("the section's parts", () => {
   const ctx = (c: Correlation) => ({ now: NOW, rules: new Map(index().rules.map((r) => [r.id, r])), commit: COMMIT, c });
 
-  it("an incident: severity, kind, UTC times, TTD/TTI, the timeline with rule links at the commit, the evidence ids", () => {
+  it("an incident: severity, kind, Polish times, TTD/TTI, the timeline with rule links at the commit, the evidence ids", () => {
     const c = parseCorrelation(answer());
     const el = renderIncident(c.incidents[0], ctx(c));
     expect(el.querySelector(".incident__title")?.textContent).toBe("Shadow file read, pod quarantined");
     expect(el.querySelector(".chip")?.textContent).toContain("high");
     expect(el.querySelector(".incident__kind")?.textContent).toContain(kindLabel("contained-intrusion"));
-    expect(el.querySelector(".incident__when")?.textContent).toBe("from 11:50:00.000 UTC to 11:50:02.000 UTC");
+    expect(el.querySelector(".incident__when")?.textContent).toBe("from 13:50:00.000 CEST to 13:50:02.000 CEST");
     expect(el.querySelector(".incident__facts")?.textContent).toContain("Time to detect840 ms");
     expect(el.querySelector(".incident__facts")?.textContent).toContain("Time to isolate212 ms");
     const steps = el.querySelectorAll(".corr-step");
     expect(steps).toHaveLength(2);
-    expect(steps[1].textContent).toBe("11:50:01.000 UTC +1.0 s falco Credential file read (opens in a new tab) · command 3 · sandbox/terminal-7e57000001 · cat /etc/shadow");
+    expect(steps[1].textContent).toBe("13:50:01.000 CEST +1.0 s falco Credential file read (opens in a new tab) · command 3 · sandbox/terminal-7e57000001 · cat /etc/shadow");
     expect(steps[1].querySelector("a")?.getAttribute("href")).toBe(`https://github.com/HubertMJ/self-defending-portfolio/blob/${COMMIT}/siem/rules/falco/credential-file-read.yml#L3`);
     // A step without a rule id has no link.
     expect(steps[0].querySelector("a")).toBeNull();
@@ -358,7 +358,7 @@ describe("the section's parts", () => {
   it("a stream document without a finding has no rule: its detail stands alone", () => {
     const c = parseCorrelation(answer({ incidents: [incident({ steps: [{ at: at(5), source: "k8s-audit", rule: "", rule_id: "", command_seq: null, detail: "patch pods on sandbox/terminal-7e57000001 by Talon, response 200" }] })] }));
     const step = renderIncident(c.incidents[0], ctx(c)).querySelector(".corr-step");
-    expect(step?.textContent).toBe("11:59:55.000 UTC audit patch pods on sandbox/terminal-7e57000001 by Talon, response 200");
+    expect(step?.textContent).toBe("13:59:55.000 CEST audit patch pods on sandbox/terminal-7e57000001 by Talon, response 200");
     expect(step?.querySelector("strong")).toBeNull();
   });
 
@@ -448,7 +448,7 @@ describe("the section's parts", () => {
     expect(ok.querySelector(".corr-health__rules a")?.getAttribute("href")).toBe("https://github.com/HubertMJ/self-defending-portfolio/commit/a7cc041e5d2b9f30c1a4e6b8d0f2a3c5e7f9b1d3");
     expect(ok.textContent).toContain("ingest ok");
     expect(ok.textContent).toContain("evidence not rewritten");
-    expect(ok.querySelector(".corr-health__checked")?.textContent).toContain("11:59:40 UTC (20 seconds ago)");
+    expect(ok.querySelector(".corr-health__checked")?.textContent).toContain("13:59:40 CEST (20 seconds ago)");
     const bad = renderHealth(parseCorrelation(answer({ rules: { commit: "", status: "refused" }, health: { ingest: "silent", evidence_rewritten: true, disk: "high" } })), NOW);
     expect(bad.textContent).toContain("rules refused (commit unknown)");
     expect(bad.textContent).toContain("ingest silent");

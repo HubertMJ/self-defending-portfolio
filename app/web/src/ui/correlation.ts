@@ -7,12 +7,12 @@
 //
 // It exists only while GET /api/correlation says `available: true`: a SIEM that is down or not
 // configured, an API without the endpoint and a malformed answer all hide it, and the demo above never
-// depends on it. Nothing is computed into the record here: every time is the SIEM's, in UTC, and the
+// depends on it. Nothing is computed into the record here: every time is the SIEM's, shown in Polish time, and the
 // only figures the page derives (the p95s) say what they are taken over.
 
 import type { ApiClient, Result } from "../lib/api";
 import type { Correlation, CorrelationIncident, CorrelationStep, RuleIndex, SiemRule } from "../lib/contract";
-import { h, refreshRelative, replace, setText, timeEl, utcClock, when, whenEl } from "../lib/dom";
+import { h, refreshRelative, replace, setText, timeEl, plClock, when, whenEl } from "../lib/dom";
 import { commitUrl } from "../lib/provenance";
 import { formatDuration } from "../lib/timeline";
 import { attackUrl, extLink, sourceUrl } from "./common";
@@ -206,7 +206,7 @@ function stepItem(s: CorrelationStep, n: number, t0: number, ctx: BoardContext):
   return h(
     "li",
     { class: "corr-step", "data-source": s.source },
-    timeEl(s.at, utcClock(s.at, ctx.now, { ms: true }), { class: "corr-step__at" }),
+    timeEl(s.at, plClock(s.at, ctx.now, { ms: true }), { class: "corr-step__at" }),
     delta > 0 ? h("span", { class: "corr-step__delta" }, ` +${formatDuration(delta)}`) : null,
     " ",
     h("span", { class: `tag tag--src tag--${s.source}` }, SOURCE_WORD[s.source]),
@@ -244,7 +244,7 @@ export function renderIncident(i: CorrelationIncident, ctx: BoardContext): HTMLE
       i.arm ? [" ", h("span", { class: "tag tag--arm", "data-arm": i.arm }, i.arm === "guarded" ? "guarded" : "twin, unguarded")] : null,
       i.run_id ? [" · run ", extLink(rawRunUrl(i.run_id), h("code", {}, i.run_id))] : null,
     ),
-    h("p", { class: "incident__when small" }, "from ", timeEl(i.first_at, utcClock(i.first_at, ctx.now, { ms: true })), " to ", timeEl(i.last_at, utcClock(i.last_at, ctx.now, { ms: true }))),
+    h("p", { class: "incident__when small" }, "from ", timeEl(i.first_at, plClock(i.first_at, ctx.now, { ms: true })), " to ", timeEl(i.last_at, plClock(i.last_at, ctx.now, { ms: true }))),
     h(
       "dl",
       { class: "facts incident__facts" },
@@ -273,7 +273,7 @@ function olderItem(i: CorrelationIncident, now: number): HTMLElement {
     { class: "corr-older__item", "data-incident": i.id },
     statusChip(SEVERITY_TONE[i.severity], i.severity),
     " ",
-    timeEl(i.first_at, utcClock(i.first_at, now)),
+    timeEl(i.first_at, plClock(i.first_at, now)),
     " ",
     h("span", {}, i.title || kindLabel(i.kind)),
   );

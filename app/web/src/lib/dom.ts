@@ -67,43 +67,65 @@ export function relativeTime(iso: string | null | undefined, now: number = Date.
   return rtf.format(Math.round(s / 86_400), "day");
 }
 
-// Absolute times are UTC and say so (ADR 0035): a visitor in any zone reads the same instant as the
-// cluster's records and the raw JSON, and a relative "6 hours ago" only ever stands next to one.
+// Absolute times are Polish time, Europe/Warsaw, and say CET or CEST (ADR 0035, amendment 2026-10-06):
+// the zone is named explicitly, never the visitor's or the host's, so every visitor reads the same text,
+// and the label tells the repeated hour of the autumn switch apart. The instant itself stays UTC wherever
+// a machine reads it (a <time>'s datetime, data attributes, the raw JSON), and a relative "6 hours ago"
+// only ever stands next to an absolute time.
+
+export const TIME_ZONE = "Europe/Warsaw";
+const zoned = new Intl.DateTimeFormat("en-GB", {
+  timeZone: TIME_ZONE,
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+  hourCycle: "h23",
+  timeZoneName: "short",
+});
+// en-GB's short names are CET and CEST; an ICU without them names the offset instead.
+const ZONE_LABEL: Record<string, string> = { "GMT+1": "CET", "GMT+2": "CEST" };
 
 const toMs = (t: string | number): number => (typeof t === "number" ? t : Date.parse(t));
 const pad2 = (n: number, w = 2) => String(n).padStart(w, "0");
-const ymd = (d: Date) => `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}-${pad2(d.getUTCDate())}`;
-const hms = (d: Date, ms: boolean) =>
-  `${pad2(d.getUTCHours())}:${pad2(d.getUTCMinutes())}:${pad2(d.getUTCSeconds())}${ms ? `.${pad2(d.getUTCMilliseconds(), 3)}` : ""}`;
-
-/** "2026-10-03 18:01:57 UTC" ("…18:01:57.123 UTC" with ms); an unparseable string comes back as is. */
-export function utc(t: string | number, opts: { ms?: boolean } = {}): string {
-  const n = toMs(t);
-  if (Number.isNaN(n)) return typeof t === "string" ? t : "–";
-  const d = new Date(n);
-  return `${ymd(d)} ${hms(d, opts.ms ?? false)} UTC`;
+function warsaw(n: number, ms: boolean): { date: string; time: string } {
+  const p: Partial<Record<Intl.DateTimeFormatPartTypes, string>> = {};
+  for (const x of zoned.formatToParts(n)) p[x.type] = x.value;
+  const zone = p.timeZoneName ?? "";
+  const frac = ms ? `.${pad2(((n % 1000) + 1000) % 1000, 3)}` : "";
+  return { date: `${p.year}-${p.month}-${p.day}`, time: `${p.hour}:${p.minute}:${p.second}${frac} ${ZONE_LABEL[zone] ?? zone}` };
 }
 
-/** "18:01:57 UTC" on the same UTC day as `now`, else with the date in front as utc() writes it. */
-export function utcClock(t: string | number, now: number = Date.now(), opts: { ms?: boolean } = {}): string {
+/** "2026-10-03 20:01:57 CEST" ("…20:01:57.123 CEST" with ms), Polish time; an unparseable string comes back as is. */
+export function plTime(t: string | number, opts: { ms?: boolean } = {}): string {
   const n = toMs(t);
   if (Number.isNaN(n)) return typeof t === "string" ? t : "–";
-  const d = new Date(n);
-  return ymd(d) === ymd(new Date(now)) ? `${hms(d, opts.ms ?? false)} UTC` : utc(n, opts);
+  const w = warsaw(n, opts.ms ?? false);
+  return `${w.date} ${w.time}`;
 }
 
-/** "18:01:57 UTC (6 hours ago)": the absolute time, then how long ago; "never" for none. */
+/** "20:01:57 CEST" on the same Polish day as `now`, else with the date in front as plTime() writes it. */
+export function plClock(t: string | number, now: number = Date.now(), opts: { ms?: boolean } = {}): string {
+  const n = toMs(t);
+  if (Number.isNaN(n)) return typeof t === "string" ? t : "–";
+  const w = warsaw(n, opts.ms ?? false);
+  return w.date === warsaw(now, false).date ? w.time : `${w.date} ${w.time}`;
+}
+
+/** "20:01:57 CEST (6 hours ago)": the absolute time, then how long ago; "never" for none. */
 export function when(t: string | number | null | undefined, now: number = Date.now()): string {
   if (t === null || t === undefined || t === "") return "never";
   const n = toMs(t);
   if (Number.isNaN(n)) return String(t);
-  return `${utcClock(n, now)} (${relativeTime(new Date(n).toISOString(), now)})`;
+  return `${plClock(n, now)} (${relativeTime(new Date(n).toISOString(), now)})`;
 }
 
-/** A <time> element whose datetime is the exact instant and whose text is `text` (utc() by default). */
+/** A <time> element whose datetime is the exact instant and whose text is `text` (plTime() by default). */
 export function timeEl(t: string | number, text?: string, attrs: Attrs = {}): HTMLTimeElement {
   const n = toMs(t);
-  return h("time", { ...attrs, datetime: Number.isNaN(n) ? null : new Date(n).toISOString() }, text ?? utc(t));
+  return h("time", { ...attrs, datetime: Number.isNaN(n) ? null : new Date(n).toISOString() }, text ?? plTime(t));
 }
 
 export function prefersReducedMotion(): boolean {
