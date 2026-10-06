@@ -78,17 +78,50 @@
       logger.sdp_audit.additivity = false
   notify: Restart opensearch
 
-- name: Size the heap
+# ADR 0034 amendment of 2026-10-06. Measured on siem01 with a 3 GB heap: the JVM's RSS is ~0.9 GB
+# above its heap, Dashboards ~0.25 GB, Fluent Bit and the sync are capped at 192 and 512 MB, and
+# there is no swap. 3 GB beside the heap keep that and some page cache for Lucene.
+- name: Assert the heap leaves 3 GB of the host's memory to everything else
+  ansible.builtin.assert:
+    that:
+      - opensearch_heap | human_to_bytes + 3 * 1024 ** 3 <= ansible_facts['memtotal_mb'] * 1024 ** 2
+    fail_msg: >-
+      A heap of {{ opensearch_heap }} leaves less than 3 GB of {{ ansible_facts['memtotal_mb'] }} MB to the JVM's own
+      memory, Dashboards, the shippers and the page cache; the host has no swap.
+    success_msg: A heap of {{ opensearch_heap }} leaves 3 GB or more of {{ ansible_facts['memtotal_mb'] }} MB.
+  tags: [opensearch_service]
+
+# The JVM reads jvm.options, then jvm.options.d/*.options, and the last occurrence of an option wins.
+# The package's own heap (-Xms1g/-Xmx1g) and heap dump lines are commented out so sdp-heap.options
+# holds the only setting of each.
+- name: Leave the heap and heap dumps to sdp-heap.options
+  ansible.builtin.replace:
+    path: /etc/opensearch/jvm.options
+    regexp: '^(-Xm[sx]\S*|-XX:\+HeapDumpOnOutOfMemoryError)$'
+    replace: '## sdp (Ansible, role opensearch): set in jvm.options.d/sdp-heap.options: \1'
+  notify: Restart opensearch
+  tags: [opensearch_service]
+
+# ExitOnOutOfMemoryError: the first OutOfMemoryError ends the JVM (exit 3) and systemd restarts it
+# (sdp-restart.conf) instead of a node that may limp on with dead threads. No heap dump: a dump is
+# the whole heap (~heap size on /var/lib/opensearch per crash, 4.35 GB on 2026-10-06) and holds
+# whatever the heap held - documents, request bodies, key material - in a file outside every
+# OpenSearch permission.
+- name: Size the heap, exit on OutOfMemoryError, no heap dump
   ansible.builtin.copy:
     dest: /etc/opensearch/jvm.options.d/sdp-heap.options
     content: |
-      # Managed by Ansible (role: opensearch). ADR 0034: 3 GB of the VM's 8 GB.
+      # Managed by Ansible (role: opensearch). ADR 0034 amendment of 2026-10-06: 4 GB of the VM's 8 GB,
+      # the only heap setting (the package's lines in jvm.options are commented out).
       -Xms{{ opensearch_heap }}
       -Xmx{{ opensearch_heap }}
+      -XX:+ExitOnOutOfMemoryError
+      -XX:-HeapDumpOnOutOfMemoryError
     owner: root
     group: opensearch
     mode: "0640"
   notify: Restart opensearch
+  tags: [opensearch_service]
 
 # ADR 0034: Performance Analyzer is off. Its agent unit ships disabled and stays masked; the plugin
 # itself is switched off over REST below (its files stay, so the watched plugins directory remains

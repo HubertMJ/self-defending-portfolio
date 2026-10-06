@@ -59,10 +59,17 @@ $DOCKER exec -i sdp-smoke-siem sh -ec '
     > /usr/lib/systemd/system/opensearch.service
   systemctl daemon-reload' < tests/siem/fixtures/opensearch-jvm.options
 twice opensearch "playbooks/siem.yml --limit sdp-smoke-siem --tags opensearch_service"
+# What the JVM gets is jvm.options followed by jvm.options.d/*.options, the last occurrence winning.
 # shellcheck disable=SC2016  # the quoted block runs inside the container
 $DOCKER exec sdp-smoke-siem sh -ec '
   fail() { echo "opensearch: $*"; exit 1; }
   [ "$(systemctl show opensearch -p Restart --value)" = on-failure ] || fail "Restart= is not on-failure"
   [ "$(stat -c "%U:%G %a" /etc/systemd/system/opensearch.service.d/sdp-restart.conf)" = "root:root 644" ] \
     || fail "the drop-in is not root:root 0644"
-  echo "opensearch: Restart=on-failure from the drop-in"'
+  opts=$(cat /etc/opensearch/jvm.options /etc/opensearch/jvm.options.d/*.options | grep -E "^-")
+  [ "$(printf "%s\n" "$opts" | grep -E "^-Xm[sx]")" = "$(printf -- "-Xms4g\n-Xmx4g")" ] \
+    || fail "heap settings are not exactly -Xms4g and -Xmx4g: $(printf "%s\n" "$opts" | grep -E "^-Xm[sx]" | tr "\n" " ")"
+  printf "%s\n" "$opts" | grep -qx -- "-XX:+ExitOnOutOfMemoryError" || fail "no -XX:+ExitOnOutOfMemoryError"
+  [ "$(printf "%s\n" "$opts" | grep -E "HeapDumpOnOutOfMemoryError")" = "-XX:-HeapDumpOnOutOfMemoryError" ] \
+    || fail "heap dumps are not off exactly once"
+  echo "opensearch: Restart=on-failure, one heap setting (4g), exit on OOM, no heap dump"'

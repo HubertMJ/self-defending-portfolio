@@ -41,9 +41,9 @@ argument_specs:
         description: VLAN address HTTP binds next to the loopback; the node certificate's IP SAN.
         type: str
       opensearch_heap:
-        description: JVM heap size (Xms and Xmx).
+        description: JVM heap size (Xms and Xmx); the role asserts it leaves 3 GB of the host's memory.
         type: str
-        default: 3g
+        default: 4g
       opensearch_snapshot_path:
         description: path.repo, the snapshot repository on the data disk.
         type: path

@@ -14,7 +14,7 @@ opensearch_dashboards_apt_repo_url: https://artifacts.opensearch.org/releases/bu
 opensearch_cluster_name: sdp-siem
 opensearch_node_name: "{{ inventory_hostname_short }}"
 opensearch_node_ip: "{{ siem_node_ip }}"
-opensearch_heap: 3g
+opensearch_heap: 4g
 
 # Hourly snapshots go to the data disk siem_disk mounts here (path.repo).
 opensearch_snapshot_path: /var/lib/opensearch-snapshots

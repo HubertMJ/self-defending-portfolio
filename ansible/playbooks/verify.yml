@@ -185,6 +185,8 @@
     verify_os_ca: /etc/opensearch/certs/ca.crt
     verify_os_cert: /etc/sdp-siem/pki/admin.crt
     verify_os_key: /etc/sdp-siem/pki/admin.key
+    # The opensearch role's default (ADR 0034 amendment of 2026-10-06), unless group_vars set it.
+    verify_os_heap: "{{ opensearch_heap | default('4g') }}"
   tasks:
     - name: Read the effective sshd configuration
       ansible.builtin.command:
@@ -398,6 +400,35 @@
           - verify_os_unit.status.Restart == 'on-failure'
         fail_msg: "The OpenSearch unit has Restart={{ verify_os_unit.status.Restart }}, not on-failure."
         success_msg: The OpenSearch unit restarts on failure.
+
+    - name: Read the JVM arguments of the node
+      ansible.builtin.uri:
+        url: "{{ verify_os_url }}/_nodes/_local/jvm"
+        ca_path: "{{ verify_os_ca }}"
+        client_cert: "{{ verify_os_cert }}"
+        client_key: "{{ verify_os_key }}"
+      register: verify_jvm
+
+    - name: Look for heap dumps in the data directory
+      ansible.builtin.find:
+        paths: /var/lib/opensearch
+        patterns: "*.hprof"
+      register: verify_hprof
+
+    # The running JVM's arguments, so a package file that sets its own heap again is caught too.
+    - name: Assert one heap setting, exit on OutOfMemoryError and no heap dump
+      ansible.builtin.assert:
+        that:
+          - verify_jvm_args | select('match', '-Xm[sx]') | sort == ['-Xms' ~ verify_os_heap, '-Xmx' ~ verify_os_heap]
+          - "'-XX:+ExitOnOutOfMemoryError' in verify_jvm_args"
+          - verify_jvm_args | select('search', 'HeapDumpOnOutOfMemoryError') | list == ['-XX:-HeapDumpOnOutOfMemoryError']
+          - verify_hprof.matched == 0
+        fail_msg: >-
+          JVM heap and OOM arguments {{ verify_jvm_args | select('search', '^-Xm[sx]|OutOfMemoryError') | list }},
+          heap dumps {{ verify_hprof.files | map(attribute='path') | list }}.
+        success_msg: "Heap -Xms/-Xmx{{ verify_os_heap }} set once, exit on OutOfMemoryError, heap dumps off and none on disk."
+      vars:
+        verify_jvm_args: "{{ (verify_jvm.json.nodes | dict2items | first).value.jvm.input_arguments }}"
 
     - name: Read the Performance Analyzer state
       ansible.builtin.uri:
