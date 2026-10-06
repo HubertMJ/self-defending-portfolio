@@ -13,9 +13,12 @@ tests/siem/p3-acceptance.sh (copied there; it runs with the node's admin certifi
 the temporary shipper-test identity for writes). Only python3 and the standard library.
 
 Usage: canary_docs.py --url U --ca CA --admin CERT KEY --writer CERT KEY --index index.json
-                      [--streams sdp-a,sdp-b] [--timeout 240] [--tag T]
+                      [--correlations correlations.json] [--streams sdp-a,sdp-b] [--timeout 240] [--tag T]
   index.json is `siem_lint.py --index siem`. Without --streams every stream is written; a rule or
   monitor whose documents go to a stream not written is reported as skipped, not passed.
+  correlations.json is {name: [{"stream", "query"}, ...]} from siem/correlations (the callers write it):
+  each side's query must find the canary document of every expected correlation - a side that misses it
+  (a misspelt slug) is a FAIL, while SA's correlation record itself is only a note (S0-e, F17).
 """
 import argparse
 import datetime
@@ -204,6 +207,7 @@ def main():
     ap.add_argument("--admin", nargs=2, required=True)
     ap.add_argument("--writer", nargs=2, required=True)
     ap.add_argument("--index", required=True)
+    ap.add_argument("--correlations", default="")
     ap.add_argument("--streams", default="")
     ap.add_argument("--timeout", type=int, default=240)
     ap.add_argument("--tag", default=datetime.datetime.now(datetime.timezone.utc).strftime("%H%M%S"))
@@ -323,6 +327,23 @@ def main():
     # SA correlations are evidence, not guaranteed (S0-e: 13 of 14 pairs; F17): reported, not failed.
     for x in c_missing:
         print(f"note correlation not recorded by SA (S0-e, F17): {x}")
+    # What is ours is checked: each side's query finds the canary's document of that pod.
+    if a.correlations:
+        with open(a.correlations, encoding="utf-8") as fh:
+            corr = json.load(fh)
+        for name, ms in expect["correlations"].items():
+            if not corr.get(name):
+                fails.append(f"correlation {name}: not in {a.correlations}")
+                continue
+            for m in (m for m in ms if m in written):
+                for side in (s for s in corr[name] if s["stream"] in streams):
+                    code, out = admin.req("POST", f"/{side['stream']}/_count", {"query": {"bool": {"filter": [
+                        {"query_string": {"query": side["query"]}}, {"term": {"k8s.pod.ref": m}}]}}})
+                    if code != 200 or out.get("count", 0) < 1:
+                        fails.append(f"correlation {name} <- {m}: {side['stream']} query {side['query']!r} finds "
+                                     f"{out.get('count', 0) if code == 200 else code} documents")
+    else:
+        skipped.append("correlation side queries (no --correlations)")
     checked = sum(1 for ms in expect["rules"].values() if any(m in written for m in ms))
     print(f"canaries: {checked} rules, {len(expect['monitors'])} monitors, {len(expect['correlations'])} correlations "
           f"checked in {took} s; {len(fails)} failed, {len(skipped)} skipped")
