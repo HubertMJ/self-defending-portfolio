@@ -6,7 +6,8 @@
 
 import { h, replace } from "../lib/dom";
 
-const KEY = "collapsed:";
+// theme.ts reads the same keys before first paint (html[data-folded]).
+const KEY = "sdp:collapsed:";
 
 interface Fold {
   section: HTMLElement;
@@ -72,6 +73,8 @@ export function mountSections(onChange?: (id: string, expanded: boolean) => void
     btn.addEventListener("click", () => set(fold, !isOpen(fold), true));
     if (stored(section.id)) set(fold, false, false);
   }
+  // The folded sections are folded by their buttons now: theme.ts's stand-in (styles.css) goes.
+  delete document.documentElement.dataset.folded;
 
   const byHash = (hash: string): HTMLElement | null => {
     if (hash.length < 2) return null;
@@ -93,14 +96,20 @@ export function mountSections(onChange?: (id: string, expanded: boolean) => void
 
   // A click on an in-page link opens the section before the browser scrolls to it; the same link
   // clicked again (no hashchange) still works.
+  // A modified or non-primary click opens no section here: it opens a tab or a window, or nothing.
   document.addEventListener("click", (e) => {
+    if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
     const a = e.target instanceof Element ? e.target.closest("a[href^='#']") : null;
     if (a) reveal(a.getAttribute("href") ?? "");
   });
   // Back/forward and a typed hash: the browser has already scrolled, to a section that was folded.
   window.addEventListener("hashchange", () => reveal(location.hash)?.scrollIntoView());
   // Opened at #anchor: open its section, and land on it again if a section folded above it moved it
-  // (at once, as the browser lands on a fragment when a page opens).
+  // (at once, as the browser lands on a fragment when a page opens). Not on a reload or back/forward,
+  // where the browser restores the visitor's own scroll position, unless a folded section was opened.
   const opened = reveal(location.hash);
-  if (opened || [...folds.values()].some((f) => !isOpen(f))) (opened ?? byHash(location.hash))?.scrollIntoView({ behavior: "instant" });
+  const nav = typeof performance.getEntriesByType === "function" ? (performance.getEntriesByType("navigation")[0] as PerformanceNavigationTiming | undefined) : undefined;
+  const restoring = nav?.type === "reload" || nav?.type === "back_forward";
+  if (opened) opened.scrollIntoView({ behavior: "instant" });
+  else if (!restoring && [...folds.values()].some((f) => !isOpen(f))) byHash(location.hash)?.scrollIntoView({ behavior: "instant" });
 }

@@ -210,6 +210,40 @@ test.describe("layout (ADR 0035, amended 2026-10-05; ?mock=1)", () => {
     expect(problems).toEqual([]);
   });
 
+  test("folded at first paint: with the module script held back, theme.ts and the stylesheet fold a folded section alone", async ({ page }) => {
+    await page.goto("/?mock=1");
+    await page.locator("#posture-title > button").click();
+    await page.route(/\/assets\/main-[^/]*\.js$/, (route) => route.abort());
+    await page.reload();
+    expect(await page.evaluate(() => document.documentElement.dataset.folded)).toBe("posture");
+    await expect(page.locator("#posture-body")).toBeHidden();
+    await expect(page.locator("#posture .section__lead")).toBeHidden();
+    await expect(page.locator("#posture-title")).toBeVisible();
+    await expect(page.locator("#how-body")).toBeVisible();
+  });
+
+  test("a reload keeps the visitor's scroll position: no jump to the hash because a section above it is folded", async ({ page }) => {
+    await page.goto("/?mock=1#posture");
+    await expect(page.locator("#correlation .corr-matrix")).toBeVisible();
+    await page.locator("#evidence-title > button").click();
+    await expect(page.locator("#evidence-body")).toBeHidden();
+    await page.evaluate(() => window.scrollTo(0, (document.getElementById("skills") as HTMLElement).getBoundingClientRect().top + scrollY - 200));
+    const y = await page.evaluate(() => scrollY);
+    await page.reload();
+    await expect(page.locator("#evidence-body")).toBeHidden();
+    await expect(page.locator("#correlation .corr-matrix")).toBeVisible();
+    // theme.ts's stand-in is gone once the buttons fold the section themselves.
+    expect(await page.evaluate(() => document.documentElement.dataset.folded)).toBeUndefined();
+    // The browser restores what it can (the mock's panels arrive after the load, so it may fall short of
+    // y), and the visitor is not left at #posture. The browser's restoration comes after the module here,
+    // so the unit test (a reload faked) is what pins sections.ts's own decision.
+    await page.waitForTimeout(1500);
+    const at = await page.evaluate(() => ({ y: scrollY, posture: (document.getElementById("posture") as HTMLElement).getBoundingClientRect().top }));
+    expect(at.y).toBeGreaterThan(0);
+    expect(Math.abs(at.posture)).toBeGreaterThan(300);
+    expect(y).toBeGreaterThan(0);
+  });
+
   for (const wide of [false, true]) {
     const fonts = wide ? " (a wide font forced in)" : "";
 

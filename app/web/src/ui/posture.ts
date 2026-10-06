@@ -7,6 +7,8 @@ import { h, replace, timeEl, when } from "../lib/dom";
 import { extLink, offlinePanel, sourceUrl } from "./common";
 
 const REFRESH_MS = 60_000;
+// How long an unfolded panel's live region stays off: past the accessibility tree's update of the draw.
+const LIVE_RESTORE_MS = 250;
 /** Rows of the per-image breakdown shown; the rest are summarised in the caption. */
 const TOP_OFFENDERS = 5;
 
@@ -400,7 +402,12 @@ export function mountPosture(root: HTMLElement, api: ApiClient, onData?: (p: Pos
     },
     setActive(on) {
       active = on;
-      if (on && pending) draw(pending);
+      if (!on || !pending) return;
+      // The panel is a polite live region (a refresh is announced), but the visitor who unfolds it
+      // asked to see it: drawn with the region off, which comes back once the new content is in.
+      root.setAttribute("aria-live", "off");
+      draw(pending);
+      setTimeout(() => root.setAttribute("aria-live", "polite"), LIVE_RESTORE_MS);
     },
   };
 }

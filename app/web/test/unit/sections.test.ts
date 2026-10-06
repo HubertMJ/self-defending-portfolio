@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Posture } from "../../src/lib/contract";
 import { h } from "../../src/lib/dom";
@@ -69,10 +71,10 @@ describe("mountSections", () => {
     expect(body("posture").hidden).toBe(true);
     expect(document.getElementById("posture")?.classList.contains("section--collapsed")).toBe(true);
     expect(body("attack").hidden).toBe(false);
-    expect(localStorage.getItem("collapsed:posture")).toBe("1");
+    expect(localStorage.getItem("sdp:collapsed:posture")).toBe("1");
     toggle("posture").click();
     expect(body("posture").hidden).toBe(false);
-    expect(localStorage.getItem("collapsed:posture")).toBeNull();
+    expect(localStorage.getItem("sdp:collapsed:posture")).toBeNull();
     expect(changes).toEqual([
       ["posture", false],
       ["posture", true],
@@ -80,7 +82,7 @@ describe("mountSections", () => {
   });
 
   it("a folded section stays folded on the next visit, and its panels are told at mount", () => {
-    localStorage.setItem("collapsed:verify", "1");
+    localStorage.setItem("sdp:collapsed:verify", "1");
     const changes: [string, boolean][] = [];
     mountSections((id, open) => changes.push([id, open]));
     expect(toggle("verify").getAttribute("aria-expanded")).toBe("false");
@@ -102,20 +104,60 @@ describe("mountSections", () => {
   });
 
   it("a link to a folded section, or to anything inside one, opens it first", () => {
-    localStorage.setItem("collapsed:verify", "1");
-    localStorage.setItem("collapsed:posture", "1");
+    localStorage.setItem("sdp:collapsed:verify", "1");
+    localStorage.setItem("sdp:collapsed:posture", "1");
     mountSections();
     (document.getElementById("to-panel") as HTMLAnchorElement).click();
     expect(body("verify").hidden).toBe(false);
     expect(toggle("verify").getAttribute("aria-expanded")).toBe("true");
-    expect(localStorage.getItem("collapsed:verify")).toBeNull();
+    expect(localStorage.getItem("sdp:collapsed:verify")).toBeNull();
     (document.getElementById("to-posture") as HTMLAnchorElement).click();
     expect(body("posture").hidden).toBe(false);
   });
 
+  it("a modified, non-primary or already handled click on a link opens nothing", () => {
+    localStorage.setItem("sdp:collapsed:verify", "1");
+    mountSections();
+    const link = document.getElementById("to-panel") as HTMLAnchorElement;
+    for (const init of [{ ctrlKey: true }, { metaKey: true }, { shiftKey: true }, { altKey: true }, { button: 1 }]) {
+      link.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, ...init }));
+      expect(body("verify").hidden).toBe(true);
+    }
+    const handled = (e: Event) => e.preventDefault();
+    document.getElementById("top")?.addEventListener("click", handled);
+    link.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    expect(body("verify").hidden).toBe(true);
+    document.getElementById("top")?.removeEventListener("click", handled);
+    link.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    expect(body("verify").hidden).toBe(false);
+  });
+
+  it("drops theme.ts's pre-paint stand-in once the sections are folded by their buttons", () => {
+    localStorage.setItem("sdp:collapsed:posture", "1");
+    document.documentElement.dataset.folded = "posture";
+    mountSections();
+    expect(document.documentElement.dataset.folded).toBeUndefined();
+    expect(body("posture").hidden).toBe(true);
+    toggle("posture").click();
+    expect(body("posture").hidden).toBe(false);
+  });
+
+  it("on a reload the browser's own scroll position stands: no jump to the hash unless a folded section was opened", () => {
+    localStorage.setItem("sdp:collapsed:attack", "1");
+    history.replaceState(null, "", "/#verify-panel");
+    vi.spyOn(performance, "getEntriesByType").mockReturnValue([{ type: "reload" } as unknown as PerformanceEntry]);
+    mountSections();
+    expect(Element.prototype.scrollIntoView).not.toHaveBeenCalled();
+    page();
+    localStorage.setItem("sdp:collapsed:verify", "1");
+    mountSections();
+    expect(body("verify").hidden).toBe(false);
+    expect(Element.prototype.scrollIntoView).toHaveBeenCalledTimes(1);
+  });
+
   it("a hash change and a page opened at a hash open the section they name", () => {
-    localStorage.setItem("collapsed:attack", "1");
-    localStorage.setItem("collapsed:verify", "1");
+    localStorage.setItem("sdp:collapsed:attack", "1");
+    localStorage.setItem("sdp:collapsed:verify", "1");
     history.replaceState(null, "", "/#attack");
     mountSections();
     expect(body("attack").hidden).toBe(false);
@@ -124,6 +166,44 @@ describe("mountSections", () => {
     history.replaceState(null, "", "/#verify-panel");
     window.dispatchEvent(new HashChangeEvent("hashchange"));
     expect(body("verify").hidden).toBe(false);
+  });
+});
+
+describe("folded at first paint (theme.ts, styles.css)", () => {
+  afterEach(() => {
+    localStorage.clear();
+    delete document.documentElement.dataset.folded;
+  });
+
+  it("theme.ts names the stored folded sections in html[data-folded], and nothing else", async () => {
+    localStorage.setItem("sdp:collapsed:posture", "1");
+    localStorage.setItem("sdp:collapsed:verify", "1");
+    localStorage.setItem("sdp:collapsed:how", "0");
+    localStorage.setItem("sdp:collapsed:Bad Id", "1");
+    localStorage.setItem("collapsed:skills", "1");
+    vi.resetModules();
+    await import("../../src/theme");
+    expect((document.documentElement.dataset.folded ?? "").split(" ").sort()).toEqual(["posture", "verify"]);
+  });
+
+  it("sets nothing with no section folded, and survives storage that throws", async () => {
+    vi.resetModules();
+    await import("../../src/theme");
+    expect(document.documentElement.dataset.folded).toBeUndefined();
+    vi.spyOn(Storage.prototype, "key").mockImplementation(() => {
+      throw new Error("SecurityError");
+    });
+    vi.resetModules();
+    await expect(import("../../src/theme")).resolves.toBeDefined();
+    vi.restoreAllMocks();
+  });
+
+  it("the stylesheet's stand-in covers every foldable section of index.html", () => {
+    const html = readFileSync(join(process.cwd(), "src", "index.html"), "utf8");
+    const css = readFileSync(join(process.cwd(), "src", "styles.css"), "utf8");
+    const ids = [...html.matchAll(/<section class="section[ "][^>]*\sid="([^"]+)"/g)].map((m) => m[1]);
+    expect(ids.length).toBe(9);
+    for (const id of ids) expect(css.split(`html[data-folded~="${id}"] #${id}`).length - 1, id).toBe(3);
   });
 });
 
@@ -143,5 +223,9 @@ describe("a folded section's panels stop drawing", () => {
     expect(root.querySelector(".tile")).toBeNull();
     handle.setActive(true);
     expect(root.querySelector(".tile")).not.toBeNull();
+    // Drawn with its live region off: unfolding does not read the whole panel aloud; then polite again.
+    expect(root.getAttribute("aria-live")).toBe("off");
+    await vi.advanceTimersByTimeAsync(300);
+    expect(root.getAttribute("aria-live")).toBe("polite");
   });
 });
