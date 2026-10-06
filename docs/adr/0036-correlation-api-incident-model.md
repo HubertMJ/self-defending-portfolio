@@ -312,7 +312,8 @@ is not generated yet:
 }
 ```
 
-- `kind`: one of the eight names of section 4. `severity`: `low|medium|high|critical`.
+- `kind`: one of the eight names of section 4. `severity`: `low|medium|high|critical`. `operator_test`:
+  true for an exec-outside-api incident of the live test suites, else false (amendment 2026-10-06).
   `arm`: `guarded|unguarded` for a compare run's incident, else "". `run_id`: the run's public id from the
   `sdp-api` lines on the ref, else "". `attack`: ATT&CK ids from the findings' `attack.tNNNN[.NNN]` tags
   and the commands' catalogue techniques, upper-case, de-duplicated, in first-seen order.
@@ -425,3 +426,39 @@ the API does not trust the field either.
 **Consequences.** The false dns-exfil incidents go; a real one shows the command first. Documents already
 in the SIEM keep their stale query, and the API ignores it. A rename of the DNS rule's title is followed
 through the regenerated index (the id is what the API knows).
+
+## Amendment 2026-10-06: operator test runs, labelled and folded, never hidden
+
+**Context.** Most live `exec-outside-api` incidents come from the project's own live test suites:
+`tests/scenarios/run.sh` and `tests/runtime/run.sh` `kubectl exec` into the pods they create, with the
+admin kubeconfig. The incidents are true - someone other than the API opened a session into a sandbox
+pod - but they flood the board and bury the visitors' attacks. Hiding them would make the board lie by
+omission.
+
+**Decision.**
+- An exec-outside-api session is an **operator test run** only when both hold, each matched whole:
+  - the principal (`user.name`, kept verbatim in the SIEM for `system:` users) is exactly `system:admin`,
+    the k3s admin kubeconfig's client certificate;
+  - the pod name matches `^(sc-[a-z0-9]+(-[a-z0-9]+)*-[0-9a-f]{6}|sdp-probe-[0-9a-f]{6}|rt-iso-[a-z0-9]{5}|l3probe)$`:
+    `sc-<scenario>-<6 hex>` and `sdp-probe-<6 hex>` (tests/scenarios/run.sh), `rt-iso-<5 [a-z0-9]>`
+    (tests/runtime/run.sh) and `l3probe` (the live acceptance's probe pod, which no committed script
+    creates). `sdp-probe-*` lives in the API namespace and so never reaches this check (section 3); it
+    is listed for completeness.
+- An operator test run's sessions on a pod are an incident of their own (id over the key
+  `operator-test:<ref>`): still built, cited and counted in `metrics.incidents`, severity `low`,
+  `operator_test: true`, titled "Operator test run: exec into <ns>/<pod>" (with "(N sessions)" for
+  more than one). Every session failing either condition - another principal, a near-miss name - stays
+  in the pod's `high` exec-outside-api incident, as before. The principal itself is never published.
+- The page folds every `operator_test` incident into one collapsible line, "N operator test-suite execs
+  in the last 24 h" (N counts the sessions), which opens to list them; the board's other incidents are
+  shown as before.
+
+**Caveat.** The label states only what the evidence shows: a session by the admin certificate into a
+pod named like a test suite's. Whoever holds the admin credential can produce exactly that - a real
+intruder with it would be labelled an operator test run, and could also name a pod `sc-...`. That holder
+already controls the cluster; the label does not claim intent, and the incident stays on the board,
+counted and citing its evidence, for anyone to read.
+
+**Consequences.** The board leads with the incidents that are not the project's own tests; the tests
+remain one click away. A suite that renames its pods, or runs under another principal, shows as `high`
+again until this pattern follows it.
