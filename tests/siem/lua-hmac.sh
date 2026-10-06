@@ -9,6 +9,8 @@
 #   - F2: the sandbox pod create carries no flag and no request body; the TokenReview and the kyverno
 #     review are dropped; F13: Hubble's non-flow records are dropped; F1: a client-sent
 #     event.overwrite / event.ingested is stripped;
+#   - Hubble DNS: dns.query and dns.rcode only on an L7 DNS event (event_type 129, request to or response
+#     from port 53); the exporter's stale l7.dns on every other flow is dropped (tests/siem/lua/extra-hubble.log);
 #   - the whole output equals tests/siem/expected/lua-output.jsonl (heartbeats aside).
 # Runs in CI (lint.yml validate job). Needs docker and python3 with PyYAML and Jinja2.
 #
@@ -77,7 +79,7 @@ tail_input() {
   tail_input sdp.talon.log /fixtures/talon.log cri
   tail_input sdp.api.log '/fixtures/api.log,/extra/extra-api.log' cri
   tail_input sdp.k8s-audit.log '/fixtures/k8s-audit.jsonl,/extra/extra-audit.jsonl' json
-  tail_input sdp.hubble.log /fixtures/hubble.log json
+  tail_input sdp.hubble.log '/fixtures/hubble.log,/extra/extra-hubble.log' json
   tail_input sdp.host.journal '/fixtures/host-*.json,/extra/extra-journal.json' json
   tail_input sdp.host.auditd /fixtures/host-auditd.log raw
   tail_input sdp.host.fbmetrics /extra/extra-fbmetrics.json json

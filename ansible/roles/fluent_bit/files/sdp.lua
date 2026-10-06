@@ -511,8 +511,27 @@ SOURCES["k8s-audit"] = function(rec, ctx)
   return true
 end
 
-SOURCES["hubble"] = function(rec)
-  return type(rec.flow) == "table"
+-- Hubble's DNS fields belong to a flow only when it is an L7 DNS event: event_type 129 with an
+-- l7.type, a request to port 53 or a response from it. Cilium 1.19's exporter applies the field mask
+-- by copying each flow into one reused message and skips a oneof member the flow does not set
+-- (fieldmask.Copy), so l7.dns of the last DNS event stays on every later flow - TCP traces, drops,
+-- HTTP events - and in events.log already.
+local function hubble_dns_of_event(flow)
+  local et = type(flow.event_type) == "table" and tonumber(flow.event_type.type) or nil
+  local l7, l4 = flow.l7, flow.l4
+  if et ~= 129 or type(l7) ~= "table" or type(l7.dns) ~= "table" or type(l4) ~= "table" then return false end
+  local ports = type(l4.UDP) == "table" and l4.UDP or l4.TCP
+  if type(ports) ~= "table" then return false end
+  if l7.type == "REQUEST" then return tonumber(ports.destination_port) == 53 end
+  if l7.type == "RESPONSE" then return tonumber(ports.source_port) == 53 end
+  return false
+end
+
+SOURCES["hubble"] = function(rec, ctx)
+  local flow = rec.flow
+  if type(flow) ~= "table" then return false end
+  if not hubble_dns_of_event(flow) then ctx.skip = { ["dns.query"] = true, ["dns.rcode"] = true } end
+  return true
 end
 
 local dropped_errors = 0

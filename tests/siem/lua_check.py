@@ -165,8 +165,24 @@ check(person and "k8s.pod.ref" not in person[0] and "k8s.pod.name" not in person
 check(all(r.get("source.ip", "hm1:").startswith("hm1:") for r in audit), "audit: every source.ip pseudonymised")
 
 hubble = only("hubble")
-check(len(hubble) == 4, f"hubble: only flow records ({len(hubble)})")
-dns = [r for r in hubble if r.get("dns.query")]
+extra_hubble = [json.loads(line) for line in open("tests/siem/lua/extra-hubble.log") if line.strip()]
+check(len(hubble) == 4 + len(extra_hubble), f"hubble: only flow records ({len(hubble)})")
+# The exporter's stale l7.dns (Cilium 1.19 field mask): the DNS fields stay only on an L7 DNS event,
+# by pod name in tests/siem/lua/extra-hubble.log.
+dns_kept = {"terminal-dns-request": ("ok.x.exfil.sdp.test.", None),
+            "terminal-dns-response": ("ok.x.exfil.sdp.test.", None),
+            "terminal-dns-tcp": ("sdp-fedcba9876543210.x.exfil.sdp.test.", None),
+            "terminal-dns-tcp-response": ("sdp-fedcba9876543210.x.exfil.sdp.test.", 3)}
+dns_dropped = ["terminal-stale-reply", "terminal-stale-rcode-u", "terminal-stale-drop", "terminal-stale-dnsdrop",
+               "terminal-hostile-type1", "terminal-stale-http", "terminal-no-l7-type", "terminal-request-from-53",
+               "terminal-response-to-53"]
+check(len(dns_kept) + len(dns_dropped) == len(extra_hubble), "hubble: every extra line has an expectation")
+for pod in list(dns_kept) + dns_dropped:
+    got = [r for r in hubble if r.get("k8s.pod.name") == pod]
+    want = dns_kept.get(pod, (None, None))
+    check(len(got) == 1 and (got[0].get("dns.query"), got[0].get("dns.rcode")) == want,
+          f"hubble {pod}: dns.query/dns.rcode {[(r.get('dns.query'), r.get('dns.rcode')) for r in got]} != {want}")
+dns = [r for r in hubble if r.get("dns.query") and r.get("k8s.pod.name") not in dns_kept]
 check(dns and all(r["dns.query"] == "sdp-0123456789abcdef.x.exfil.sdp.test.".replace("0123456789abcdef", "0123456789abcdef")
                   for r in dns), "hubble: dns.query lower-cased")
 check(any(r.get("dns.rcode") == 3 for r in dns), "hubble: rcode")
