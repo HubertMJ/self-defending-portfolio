@@ -36,6 +36,14 @@ argument_specs:
         description: Key of the rules-sync identity (read only by systemd, as a credential).
         type: path
         default: /etc/sdp-siem/pki/rules-sync.key
+      siem_sync_admin_cert:
+        description: Admin client certificate, used at install time for the siem-sync index mapping.
+        type: path
+        default: /etc/sdp-siem/pki/admin.crt
+      siem_sync_admin_key:
+        description: Key of the admin client certificate.
+        type: path
+        default: /etc/sdp-siem/pki/admin.key
       siem_sync_delete_cap:
         description: Managed deletions allowed in one run without the allow-mass-delete flag.
         type: int

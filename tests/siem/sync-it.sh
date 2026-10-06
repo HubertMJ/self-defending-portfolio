@@ -119,8 +119,10 @@ $DOCKER exec "$H" install -d -m 0700 /etc/sdp-siem/pki
 $DOCKER exec "$H" install -d -m 0755 /etc/opensearch/certs
 $DOCKER cp "$pki/rules-sync.crt" "$H":/etc/sdp-siem/pki/rules-sync.crt
 $DOCKER cp "$pki/rules-sync.key" "$H":/etc/sdp-siem/pki/rules-sync.key
+$DOCKER cp "$pki/admin.crt" "$H":/etc/sdp-siem/pki/admin.crt
+$DOCKER cp "$pki/admin.key" "$H":/etc/sdp-siem/pki/admin.key
 $DOCKER cp "$pki/ca.crt" "$H":/etc/opensearch/certs/ca.crt
-$DOCKER exec "$H" sh -ec 'chown root:root /etc/sdp-siem/pki/* /etc/opensearch/certs/ca.crt; chmod 0400 /etc/sdp-siem/pki/rules-sync.key'
+$DOCKER exec "$H" sh -ec 'chown root:root /etc/sdp-siem/pki/* /etc/opensearch/certs/ca.crt; chmod 0400 /etc/sdp-siem/pki/rules-sync.key /etc/sdp-siem/pki/admin.key'
 
 tooling() { # <command...> in the tooling container on the test network
   $DOCKER run --rm --network "$NET" -v "$PWD":/work:ro -v "$pki":/pki:ro -v /var/run/docker.sock:/var/run/docker.sock \
@@ -142,7 +144,9 @@ $DOCKER exec "$OS" bash -c 'cd /usr/share/opensearch && plugins/opensearch-secur
 tooling "ansible-playbook -i localhost, /work/tests/siem/sync-it.yml -e sync_it_url=$URL" >"$work/prepare.log" 2>&1 \
   || { tail -40 "$work/prepare.log"; fail "preparing OpenSearch"; }
 
-step "the siem_sync role against the siem01 container, twice"
+step "siem-sync as an older sync left it (dynamic: false, no heartbeat fields), then the siem_sync role, twice"
+curl -sS -o /dev/null --cacert "$pki/ca.crt" --cert "$pki/admin.crt" --key "$pki/admin.key" -X PUT -H 'Content-Type: application/json' \
+  "$URL/siem-sync" -d '{"mappings":{"dynamic":false,"properties":{"commit":{"type":"keyword"},"applied_at":{"type":"date"},"status":{"type":"keyword"}}}}'
 run_role() {
   tooling "ansible-playbook -i $H, -c community.docker.docker_api -e ansible_python_interpreter=/usr/bin/python3 \
     -e siem_sync_url=$URL -e siem_sync_repo_url=file:///srv/sdp-repo.git -e siem_sync_git_protocols=file \
@@ -153,6 +157,10 @@ tail -3 "$work/role1.log"
 run_role >"$work/role2.log" 2>&1 || { tail -40 "$work/role2.log"; fail "siem_sync role run 2"; }
 grep -qE "$H +: ok=[0-9]+ +changed=0 +unreachable=0 +failed=0" "$work/role2.log" || { tail -20 "$work/role2.log"; fail "second run is not changed=0"; }
 ok "role: second run changed=0"
+curl -sS --cacert "$pki/ca.crt" --cert "$pki/admin.crt" --key "$pki/admin.key" "$URL/siem-sync/_mapping" \
+  | python3 -c 'import json,sys; p=json.load(sys.stdin)["siem-sync"]["mappings"]["properties"]; sys.exit(0 if all(k in p for k in ("kind","checked_at","outcome","lint_sha256","allowed")) else 1)' \
+  || fail "the role did not add the new fields to the existing siem-sync index"
+ok "role: the existing siem-sync index gained kind, checked_at, outcome, lint_sha256, allowed"
 if [ -n "${SYNC_PY:-}" ]; then
   $DOCKER cp "$SYNC_PY" "$H":/usr/local/lib/sdp-siem-sync/sdp_siem_sync.py
   echo "NOTE: running $SYNC_PY instead of the role's program"
@@ -222,7 +230,10 @@ done
 $DOCKER exec "$H" journalctl -u sdp-siem-sync --no-pager -n 5 | grep -q "nothing to do" || fail "second run did not say nothing to do"
 hb=$(chk heartbeat)
 case $hb in *'"outcome": "unchanged"'*'"kind": "heartbeat"'*|*'"kind": "heartbeat"'*'"outcome": "unchanged"'*) ;; *) fail "heartbeat after the no-op run: $hb" ;; esac
-ok "second run: nothing to do, no record, rules/detectors/monitors untouched; heartbeat outcome unchanged"
+n_hb=$(curl -sS --cacert "$pki/ca.crt" --cert "$pki/admin.crt" --key "$pki/admin.key" -H 'Content-Type: application/json' \
+  "$URL/siem-sync/_search" -d '{"query":{"term":{"kind":"heartbeat"}}}' | python3 -c 'import json,sys; print(json.load(sys.stdin)["hits"]["total"]["value"])')
+[ "$n_hb" = 1 ] || fail "a term query on kind:heartbeat finds $n_hb documents (the API reads it that way)"
+ok "second run: nothing to do, no record, rules/detectors/monitors untouched; heartbeat outcome unchanged and searchable by kind"
 
 step "a changed rule stays attached to its detector"
 talon_id=$(python3 -c "import yaml; print(yaml.safe_load(open('siem/rules/talon-terminate.yml'))['id'])")
@@ -319,7 +330,7 @@ c5=$(commit "six rules removed")
 rc=$(sync_run)
 snap s6
 { [ "$rc" = 2 ] && [ "$(last "['status']")" = refused ]; } || fail "cap: exit $rc $(last "['reason']")"
-last "['reason']" | grep -q "6 managed deletions exceed the cap of 5" || fail "cap reason: $(last "['reason']")"
+last "['reason']" | grep -q "6 managed deletions (6 in 24 h) exceed the cap of 5" || fail "cap reason: $(last "['reason']")"
 [ "$(j "$work/s6.json" 'len(d["rules"])')" = "$(j "$work/s4.json" 'len(d["rules"])')" ] || fail "refused run deleted rules"
 ok "refused: 6 managed deletions exceed the cap; nothing deleted"
 $DOCKER exec "$H" touch /etc/sdp-siem/allow-mass-delete

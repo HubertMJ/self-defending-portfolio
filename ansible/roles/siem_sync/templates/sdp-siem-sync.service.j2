@@ -43,4 +43,6 @@ SystemCallFilter=@system-service
 SystemCallErrorNumber=EPERM
 UMask=0077
 MemoryMax=512M
+# No file the sync writes (a fetched pack above all) may outgrow the repository cap.
+LimitFSIZE={{ siem_sync_repo_max_mb }}M
 TimeoutStartSec=15min

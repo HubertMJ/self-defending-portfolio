@@ -17,6 +17,9 @@ siem_sync_url: https://127.0.0.1:9200
 siem_sync_ca: /etc/opensearch/certs/ca.crt
 siem_sync_cert: /etc/sdp-siem/pki/rules-sync.crt
 siem_sync_key: /etc/sdp-siem/pki/rules-sync.key
+# The admin identity (opensearch role) creates and extends the siem-sync index at install time.
+siem_sync_admin_cert: /etc/sdp-siem/pki/admin.crt
+siem_sync_admin_key: /etc/sdp-siem/pki/admin.key
 
 # More managed deletions than this in one run are refused unless <flag dir>/allow-mass-delete exists
 # (removed again after the next successful run).

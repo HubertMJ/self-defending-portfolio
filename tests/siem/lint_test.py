@@ -22,7 +22,10 @@ SIEM = os.path.join(REPO, "siem")
 
 
 def run(tree):
-    p = subprocess.run([sys.executable, LINT, tree], capture_output=True, text=True, check=False)
+    try:
+        p = subprocess.run([sys.executable, LINT, tree], capture_output=True, text=True, check=False, timeout=30)
+    except subprocess.TimeoutExpired:
+        return -1, "the lint ran longer than 30 s"
     return p.returncode, p.stderr + p.stdout
 
 
@@ -48,6 +51,29 @@ def rule(tree, slug):
 
 def sel(tree, slug, fn):
     edit_yaml(rule(tree, slug), lambda d: fn(d["detection"]))
+
+
+def mon_filter(tree, node):
+    edit_json(os.path.join(tree, "monitors/detection-missing.json"),
+              lambda d: d["inputs"][0]["search"]["query"]["query"]["bool"]["filter"].append(node))
+
+
+def mon_agg(tree, node):
+    edit_json(os.path.join(tree, "monitors/detection-missing.json"),
+              lambda d: d["inputs"][0]["search"]["query"]["aggregations"]["composite_agg"]["aggregations"].update(extra=node))
+
+
+def trigger_source(tree, source):
+    edit_json(os.path.join(tree, "monitors/detection-missing.json"),
+              lambda d: d["triggers"][0]["bucket_level_trigger"]["condition"]["script"].update(source=source))
+
+
+def query_trigger(tree, source):
+    def change(d):
+        d["monitor_type"] = "query_level_monitor"
+        d["triggers"] = [{"query_level_trigger": {"name": "t", "severity": "1", "actions": [],
+                                                  "condition": {"script": {"source": source, "lang": "painless"}}}}]
+    edit_json(os.path.join(tree, "monitors/detection-missing.json"), change)
 
 
 def det(name):
@@ -201,15 +227,76 @@ CASES = [
         os.path.join(t, "monitors/detection-missing.json"),
         lambda d: d["inputs"][0]["search"]["query"]["aggregations"]["composite_agg"]["aggregations"]["falco"]["filter"]["bool"]["filter"]
         .append({"term": {"falco.output": "x"}})),
-     r"query field 'falco.output' is in no allow-list"),
+     r"field 'falco.output' is in no allow-list"),
     ("monitor aggregation field outside the allow-lists", lambda t: edit_json(
         os.path.join(t, "monitors/policy-probing.json"),
         lambda d: d["inputs"][0]["search"]["query"]["aggregations"]["composite_agg"]["composite"]["sources"][0]["principal"]["terms"]
         .update(field="user.groups")),
-     r"query field 'user.groups' is in no allow-list"),
+     r"field 'user.groups' is in no allow-list"),
+    ("monitor with query_string", lambda t: mon_filter(t, {"query_string": {"query": "dns.query:*"}}),
+     r"query type 'query_string' is not allowed"),
+    ("monitor with a script query", lambda t: mon_filter(t, {"script": {"script": {"source": "true"}}}),
+     r"query type 'script' is not allowed"),
+    ("monitor with a terms lookup", lambda t: mon_filter(t, {"terms": {"k8s.pod.ref": {"index": "sdp-siem01", "id": "x", "path": "y"}}}),
+     r"terms takes a list of values \(no lookup"),
+    ("monitor with top_hits", lambda t: mon_agg(t, {"top_hits": {"size": 5}}), r"aggregation type 'top_hits' is not allowed"),
+    ("monitor with a date_histogram", lambda t: mon_agg(t, {"date_histogram": {"field": "@timestamp", "fixed_interval": "1m"}}),
+     r"aggregation type 'date_histogram' is not allowed"),
+    ("monitor body with script_fields", lambda t: edit_json(os.path.join(t, "monitors/detection-missing.json"),
+                                                            lambda d: d["inputs"][0]["search"]["query"].update(script_fields={})),
+     r"the search body takes size"),
+    ("monitor on a cron schedule", lambda t: edit_json(os.path.join(t, "monitors/detection-missing.json"),
+                                                       lambda d: set_in(d, "schedule", {"cron": {"expression": "0 0 1 1 *", "timezone": "UTC"}})),
+     r"schedule must be exactly"),
+    ("monitor every 1000 minutes", lambda t: edit_json(os.path.join(t, "monitors/detection-missing.json"),
+                                                       lambda d: d["schedule"]["period"].update(interval=1000)),
+     r"schedule must be exactly"),
+    ("trigger neutered by its script", lambda t: edit_json(os.path.join(t, "monitors/detection-missing.json"),
+                                                           lambda d: d["triggers"][0]["bucket_level_trigger"]["condition"]["script"]
+                                                           .update(source="params.commands > 0 && params.falco == 0 && false")),
+     r"painless condition only compares counts"),
+    ("query_string hidden in bool.should", lambda t: mon_filter(t, {"bool": {"should": [{"query_string": {"query": "x"}}]}}),
+     r"query type 'query_string' is not allowed"),
+    ("metric aggregation with a script", lambda t: edit_json(os.path.join(t, "monitors/policy-probing.json"),
+        lambda d: d["inputs"][0]["search"]["query"]["aggregations"]["composite_agg"]["aggregations"]["denied"]["aggregations"]["last"]["max"]
+        .update(script={"source": "1"})), r"max takes field only"),
+    ("exists with an extra key", lambda t: mon_filter(t, {"exists": {"field": "k8s.pod.ref", "boost": 1}}), r"exists takes field only"),
+    ("term with a script in its value", lambda t: mon_filter(t, {"term": {"k8s.pod.ref": {"value": "x", "script": "y"}}}),
+     r"term takes a value"),
+    ("range with an unknown key", lambda t: mon_filter(t, {"range": {"@timestamp": {"gte": "now-1m", "script": "x"}}}), r"range takes"),
+    ("search size not capped", lambda t: edit_json(os.path.join(t, "monitors/detection-missing.json"),
+                                                   lambda d: d["inputs"][0]["search"]["query"].update(size=1000)),
+     r"the search body takes size"),
+    ("schedule in hours", lambda t: edit_json(os.path.join(t, "monitors/detection-missing.json"),
+                                              lambda d: d["schedule"]["period"].update(unit="HOURS")),
+     r"schedule must be exactly"),
+    ("bucket trigger with or", lambda t: trigger_source(t, "params.commands > 0 || params.falco == 0"),
+     r"painless condition only compares counts"),
+    ("bucket trigger below zero", lambda t: trigger_source(t, "params.commands > 0 && params.falco < 0"),
+     r"painless condition only compares counts"),
+    ("query-level trigger with or", lambda t: query_trigger(t, "ctx.results[0].hits.total.value > 0 || true"),
+     r"painless condition only compares counts"),
+    ("query-level trigger below zero", lambda t: query_trigger(t, "ctx.results[0].hits.total.value < 0"),
+     r"painless condition only compares counts"),
+    # check_rule_condition limits (no regex from a condition: ReDoS)
+    ("condition that would backtrack", lambda t: sel(t, "talon-terminate", lambda d: (d.update({"a" * 40: d.pop("selection")}),
+                                                                                       set_in(d, "condition", "*a" * 18 + "b"))),
+     r"condition names '\*a\*a"),
+    ("condition too long", lambda t: sel(t, "talon-terminate", lambda d: set_in(d, "condition", " or ".join(["selection"] * 60))),
+     r"condition longer than 512"),
+    ("selection name too long", lambda t: sel(t, "talon-terminate", lambda d: (d.update({"s" * 70: d.pop("selection")}),
+                                                                                set_in(d, "condition", "s" * 70))),
+     r"longer than 64 characters"),
     # check_published
     ("rule title names a node", lambda t: edit_yaml(rule(t, "host-ssh-accepted"), lambda d: set_in(d, "title", "k3s01 - SSH login accepted")),
      r"host-ssh-accepted.yml: the rule's title or file name names an address or a node"),
+    ("rule title names a node in capitals", lambda t: edit_yaml(rule(t, "host-ssh-accepted"), lambda d: set_in(d, "title", "K3S01 login")),
+     r"host-ssh-accepted.yml: the rule's title or file name names"),
+    ("rule title names an IPv6 address", lambda t: edit_yaml(rule(t, "host-ssh-accepted"), lambda d: set_in(d, "title", "login from fe80::1")),
+     r"host-ssh-accepted.yml: the rule's title or file name names"),
+    ("rule title names an IPv6 address after a colon", lambda t: edit_yaml(rule(t, "host-ssh-accepted"),
+                                                                           lambda d: set_in(d, "title", "login ip:fe80::1")),
+     r"host-ssh-accepted.yml: the rule's title or file name names"),
     ("rule file names a node", lambda t: os.rename(rule(t, "siem-host-ssh-failed"), rule(t, "siem01-ssh-failed")),
      r"rules/siem01-ssh-failed.yml: the rule's title or file name names"),
     ("monitor names a duplicate", lambda t: edit_json(os.path.join(t, "monitors/detection-missing.json"),
