@@ -50,21 +50,23 @@ type MetricsView struct {
 
 // Incident is one assembled incident; FlagMatch is set for dns-exfil only.
 type Incident struct {
-	ID          string     `json:"id"`
-	Kind        string     `json:"kind"`
-	Severity    string     `json:"severity"`
-	Title       string     `json:"title"`
-	RunID       string     `json:"run_id"`
-	Arm         string     `json:"arm"`
-	FirstAt     time.Time  `json:"first_at"`
-	LastAt      time.Time  `json:"last_at"`
-	Attack      []string   `json:"attack"`
-	FalcoEvents int        `json:"falco_events"`
-	FlagMatch   *bool      `json:"flag_match"`
-	TTDMs       *int64     `json:"ttd_ms"`
-	TTIMs       *int64     `json:"tti_ms"`
-	Steps       []Step     `json:"steps"`
-	Evidence    []Evidence `json:"evidence"`
+	ID          string    `json:"id"`
+	Kind        string    `json:"kind"`
+	Severity    string    `json:"severity"`
+	Title       string    `json:"title"`
+	RunID       string    `json:"run_id"`
+	Arm         string    `json:"arm"`
+	FirstAt     time.Time `json:"first_at"`
+	LastAt      time.Time `json:"last_at"`
+	Attack      []string  `json:"attack"`
+	FalcoEvents int       `json:"falco_events"`
+	FlagMatch   *bool     `json:"flag_match"`
+	// OperatorTest: an exec-outside-api incident of the live test suites (ADR 0036 amendment 2026-10-06).
+	OperatorTest bool       `json:"operator_test"`
+	TTDMs        *int64     `json:"ttd_ms"`
+	TTIMs        *int64     `json:"tti_ms"`
+	Steps        []Step     `json:"steps"`
+	Evidence     []Evidence `json:"evidence"`
 }
 
 // Step is one piece of an incident's evidence in time order. Count is the number of records that are

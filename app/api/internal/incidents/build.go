@@ -425,15 +425,29 @@ func (ix *index) dnsExfil(ref string) *draft {
 // execOutsideAPI: audited exec/attach/portforward sessions into a sandbox pod by anyone but the API,
 // one incident per pod with each session a step. A session is audited once per stage
 // (ResponseStarted, then ResponseComplete) under one audit id: the stages are one step, both
-// findings cited.
+// findings cited. Sessions by operatorUser into a pod the test suites create are an operator test
+// run: an incident of their own, low, flagged operator_test; every other session stays high.
 func (ix *index) execOutsideAPI(ref string) []*draft {
-	d := &draft{key: ref, refs: []string{ref}}
-	d.Kind, d.Severity = KindExecOutsideAPI, "high"
+	_, podName, _ := ix.t.splitRef(ref)
+	testPod := operatorPod.MatchString(podName)
+	var out []*draft
+	drafts := map[bool]*draft{}
+	firsts := map[bool]*record{}
 	seen := map[string]bool{}
-	var first *record
 	for _, r := range ix.on(ref, isFinding("k8s-audit")) {
 		if r.actor == actorAPI || (r.subresource != "exec" && r.subresource != "attach" && r.subresource != "portforward") {
 			continue
+		}
+		test := testPod && r.operator
+		d := drafts[test]
+		if d == nil {
+			d = &draft{key: ref, refs: []string{ref}}
+			d.Kind, d.Severity = KindExecOutsideAPI, "high"
+			if test {
+				d.key, d.Severity, d.OperatorTest = "operator-test:"+ref, "low", true
+			}
+			drafts[test] = d
+			out = append(out, d)
 		}
 		key := r.auditID
 		if key == "" {
@@ -444,22 +458,29 @@ func (ix *index) execOutsideAPI(ref string) []*draft {
 			continue
 		}
 		seen[key] = true
-		if first == nil {
-			first = r
+		if firsts[test] == nil {
+			firsts[test] = r
 		}
 		d.add(r)
 	}
-	if first == nil {
-		return nil
-	}
 	pod := ix.t.publicRef(ref)
-	if len(d.recs) == 1 {
-		verb := map[string]string{"exec": "Exec into", "attach": "Attach to", "portforward": "Port-forward to"}[first.subresource]
-		d.Title = verb + " " + pod + " outside the API"
-	} else {
-		d.Title = fmt.Sprintf("%d exec/attach/port-forward sessions into %s outside the API", len(d.recs), pod)
+	for _, d := range out {
+		first := firsts[d.OperatorTest]
+		switch {
+		case d.OperatorTest:
+			verb := map[string]string{"exec": "exec into", "attach": "attach to", "portforward": "port-forward to"}[first.subresource]
+			d.Title = "Operator test run: " + verb + " " + pod
+			if len(d.recs) > 1 {
+				d.Title += fmt.Sprintf(" (%d sessions)", len(d.recs))
+			}
+		case len(d.recs) == 1:
+			verb := map[string]string{"exec": "Exec into", "attach": "Attach to", "portforward": "Port-forward to"}[first.subresource]
+			d.Title = verb + " " + pod + " outside the API"
+		default:
+			d.Title = fmt.Sprintf("%d exec/attach/port-forward sessions into %s outside the API", len(d.recs), pod)
+		}
 	}
-	return []*draft{d}
+	return out
 }
 
 // stagedAttack: in one run, a recon step, then a credentials step, then an exfiltration attempt, by

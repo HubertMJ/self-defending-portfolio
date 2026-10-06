@@ -670,7 +670,7 @@ func TestViewLeaksNothing(t *testing.T) {
 		"SDP{" + flagHex + "} sdp-" + flagHex + " hm1:0011223344556677 system:serviceaccount:portfolio-api:portfolio-api ServiceAccount " +
 		"https://10.43.0.1:443/api node_k3s01 siem01-data service-account service_account"
 	f.findings["sdp_falco"] = append(f.findings["sdp_falco"], finding("f-poison", t0.Add(25*time.Second), "Falco "+poison, []string{"attack.t1059"},
-		map[string]any{"falco.rule": poison, "proc.name": poison, "k8s.pod.ref": termRef, "user.name": "operator", "source.ip": "10.1.1.250",
+		map[string]any{"falco.rule": poison, "proc.name": poison, "k8s.pod.ref": termRef, "user.name": "op-jdoe", "source.ip": "10.1.1.250",
 			"hostname": "k3s01", "dns.query": "sdp-" + flagHex + ".x.exfil.sdp.test."}))
 	f.findings["sdp_talon"] = append(f.findings["sdp_talon"], talonFinding("f-talon-p", t0.Add(26*time.Second), termRef, poison, poison))
 	f.hits["sdp-k8s-audit"] = append(f.hits["sdp-k8s-audit"], hit("sdp-k8s-audit", "a9", t0.Add(27*time.Second), map[string]any{
@@ -683,6 +683,10 @@ func TestViewLeaksNothing(t *testing.T) {
 		map[string]any{"dns.query": "sdp-" + flagHex + ".x.exfil.sdp.test.", "hubble.verdict": "FORWARDED", "hubble.traffic_direction": poison,
 			"hubble.event_type": 129, "hubble.l7.type": "RESPONSE",
 			"hubble.l4.protocol": "udp", "hubble.l4.destination_port": 53, "k8s.pod.ref": termRef}))
+	// An operator test run: the principal is read, never published.
+	f.findings["sdp_k8s_audit"] = append(f.findings["sdp_k8s_audit"], finding("f-op", t0.Add(29*time.Second), "Exec "+poison, nil, map[string]any{
+		"audit.verb": "create", "audit.object.resource": "pods", "audit.object.subresource": "exec", "audit.response.code": 101,
+		"k8s.pod.ref": "sandbox_sc-terminal-0a1b2c", "user.name": "system:admin", "source.ip": "10.1.1.250"}))
 	f.alerts = []siem.Alert{{ID: "al-p", MonitorName: "sdp-git: policy probing " + poison, State: "ACTIVE", StartTime: ptrInt(t0.UnixMilli()),
 		Agg: &siem.AlertAgg{BucketKeys: []any{"hm1:0011223344556677", "system:serviceaccount:x:y"}}}}
 	clk := &clock{t: t0}
@@ -693,6 +697,9 @@ func TestViewLeaksNothing(t *testing.T) {
 	v := tr.View()
 	if len(v.Incidents) < 6 {
 		t.Fatalf("only %d incidents: the leak test must see every kind", len(v.Incidents))
+	}
+	if op := incidentsOf(v, KindExecOutsideAPI); len(op) != 1 || !op[0].OperatorTest {
+		t.Fatalf("the leak test must see an operator test run: %+v", op)
 	}
 	if dx := one(t, v, KindDNSExfil); !hasStep(dx, "DNS query under the exfil zone") || dx.Steps[len(dx.Steps)-1].Count != 2 {
 		t.Fatalf("the leak test must see a collapsed step: %+v", dx.Steps)
@@ -708,7 +715,7 @@ func TestViewLeaksNothing(t *testing.T) {
 			t.Errorf("published %q (pattern %s)", m, re)
 		}
 	}
-	for _, s := range []string{"operator", "10.1.1.250", "/etc/shadow", "/srv/shop/.flag", "exfil.sdp.test"} {
+	for _, s := range []string{"op-jdoe", "system:admin", "10.1.1.250", "/etc/shadow", "/srv/shop/.flag", "exfil.sdp.test"} {
 		if strings.Contains(string(b), s) {
 			t.Errorf("published %q", s)
 		}
@@ -1610,5 +1617,93 @@ func TestDNSExfilAnchoredAfterCommand(t *testing.T) {
 	}
 	if inc.FlagMatch == nil || !*inc.FlagMatch || inc.Severity != "critical" {
 		t.Fatalf("incident %+v", inc)
+	}
+}
+
+// The live test suites exec into the pods they create with the admin kubeconfig: an operator test
+// run - its own incident, low, flagged - only when the principal is exactly system:admin and the pod
+// name is wholly one of the suites' (ADR 0036 amendment 2026-10-06). Anything else stays high.
+func TestOperatorTestRun(t *testing.T) {
+	f := newFake()
+	exec := func(id string, at time.Time, ref, user, auditID, stage string) siem.Finding {
+		return finding(id, at, "Exec into a sandbox pod not by the API", []string{"sdp_k8s_audit", "attack.t1609"}, map[string]any{
+			"audit.id": auditID, "audit.stage": stage, "audit.verb": "create", "audit.object.resource": "pods",
+			"audit.object.subresource": "exec", "audit.response.code": 101, "k8s.pod.ref": ref, "user.name": user})
+	}
+	const admin = "system:admin"
+	sc := "sandbox_sc-network-tool-a1b2c3"
+	f.findings["sdp_k8s_audit"] = []siem.Finding{
+		// The scenario suite: pre_exec and exec into its pod, the first audited at both stages.
+		exec("o-1a", t0, sc, admin, "aud-1", "ResponseStarted"),
+		exec("o-1b", t0, sc, admin, "aud-1", "ResponseComplete"),
+		exec("o-2", t0.Add(time.Second), sc, admin, "aud-2", "ResponseComplete"),
+		// Someone else in the same pod: not a test run.
+		exec("p-1", t0.Add(2*time.Second), sc, "hm1:8899aabbccddeeff", "aud-3", "ResponseComplete"),
+		exec("o-3", t0, "sandbox_rt-iso-ab12c", admin, "aud-4", "ResponseComplete"),
+		exec("o-4", t0, "sandbox_l3probe", admin, "aud-5", "ResponseComplete"),
+		exec("o-5", t0, "sandbox_sdp-probe-0a1b2c", admin, "aud-6", "ResponseComplete"),
+		exec("o-6", t0, "sandbox-unguarded_sc-terminal-d4e5f6", admin, "aud-7", "ResponseComplete"),
+		// Principals that are not exactly the admin certificate's.
+		exec("n-1", t0, "sandbox_sc-terminal-0a1b2c", "system:admin-x", "aud-8", "ResponseComplete"),
+		exec("n-2", t0, "sandbox_sc-terminal-1a1b2c", "system:administrator", "aud-9", "ResponseComplete"),
+		// Pod names that only contain, extend or bend a suite's.
+		exec("n-3", t0, "sandbox_my-sc-network-tool-a1b2c3", admin, "aud-10", "ResponseComplete"),
+		exec("n-4", t0, "sandbox_l3probe2", admin, "aud-11", "ResponseComplete"),
+		exec("n-5", t0, "sandbox_rt-iso-abcde1", admin, "aud-12", "ResponseComplete"),
+		exec("n-6", t0, "sandbox_sc-network-tool-a1b2c", admin, "aud-13", "ResponseComplete"),
+		exec("n-7", t0, "sandbox_sc-network-tool-a1b2cz", admin, "aud-14", "ResponseComplete"),
+		exec("n-8", t0, "sandbox_xl3probe", admin, "aud-15", "ResponseComplete"),
+	}
+	tr := newTracker(t, f, &clock{t: t0.Add(time.Minute)})
+	tr.Poll(context.Background())
+	v := tr.View()
+	byTitle := map[string]Incident{}
+	for _, inc := range incidentsOf(v, KindExecOutsideAPI) {
+		byTitle[inc.Title] = inc
+	}
+	tests := []string{
+		"Operator test run: exec into sandbox/sc-network-tool-a1b2c3 (2 sessions)",
+		"Operator test run: exec into sandbox/rt-iso-ab12c",
+		"Operator test run: exec into sandbox/l3probe",
+		"Operator test run: exec into sandbox/sdp-probe-0a1b2c",
+		"Operator test run: exec into sandbox-unguarded/sc-terminal-d4e5f6",
+	}
+	high := []string{
+		"Exec into sandbox/sc-network-tool-a1b2c3 outside the API",
+		"Exec into sandbox/sc-terminal-0a1b2c outside the API",
+		"Exec into sandbox/sc-terminal-1a1b2c outside the API",
+		"Exec into sandbox/my-sc-network-tool-a1b2c3 outside the API",
+		"Exec into sandbox/l3probe2 outside the API",
+		"Exec into sandbox/rt-iso-abcde1 outside the API",
+		"Exec into sandbox/sc-network-tool-a1b2c outside the API",
+		"Exec into sandbox/sc-network-tool-a1b2cz outside the API",
+		"Exec into sandbox/xl3probe outside the API",
+	}
+	if len(byTitle) != len(tests)+len(high) {
+		t.Errorf("%d exec-outside-api incidents, want %d: %v", len(byTitle), len(tests)+len(high), byTitle)
+	}
+	for _, title := range tests {
+		inc, ok := byTitle[title]
+		if !ok || !inc.OperatorTest || inc.Severity != "low" {
+			t.Errorf("%q: %+v", title, inc)
+		}
+	}
+	for _, title := range high {
+		inc, ok := byTitle[title]
+		if !ok || inc.OperatorTest || inc.Severity != "high" {
+			t.Errorf("%q: %+v", title, inc)
+		}
+	}
+	// Both incidents of the shared pod keep their own evidence and id; the test run's is still counted.
+	op, other := byTitle[tests[0]], byTitle[high[0]]
+	if op.ID == other.ID || len(op.Evidence) != 3 || len(other.Evidence) != 1 || other.Evidence[0].ID != "p-1" {
+		t.Errorf("shared pod: %+v / %+v", op, other)
+	}
+	if v.Metrics.Incidents != len(v.Incidents) || len(v.Incidents) != len(tests)+len(high) {
+		t.Errorf("metrics count %d of %d incidents", v.Metrics.Incidents, len(v.Incidents))
+	}
+	b, _ := json.Marshal(v)
+	if strings.Contains(string(b), "system:admin") || !strings.Contains(string(b), `"operator_test":true`) {
+		t.Errorf("published principal or no flag: %s", b)
 	}
 }

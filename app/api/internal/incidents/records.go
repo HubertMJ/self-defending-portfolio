@@ -16,7 +16,14 @@ import (
 const (
 	apiUser   = "system:serviceaccount:portfolio-api:portfolio-api"
 	talonUser = "system:serviceaccount:falco-response:falco-talon"
+	// operatorUser: the k3s admin kubeconfig's client certificate, the live test suites' principal
+	// (tests/scenarios/run.sh, tests/runtime/run.sh).
+	operatorUser = "system:admin"
 )
+
+// operatorPod: the pods the live test suites create, matched whole - tests/scenarios/run.sh's
+// sc-<scenario>-<6 hex> and sdp-probe-<6 hex>, tests/runtime/run.sh's rt-iso-<5 [a-z0-9]>, and l3probe.
+var operatorPod = regexp.MustCompile(`^(sc-[a-z0-9]+(-[a-z0-9]+)*-[0-9a-f]{6}|sdp-probe-[0-9a-f]{6}|rt-iso-[a-z0-9]{5}|l3probe)$`)
 
 // Who an audit record's request came from - the only thing kept of its user.
 const (
@@ -68,6 +75,7 @@ type record struct {
 	verb, resource, subresource, actor string
 	auditID                            string // one request's id, shared by its stages
 	code                               int
+	operator                           bool // the request came from operatorUser, exactly
 
 	apiAction, runID, state, arm, commandID, technique, objective, outcome string
 	seq, commandSeq                                                        int
@@ -182,6 +190,7 @@ func (t *Tracker) fill(r *record, m map[string]any) (dnsQuery string) {
 		r.verb, r.resource, r.subresource = str(m, "audit.verb"), str(m, "audit.object.resource"), str(m, "audit.object.subresource")
 		r.auditID = str(m, "audit.id")
 		r.code, _ = num(m, "audit.response.code")
+		r.operator = str(m, "user.name") == operatorUser
 		switch str(m, "user.name") {
 		case apiUser:
 			r.actor = actorAPI
