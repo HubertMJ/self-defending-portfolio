@@ -36,7 +36,7 @@ const (
 // Windows of the checks.
 const (
 	// dnsJoinWindow: a DNS finding belongs to the run's dns-exfil command started at most this long
-	// before it - the terminal session's length (siem contract P3, the SA correlation's 300 000 ms).
+	// before it - the terminal session's length (siem contract P3; the SA correlation's window is 180 000 ms).
 	dnsJoinWindow = 300 * time.Second
 	// falcoWindow: Falco findings within this of the dns-exfil command count as "Falco saw it".
 	falcoWindow = 60 * time.Second
