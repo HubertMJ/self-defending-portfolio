@@ -446,3 +446,61 @@ SIEM); the mock's SIEM files a dns-exfil and a contained intrusion for the visit
 toast, *Open it* and its pulse, the scenario button, the layout on a desktop and a phone, the jump bar
 at 360 and 320 px and the reduced-motion pulse. Not in this stage: the hero, typography and contrast,
 the evidence and posture sections.
+
+## Amendment 2026-10-06: this session first, everything else behind one filter
+
+**Context.** After UX stage 1 the owner still found the page chaotic: every visitor's runs of the
+whole day were mixed into the run history, the live run console, the evidence card and ticker and the
+SIEM's board, so nothing showed the link between what *this* visitor did and what got detected. The
+incident cards' "SIEM evidence: correlation …, finding …, finding …" line was a wall of ids.
+
+**Decision.** By default the page shows what the current visitor does, plus a run another visitor has
+in progress right now, labelled as theirs. Every other run and incident of the window is behind one
+choice, drawn as a segmented pair of buttons beside each list it scopes (the run history, the evidence
+ticker, the SIEM's board), every copy the same control: "This session" (the default) | "All activity,
+last 24 h". The choice is kept in `localStorage` as `sdp:scope` (beside the fold keys; a storage error
+leaves it unremembered). `app/web/src/lib/scope.ts` holds the pure rules, `ui/scope.ts` the control.
+
+- *The visitor's runs* are this tab's: the terminal sessions it started (the strip's reading) and the
+  one-click runs it launched (the POST's id). They are kept in `sessionStorage` (`sdp:own-runs`, the
+  newest 20), so a reload still knows them; they are public ids (`/api/runs`), and only strings
+  `isRunId` accepts are read back. After a reload they keep their "Your run" label, the board's own
+  tier, and the scenario chip's "found it". Nothing in UX stage 1 changes: the strip, the This-run
+  panel and the own tier work as before.
+- *Live now.* A run in progress that is not the visitor's is shown as "Someone else is attacking right
+  now": its card in the history, the console ("· you are watching it live"), the hero's card, its
+  events on the ticker and any incident already filed for it. When it ends it drops out of this view.
+- *Per part.* The run history lists the visitor's runs and the live one, each labelled, and says how
+  many other visitors' runs the filter holds. The console shows a run picked from the history, the run
+  in progress, or the visitor's newest, never an earlier visitor's on its own. The hero's card shows the
+  visitor's run in progress, else the live one, else the visitor's newest; its eyebrow and #evidence's
+  full record say whose it is. The ticker lists only those runs' events (no unattributed event) and
+  counts what it leaves out. The SIEM's board lists the visitor's incidents under "From your run on this
+  page" and the live run's under "Someone else is attacking right now"; "All activity" is the board of
+  UX stage 1 unchanged.
+- *The empty state* (the owner's decision): when the visitor has done nothing and nobody else is
+  running, the run history, the hero's card, the ticker and the board say "Nothing from you yet — launch
+  an attack" (a link to the terminal), and the history, the card and the board then show exactly one
+  clearly labelled example of an earlier visitor's run: the newest run ("Example: an earlier visitor's
+  run", the same on the card and its full record), and on the board the newest critical DNS exfil, else
+  the newest critical incident, else the newest (never an operator's test exec), under "Example: from an
+  earlier visitor's run". The ticker and the console show no example. A visitor whose runs the SIEM has
+  not filed yet is told it usually takes 1–3 min. Everything else stays behind "All activity, last 24 h".
+- *Aggregates stay global* and say so: the hero's counters are "Live, all visitors — not only yours"
+  (each tile keeps its own window), the SOC tiles "SOC figures · last 24 h, all visitors", the ATT&CK
+  matrix's caption "incidents in the last 24 h, all visitors". The rule library is no one's.
+- *The SIEM evidence line* is one line of counts, "Evidence: 1 SA correlation · 4 findings", a
+  `<details>` whose "show IDs" opens the SIEM's record ids as wrapped monospace chips with a link to
+  `/api/correlation`, and stays open across the board's redraws; nothing scrolls sideways at 320 px.
+
+Sections still start expanded (amendment 2026-10-05 stands). Everything stays text through `h()`, with
+no inline script or style and no new published field.
+
+**Consequences.** A first-time visitor sees a prompt and one example instead of a day of other people's
+runs, and after their attack sees only their own run and what was detected for it. The unit tests cover
+the stored scope and run ids (garbage, repeats, the cap, a throwing storage), the selection rules, each
+scoped part and its empty state, the control's copies moving together and the compact evidence; the
+end-to-end suite (mock) covers the default view, the filter revealing the history and persisting over a
+reload, the empty state's prompt and one example, another visitor's live run labelled and dropping out
+when it ends, the evidence line expanding, and no sideways scroll at 320 px. The tests of the whole
+board and history choose "All activity" first.
