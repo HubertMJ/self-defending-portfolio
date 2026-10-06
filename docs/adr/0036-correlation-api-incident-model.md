@@ -380,7 +380,8 @@ read as a flood, and repeated sessions or Falco findings did the same to the oth
 
 **Decision.** For every kind, records that are the same evidence are one step: the same source, rule
 title, pod, `command_seq` and kind, where the kind is the published detail without the traffic
-direction (section 3's allow-list otherwise). The step is at the earliest record's time, keeps the
+direction (section 3's allow-list otherwise) and, for a DNS lookup, without the port: the response
+goes back to the client's ephemeral port, the query to 53, and the step reads as port 53. The step is at the earliest record's time, keeps the
 place of that record in the time order (ties keep their order), and carries `count`, the number of
 records it stands for: an integer >= 1, omitted when it is 1. Its detail lists the directions seen,
 sorted and joined by `+` ("FORWARDED egress+ingress udp/53"). It cites the ids of its records, earliest
@@ -409,14 +410,20 @@ the API does not trust the field either.
 - A Hubble record is a DNS lookup only when it is a finding of the flag-shaped DNS rule
   (`siem/rules/hubble-dns-exfil.yml`, Sigma id `fa0bd074-18fc-4827-834c-705c707a94f9`, looked up by the
   finding's rule title in the embedded index) on an L7 DNS event (`hubble.event_type` 129 with an
-  `hubble.l7.type`). A document read by a search is never a lookup (no rule fired on it). Everything else
+  `hubble.l7.type`). A document read by a search is never a lookup (no rule fired on it). Fail-safe
+  under deploy skew (the rules synced to the SIEM before the API image with the regenerated index): a
+  finding none of whose rule titles the index knows also counts, when it is on an L7 DNS event whose
+  query has the flag's shape, `^sdp-[0-9a-f]{16}\.x\.exfil\.sdp\.test\.?$`; Hubble findings under
+  unknown titles are logged once while they are read ("siem: Hubble findings under a rule title the
+  embedded index does not know"). Everything else
   is a flow, described and used as one - a stale-query drop is a drop (the "policy enforced" step, the
   quarantined lookup's drop).
 - A dns-exfil incident with lookups is anchored on the run's `dns-exfil` command that a lookup follows
   within the join window: the command before the first lookup matching the run's flag, else before the
   first lookup that follows any command. Its steps are that command (with the run's `read-flag` before
-  it) and the lookups at or after it; a lookup before that command is not this incident's, and the flag
-  match and the Falco window are taken over the lookups kept. Without any command, the lookups alone
+  it), the lookups at or after it, and every lookup carrying the run's flag even before it - the flag's
+  lookup is never dropped. Another lookup before the command is not a step. The flag match is taken
+  over every lookup on the ref; the anchor decides the order and the Falco window. Without any command, the lookups alone
   make the incident, as before. dns-exfil still carries no TTD or TTI (section 5 defines them for
   contained intrusions only).
 - An audit document no rule fired on is named in `rule`: "Kubernetes audit - pod labelled by the response
@@ -439,15 +446,17 @@ omission.
 - An exec-outside-api session is an **operator test run** only when both hold, each matched whole:
   - the principal (`user.name`, kept verbatim in the SIEM for `system:` users) is exactly `system:admin`,
     the k3s admin kubeconfig's client certificate;
-  - the pod name matches `^(sc-[a-z0-9]+(-[a-z0-9]+)*-[0-9a-f]{6}|sdp-probe-[0-9a-f]{6}|rt-iso-[a-z0-9]{5}|l3probe)$`:
+  - the pod name matches `^(sc-[a-z0-9]+(-[a-z0-9]+)*-[0-9a-f]{6}|sdp-probe-[0-9a-f]{6}|rt-(iso|shell)-[a-z0-9]{5})$`:
     `sc-<scenario>-<6 hex>` and `sdp-probe-<6 hex>` (tests/scenarios/run.sh), `rt-iso-<5 [a-z0-9]>`
-    (tests/runtime/run.sh) and `l3probe` (the live acceptance's probe pod, which no committed script
-    creates). `sdp-probe-*` lives in the API namespace and so never reaches this check (section 3); it
-    is listed for completeness.
+    and `rt-shell-<5 [a-z0-9]>` (tests/runtime/run.sh). `sdp-probe-*` lives in the API namespace and so
+    never reaches this check (section 3); it is listed for completeness. Only names a committed suite
+    creates are listed: a manual probe pod (the live acceptance's `l3probe`) stays `high` - a pattern
+    for a name no script uses would be a label to borrow for nothing.
 - An operator test run's sessions on a pod are an incident of their own (id over the key
   `operator-test:<ref>`): still built, cited and counted in `metrics.incidents`, severity `low`,
   `operator_test: true`, titled "Operator test run: exec into <ns>/<pod>" (with "(N sessions)" for
-  more than one). Every session failing either condition - another principal, a near-miss name - stays
+  more than one; "Operator test run: N sessions into <ns>/<pod>" when exec, attach and port-forward
+  are mixed). Every session failing either condition - another principal, a near-miss name - stays
   in the pod's `high` exec-outside-api incident, as before. The principal itself is never published.
 - The page folds every `operator_test` incident into one collapsible line, "N operator test-suite execs
   in the last 24 h" (N counts the sessions), which opens to list them; the board's other incidents are
