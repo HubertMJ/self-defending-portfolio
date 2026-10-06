@@ -459,20 +459,26 @@ in progress right now, labelled as theirs. Every other run and incident of the w
 choice, drawn as a segmented pair of buttons beside each list it scopes (the run history, the evidence
 ticker, the SIEM's board), every copy the same control: "This session" (the default) | "All activity,
 last 24 h". The choice is kept in `localStorage` as `sdp:scope` (beside the fold keys; a storage error
-leaves it unremembered). `app/web/src/lib/scope.ts` holds the pure rules, `ui/scope.ts` the control.
+leaves it unremembered). Each copy is named for what it scopes, and one polite line says what the page
+shows after each change. `app/web/src/lib/scope.ts` holds the pure rules, `ui/scope.ts` the control.
 
 - *The visitor's runs* are this tab's: the terminal sessions it started (the strip's reading) and the
   one-click runs it launched (the POST's id). They are kept in `sessionStorage` (`sdp:own-runs`, the
   newest 20), so a reload still knows them; they are public ids (`/api/runs`), and only strings
   `isRunId` accepts are read back. After a reload they keep their "Your run" label, the board's own
-  tier, and the scenario chip's "found it". Nothing in UX stage 1 changes: the strip, the This-run
-  panel and the own tier work as before.
+  tier, and the scenario chip's "found it"; the terminal shows a live session of theirs from before
+  the reload read-only as "your session from before the reload" (the page lost its key), not as
+  another visitor's. Nothing in UX stage 1 changes: the strip, the This-run panel and the own tier work
+  as before.
 - *Live now.* A run in progress that is not the visitor's is shown as "Someone else is attacking right
   now": its card in the history, the console ("· you are watching it live"), the hero's card, its
   events on the ticker and any incident already filed for it. When it ends it drops out of this view.
 - *Per part.* The run history lists the visitor's runs and the live one, each labelled, and says how
-  many other visitors' runs the filter holds. The console shows a run picked from the history, the run
-  in progress, or the visitor's newest, never an earlier visitor's on its own. The hero's card shows the
+  many other visitors' runs the filter holds, in a line that ends in a button, "show all activity,
+  last 24 h", as the ticker's and the board's do. Only records of a run count as other visitors' (not
+  an operator's test exec, nor an event or incident tied to no run). The console shows a run picked
+  from the history, the run in progress, or the visitor's newest, never an earlier visitor's on its
+  own; after the visitor's terminal session it says that session is told beside the terminal. The hero's card shows the
   visitor's run in progress, else the live one, else the visitor's newest; its eyebrow and #evidence's
   full record say whose it is. The ticker lists only those runs' events (no unattributed event) and
   counts what it leaves out. The SIEM's board lists the visitor's incidents under "From your run on this
@@ -481,9 +487,9 @@ leaves it unremembered). `app/web/src/lib/scope.ts` holds the pure rules, `ui/sc
 - *The empty state* (the owner's decision): when the visitor has done nothing and nobody else is
   running, the run history, the hero's card, the ticker and the board say "Nothing from you yet — launch
   an attack" (a link to the terminal), and the history, the card and the board then show exactly one
-  clearly labelled example of an earlier visitor's run: the newest run ("Example: an earlier visitor's
+  clearly labelled example of an earlier visitor's run: the newest run the cluster answered, else the newest ("Example: an earlier visitor's
   run", the same on the card and its full record), and on the board the newest critical DNS exfil, else
-  the newest critical incident, else the newest (never an operator's test exec), under "Example: from an
+  the newest critical incident, else the newest (never an operator's test exec nor one tied to no run), under "Example: from an
   earlier visitor's run". The ticker and the console show no example. A visitor whose runs the SIEM has
   not filed yet is told it usually takes 1–3 min. Everything else stays behind "All activity, last 24 h".
 - *Aggregates stay global* and say so: the hero's counters are "Live, all visitors — not only yours"
