@@ -9,18 +9,35 @@
 // objective for touch screens. prefers-reduced-motion drops the caret blink and smooth scrolling.
 
 import type { ApiClient } from "../lib/api";
-import { type CatalogueCommand, type Objective, type Posture, type ScenarioDetails, isRunId } from "../lib/contract";
+import { type CatalogueCommand, type DefenceLayer, type Objective, type ScenarioDetails, isRunId } from "../lib/contract";
 import { type Child, h, prefersReducedMotion, replace } from "../lib/dom";
+import { type SiemRow, lastAlert, lastResponse, paletteTone } from "../lib/runstatus";
 import type { CommandRun, RunView, TimelineView } from "../lib/timeline";
 import { formatDuration, ts } from "../lib/timeline";
-import { litFromCommands, renderDefenceMap } from "./defencemap";
-import { breakable, offlinePanel } from "./common";
+import { type LitLayer, litFromCommands, renderDefenceMap } from "./defencemap";
+import { breakable, offlinePanel, pulse } from "./common";
 import { renderVictim } from "./victim";
 
 export interface TerminalHandle {
   update(view: TimelineView): void;
   /** The API's stored history of this run is incomplete (GET /api/runs/{id} said `truncated`). */
   historyTruncated(runId: string): void;
+  /** The "This run" panel's SIEM row (lib/runstatus.ts siemRow). */
+  setSiem(row: SiemRow): void;
+  /** Takes the visitor to the terminal with a command picked: opens a session if idle (one run), highlights its chip and fills it in once the pod is ready. */
+  suggest(commandId: string): void;
+  /** Back to the start panel for another session ("Run again"). */
+  again(): void;
+  /** Brings the "This run" timeline into view and pulses it ("Watch the kill timeline"). */
+  showTimeline(): void;
+}
+
+/** The visitor's own session as the status strip reads it (null: none, or no longer theirs). */
+export interface OwnSession {
+  runId: string;
+  run?: RunView;
+  commands: CatalogueCommand[];
+  idleSeconds?: number;
 }
 
 interface Catalogue {
@@ -56,12 +73,19 @@ export function mountTerminal(
     cooldownSeconds?: () => number;
     onRateLimited?: (seconds: number) => void;
     /** Whether this API has the terminal, with its objectives and run timeout: told once the catalogue has loaded or failed to. */
-    onAvailable?: (available: boolean, objectives: Objective[], timeoutSeconds?: number, commands?: CatalogueCommand[]) => void;
+    onAvailable?: (available: boolean, objectives: Objective[], timeoutSeconds?: number, commands?: CatalogueCommand[], idleSeconds?: number) => void;
+    /** The status strip (ui/runstatus.ts): carried under the input in a session and under the start button between sessions. */
+    strip?: HTMLElement;
+    /** Every change of the visitor's own session (not a watched one). */
+    onSession?: (s: OwnSession) => void;
+    /** The layers the visitor's last session lit, for "How it works". */
+    onLit?: (lit: Map<DefenceLayer, LitLayer>) => void;
+    /** How long until the run holding the one slot must end, in ms, when its limits are known. */
+    blockedEndsIn?: () => number | undefined;
   } = {},
 ): TerminalHandle {
   const reduced = prefersReducedMotion();
   let catalogue: Catalogue | null = null;
-  let posture: Posture | undefined;
   let session: { runId: string; token: string } | null = null;
   let starting = false;
   let watching: string | undefined; // another visitor's terminal run id, read-only
@@ -86,9 +110,12 @@ export function mountTerminal(
     hint: HTMLElement;
     said: HTMLElement;
     chips: HTMLElement;
+    palette: HTMLElement;
     shop: HTMLElement;
     objectives: HTMLElement;
-    map: HTMLElement;
+    banner: HTMLElement;
+    rows: { detection: HTMLElement; response: HTMLElement; siem: HTMLElement };
+    timeline: HTMLElement;
     summary: HTMLElement;
     status: HTMLElement;
     clock: HTMLElement;
@@ -103,20 +130,6 @@ export function mountTerminal(
   // an event's `at` and the moment the page saw it, so a visitor's wrong clock does not move them.
   let clockTimer: ReturnType<typeof setInterval> | undefined;
   let skew = Infinity;
-
-  // Posture (for the result map's evidence) is fetched once, lazily, the first time it is needed —
-  // not eagerly on load, where the posture panel and the defence map already fetch it (item 14).
-  let postureAsked = false;
-  const ensurePosture = () => {
-    if (postureAsked) return;
-    postureAsked = true;
-    void api.posture().then((r) => {
-      if (r.ok) {
-        posture = r.value;
-        if (mode === "session") renderMap(myRun());
-      }
-    });
-  };
 
   // ---- load the catalogue ----
   // Only the API saying "no such scenario" (a JSON 404) means this build has no terminal; a network
@@ -142,12 +155,11 @@ export function mountTerminal(
         // needed the catalogue there, rather than replacing the session with the start panel.
         buildChips();
         renderObjectives();
-        renderMap();
         patchFromView();
       } else {
         renderIdle();
       }
-      hooks.onAvailable?.(true, catalogue.objectives, catalogue.timeoutSeconds, catalogue.commands);
+      hooks.onAvailable?.(true, catalogue.objectives, catalogue.timeoutSeconds, catalogue.commands, catalogue.idleSeconds);
     } else if (r.ok || (r.status === 404 && r.json)) {
       renderUnavailable();
     } else {
@@ -189,7 +201,7 @@ export function mountTerminal(
   // ---- idle (not started) ----
   // Built once when the terminal goes idle, then patched in place: rebuilding it on every event of the
   // feed replaced the button under the visitor's keyboard focus and wiped the note under it.
-  let idle: { label: HTMLElement; btn: HTMLButtonElement; note: HTMLElement; shown: string | null; clock?: ReturnType<typeof setInterval> } | null = null;
+  let idle: { label: HTMLElement; btn: HTMLButtonElement; note: HTMLElement; eta: HTMLElement; shown: string | null; clock?: ReturnType<typeof setInterval> } | null = null;
 
   /** Why the start button is blocked right now ("Starting…", another run, a cooldown), or null. */
   const blockedNow = (): string | null => (starting ? "Starting…" : (hooks.blocked?.() ?? null));
@@ -203,6 +215,8 @@ export function mountTerminal(
     const btn = h("button", { type: "button", class: "btn btn--attack term-start__btn" }, h("span", { class: "btn__icon", "aria-hidden": "true" }, "▶"), label);
     btn.addEventListener("click", () => void start());
     const note = h("p", { class: "small term-start__blocked", role: "status" });
+    // When the slot frees up, from the busy run's limits: ticked with the button, never announced.
+    const eta = h("p", { class: "small term-start__eta", hidden: true });
     replace(
       root,
       h(
@@ -216,10 +230,12 @@ export function mountTerminal(
         ),
         btn,
         note,
+        eta,
+        hooks.strip ?? null,
       ),
     );
     if (idle?.clock !== undefined) clearInterval(idle.clock);
-    idle = { label, btn, note, shown: null };
+    idle = { label, btn, note, eta, shown: null };
     syncIdle();
   };
 
@@ -239,6 +255,11 @@ export function mountTerminal(
       if (blocked === null) setNote("");
       idle.shown = blocked;
     }
+    // "A run is in progress" says when it must end at the latest (its session or idle limit).
+    const left = blocked === "A run is in progress" ? hooks.blockedEndsIn?.() : undefined;
+    const etaText = left === undefined ? "" : left > 0 ? `That run ends within ${clockText(left)} at the latest; the button unlocks then.` : "That run should end any moment now.";
+    if (idle.eta.textContent !== etaText) idle.eta.textContent = etaText;
+    idle.eta.hidden = etaText === "";
     // A cooldown ends on its own, with no event to say so: re-check every second while blocked.
     if (blocked !== null && idle.clock === undefined) idle.clock = setInterval(syncIdle, 1000);
     else if (blocked === null && idle.clock !== undefined) {
@@ -303,6 +324,10 @@ export function mountTerminal(
   };
 
   // ---- running session skeleton ----
+  // The terminal pane on the left (bar, output, input, the status strip), the "This run" panel on the
+  // right (detection, response and SIEM rows, the objectives, this run's own timeline, the shop),
+  // sticky and never taller than the screen; the command palette full width under both. Only things
+  // about this session sit beside it: the seven-layer map is in "How it works" (ADR 0035 amendment).
   const renderSession = () => {
     mode = "session";
     const out = h("div", { class: "term__out", role: "log", "aria-live": "polite", "aria-label": "Terminal output", tabindex: "0" });
@@ -316,17 +341,63 @@ export function mountTerminal(
     const send = h("button", { type: "submit", class: "btn btn--small term__send" }, "Run") as HTMLButtonElement;
     const form = h("form", { class: "term__form" }, prompt, input, send) as HTMLFormElement;
     const chips = h("div", { class: "term__chips" });
+    const palette = h(
+      "div",
+      { class: "term__palette" },
+      h(
+        "div",
+        { class: "term__palettehead" },
+        h("h4", { class: "term__palettetitle" }, "Commands"),
+        h(
+          "ul",
+          { class: "term__legend", "aria-label": "What each colour means" },
+          h("li", { class: "term__legend--allowed" }, "allowed"),
+          h("li", { class: "term__legend--detected" }, "Falco answers"),
+          h("li", { class: "term__legend--prevented" }, "prevented"),
+          h("li", { class: "term__legend--siem" }, "only the SIEM sees it"),
+        ),
+      ),
+      chips,
+    );
     const shop = h("div", { class: "term__shop" });
     const objectives = h("div", { class: "term__objectives" });
-    const map = h("div", { class: "term__map" });
     const summary = h("div", { class: "term__summary", hidden: true });
-    const status = h("p", { class: "term__status", role: "status", "aria-live": "polite" });
+    // The visitor's own session is announced by the status strip; a watched one by this line.
+    const status = h("p", { class: "term__status", ...(watching ? { role: "status", "aria-live": "polite" } : {}) });
     // role=timer is not live: a screen reader reads it when asked, never every second.
     const left = h("span", { class: "term__left", title: "Time left before the session limit deletes the pod" });
     const idleLeft = h("span", { class: "term__idleleft", title: "Time left before the session ends for want of a command" });
     const clock = h("span", { class: "term__clock", role: "timer", "data-live": "false" }, left, idleLeft);
     const exit = h("button", { type: "button", class: "btn btn--ghost btn--small term__exit" }, "Leave");
     exit.addEventListener("click", () => void leave());
+    const row = (label: string, key: string) => {
+      const dd = h("dd", {}, "—");
+      return { el: h("div", { class: "thisrun__row", "data-row": key, "data-tone": "idle" }, h("dt", {}, label), dd), dd };
+    };
+    const detection = row("Detection", "detection");
+    const response = row("Response", "response");
+    const siem = row("SIEM", "siem");
+    const timeline = h("ol", { class: "thisrun__timeline", "aria-label": "This run, event by event" });
+    const timelineWrap = h("div", { class: "thisrun__timelinewrap", tabindex: "-1" }, h("h4", { class: "thisrun__subhead" }, "Timeline of this run"), timeline);
+    const sideBody = h("div", { class: "thisrun__body", id: "thisrun-body" }, objectives, timelineWrap, h("details", { class: "thisrun__shop", open: true }, h("summary", {}, "The shop, from the pod's own :8080"), shop));
+    // On a phone the panel is one card above the input: its rows always, the rest on request.
+    const more = h("button", { type: "button", class: "btn btn--ghost btn--small thisrun__more", "aria-expanded": "false", "aria-controls": "thisrun-body" }, "Details");
+    // The aside fills its grid cell without adding to its height; the panel inside is sticky and no
+    // taller than the screen or the terminal beside it.
+    const panel = h(
+      "div",
+      { class: "thisrun", "data-open": "false" },
+      h("div", { class: "thisrun__head" }, h("h3", { class: "thisrun__title", id: "thisrun-title" }, watching ? "This run (watching)" : "This run"), more),
+      h("dl", { class: "thisrun__rows" }, detection.el, response.el, siem.el),
+      sideBody,
+    );
+    const side = h("aside", { class: "term__side", "aria-labelledby": "thisrun-title" }, panel);
+    more.addEventListener("click", () => {
+      const open = panel.dataset.open !== "true";
+      panel.dataset.open = String(open);
+      more.setAttribute("aria-expanded", String(open));
+      replace(more, open ? "Less" : "Details");
+    });
 
     form.addEventListener("submit", (e) => {
       e.preventDefault();
@@ -349,7 +420,8 @@ export function mountTerminal(
     });
     input.addEventListener("input", () => showHint(catalogue ? completions(catalogue, input.value) : []));
 
-    els = { out, form, input, hint, said, chips, shop, objectives, map, summary, status, clock, left, idleLeft, send, exit };
+    const banner = bannerLine();
+    els = { out, form, input, hint, said, chips, palette, shop, objectives, banner, rows: { detection: detection.dd, response: response.dd, siem: siem.dd }, timeline, summary, status, clock, left, idleLeft, send, exit };
     replace(
       root,
       h(
@@ -366,18 +438,19 @@ export function mountTerminal(
             form,
             hint,
             said,
-            chips,
+            watching ? null : (hooks.strip ?? null),
           ),
-          h("aside", { class: "term__side" }, h("h4", { class: "term__sideheading" }, "The shop, from the pod's own :8080"), shop, objectives, h("h4", { class: "term__sideheading" }, "Which layer answers each move"), map),
+          side,
         ),
+        palette,
         summary,
       ),
     );
     buildChips();
     renderObjectives();
-    renderMap();
+    renderSiem();
     // The output starts with a short banner so the log is never empty for a screen reader.
-    replace(out, bannerLine());
+    replace(out, banner);
     patchFromView();
   };
 
@@ -385,6 +458,12 @@ export function mountTerminal(
     watching
       ? h("p", { class: "term__line term__line--sys" }, ownRunLost() ? "Read-only: this may be the run you just started — its start timed out before the page got the key to type into it. " : "Another visitor's session, read-only. ", "Their pod runs as uid 10001, non-root, with no network and a read-only root filesystem; each command and its output appears here as they type.")
       : h("p", { class: "term__line term__line--sys" }, "Pod starting. You will be uid 10001, non-root, no network, read-only root filesystem. When it is ready, try ", h("code", {}, "id"), " or tap a command below.");
+
+  /** The banner's ready moment: "Pod starting…" does not stay at the top of the session. */
+  const bannerReady = () => {
+    if (!els || watching) return;
+    replace(els.banner, "Pod ready. You are uid 10001, non-root, with no network and a read-only root filesystem. Try ", h("code", {}, "id"), " or tap a command below.");
+  };
 
   // The completion hint. Read out only when the visitor asks for it (Tab), so routine typing does
   // not chatter to a screen reader.
@@ -439,7 +518,7 @@ export function mountTerminal(
               "div",
               { class: "term__chiprow" },
               cmds.map((c) => {
-                const b = h("button", { type: "button", class: `term__chip term__chip--${c.outcome}`, title: c.explain, disabled: true }, breakable(c.input));
+                const b = h("button", { type: "button", class: `term__chip term__chip--${paletteTone(c)}`, "data-id": c.id, title: c.explain, disabled: true }, breakable(c.input));
                 b.addEventListener("click", () => void submit(c.input));
                 return b;
               }),
@@ -561,6 +640,7 @@ export function mountTerminal(
   const patchFromView = () => {
     if (!els) return;
     const run = myRun();
+    if (session && !watching && catalogue) hooks.onSession?.({ runId: session.runId, run, commands: catalogue.commands, idleSeconds: catalogue.idleSeconds });
     if (!run) return;
     const newest = run.events[run.events.length - 1];
     if (newest) skew = Math.min(skew, Date.now() - ts(newest.data.at));
@@ -572,7 +652,10 @@ export function mountTerminal(
     resolvePending();
     patchShop(run);
     renderObjectives(run);
-    renderMap(run);
+    renderRows(run);
+    renderTimeline(run);
+    if (!watching) hooks.onLit?.(litFromRun(run));
+    applySuggestion(run);
     renderStatus(run);
     tickClock();
     if (!run.active && !endedShown) renderSummary(run);
@@ -649,6 +732,7 @@ export function mountTerminal(
     if (!els) return;
     els.input.placeholder = "type a command, then Enter (Tab to complete)";
     ready = true;
+    bannerReady();
     syncControls();
     setTimeout(() => els && !els.input.disabled && els.input.focus(), 0);
   };
@@ -685,7 +769,17 @@ export function mountTerminal(
       if (c.killed) foot.push(h("p", { class: "term__line term__line--kill" }, "— the pod was deleted under this command; the session is over —"));
       else if (c.exitCode === undefined) foot.push(sys(noCodeReason(c)));
       else if (c.exitCode !== 0 && !c.stderr) foot.push(sys(`exit ${c.exitCode}`));
-      if (cmd && c.achieved) foot.push(h("p", { class: "term__line term__line--win" }, `✓ objective reached: ${catalogue?.objectives.find((o) => o.id === cmd.objective)?.title ?? cmd.objective}`));
+      if (cmd && c.achieved) {
+        const title = catalogue?.objectives.find((o) => o.id === cmd.objective)?.title ?? cmd.objective;
+        // Reached (it exited 0) by the command the cluster then deleted the pod for: not a win in green.
+        const run = myRun();
+        const costly = c.killed || (run !== undefined && responseOf(run, "terminate")?.cmd?.seq === c.seq);
+        foot.push(
+          costly
+            ? h("p", { class: "term__line term__line--costly" }, `✓ objective reached: ${title} — and it cost ${watching ? "the visitor" : "you"} the pod`)
+            : h("p", { class: "term__line term__line--win" }, `✓ objective reached: ${title}`),
+        );
+      }
       if (cmd) foot.push(h("p", { class: "term__explain" }, cmd.explain));
       const key = foot.map((p) => p.textContent).join("\u0000");
       if (key !== rec.footKey) {
@@ -739,12 +833,84 @@ export function mountTerminal(
     if (els.status.textContent !== text) els.status.textContent = text;
   };
 
-  /** The live defence map in the side panel: lights each layer as commands finish (review item 17). */
-  const renderMap = (run?: RunView) => {
+  // ---- the "This run" panel ----
+  let siem: SiemRow = { text: "nothing to correlate yet", tone: "idle" };
+
+  /** Patches a row only when its words change, so nothing flickers on every event. */
+  const setRow = (dd: HTMLElement, tone: string, key: string, ...kids: Child[]) => {
+    const row = dd.parentElement as HTMLElement;
+    row.dataset.tone = tone;
+    if (dd.dataset.key === key) return;
+    dd.dataset.key = key;
+    replace(dd, ...kids);
+  };
+
+  const renderRows = (run: RunView) => {
+    if (!els) return;
+    const alert = lastAlert(run);
+    const resp = lastResponse(run);
+    const enter = watching ? "their Enter" : "your Enter";
+    if (alert) setRow(els.rows.detection, "detect", `a:${alert.rule}:${alert.afterEnterMs}`, "Falco: ", h("strong", {}, alert.rule), alert.afterEnterMs !== undefined ? `, ${formatDuration(alert.afterEnterMs)} after ${enter}` : "");
+    else setRow(els.rows.detection, "idle", `n:${run.active}`, run.active ? "Falco: nothing yet" : "Falco: no alert this run");
+    if (resp) setRow(els.rows.response, "respond", `r:${resp.action}:${resp.afterAlertMs}`, "Talon: ", h("strong", {}, resp.action === "terminate" ? "deleted the pod" : "quarantined the pod"), resp.afterAlertMs !== undefined ? `, ${formatDuration(resp.afterAlertMs)} after the alert` : "");
+    else if (alert && !run.active) setRow(els.rows.response, "missed", "missed", "Talon: no response");
+    else setRow(els.rows.response, "idle", "none", alert ? "Talon: deciding…" : "Talon: nothing to answer yet");
+  };
+
+  const renderSiem = () => {
+    if (!els) return;
+    const kids: Child[] = siem.incidentId ? [h("a", { href: `#incident-${siem.incidentId}`, class: "thisrun__incident" }, siem.text, " ↓")] : [siem.text];
+    setRow(els.rows.siem, siem.tone, `${siem.tone}:${siem.text}:${siem.incidentId ?? ""}`, ...kids);
+  };
+
+  /**
+   * This run, event by event, on the API's clock: the pod created and ready, each command, Falco's
+   * alert, Talon's response, the end. The kill timeline of the visitor's own session, compact.
+   */
+  const renderTimeline = (run: RunView) => {
     if (!els || !catalogue) return;
-    ensurePosture();
-    const lit = run ? litFromRun(run) : new Map();
-    replace(els.map, renderDefenceMap({ posture, lit }));
+    const items: { at: number; kind: string; tone: string; text: Child[] }[] = [];
+    const add = (at: number | undefined, kind: string, tone: string, ...text: Child[]) => {
+      if (at !== undefined && at > 0) items.push({ at, kind, tone, text });
+    };
+    add(run.states.started ?? run.states.queued, "start", "info", "pod created");
+    add(run.states.pod_ready, "ready", "info", "pod ready");
+    for (const c of run.commands) {
+      const cmd = catalogue.commands.find((x) => x.id === c.id);
+      add(c.startedAt, "command", cmd ? paletteTone(cmd) : "allowed", h("code", {}, breakable(cmd?.input ?? c.id)), c.killed ? " — killed" : c.exitCode !== undefined && c.exitCode !== 0 ? ` — exit ${c.exitCode}` : "");
+    }
+    for (const f of run.falco.filter((x) => x.arm !== "unguarded")) add(ts(f.at), "falco", "detect", "Falco: ", f.rule);
+    const resp = lastResponse(run);
+    if (resp) add(resp.at, "talon", "respond", resp.action === "terminate" ? "Talon deleted the pod" : "Talon quarantined the pod", resp.afterAlertMs !== undefined ? ` (+${formatDuration(resp.afterAlertMs)})` : "");
+    const end = run.states.finished ?? run.states.failed ?? run.states.timeout;
+    add(end, "end", "info", endReason(run) ? `session over — ${endReason(run)}` : "session over");
+    items.sort((a, b) => a.at - b.at);
+    const t0 = items[0]?.at ?? 0;
+    const key = items.map((i) => `${i.kind}:${i.at}:${i.text.map((t) => (t instanceof Node ? t.textContent : String(t ?? ""))).join("")}`).join("|");
+    if (els.timeline.dataset.key === key) return;
+    els.timeline.dataset.key = key;
+    replace(
+      els.timeline,
+      items.map((i) => h("li", { class: "thisrun__event", "data-kind": i.kind, "data-tone": i.tone }, h("span", { class: "thisrun__at" }, `+${formatDuration(i.at - t0)}`), h("span", { class: "thisrun__what" }, ...i.text))),
+    );
+  };
+
+  // ---- a command picked for the visitor (the SIEM scenario's button) ----
+  let suggested: string | undefined;
+
+  /** Highlights the picked command's chip and fills it in, once the pod is ready; cleared once it has run. */
+  const applySuggestion = (run?: RunView) => {
+    if (!els || !catalogue || watching) return;
+    if (suggested && run?.commands.some((c) => c.id === suggested)) suggested = undefined;
+    for (const b of els.chips.querySelectorAll<HTMLElement>(".term__chip")) {
+      if (b.dataset.id === suggested) b.dataset.suggested = "true";
+      else delete b.dataset.suggested;
+    }
+    const cmd = suggested ? catalogue.commands.find((c) => c.id === suggested) : undefined;
+    if (cmd && ready && !over() && !els.input.disabled && els.input.value === "") {
+      els.input.value = cmd.input;
+      noteHint(`picked for you: ${cmd.input} — press Enter to run it`);
+    }
   };
 
   /** Lit-layer map from a run's finished commands, marking the one that ended the run. */
@@ -886,18 +1052,15 @@ export function mountTerminal(
         falcoToResp !== undefined ? stat("Falco to response", formatDuration(falcoToResp)) : null,
       ),
       reachedLines.length ? h("ul", { class: "term__sumreached", "aria-label": "Objectives reached" }, reachedLines) : null,
-      h("h4", { class: "term__sumhead" }, "Which layer answered which move"),
-      renderDefenceMap({ posture, lit }),
+      lit.size ? h("h4", { class: "term__sumhead" }, "Which layer answered which move") : null,
+      lit.size ? renderDefenceMap({ lit, only: "lit" }) : null,
+      h("p", { class: "small" }, "All seven layers, with the ones this session touched lit, are in ", h("a", { href: "#how" }, "How it works ↓"), "."),
       h(
         "div",
         { class: "term__again" },
         (() => {
           const b = h("button", { type: "button", class: "btn btn--ghost" }, other ? "Start your own session" : "Run another session");
-          b.addEventListener("click", () => {
-            session = null;
-            endedShown = false;
-            renderIdle();
-          });
+          b.addEventListener("click", () => again());
           return b;
         })(),
         h("p", { class: "small" }, "Think you got further than this page says is possible? ", h("a", { href: "https://github.com/HubertMJ/self-defending-portfolio/issues", rel: "noopener noreferrer", target: "_blank" }, "Open an issue"), "."),
@@ -945,6 +1108,7 @@ export function mountTerminal(
       els.send.disabled = true;
       els.form.hidden = true;
       els.chips.hidden = true;
+      els.palette.hidden = true;
     }
   };
 
@@ -967,7 +1131,42 @@ export function mountTerminal(
     els.out.appendChild(h("p", { class: "term__line term__line--sys" }, "— the API kept only part of this run's history (its per-run limit), so some of what came before may be missing here —"));
   };
 
-  return { update, historyTruncated };
+  /** Back to the start panel; the button there takes the focus, so a keyboard is not lost. */
+  const again = () => {
+    if (!catalogue) return;
+    if (session && !watching && !over()) return; // a live session is not thrown away by a stray press
+    session = null;
+    endedShown = false;
+    if (watching) return;
+    renderIdle();
+    root.scrollIntoView({ behavior: reduced ? "auto" : "smooth", block: "nearest" });
+    idle?.btn.focus({ preventScroll: true });
+  };
+
+  return {
+    update,
+    historyTruncated,
+    setSiem(row) {
+      siem = row;
+      renderSiem();
+    },
+    suggest(commandId) {
+      suggested = commandId;
+      root.scrollIntoView({ behavior: reduced ? "auto" : "smooth", block: "start" });
+      if (mode === "idle") void start();
+      else applySuggestion(myRun());
+    },
+    again,
+    showTimeline() {
+      const wrap = els?.timeline.parentElement;
+      if (!wrap) return;
+      const side = wrap.closest<HTMLElement>(".thisrun");
+      if (side && side.dataset.open !== "true") side.querySelector<HTMLButtonElement>(".thisrun__more")?.click();
+      wrap.scrollIntoView({ behavior: reduced ? "auto" : "smooth", block: "nearest" });
+      wrap.focus({ preventScroll: true });
+      pulse(wrap);
+    },
+  };
 }
 
 /** "4:32": minutes and seconds left, never below zero. */

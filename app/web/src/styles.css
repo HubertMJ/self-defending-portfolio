@@ -121,6 +121,17 @@ html {
   }
 }
 
+/* An anchor lands below the sticky header, which is two rows on a phone (the jump bar). */
+html {
+  scroll-padding-top: 4.5rem;
+}
+
+@media (max-width: 760px) {
+  html {
+    scroll-padding-top: 6.5rem;
+  }
+}
+
 body {
   margin: 0;
   background: var(--bg);
@@ -320,9 +331,33 @@ main {
   gap: 0.5rem;
 }
 
+/* On a phone the section links become a compact jump bar: a second row of the sticky header that
+   scrolls sideways inside itself, never the page. */
 @media (max-width: 760px) {
+  .site-header__inner {
+    flex-wrap: wrap;
+    row-gap: 0;
+  }
+
   .site-nav {
-    display: none;
+    order: 3;
+    flex: 1 0 100%;
+    margin: 0 calc(-1 * var(--gutter));
+    padding: 0 var(--gutter) 0.3rem;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .site-nav ul {
+    gap: 0.15rem;
+    white-space: nowrap;
+  }
+
+  .site-nav a {
+    padding: 0.3rem 0.55rem;
+    font-size: 0.82rem;
+    color: var(--text);
+    background: var(--surface-2);
   }
 
   .site-header__tools {
@@ -2218,8 +2253,14 @@ html:not([data-tech="on"]) .tech-only {
   cursor: pointer;
 }
 
+/* Commit hashes, digests and image refs break anywhere rather than push the panel past a phone's edge. */
 .verify__body {
   padding: 0 1.1rem 1.1rem;
+  overflow-wrap: anywhere;
+}
+
+p.small {
+  overflow-wrap: anywhere;
 }
 
 .utc {
@@ -2997,21 +3038,105 @@ html[data-terminal="off"] .needs-terminal {
   color: var(--detect);
 }
 
+.term-start__eta {
+  margin: 0.35rem 0 0;
+}
+
+.term-start .run-strip {
+  margin-top: 1rem;
+}
+
 .terminal {
   display: grid;
   gap: 1.25rem;
 }
 
+/* The terminal pane and the "This run" panel. On a wide screen the panel's cell is as tall as the
+   pane (the aside adds nothing to the row) and the panel inside it is sticky, capped at the screen:
+   it can never outgrow the terminal. On a phone the pane's parts become the grid's rows, with the
+   panel as one card between the output and the input. */
 .term__grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  gap: 1.25rem;
 }
 
 @media (min-width: 900px) {
   .term__grid {
-    grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr);
-    align-items: start;
+    grid-template-columns: minmax(0, 1.65fr) minmax(17rem, 1fr);
+    gap: 1.25rem;
+  }
+
+  .term__side {
+    height: 0;
+    min-height: 100%;
+  }
+
+  .thisrun {
+    position: sticky;
+    top: 4.75rem;
+    max-height: min(100%, calc(100vh - 6rem));
+    overflow: auto;
+    overscroll-behavior: contain;
+  }
+
+  .thisrun__more {
+    display: none;
+  }
+}
+
+@media (max-width: 899.98px) {
+  .term__grid {
+    grid-template-areas: "bar" "out" "side" "form" "hint" "strip";
+  }
+
+  .term__grid .term__pane {
+    display: contents;
+  }
+
+  .term__pane > .term__bar {
+    grid-area: bar;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius) var(--radius) 0 0;
+  }
+
+  .term__pane > .term__out {
+    grid-area: out;
+    background: #0a0c10;
+    border: 1px solid var(--border-strong);
+    border-top: 0;
+    border-radius: 0 0 var(--radius) var(--radius);
+  }
+
+  .term__side {
+    grid-area: side;
+    margin: 0.75rem 0;
+  }
+
+  .term__pane > .term__form {
+    grid-area: form;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius) var(--radius) 0 0;
+  }
+
+  .term__pane > .term__hint {
+    grid-area: hint;
+    border: 1px solid var(--border-strong);
+    border-top: 0;
+    border-radius: 0 0 var(--radius) var(--radius);
+  }
+
+  .term__pane > .run-strip {
+    grid-area: strip;
+    margin-top: 0.75rem;
+  }
+
+  .thisrun[data-open="false"] .thisrun__body {
+    display: none;
+  }
+
+  /* Shorter on a phone, so the card and the input stay within reach under it. */
+  .term__pane > .term__out {
+    min-height: min(40vh, 20rem);
   }
 }
 
@@ -3082,8 +3207,9 @@ html[data-terminal="off"] .needs-terminal {
 .term__out {
   margin: 0;
   padding: 0.85rem 0.95rem;
-  min-height: 15rem;
-  max-height: 26rem;
+  /* The tallest thing in the grid: the panel beside it never leaves a void under it. */
+  min-height: min(56vh, 34rem);
+  max-height: 64vh;
   overflow: auto;
   color: #e6e3dc;
   font: 0.82rem/1.5 var(--font-mono);
@@ -3124,6 +3250,12 @@ html[data-terminal="off"] .needs-terminal {
 
 .term__line--win {
   color: #5ee0a4;
+  font-weight: 600;
+}
+
+/* An objective reached by the command that got the pod deleted: amber, not the green of a win. */
+.term__line--costly {
+  color: #f4bf4f;
   font-weight: 600;
 }
 
@@ -3195,12 +3327,70 @@ html[data-terminal="off"] .needs-terminal {
   overflow-wrap: anywhere;
 }
 
-.term__chips {
-  padding: 0.6rem 0.7rem 0.8rem;
+/* The command palette: full width under the terminal and the panel, with what each colour means. */
+.term__palette {
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
   background: #0d1016;
-  border-top: 1px solid #262b34;
+  overflow: hidden;
+}
+
+.term__palettehead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.35rem 1rem;
+  padding: 0.6rem 0.8rem 0;
+}
+
+.term__palettetitle {
+  margin: 0;
+  color: #c9cdd6;
+  font: 650 0.74rem/1.4 var(--font-mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.term__legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.9rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: #b7bcc6;
+  font-size: 0.78rem;
+}
+
+.term__legend li::before {
+  content: "";
+  display: inline-block;
+  width: 0.65rem;
+  height: 0.65rem;
+  margin-right: 0.35rem;
+  border: 2px solid #5b6270;
+  border-radius: 50%;
+  vertical-align: -0.05rem;
+}
+
+.term__legend--detected::before {
+  border-color: #ff6363 !important;
+}
+
+.term__legend--prevented::before {
+  border-color: #f4bf4f !important;
+}
+
+.term__legend--siem::before {
+  border-color: #5ee0a4 !important;
+}
+
+.term__chips {
+  padding: 0.6rem 0.8rem 0.8rem;
   display: grid;
-  gap: 0.6rem;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 16rem), 1fr));
+  gap: 0.6rem 1rem;
 }
 
 .term__chiphead {
@@ -3244,11 +3434,188 @@ html[data-terminal="off"] .needs-terminal {
   color: #ffc7bf;
 }
 
+.term__chip--siem {
+  border-color: color-mix(in srgb, #5ee0a4 55%, #2f3540);
+  color: #c6f5de;
+}
+
+/* The command the SIEM scenario picked for the visitor. */
+.term__chip[data-suggested="true"] {
+  border-color: #5ee0a4;
+  box-shadow: 0 0 0 2px color-mix(in srgb, #5ee0a4 45%, transparent);
+  color: #fff;
+}
+
 .term__side {
+  min-width: 0;
+}
+
+/* ---------- "This run" (UX stage 1) ---------- */
+
+.thisrun {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  gap: 1rem;
+  align-content: start;
+  gap: 0.85rem;
+  padding: 0.9rem 1rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.thisrun__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.thisrun__title {
+  margin: 0;
+  font: 650 0.82rem/1.4 var(--font-mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.thisrun__rows {
+  display: grid;
+  gap: 0.35rem;
+  margin: 0;
+}
+
+.thisrun__row {
+  --c: var(--border-strong);
+  display: grid;
+  grid-template-columns: 6.2rem minmax(0, 1fr);
+  gap: 0.5rem;
+  align-items: baseline;
+  padding: 0.35rem 0.5rem;
+  border-left: 3px solid var(--c);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  font-size: 0.86rem;
+}
+
+.thisrun__row dt {
+  color: var(--text-faint);
+  font: 600 0.72rem/1.4 var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.thisrun__row dd {
+  margin: 0;
   min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--text-muted);
+}
+
+.thisrun__row[data-tone="detect"] {
+  --c: var(--detect);
+}
+
+.thisrun__row[data-tone="respond"] {
+  --c: var(--respond);
+}
+
+.thisrun__row[data-tone="missed"] {
+  --c: var(--critical);
+}
+
+.thisrun__row[data-tone="pending"] {
+  --c: var(--warning);
+}
+
+.thisrun__row[data-tone="siem"] {
+  --c: var(--critical);
+}
+
+.thisrun__row:not([data-tone="idle"]) dd {
+  color: var(--text);
+}
+
+.thisrun__body {
+  display: grid;
+  gap: 0.85rem;
+  min-width: 0;
+}
+
+.thisrun__subhead {
+  margin: 0 0 0.35rem;
+  font: 600 0.72rem/1.4 var(--font-mono);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.thisrun__timelinewrap {
+  border-radius: var(--radius-sm);
+}
+
+.thisrun__timelinewrap:focus {
+  outline: none;
+}
+
+.thisrun__timeline {
+  display: grid;
+  gap: 0.2rem;
+  margin: 0;
+  padding: 0 0 0 0.7rem;
+  list-style: none;
+  border-left: 2px solid var(--border-strong);
+  font-size: 0.82rem;
+}
+
+.thisrun__event {
+  display: grid;
+  grid-template-columns: 4.2rem minmax(0, 1fr);
+  gap: 0.4rem;
+  min-width: 0;
+}
+
+.thisrun__at {
+  color: var(--text-faint);
+  font: 0.74rem/1.6 var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.thisrun__what {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.thisrun__what code {
+  font-size: 0.78rem;
+}
+
+.thisrun__event[data-tone="detect"] .thisrun__what,
+.thisrun__event[data-tone="detected"] .thisrun__what {
+  color: var(--critical);
+}
+
+.thisrun__event[data-tone="respond"] .thisrun__what {
+  color: var(--respond);
+  font-weight: 600;
+}
+
+.thisrun__event[data-tone="prevented"] .thisrun__what {
+  color: var(--warning);
+}
+
+.thisrun__event[data-tone="siem"] .thisrun__what {
+  color: var(--good);
+}
+
+.thisrun__shop > summary {
+  cursor: pointer;
+  font: 600 0.72rem/1.4 var(--font-mono);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.thisrun__shop[open] > summary {
+  margin-bottom: 0.5rem;
 }
 
 .term__sideheading,
@@ -3260,22 +3627,25 @@ html[data-terminal="off"] .needs-terminal {
   color: var(--text-muted);
 }
 
+/* Compact: the five objectives as pills that wrap. */
 .term__objlist {
-  display: grid;
+  display: flex;
+  flex-wrap: wrap;
   gap: 0.3rem;
-  margin: 0.5rem 0 0;
+  margin: 0.4rem 0 0;
   padding: 0;
   list-style: none;
 }
 
 .term__obj {
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  gap: 0.5rem;
-  padding: 0.3rem 0.5rem;
-  border-radius: var(--radius-sm);
+  gap: 0.35rem;
+  padding: 0.15rem 0.55rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
   background: var(--surface-2);
-  font-size: 0.86rem;
+  font-size: 0.8rem;
   color: var(--text-muted);
 }
 
@@ -4055,7 +4425,8 @@ html[data-terminal="off"] .needs-terminal {
   overflow-wrap: anywhere;
 }
 
-.corr-step__delta {
+.corr-step__delta,
+.corr-step__prec {
   color: var(--text-faint);
   font-family: var(--font-mono);
   font-size: 0.78rem;
@@ -4190,4 +4561,317 @@ html[data-terminal="off"] .needs-terminal {
 .corr-lag__ms {
   font-family: var(--font-mono);
   font-size: 0.8rem;
+}
+
+/* ---------- the visitor's run, told back (ADR 0035 amendment, UX stage 1) ---------- */
+
+/* The status strip under the terminal's input, and the same words in a toast while it is out of view. */
+.run-strip,
+.run-toast {
+  --c: var(--accent);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+  padding: 0.65rem 0.75rem 0.65rem 0.85rem;
+  border: 1px solid color-mix(in srgb, var(--c) 45%, var(--border));
+  border-left: 4px solid var(--c);
+  background: color-mix(in srgb, var(--c) 9%, var(--surface));
+  color: var(--text);
+}
+
+.run-strip {
+  border-radius: var(--radius);
+}
+
+@media (min-width: 900px) {
+  .term__pane > .run-strip {
+    border-width: 1px 0 0;
+    border-left-width: 4px;
+    border-radius: 0;
+  }
+}
+
+.run-strip[data-tone="detect"],
+.run-toast[data-tone="detect"] {
+  --c: var(--detect);
+}
+
+.run-strip[data-tone="respond"],
+.run-toast[data-tone="respond"] {
+  --c: var(--critical);
+}
+
+.run-strip[data-tone="siem"],
+.run-toast[data-tone="siem"] {
+  --c: var(--critical);
+}
+
+.run-strip[data-tone="pending"],
+.run-toast[data-tone="pending"] {
+  --c: var(--warning);
+}
+
+.run-strip[data-tone="neutral"],
+.run-toast[data-tone="neutral"] {
+  --c: var(--neutral);
+}
+
+.run-strip__dot {
+  flex: none;
+  width: 0.6rem;
+  height: 0.6rem;
+  border-radius: 50%;
+  background: var(--c);
+}
+
+/* A quiet progress dot while the SIEM is awaited: the silence reads as pending, not as nothing. */
+@media (prefers-reduced-motion: no-preference) {
+  .run-strip[data-tone="pending"] .run-strip__dot,
+  .run-toast[data-tone="pending"] .run-strip__dot {
+    animation: pulse 2.4s ease-out infinite;
+  }
+}
+
+.run-strip__body {
+  flex: 1 1 10rem;
+  min-width: 0;
+}
+
+.run-strip__msg,
+.run-toast__msg {
+  margin: 0;
+  font-size: 0.92rem;
+  overflow-wrap: anywhere;
+}
+
+.run-strip__note {
+  margin: 0.15rem 0 0;
+  color: var(--text-muted);
+  font-size: 0.82rem;
+}
+
+.run-strip__actions,
+.run-toast__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.run-strip__close {
+  flex: none;
+  width: 1.9rem;
+  height: 1.9rem;
+  margin-left: auto;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: var(--surface);
+  color: var(--text-muted);
+  font-size: 1.05rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.run-strip__close:hover {
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+
+.run-toast {
+  position: fixed;
+  z-index: 20;
+  left: 50%;
+  bottom: 0.75rem;
+  transform: translateX(-50%);
+  width: min(46rem, calc(100vw - 1.5rem));
+  padding-block: 0.5rem;
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  background: color-mix(in srgb, var(--c) 10%, var(--surface));
+}
+
+.run-toast__msg {
+  flex: 1 1 14rem;
+  min-width: 0;
+  font-size: 0.88rem;
+}
+
+/* A brief outline pulse on what the visitor was sent to; a steady outline under reduced motion. */
+.is-pulsing {
+  outline: 3px solid var(--accent);
+  outline-offset: 3px;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .is-pulsing {
+    animation: sdp-pulse 0.85s ease-out 3;
+  }
+}
+
+@keyframes sdp-pulse {
+  0% {
+    outline-color: color-mix(in srgb, var(--accent) 100%, transparent);
+    outline-offset: 2px;
+  }
+
+  100% {
+    outline-color: color-mix(in srgb, var(--accent) 0%, transparent);
+    outline-offset: 10px;
+  }
+}
+
+/* The SIEM scenario at the top of #correlation. */
+.corr-scenario-wrap {
+  margin-bottom: 2rem;
+}
+
+.corr-scenario {
+  padding: clamp(1rem, 3vw, 1.5rem);
+  border: 1px solid color-mix(in srgb, var(--good) 40%, var(--border));
+  border-left: 4px solid var(--good);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--good) 6%, var(--surface));
+}
+
+.corr-scenario__title {
+  margin: 0 0 0.4rem;
+  font-size: 1.15rem;
+}
+
+.corr-scenario__lead {
+  max-width: 52rem;
+  margin: 0 0 0.9rem;
+  color: var(--text-muted);
+}
+
+.corr-scenario__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem 1rem;
+}
+
+.corr-scenario__statewrap {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 0.9rem;
+}
+
+.corr-scenario__label {
+  color: var(--text-faint);
+}
+
+.corr-scenario__state {
+  padding: 0.15rem 0.55rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: var(--surface);
+  font-weight: 600;
+}
+
+.corr-scenario__state[data-phase="running"],
+.corr-scenario__state[data-phase="waiting"],
+.corr-scenario__state[data-phase="late"] {
+  border-color: var(--warning);
+  color: var(--warning);
+}
+
+.corr-scenario__state[data-phase="found"] {
+  border-color: var(--critical);
+}
+
+.corr-scenario__btn {
+  width: auto;
+}
+
+.corr-scenario__note {
+  margin: 0.6rem 0 0;
+}
+
+/* The board's tiers: the pinned ones the project is about, the auto-contained ones folded. */
+.corr-tier__title {
+  margin: 0 0 0.75rem;
+  font-size: 1rem;
+}
+
+.incident--pinned,
+.incident--own {
+  background: color-mix(in srgb, var(--good) 5%, var(--surface));
+  border-top: 1px solid color-mix(in srgb, var(--good) 45%, var(--border));
+}
+
+.incident--own {
+  border-top: 3px solid var(--accent);
+}
+
+.incident__own {
+  margin: 0.6rem 0 0;
+  color: var(--accent);
+  font-weight: 650;
+  font-size: 0.86rem;
+}
+
+.corr-contained {
+  margin-top: 1rem;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.corr-contained > summary {
+  cursor: pointer;
+  font-weight: 650;
+}
+
+.corr-contained__line {
+  margin: 0.5rem 0 0;
+}
+
+.corr-incidents--other {
+  margin-top: 1rem;
+}
+
+.corr-healthfold {
+  padding: 0.6rem 0.9rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.corr-healthfold > summary {
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+
+.corr-healthfold > summary .chip {
+  margin: 0.15rem 0.3rem 0 0;
+  white-space: normal;
+}
+
+.corr-healthfold__title {
+  display: inline;
+  margin: 0 0.4rem 0 0;
+}
+
+.corr-healthfold[open] > summary {
+  margin-bottom: 0.75rem;
+}
+
+/* Run history: four cards, the rest folded. */
+.runs-more {
+  margin-top: 0.75rem;
+}
+
+.runs-more > summary {
+  cursor: pointer;
+  font-weight: 600;
+  padding: 0.5rem 0;
+}
+
+.defmap__overlay {
+  margin: 0 0 0.75rem;
+  color: var(--text-muted);
+  font-size: 0.9rem;
 }

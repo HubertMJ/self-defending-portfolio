@@ -252,7 +252,9 @@ describe("operator test runs (ADR 0036 amendment 2026-10-06)", () => {
   it("folds them into one line that counts their sessions and opens to list them; the rest of the board is as before", () => {
     const c = parseCorrelation(answer({ incidents: [op("0b5e7a10c0ffee01", 5, 2), incident({ id: "d15e0f17a1b2c3d4", kind: "dns-exfil", first_at: at(60), last_at: at(59) }), incident(), op("0b5e7a10c0ffee02", 900)] }));
     const board = renderBoard(c, ctx(c));
-    expect([...board.querySelectorAll(".incident")].map((e) => e.getAttribute("data-incident"))).toEqual(["d15e0f17a1b2c3d4", "c0a1b2c3d4e5f607"]);
+    // The DNS exfil is pinned in full; the contained intrusion is a line in its own fold (UX stage 1).
+    expect([...board.querySelectorAll(".incident")].map((e) => e.getAttribute("data-incident"))).toEqual(["d15e0f17a1b2c3d4"]);
+    expect([...board.querySelectorAll(".corr-contained li[data-incident]")].map((e) => e.getAttribute("data-incident"))).toEqual(["c0a1b2c3d4e5f607"]);
     const fold = board.querySelector<HTMLDetailsElement>("details.corr-optests");
     expect(fold?.open).toBe(false);
     expect(fold?.querySelector("summary")?.textContent).toBe("3 operator test-suite execs in the last 24 h");
@@ -433,7 +435,7 @@ describe("the section's parts", () => {
   });
 
   it("the board: the newest in full, the rest one line each; an empty board says since when it looks", () => {
-    const many = Array.from({ length: BOARD_INCIDENTS + 3 }, (_, n) => incident({ id: n.toString(16).padStart(16, "0"), last_at: at(100 + n) }));
+    const many = Array.from({ length: BOARD_INCIDENTS + 3 }, (_, n) => incident({ id: n.toString(16).padStart(16, "0"), kind: "dns-exfil", last_at: at(100 + n) }));
     const c = parseCorrelation(answer({ incidents: many }));
     const el = renderBoard(c, ctx(c));
     expect(el.querySelectorAll(".incident")).toHaveLength(BOARD_INCIDENTS);
@@ -454,14 +456,14 @@ describe("the section's parts", () => {
     expect(bad.textContent).toContain("ingest silent");
     expect(bad.textContent).toContain("evidence rewrite detected");
     expect(bad.textContent).toContain("disk high");
-    expect(bad.querySelectorAll(".chip--critical")).toHaveLength(3);
-    expect(bad.querySelectorAll(".chip--warning")).toHaveLength(1);
+    expect(bad.querySelectorAll(".corr-health .chip--critical")).toHaveLength(3);
+    expect(bad.querySelectorAll(".corr-health .chip--warning")).toHaveLength(1);
   });
 
   it("the rules chip: failed is critical, stale a warning, a word the page does not know reads as unknown and never good", () => {
     const rulesChip = (status: unknown) => {
       const el = renderHealth(parseCorrelation(answer({ rules: { commit: COMMIT, applied_at: at(5400), status } })), NOW);
-      return { data: el.getAttribute("data-rules"), chip: el.querySelector(".corr-health__rules .chip") };
+      return { data: el.querySelector(".corr-health")?.getAttribute("data-rules"), chip: el.querySelector(".corr-health__rules .chip") };
     };
     const failed = rulesChip("failed");
     expect(failed.data).toBe("failed");
@@ -504,16 +506,17 @@ describe("the section's parts", () => {
     const c = parseCorrelation(answer({ metrics: { since: at(86_400), incidents: 1, median_ttd_ms: 840, median_tti_ms: 212, median_twin_dwell_ms: null, host_findings: 0, ingest_lag_ms: { hubble: 3400, falco: 1240, host: null, "Bad Key": 5, api: -1, talon: "860", "k8s-audit": Number.NaN } } }));
     // A negative lag is clock skew between the hosts, published as it is (ADR 0036 §5).
     expect(c.metrics.ingest_lag_ms).toEqual([["hubble", 3400], ["falco", 1240], ["host", null], ["api", -1]]);
-    const line = renderMetrics(c, NOW).querySelector(".corr-lag");
+    const line = renderHealth(c, NOW).querySelector(".corr-lag");
     expect(line?.textContent).toBe("Ingest lag, per source (how far behind its newest record was when the API last read it): falco 1.2 s · hubble 3.4 s · api -1 ms · host –");
-    expect(renderMetrics(parseCorrelation(answer()), NOW).querySelector(".corr-lag")).toBeNull();
+    expect(renderHealth(parseCorrelation(answer()), NOW).querySelector(".corr-lag")).toBeNull();
+    expect(renderMetrics(c, NOW).querySelector(".corr-lag")).toBeNull();
     expect(parseCorrelation(answer({ metrics: { ingest_lag_ms: {} } })).metrics.ingest_lag_ms).toBeUndefined();
     expect(parseCorrelation(answer({ metrics: { ingest_lag_ms: [1, 2] } })).metrics.ingest_lag_ms).toBeUndefined();
   });
 
   it("ingest lag display: over an hour reads \"> 1 h\", a negative lag as it is (review L-2)", () => {
     const shown = (ms: number) =>
-      renderMetrics(parseCorrelation(answer({ metrics: { ingest_lag_ms: { falco: ms } } })), NOW).querySelector('.corr-lag__ms[data-source="falco"]')?.textContent;
+      renderHealth(parseCorrelation(answer({ metrics: { ingest_lag_ms: { falco: ms } } })), NOW).querySelector('.corr-lag__ms[data-source="falco"]')?.textContent;
     expect(shown(3_600_000)).toBe("60 min 0 s");
     expect(shown(3_600_001)).toBe("> 1 h");
     expect(shown(86_400_000 * 400)).toBe("> 1 h");
@@ -561,7 +564,8 @@ describe("mountCorrelation", () => {
     const handle = mountCorrelation(section, mounts, api, (a) => calls.available.push(a));
     return { section, mounts, calls, handle };
   };
-  const ok = (over: Record<string, unknown> = {}): Result<Correlation> => ({ ok: true, value: parseCorrelation(answer(over)) });
+  // A pinned incident (UX stage 1: a contained intrusion is a line in a fold, not a card).
+  const ok = (over: Record<string, unknown> = {}): Result<Correlation> => ({ ok: true, value: parseCorrelation(answer({ incidents: [incident({ kind: "dns-exfil" })], ...over })) });
   const off: Result<Correlation> = { ok: true, value: parseCorrelation({ available: false }) };
   const missing: Result<Correlation> = { ok: false, error: "offline", message: "HTTP 404", status: 404, json: true };
   const malformed: Result<Correlation> = { ok: false, error: "bad-response", message: "correlation: expected an object" };
@@ -656,7 +660,7 @@ describe("mountCorrelation", () => {
   it("a step's count moving between polls is rewritten in place; a count appearing redraws", async () => {
     vi.useFakeTimers();
     const counted = (count?: number) =>
-      ok({ incidents: [incident({ steps: [{ at: at(600), source: "hubble", rule: "Hubble - flag-shaped DNS lookup", rule_id: "", command_seq: 3, detail: "FORWARDED egress udp/53", ...(count === undefined ? {} : { count }) }] })] });
+      ok({ incidents: [incident({ kind: "dns-exfil", steps: [{ at: at(600), source: "hubble", rule: "Hubble - flag-shaped DNS lookup", rule_id: "", command_seq: 3, detail: "FORWARDED egress udp/53", ...(count === undefined ? {} : { count }) }] })] });
     const { section } = setup([counted(12), counted(14), counted(), counted(2)]);
     await vi.advanceTimersByTimeAsync(0);
     const incident0 = section.querySelector(".incident");
@@ -678,7 +682,7 @@ describe("mountCorrelation", () => {
 
   it("an ingest lag crossing zero (clock skew) keeps its row and redraws nothing: an open <details> stays open", async () => {
     vi.useFakeTimers();
-    const many = Array.from({ length: BOARD_INCIDENTS + 2 }, (_, n) => incident({ id: n.toString(16).padStart(16, "0"), last_at: at(100 + n) }));
+    const many = Array.from({ length: BOARD_INCIDENTS + 2 }, (_, n) => incident({ id: n.toString(16).padStart(16, "0"), kind: "dns-exfil", last_at: at(100 + n) }));
     const lagged = (falco: number) => ok({ incidents: many, metrics: { since: at(86_400), incidents: many.length, median_ttd_ms: 840, median_tti_ms: 212, median_twin_dwell_ms: null, host_findings: 0, ingest_lag_ms: { falco, api: null } } });
     const { section } = setup([lagged(100), lagged(-100)]);
     await vi.advanceTimersByTimeAsync(0);
@@ -745,5 +749,34 @@ describe("the fixtures (?mock=1 and serve.mjs --siem)", () => {
     expect(c.checked_at).toBe(new Date(NOW - 20_000).toISOString());
     expect(shiftTimes({ at: "2026-10-04T12:00:00.000Z", n: "2026-10-04T12:00:00.000Z" }, 1000)).toEqual({ at: "2026-10-04T12:00:01.000Z", n: "2026-10-04T12:00:00.000Z" });
     expect(parseCorrelation(fixtureCorrelation(NOW, false)).available).toBe(false);
+  });
+});
+
+describe("a Talon step timed to the second (UX stage 1)", () => {
+  it("is listed by the end of its second, after the Falco alert that caused it, and says so; deltas count from a millisecond step", () => {
+    const base = Date.parse(at(600));
+    const t = (ms: number) => new Date(base - (base % 1000) + ms).toISOString();
+    const c = parseCorrelation(
+      answer({
+        incidents: [
+          incident({
+            steps: [
+              { at: t(0), source: "talon", rule: "Talon - pod terminated", rule_id: "", command_seq: 3, detail: "Talon: Terminate Pod" },
+              { at: t(221), source: "falco", rule: "Credential file read", rule_id: UUID, command_seq: 3, detail: "cat /etc/shadow" },
+              { at: t(256), source: "k8s-audit", rule: "", rule_id: "", command_seq: 3, detail: "delete pods" },
+            ],
+          }),
+        ],
+      }),
+    );
+    expect(c.incidents[0].steps.map((s) => s.source)).toEqual(["falco", "k8s-audit", "talon"]);
+    const el = renderIncident(c.incidents[0], { now: NOW, rules: new Map(), commit: COMMIT });
+    const talon = el.querySelector('.corr-step[data-source="talon"]');
+    expect(talon?.getAttribute("data-precision")).toBe("s");
+    expect(talon?.querySelector(".corr-step__at")?.textContent).not.toMatch(/\.\d{3}/);
+    expect(talon?.textContent).toContain("(to the second)");
+    expect(el.querySelector('.corr-step[data-source="k8s-audit"] .corr-step__delta')?.textContent).toBe(" +35 ms");
+    // A Falco step at a whole second is not coarse: only Talon's records are.
+    expect(el.querySelector('.corr-step[data-source="falco"]')?.getAttribute("data-precision")).toBe("ms");
   });
 });

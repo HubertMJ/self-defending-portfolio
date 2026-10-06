@@ -26,6 +26,7 @@
     <nav class="site-nav" aria-label="Sections">
       <ul>
         <li><a href="#attack">Attack it</a></li>
+        <li class="site-nav__siem" hidden><a href="#correlation">SIEM</a></li>
         <li><a href="#how">How it works</a></li>
         <li><a href="#about">About</a></li>
         <li><a href="#posture">Posture</a></li>
@@ -140,9 +141,10 @@
         <p class="section__lead">Every Falco alert, Talon action, audited API call, network flow and terminal command is also shipped to a SIEM on its own VM, which the cluster can append to but not rewrite. Sigma rules from this repository run there, and the API joins their findings into incidents, one to three minutes after the event. Every time below is the SIEM's record.</p>
       </header>
       <div class="section__body" id="correlation-body">
-        <div class="corr-health-wrap" id="correlation-health"></div>
-        <div class="corr-metrics-wrap" id="correlation-metrics"></div>
+        <div class="corr-scenario-wrap" id="correlation-scenario"></div>
         <div class="corr-board-wrap" id="correlation-board"></div>
+        <div class="corr-metrics-wrap" id="correlation-metrics"></div>
+        <div class="corr-health-wrap" id="correlation-health"></div>
         <div class="corr-rules-wrap" id="correlation-rules"></div>
       </div>
     </div>

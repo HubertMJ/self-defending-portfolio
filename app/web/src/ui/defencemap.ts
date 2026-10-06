@@ -109,10 +109,12 @@ export interface LitLayer {
 
 const OUTCOME_WORD: Record<CommandOutcome, string> = { allowed: "allowed", prevented: "prevented", detected: "detected" };
 
-export function renderDefenceMap(opts: { posture?: Posture; lit?: Map<DefenceLayer, LitLayer>; heading?: string } = {}): HTMLElement {
+/** `only: "lit"`: just the layers a session touched (the session summary; the whole map is in "How it works"). */
+export function renderDefenceMap(opts: { posture?: Posture; lit?: Map<DefenceLayer, LitLayer>; heading?: string; only?: "lit" } = {}): HTMLElement {
   const lit = opts.lit;
   const live = lit !== undefined;
-  const items = DEFENCE_LAYERS.map((id) => layerCard(byId.get(id) as LayerMeta, opts.posture, lit?.get(id), live));
+  const ids = opts.only === "lit" ? DEFENCE_LAYERS.filter((id) => lit?.has(id)) : DEFENCE_LAYERS;
+  const items = ids.map((id) => layerCard(byId.get(id) as LayerMeta, opts.posture, lit?.get(id), live));
   return h(
     "div",
     { class: "defmap", "data-mode": live ? "result" : "static" },
@@ -184,12 +186,18 @@ export function litFromCommands(entries: { layer: DefenceLayer; outcome: Command
   return map;
 }
 
-export function mountDefenceMap(root: HTMLElement, api: ApiClient): { refresh(): void } {
+export function mountDefenceMap(root: HTMLElement, api: ApiClient): { refresh(): void; setLit(lit: Map<DefenceLayer, LitLayer>): void } {
+  let last: Result<Posture> | null = null;
+  // The layers the visitor's last terminal session touched, lit over the map (none: the plain map).
+  let lit: Map<DefenceLayer, LitLayer> | undefined;
+  let litKey = "";
   const show = (res: Result<Posture> | null) => {
+    last = res;
     const posture = res && res.ok ? res.value : undefined;
     replace(
       root,
-      renderDefenceMap({ posture }),
+      lit ? h("p", { class: "defmap__overlay" }, "Lit: the layers your last terminal session touched, each with what it met. The rest are as they stand.") : null,
+      renderDefenceMap({ posture, lit }),
       posture
         ? h("p", { class: "panel-foot" }, "Live posture numbers come from the ", h("a", { href: "#posture" }, "posture panel below"), ".", h("span", { class: "needs-terminal" }, " Launch the terminal to see which layer answers which move."))
         : h("p", { class: "panel-foot" }, "Posture numbers load with the ", h("a", { href: "#posture" }, "posture panel below"), "; the layers themselves are always here."),
@@ -201,5 +209,14 @@ export function mountDefenceMap(root: HTMLElement, api: ApiClient): { refresh():
   // Render the static layers at once so the section is never blank, then fill the evidence.
   replace(root, renderDefenceMap({}));
   refresh();
-  return { refresh };
+  return {
+    refresh,
+    setLit(next) {
+      const key = JSON.stringify([...next.entries()]);
+      if (!next.size || key === litKey) return;
+      litKey = key;
+      lit = next;
+      show(last);
+    },
+  };
 }

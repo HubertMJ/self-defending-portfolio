@@ -14,6 +14,8 @@ import { mountCorrelation } from "./ui/correlation";
 import { mountDefenceMap } from "./ui/defencemap";
 import { mountEvidence } from "./ui/evidence";
 import { mountPosture } from "./ui/posture";
+import { mountRunStatus } from "./ui/runstatus";
+import { SIEM_COMMAND, runEndsWithin } from "./lib/runstatus";
 import { mountScenarios } from "./ui/scenarios";
 import { mountSections, sectionTitle } from "./ui/sections";
 import { mountStats } from "./ui/stats";
@@ -101,12 +103,37 @@ function main(): void {
 
   const verify = mountVerify(byId("verify-panel"));
   const posture = mountPosture(byId("posture-panel"), api, (p) => evidence.setPosture(p));
+  // The visitor's own run told back (ADR 0035 amendment, UX stage 1): the status strip under the
+  // terminal and its toast, joined with the SIEM's incidents for that run. Wired to the terminal and
+  // the correlation below, once they exist.
+  const runStatus = mountRunStatus({
+    toastParent: document.body,
+    onTimeline: () => terminal.showTimeline(),
+    onAgain: () => terminal.again(),
+    onOpen: (id) => correlation.pulse(id),
+    onReading: (r) => {
+      correlation.setVisitor(r);
+      terminal.setSiem(r.siem);
+      timeline.setQuiet(r.ownRuns);
+      evidence.setQuiet(r.ownRuns);
+    },
+  });
   // The SIEM's section (ADR 0036): shown only while GET /api/correlation says available.
+  const siemNav = document.querySelector<HTMLElement>(".site-nav__siem");
   const correlation = mountCorrelation(
     byId("correlation"),
-    { health: byId("correlation-health"), metrics: byId("correlation-metrics"), board: byId("correlation-board"), rules: byId("correlation-rules") },
+    { scenario: byId("correlation-scenario"), health: byId("correlation-health"), metrics: byId("correlation-metrics"), board: byId("correlation-board"), rules: byId("correlation-rules") },
     api,
-    (available) => verify.set({ correlation: available }),
+    (available) => {
+      verify.set({ correlation: available });
+      // The nav names the section only while it is there.
+      if (siemNav) siemNav.hidden = !available;
+    },
+    {
+      onData: (c) => runStatus.setCorrelation(c !== null, c?.incidents ?? []),
+      onScenario: () => terminal.suggest(SIEM_COMMAND),
+      ...(mock?.eagerPollMs !== undefined ? { eagerMs: mock.eagerPollMs } : {}),
+    },
   );
   pollProvenance(() => api.provenance(), {
     data: (p) => {
@@ -127,15 +154,17 @@ function main(): void {
     },
     mock?.statsLabel,
   );
-  mountDefenceMap(byId("defence-map"), api);
+  const defenceMap = mountDefenceMap(byId("defence-map"), api);
 
   const limits = mountLimits(byId("limits-panel"), api);
   setupTechMode(byId("tech-toggle"), (on) => limits.setEnabled(on));
 
-  // Each scenario's timeout, as its details load, bounds how long the timeline believes a run without
-  // an end event (lib/timeline.ts staleRunMs).
+  // Each scenario's limits, as its details load: they bound how long the timeline believes a run without
+  // an end event (lib/timeline.ts staleRunMs), and tell when a busy slot frees up.
+  const limitsOf = new Map<string, { timeout?: number; idle?: number }>();
   const runConsole = mountConsole(byId("console"), api, (scenario, d) => {
     if (d.timeout_seconds !== undefined) timeline.setScenarioTimeout(scenario, d.timeout_seconds);
+    limitsOf.set(scenario, { timeout: d.timeout_seconds, idle: d.idle_seconds });
     evidence.setDetails(scenario, d);
   });
 
@@ -145,15 +174,25 @@ function main(): void {
   const terminal = mountTerminal(byId("terminal"), api, {
     blocked: () => blockedReason(launcherState, Date.now()),
     cooldownSeconds: () => Math.max(0, Math.ceil(((launcherState.cooldownUntil ?? 0) - Date.now()) / 1000)),
+    blockedEndsIn: () => {
+      const r = latestView.activeRun;
+      const l = r ? limitsOf.get(r.scenario) : undefined;
+      return r && l ? runEndsWithin(r, Date.now(), l.timeout, l.idle) : undefined;
+    },
+    strip: runStatus.strip,
+    onSession: (s) => runStatus.setSession(s),
+    onLit: (lit) => defenceMap.setLit(lit),
     // A 429 starting the terminal sets the shared cooldown, so the blocked state shows on both the
     // terminal's button and the one-click launcher (review item 11).
     onRateLimited: (seconds) => {
       launcherState = { ...launcherState, cooldownUntil: Date.now() + seconds * 1000 };
     },
-    onAvailable: (available, objectives, timeoutSeconds, commands) => {
+    onAvailable: (available, objectives, timeoutSeconds, commands, idleSeconds) => {
       if (available) stats.setObjectives(objectives);
       else degradeToOneClick();
+      correlation.setTerminal(available);
       if (timeoutSeconds !== undefined) timeline.setScenarioTimeout("terminal", timeoutSeconds);
+      limitsOf.set("terminal", { timeout: timeoutSeconds, idle: idleSeconds });
       if (commands?.length) {
         // Why a finished terminal run shows no detection is read from its commands' outcomes (ADR 0035).
         timeline.setOutcomes(new Map(commands.map((c) => [c.id, c.outcome])));

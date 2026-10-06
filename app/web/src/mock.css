@@ -27,3 +27,11 @@
   font-size: 0.9rem;
   text-align: center;
 }
+
+/* The banner makes the sticky header taller: the terminal's sticky "This run" panel starts below it. */
+@media (min-width: 900px) {
+  html[data-mock="true"] .thisrun {
+    top: 7rem;
+    max-height: min(100%, calc(100vh - 8.25rem));
+  }
+}

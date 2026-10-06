@@ -28,6 +28,17 @@ export function breakable(line: string): (string | HTMLElement)[] {
   return line.split(/(?<=[/;])/).flatMap((part, i) => (i ? [h("wbr"), part] : [part]));
 }
 
+/**
+ * A brief outline pulse on an element the visitor was just sent to (styles.css .is-pulsing; a steady
+ * outline instead of the animation under prefers-reduced-motion). Restarted on each call.
+ */
+export function pulse(el: HTMLElement, ms = 2600): void {
+  el.classList.remove("is-pulsing");
+  void el.offsetWidth;
+  el.classList.add("is-pulsing");
+  setTimeout(() => el.classList.remove("is-pulsing"), ms);
+}
+
 /** MITRE ATT&CK technique page for an id like T1059 or T1059.004; null if the id is malformed. */
 export function attackUrl(technique: string): string | null {
   const m = /^T(\d{4})(?:\.(\d{3}))?$/.exec(technique.trim());

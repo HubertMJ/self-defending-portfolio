@@ -113,3 +113,12 @@ describe("the committed ?mock=1 catalogue", () => {
     });
   }
 });
+
+describe("the explain text reaches the page whole (UX stage 1)", () => {
+  it("keeps the dns-exfil explanation's last sentences, which a 400-character cap cut", () => {
+    const d = parseScenarioDetails(JSON.parse(JSON.stringify(terminalDetails())));
+    const exfil = d.commands?.find((c) => c.id === "dns-exfil");
+    expect(exfil?.explain.length).toBeGreaterThan(600);
+    expect(exfil?.explain).toContain("tying it to this run is the SIEM's job");
+  });
+});

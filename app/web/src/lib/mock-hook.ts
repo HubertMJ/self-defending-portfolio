@@ -21,6 +21,8 @@ export interface MockHook {
   headerWord: string;
   /** The hero counters' label. */
   statsLabel: string;
+  /** How often the SIEM is asked while a filing for the visitor's run is awaited: the mock files in seconds. */
+  eagerPollMs?: number;
 }
 
 /** `?mock=1` (dev and test builds only): the mock backend, its banner shown; otherwise null. */
@@ -38,5 +40,5 @@ export function installMock(search: string): MockHook | null {
   // The mock answers in-page, so the network never sees a request: its own call log is what the
   // end-to-end tests read to check what the page sent.
   (window as unknown as { sdpMock: MockBackend }).sdpMock = mock;
-  return { fetch: mock.fetch, eventSource: mock.eventSource, headerWord: "mock ·", statsLabel: "Mock data — across every visitor" };
+  return { fetch: mock.fetch, eventSource: mock.eventSource, headerWord: "mock ·", statsLabel: "Mock data — across every visitor", eagerPollMs: 1500 };
 }

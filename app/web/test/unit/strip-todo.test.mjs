@@ -87,7 +87,7 @@ describe("stripTodoContent on src/index.html (review 2, item 9)", () => {
     expect(sectionIds(out)).toEqual(["top", "attack", "console", "correlation", "how", "evidence", "posture", "verify", "skills", "projects"]);
     expect([...out.matchAll(/href="#verify"/g)]).toHaveLength(1);
     expect(out.slice(out.indexOf("<footer"))).toContain('<a href="#verify">Verify the running images</a>');
-    expect(navLinks(out)).toEqual(["attack", "how", "posture"]);
+    expect(navLinks(out)).toEqual(["attack", "correlation", "how", "posture"]);
     expect(out).toContain("<li>Kubernetes (k3s)</li>");
     expect(out).toContain("self-defending-portfolio</a></h3>");
     expect(out).not.toContain("[TODO");

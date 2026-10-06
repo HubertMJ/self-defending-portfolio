@@ -10,6 +10,8 @@ import { CONNECTION_LONG, extLink } from "./common";
 
 // A run with victim probes every 500 ms produces a few hundred events; keep a handful of runs' worth.
 const MAX_LOG = 1500;
+/** Run cards shown before the rest fold under "N earlier runs". */
+export const HISTORY_SHOWN = 4;
 
 const STATE_LABEL: Record<string, string> = {
   queued: "Queued",
@@ -33,6 +35,8 @@ export interface TimelineHandle {
   setScenarioTimeout(scenario: string, seconds: number): void;
   /** The terminal catalogue's outcome per command id: why a finished run shows no detection. */
   setOutcomes(outcomes: ReadonlyMap<string, CommandOutcome>): void;
+  /** Runs the status strip announces (the visitor's own): this announcer keeps quiet about them. */
+  setQuiet(runIds: readonly string[]): void;
 }
 
 /**
@@ -232,6 +236,9 @@ export function mountTimeline(
   let shown: string | undefined;
   const timeouts = new Map<string, number>();
   let outcomes: ReadonlyMap<string, CommandOutcome> = new Map();
+  let quiet: ReadonlySet<string> = new Set();
+  // The fold of the older run cards stays as the visitor left it across the re-renders.
+  let moreOpen = false;
   // The one countdown of the connection line. Replaced, never stacked: every setConnection clears it.
   let countdownTimer: ReturnType<typeof setInterval> | undefined;
 
@@ -247,7 +254,11 @@ export function mountTimeline(
     if (view.runs.length === 0) {
       replace(root, h("p", { class: "empty" }, "No runs yet. Launch an attack and it appears here as it happens."));
     } else {
-      replace(root, h("ol", { class: "runs", role: "list" }, view.runs.map((r) => renderRun(r, titleOf(r.scenario), openDetails, onShow, shown, outcomes))));
+      const card = (r: RunView) => renderRun(r, titleOf(r.scenario), openDetails, onShow, shown, outcomes);
+      const rest = view.runs.slice(HISTORY_SHOWN);
+      const more = rest.length ? h("details", { class: "runs-more", open: moreOpen }, h("summary", {}, `${rest.length} earlier run${rest.length === 1 ? "" : "s"}`), h("ol", { class: "runs", role: "list" }, rest.map(card))) : null;
+      more?.addEventListener("toggle", () => (moreOpen = (more as HTMLDetailsElement).open));
+      replace(root, h("ol", { class: "runs", role: "list" }, view.runs.slice(0, HISTORY_SHOWN).map(card)), more);
     }
     if (focusKey) [...root.querySelectorAll<HTMLElement>("[data-focus-key]")].find((el) => el.dataset.focusKey === focusKey)?.focus();
     // Announce transitions of the newest run while it is active, plus the terminal state of a run
@@ -257,7 +268,7 @@ export function mountTimeline(
       const key = `${newest.runId}:${newest.current}`;
       if (key !== lastAnnounced && (newest.active || lastAnnounced.startsWith(`${newest.runId}:`))) {
         lastAnnounced = key;
-        replace(liveEl, announce(newest, titleOf(newest.scenario)));
+        if (!quiet.has(newest.runId)) replace(liveEl, announce(newest, titleOf(newest.scenario)));
       }
     }
   };
@@ -331,6 +342,9 @@ export function mountTimeline(
     setOutcomes(o) {
       outcomes = o;
       schedule();
+    },
+    setQuiet(ids) {
+      quiet = new Set(ids);
     },
   };
 }

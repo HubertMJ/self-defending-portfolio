@@ -272,6 +272,8 @@ export interface TickerItem {
   key: string;
   type: StreamEvent["type"];
   text: string;
+  /** The run it belongs to, when the timeline attributed it to one. */
+  run?: string;
 }
 
 /**
@@ -280,8 +282,10 @@ export interface TickerItem {
  */
 export function tickerItems(view: TimelineView, max = TICKER_ITEMS): TickerItem[] {
   const out: TickerItem[] = [];
-  const add = (ev: StreamEvent, text: string) => out.push({ at: ts(ev.data.at), key: `${ev.id ?? ""}|${ev.type}|${ev.data.at}|${text}`, type: ev.type, text });
-  for (const ev of [...view.runs.flatMap((r) => r.events), ...view.unmatched]) {
+  let run: string | undefined;
+  const add = (ev: StreamEvent, text: string) => out.push({ at: ts(ev.data.at), key: `${ev.id ?? ""}|${ev.type}|${ev.data.at}|${text}`, type: ev.type, text, ...(run ? { run } : {}) });
+  for (const [ev, owner] of [...view.runs.flatMap((r) => r.events.map((e) => [e, r.runId] as const)), ...view.unmatched.map((e) => [e, undefined] as const)]) {
+    run = owner;
     switch (ev.type) {
       case "run":
         add(ev, `${ev.data.scenario}: ${STATE_WORD[ev.data.state] ?? ev.data.state}`);
@@ -374,6 +378,8 @@ export interface EvidenceHandle {
   setLoading(loading: boolean): void;
   /** The newest run GET /api/runs knows, named on the card until its events arrive. */
   setLatest(summary: RunSummary): void;
+  /** Runs the status strip announces (the visitor's own): the ticker's announcer keeps quiet about them. */
+  setQuiet(runIds: readonly string[]): void;
   /**
    * Whether #evidence can be seen (its section is not folded away). While it cannot, only the hero's
    * card is drawn; the ticker, the liveness line and the full record are drawn on the way back, and
@@ -414,6 +420,7 @@ export function mountEvidence(
   let primed = false;
   let lastKey = "";
   let active = true;
+  let quiet: ReadonlySet<string> = new Set();
 
   const ctxFor = (run: RunView, now: number): EvidenceContext => ({ title: titles.get(run.scenario) ?? run.scenario, now, details: details.get(run.scenario), commands });
 
@@ -461,7 +468,8 @@ export function mountEvidence(
     const fresh = wasPrimed ? items.filter((i) => !seen.has(i.key)) : [];
     seen = new Set(items.map((i) => i.key));
     replace(section.ticker, renderTicker(items, { now, since, connected, tickAt: live.tickAt, fresh: new Set(fresh.map((i) => i.key)) }));
-    if (fresh.length) replace(section.announce, `New event${fresh.length === 1 ? "" : "s"}: ${fresh.map((i) => i.text).join("; ")}`);
+    const spoken = fresh.filter((i) => !i.run || !quiet.has(i.run));
+    if (spoken.length) replace(section.announce, `New event${spoken.length === 1 ? "" : "s"}: ${spoken.map((i) => i.text).join("; ")}`);
   };
 
   const drawLiveness = () => {
@@ -539,6 +547,9 @@ export function mountEvidence(
       latest = summary;
       loading = false;
       drawRun();
+    },
+    setQuiet(ids) {
+      quiet = new Set(ids);
     },
     setActive(on) {
       if (on === active) return;

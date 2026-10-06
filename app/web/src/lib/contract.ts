@@ -759,7 +759,9 @@ function parseCommand(v: unknown): CatalogueCommand | null {
     control: isStr(v.control) ? cap(v.control, 200) : "",
     detection: isStr(v.detection) ? cap(v.detection, 200) : undefined,
     response: isStr(v.response) ? cap(v.response, 40) : undefined,
-    explain: isStr(v.explain) ? cap(v.explain, 400) : "",
+    // The API's own bound (scenarios.go maxExplain): the dns-exfil text runs past 600 characters, and
+    // the part a shorter cap cut was the sentence that sends the visitor to the SIEM.
+    explain: isStr(v.explain) ? cap(v.explain, 2000) : "",
   };
 }
 
@@ -1273,6 +1275,18 @@ function parseStep(v: unknown): CorrelationStep | null {
   };
 }
 
+/**
+ * Talon's records carry whole seconds (its log line's clock), while Falco, the audit log and Hubble
+ * carry milliseconds: a Talon step at 09:57:19.000 happened somewhere in that second, and listed by its
+ * face value it lands before the Falco alert at .810 that caused it. Such a step is shown "to the
+ * second" and ordered by the end of its second (Talon logs after the API server acted).
+ */
+export function secondPrecision(s: CorrelationStep): boolean {
+  return s.source === "talon" && Date.parse(s.at) % 1000 === 0;
+}
+
+const stepOrder = (s: CorrelationStep): number => Date.parse(s.at) + (secondPrecision(s) ? 999 : 0);
+
 function parseIncident(v: unknown): CorrelationIncident | null {
   if (!isObj(v) || !isStr(v.id) || !/^[0-9a-f]{16}$/.test(v.id) || !isStr(v.kind) || !/^[a-z][a-z-]{0,39}$/.test(v.kind)) return null;
   if (!isTime(v.first_at) || !isTime(v.last_at)) return null;
@@ -1292,7 +1306,7 @@ function parseIncident(v: unknown): CorrelationIncident | null {
     operator_test: v.operator_test === true && v.kind === "exec-outside-api",
     ttd_ms: optMs(v.ttd_ms),
     tti_ms: optMs(v.tti_ms),
-    steps: steps.sort((a, b) => Date.parse(a.at) - Date.parse(b.at)),
+    steps: steps.sort((a, b) => stepOrder(a) - stepOrder(b)),
     evidence: Array.isArray(v.evidence)
       ? v.evidence
           .filter((e): e is Obj => isObj(e) && (EVIDENCE_TYPES as readonly unknown[]).includes(e.type) && isStr(e.id) && /^[A-Za-z0-9_-]{1,64}$/.test(e.id) && publishable(e.id))

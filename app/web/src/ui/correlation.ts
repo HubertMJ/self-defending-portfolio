@@ -11,34 +11,25 @@
 // only figures the page derives (the p95s) say what they are taken over.
 
 import type { ApiClient, Result } from "../lib/api";
-import type { Correlation, CorrelationIncident, CorrelationStep, RuleIndex, SiemRule } from "../lib/contract";
+import { type Correlation, type CorrelationIncident, type CorrelationStep, type RuleIndex, type SiemRule, secondPrecision } from "../lib/contract";
 import { h, refreshRelative, replace, setText, timeEl, plClock, when, whenEl } from "../lib/dom";
 import { commitUrl } from "../lib/provenance";
+import { type ScenarioState, kindLabel } from "../lib/runstatus";
 import { formatDuration } from "../lib/timeline";
-import { attackUrl, extLink, sourceUrl } from "./common";
+import { attackUrl, extLink, pulse, sourceUrl } from "./common";
 import { type Tone, statusChip } from "./posture";
 
 /** Polled while the page is visible; an API without the endpoint (a 404) is asked again after 10 min. */
 export const POLL_MS = 60_000;
+/** While a filing for the visitor's own run is awaited (lib/runstatus.ts siemPending). */
+export const EAGER_POLL_MS = 20_000;
 export const POLL_404_MS = 10 * 60_000;
 /** Incidents drawn in full; older ones are listed one line each below them. */
 export const BOARD_INCIDENTS = 6;
 /** Steps drawn per incident; the rest are in the raw JSON. */
 export const INCIDENT_STEPS = 12;
 
-/** What each incident kind means, in the page's words. A Map: a kind such as "constructor" finds nothing. */
-const KINDS: ReadonlyMap<string, string> = new Map([
-  ["staged-attack", "Staged attack"],
-  ["contained-intrusion", "Contained intrusion"],
-  ["dns-exfil", "DNS exfiltration"],
-  ["policy-probing", "Policy probing"],
-  ["prevented-not-detected", "Prevented, not detected"],
-  ["detection-missing", "Detection missing"],
-  ["exec-outside-api", "Exec outside the API"],
-  ["twin-dwell", "Unguarded twin: dwell time"],
-]);
-/** An unknown kind (a newer API) reads as a plain "Incident": the page names only kinds it knows. */
-export const kindLabel = (kind: string): string => KINDS.get(kind) ?? "Incident";
+export { kindLabel };
 
 const SEVERITY_TONE: Record<CorrelationIncident["severity"], Tone> = { critical: "critical", high: "critical", medium: "warning", low: "neutral", unknown: "neutral" };
 
@@ -60,33 +51,44 @@ export function percentile(values: number[], p: number): number | undefined {
 
 const RULES_TONE: Record<Correlation["rules"]["status"], Tone> = { applied: "good", refused: "critical", failed: "critical", stale: "warning", unknown: "neutral" };
 
-/** "SIEM health · rules applied at <commit> <when> · ingest ok · evidence not rewritten · disk ok · checked <when>". */
-export function renderHealth(c: Correlation, now: number): HTMLElement {
+/**
+ * "SIEM health", folded: rules applied at <commit> <when> · ingest ok · evidence not rewritten · disk
+ * ok · checked <when>, and the ingest lag per source. A first-time visitor meets the scenario and the
+ * incidents first; the plumbing is one click away, and its summary names any check that is not ok.
+ */
+export function renderHealth(c: Correlation, now: number, open = false): HTMLElement {
   const commit = c.rules.commit;
   const url = commit ? commitUrl(commit) : null;
   const ingest: [Tone, string] = c.health.ingest === "ok" ? ["good", "ingest ok"] : c.health.ingest === "silent" ? ["critical", "ingest silent"] : ["neutral", "ingest unknown"];
   const evidence: [Tone, string] =
     c.health.evidence_rewritten === false ? ["good", "evidence not rewritten"] : c.health.evidence_rewritten === true ? ["critical", "evidence rewrite detected"] : ["neutral", "evidence rewrite check unknown"];
   const disk: [Tone, string] = c.health.disk === "ok" ? ["good", "disk ok"] : c.health.disk === "high" ? ["warning", "disk high"] : ["neutral", "disk unknown"];
+  const rules: [Tone, string] = [RULES_TONE[c.rules.status], `rules ${c.rules.status}`];
+  const notOk = [rules, ingest, evidence, disk].filter(([tone]) => tone !== "good");
   return h(
-    "div",
-    { class: "corr-health", "data-ingest": c.health.ingest, "data-disk": c.health.disk, "data-rules": c.rules.status },
-    h("h3", { class: "panel-title" }, "SIEM health"),
+    "details",
+    { class: "corr-healthfold", open },
+    h("summary", {}, h("h3", { class: "panel-title corr-healthfold__title" }, "SIEM health"), " ", notOk.length ? notOk.map(([tone, word]) => statusChip(tone, word)) : statusChip("good", "every check ok")),
     h(
-      "ul",
-      { class: "corr-health__list", role: "list" },
+      "div",
+      { class: "corr-health", "data-ingest": c.health.ingest, "data-disk": c.health.disk, "data-rules": c.rules.status },
       h(
-        "li",
-        { class: "corr-health__rules" },
-        statusChip(RULES_TONE[c.rules.status], `rules ${c.rules.status}`),
-        url ? [" at commit ", extLink(url, h("code", {}, commit.slice(0, 7)))] : " (commit unknown)",
-        c.rules.applied_at ? [", applied ", whenEl(c.rules.applied_at, now)] : null,
+        "ul",
+        { class: "corr-health__list", role: "list" },
+        h(
+          "li",
+          { class: "corr-health__rules" },
+          statusChip(...rules),
+          url ? [" at commit ", extLink(url, h("code", {}, commit.slice(0, 7)))] : " (commit unknown)",
+          c.rules.applied_at ? [", applied ", whenEl(c.rules.applied_at, now)] : null,
+        ),
+        h("li", {}, statusChip(...ingest)),
+        h("li", {}, statusChip(...evidence)),
+        h("li", {}, statusChip(...disk)),
       ),
-      h("li", {}, statusChip(...ingest)),
-      h("li", {}, statusChip(...evidence)),
-      h("li", {}, statusChip(...disk)),
+      c.checked_at ? h("p", { class: "small corr-health__checked" }, "Checked by the API ", whenEl(c.checked_at, now, { class: "corr-health__at" }), ". Alarms are the SIEM's own alerts; this line is where they show.") : null,
+      lagLine(c.metrics),
     ),
-    c.checked_at ? h("p", { class: "small corr-health__checked" }, "Checked by the API ", whenEl(c.checked_at, now, { class: "corr-health__at" }), ". Alarms are the SIEM's own alerts; this line is where they show.") : null,
   );
 }
 
@@ -127,7 +129,7 @@ export function renderMetrics(c: Correlation, now: number): HTMLElement {
     ]),
     metricTile("Host findings", String(m.host_findings), m.host_findings > 0 ? "warning" : "good", m.host_findings > 0 ? "on the VM hosts" : "none", ["counted only: a host finding names users and addresses, which this page never shows"]),
   );
-  return h("div", {}, tiles, lagLine(m));
+  return h("div", {}, tiles);
 }
 
 /** A lag over an hour reads "> 1 h" (an absurd value is not spelled out); a negative one (clock skew) as it is, in ms (formatDuration). */
@@ -154,6 +156,8 @@ export interface BoardContext {
   rules: ReadonlyMap<string, SiemRule>;
   /** The commit the rule files are linked at. */
   commit: string;
+  /** The visitor's own runs in this page view: their incidents are shown in full, pinned first. */
+  own?: ReadonlySet<string>;
 }
 
 /** "T1046, T1048.003", each linked to its MITRE page. */
@@ -203,11 +207,16 @@ function stepItem(s: CorrelationStep, n: number, t0: number, ctx: BoardContext):
   const rule = ruleRef(s, ctx);
   const count = countEl(s, n);
   const lead = !!rule || !!count;
+  const coarse = secondPrecision(s);
   return h(
     "li",
-    { class: "corr-step", "data-source": s.source },
-    timeEl(s.at, plClock(s.at, ctx.now, { ms: true }), { class: "corr-step__at" }),
-    delta > 0 ? h("span", { class: "corr-step__delta" }, ` +${formatDuration(delta)}`) : null,
+    { class: "corr-step", "data-source": s.source, "data-precision": coarse ? "s" : "ms" },
+    timeEl(s.at, plClock(s.at, ctx.now, { ms: !coarse }), { class: "corr-step__at" }),
+    coarse
+      ? h("span", { class: "corr-step__prec", title: "Talon records whole seconds: this step is listed by the end of its second" }, " (to the second)")
+      : delta > 0
+        ? h("span", { class: "corr-step__delta" }, ` +${formatDuration(delta)}`)
+        : null,
     " ",
     h("span", { class: `tag tag--src tag--${s.source}` }, SOURCE_WORD[s.source]),
     " ",
@@ -223,13 +232,15 @@ function stepItem(s: CorrelationStep, n: number, t0: number, ctx: BoardContext):
   );
 }
 
-export function renderIncident(i: CorrelationIncident, ctx: BoardContext): HTMLElement {
-  const t0 = i.steps.length ? Date.parse(i.steps[0].at) : Date.parse(i.first_at);
+export function renderIncident(i: CorrelationIncident, ctx: BoardContext, tier?: "pinned" | "own"): HTMLElement {
+  // Deltas count from the first step timed to the millisecond; a whole-second Talon step is no origin.
+  const origin = i.steps.find((s) => !secondPrecision(s)) ?? i.steps[0];
+  const t0 = origin ? Date.parse(origin.at) : Date.parse(i.first_at);
   const shown = i.steps.slice(0, INCIDENT_STEPS);
   const more = i.steps.length - shown.length;
   return h(
     "article",
-    { class: "incident", "data-kind": i.kind, "data-severity": i.severity, "data-incident": i.id, "aria-labelledby": `incident-${i.id}` },
+    { class: tier ? `incident incident--${tier}` : "incident", "data-kind": i.kind, "data-severity": i.severity, "data-incident": i.id, "aria-labelledby": `incident-${i.id}` },
     h(
       "header",
       { class: "incident__head" },
@@ -256,6 +267,7 @@ export function renderIncident(i: CorrelationIncident, ctx: BoardContext): HTMLE
     ),
     shown.length ? h("ol", { class: "corr-steps", "aria-label": "Evidence timeline" }, shown.map((s, n) => stepItem(s, n, t0, ctx))) : h("p", { class: "small" }, "No step of this incident is publishable."),
     more > 0 ? h("p", { class: "small" }, `${more} more step${more === 1 ? "" : "s"} in the raw JSON.`) : null,
+    tier === "own" ? h("p", { class: "incident__own" }, "From your run on this page.") : null,
     i.evidence.length
       ? h(
           "p",
@@ -294,26 +306,126 @@ function operatorTests(tests: CorrelationIncident[], now: number): HTMLElement {
   );
 }
 
+/** The kinds that are the project's thesis: caught by correlating sources, where Falco alone says nothing. */
+const PINNED_KINDS: ReadonlySet<string> = new Set(["dns-exfil", "policy-probing", "prevented-not-detected"]);
+const SEVERITY_RANK: Record<string, number> = { critical: 4, high: 3, medium: 2, low: 1 };
+
+/**
+ * Which tier an incident is drawn in. "pinned": caught by correlation, not by Falco (its kind, or a
+ * Falco count of zero), and the visitor's own incidents while their session lasts; "contained": the
+ * contained intrusions Falco and Talon handled on their own, folded into one line; "other": everything
+ * else, as before; "test": the operator's test-suite execs, folded.
+ */
+export function tierOf(i: CorrelationIncident, own: ReadonlySet<string> = new Set()): "pinned" | "contained" | "other" | "test" {
+  if (i.operator_test) return "test";
+  if ((i.run_id && own.has(i.run_id)) || PINNED_KINDS.has(i.kind) || i.falco_events === 0) return "pinned";
+  if (i.kind === "contained-intrusion") return "contained";
+  return "other";
+}
+
+/** "12 intrusions caught and ended · median 692 ms to detect · 14 ms to isolate", over the ones listed. */
+function containedSummary(list: CorrelationIncident[]): string {
+  const med = (xs: (number | null)[]) => percentile(xs.filter((x): x is number => x !== null), 50);
+  const ttd = med(list.map((i) => i.ttd_ms));
+  const tti = med(list.map((i) => i.tti_ms));
+  return [
+    `${list.length} intrusion${list.length === 1 ? "" : "s"} caught and ended`,
+    ttd !== undefined ? `median ${formatDuration(ttd)} to detect` : null,
+    tti !== undefined ? `${ttd !== undefined ? "" : "median "}${formatDuration(tti)} to isolate` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+}
+
 export function renderBoard(c: Correlation, ctx: BoardContext): HTMLElement {
   if (!c.incidents.length) {
     return h("div", { class: "corr-board" }, h("h3", { class: "panel-title" }, "Incidents"), h("p", { class: "empty" }, "No incident in the last 24 hours. The rules run on every event the cluster ships; when one fires, it appears here with its evidence."));
   }
+  const own = ctx.own ?? new Set<string>();
+  const by = (tier: ReturnType<typeof tierOf>) => c.incidents.filter((i) => tierOf(i, own) === tier);
   // The live test suites' own execs (operator_test) are folded into one line, never dropped.
-  const tests = c.incidents.filter((i) => i.operator_test);
-  const rest = c.incidents.filter((i) => !i.operator_test);
-  const full = rest.slice(0, BOARD_INCIDENTS);
-  const older = rest.slice(BOARD_INCIDENTS);
+  const tests = by("test");
+  const isOwn = (i: CorrelationIncident) => !!i.run_id && own.has(i.run_id);
+  // Pinned: the visitor's own first, then the most severe, then the newest (the API's order).
+  const pinned = by("pinned")
+    .map((i, n) => ({ i, n }))
+    .sort((a, b) => Number(isOwn(b.i)) - Number(isOwn(a.i)) || (SEVERITY_RANK[b.i.severity] ?? 0) - (SEVERITY_RANK[a.i.severity] ?? 0) || a.n - b.n)
+    .map((x) => x.i);
+  const pinnedFull = pinned.filter((i, n) => isOwn(i) || n < BOARD_INCIDENTS);
+  const contained = by("contained");
+  const other = by("other");
+  const otherFull = other.slice(0, Math.max(0, BOARD_INCIDENTS - pinnedFull.length));
+  const older = [...pinned.filter((i) => !pinnedFull.includes(i)), ...other.slice(otherFull.length)].sort((a, b) => Date.parse(b.first_at) - Date.parse(a.first_at));
   return h(
     "div",
     { class: "corr-board" },
     h("h3", { class: "panel-title" }, `Incidents, newest first (${c.incidents.length} in the last 24 h)`),
-    full.length ? h("div", { class: "corr-incidents" }, full.map((i) => renderIncident(i, ctx))) : h("p", { class: "empty" }, "No incident in the last 24 hours besides the operator's own test runs."),
+    h(
+      "section",
+      { class: "corr-tier corr-tier--pinned", "aria-labelledby": "corr-pinned-title" },
+      h("h4", { class: "corr-tier__title", id: "corr-pinned-title" }, "Caught by correlation, not by Falco"),
+      pinnedFull.length
+        ? h("div", { class: "corr-incidents" }, pinnedFull.map((i) => renderIncident(i, ctx, isOwn(i) ? "own" : "pinned")))
+        : h("p", { class: "empty" }, contained.length || other.length ? "None in the last 24 hours. Run the DNS exfiltration above and yours appears here." : "No incident in the last 24 hours besides the operator's own test runs."),
+    ),
+    contained.length
+      ? h(
+          "details",
+          { class: "corr-contained" },
+          h("summary", {}, `Contained automatically by Falco + Talon (${contained.length})`),
+          h("p", { class: "small corr-contained__line" }, containedSummary(contained), ". Falco caught each one and Talon ended it on its own; the SIEM filed them afterwards."),
+          h("ol", { class: "corr-older__list" }, contained.map((i) => olderItem(i, ctx.now))),
+        )
+      : null,
+    otherFull.length ? h("div", { class: "corr-incidents corr-incidents--other" }, otherFull.map((i) => renderIncident(i, ctx))) : null,
     tests.length ? operatorTests(tests, ctx.now) : null,
     older.length
       ? h("details", { class: "corr-older" }, h("summary", {}, `${older.length} older incident${older.length === 1 ? "" : "s"}`), h("ol", { class: "corr-older__list" }, older.map((i) => olderItem(i, ctx.now))))
       : null,
     h("p", { class: "small" }, "The whole board as the API publishes it: ", extLink("/api/correlation", "/api/correlation"), " (JSON)."),
   );
+}
+
+// ---------- the SIEM scenario (REPORT point 1) ----------
+
+const PHASE_WORD: Record<ScenarioState["phase"], string> = {
+  idle: "not run yet",
+  running: "running…",
+  waiting: "waiting for the SIEM (≈2 min)…",
+  late: "still waiting: the SIEM is behind, and this board keeps asking",
+  down: "the SIEM is not reachable right now",
+  failed: "the query did not go out; try it early in a fresh session",
+  found: "found it",
+};
+
+/** The chip's words for a state: "found it" links to the incident, wherever on the board it is. */
+export function scenarioChip(state: ScenarioState): (Node | string)[] {
+  if (state.phase === "found" && state.incidentId) return [`${PHASE_WORD.found}: `, h("a", { href: `#incident-${state.incidentId}` }, `the ${(state.severity ?? "").toUpperCase()} incident is below ↓`)];
+  return [PHASE_WORD[state.phase]];
+}
+
+function renderScenario(onRun: () => void): { el: HTMLElement; chip: HTMLElement; btn: HTMLButtonElement; note: HTMLElement } {
+  const btn = h("button", { type: "button", class: "btn btn--attack corr-scenario__btn" }, "Run it in the terminal ↑");
+  btn.addEventListener("click", () => {
+    if (btn.getAttribute("aria-disabled") !== "true") onRun();
+  });
+  const chip = h("span", { class: "corr-scenario__state", "data-phase": "idle" }, PHASE_WORD.idle);
+  const note = h("p", { class: "small corr-scenario__note" }, "Opens a terminal session (it costs one run) and picks the command for you.");
+  const el = h(
+    "div",
+    { class: "corr-scenario" },
+    h("h3", { class: "corr-scenario__title" }, "Make the SIEM catch what Falco cannot."),
+    h(
+      "p",
+      { class: "corr-scenario__lead" },
+      "Falco watches syscalls and never reads DNS. Run ",
+      h("strong", {}, "DNS exfiltration"),
+      " in the terminal and the secret leaves as a name lookup: Falco stays silent, Hubble logs the query, and one to three minutes later the SIEM ties it to your run and raises a CRITICAL incident below.",
+    ),
+    h("div", { class: "corr-scenario__actions" }, btn, h("span", { class: "corr-scenario__statewrap" }, h("span", { class: "corr-scenario__label" }, "Your run: "), chip)),
+    note,
+  );
+  return { el, chip, btn, note };
 }
 
 // ---------- rule library and ATT&CK coverage ----------
@@ -449,6 +561,15 @@ export interface CorrelationHandle {
    * nothing is drawn; the latest answer is drawn on the way back.
    */
   setActive(active: boolean): void;
+  /**
+   * The visitor's own runs and their scenario state (ui/runstatus.ts): their incidents are pinned in
+   * full, the scenario chip follows, and while a filing is awaited the SIEM is asked every EAGER_POLL_MS.
+   */
+  setVisitor(v: { ownRuns: readonly string[]; scenario: ScenarioState; eager: boolean }): void;
+  /** Whether the terminal is on this API: without it the scenario cannot be run from here. */
+  setTerminal(available: boolean): void;
+  /** Pulses an incident's card (the visitor was sent there). */
+  pulse(incidentId: string): void;
 }
 
 /**
@@ -457,9 +578,16 @@ export interface CorrelationHandle {
  */
 export function mountCorrelation(
   section: HTMLElement,
-  mounts: { health: HTMLElement; metrics: HTMLElement; board: HTMLElement; rules: HTMLElement },
+  mounts: { scenario?: HTMLElement; health: HTMLElement; metrics: HTMLElement; board: HTMLElement; rules: HTMLElement },
   api: Pick<ApiClient, "correlation" | "correlationRules">,
   onAvailable?: (available: boolean) => void,
+  opts: {
+    /** Every poll's answer: the incidents while the SIEM is available, null otherwise. */
+    onData?: (c: Correlation | null) => void;
+    /** The scenario's button: take the visitor to the terminal with the DNS exfil picked. */
+    onScenario?: () => void;
+    eagerMs?: number;
+  } = {},
 ): CorrelationHandle {
   let data: Correlation | undefined;
   let index: RuleIndex | null | undefined;
@@ -470,6 +598,28 @@ export function mountCorrelation(
   let timer: ReturnType<typeof setTimeout> | undefined;
   let due = false;
   let active = true;
+  let own: ReadonlySet<string> = new Set();
+  let eager = false;
+  let terminal = true;
+  let scenario: ScenarioState = { phase: "idle" };
+  const pulsed = new Set<string>();
+  let healthOpen = false;
+  const eagerMs = opts.eagerMs ?? EAGER_POLL_MS;
+  const sc = mounts.scenario ? renderScenario(() => opts.onScenario?.()) : null;
+  if (sc && mounts.scenario) replace(mounts.scenario, sc.el);
+
+  /** The scenario's chip and button, patched in place (the board is not redrawn for them). */
+  const drawScenario = () => {
+    if (!sc) return;
+    if (sc.chip.dataset.phase !== scenario.phase || sc.chip.dataset.incident !== (scenario.incidentId ?? "")) {
+      sc.chip.dataset.phase = scenario.phase;
+      sc.chip.dataset.incident = scenario.incidentId ?? "";
+      replace(sc.chip, ...scenarioChip(scenario));
+    }
+    sc.btn.setAttribute("aria-disabled", String(!terminal));
+    replace(sc.note, terminal ? "Opens a terminal session (it costs one run) and picks the command for you." : "The terminal is not on this build of the site right now, so the scenario cannot be run from here.");
+  };
+  drawScenario();
 
   const linkCommit = () => apiCommit || data?.rules.commit || "";
 
@@ -482,7 +632,7 @@ export function mountCorrelation(
     const lag = data.metrics.ingest_lag_ms;
     const counted = (s: CorrelationStep) => (s.count ?? 1) > 1;
     const incidents = data.incidents.map((i) => ({ ...i, steps: i.steps.map((s) => ({ ...s, count: counted(s) })) }));
-    const k = JSON.stringify({ d: { ...data, checked_at: !!data.checked_at, metrics: { ...data.metrics, since: !!data.metrics.since, ingest_lag_ms: lag?.map(([src]) => src) }, incidents }, i: index === undefined ? "u" : index, c: linkCommit() });
+    const k = JSON.stringify({ d: { ...data, checked_at: !!data.checked_at, metrics: { ...data.metrics, since: !!data.metrics.since, ingest_lag_ms: lag?.map(([src]) => src) }, incidents }, i: index === undefined ? "u" : index, c: linkCommit(), o: [...own] });
     const now = Date.now();
     if (!force && k === key) {
       const moveTo = (el: HTMLTimeElement | null, t: string) => {
@@ -494,7 +644,7 @@ export function mountCorrelation(
       moveTo(mounts.health.querySelector<HTMLTimeElement>(".corr-health__at"), data.checked_at);
       moveTo(mounts.metrics.querySelector<HTMLTimeElement>(".corr-since"), data.metrics.since);
       for (const [src, ms] of lag ?? []) {
-        const el = [...mounts.metrics.querySelectorAll<HTMLElement>(".corr-lag__ms")].find((e) => e.dataset.source === src);
+        const el = [...mounts.health.querySelectorAll<HTMLElement>(".corr-lag__ms")].find((e) => e.dataset.source === src);
         if (el) setText(el, lagText(ms));
       }
       for (const i of data.incidents) {
@@ -511,10 +661,24 @@ export function mountCorrelation(
     }
     key = k;
     const rules = new Map((index ?? { rules: [] }).rules.map((r) => [r.id, r]));
-    replace(mounts.health, renderHealth(data, now));
+    // The fold stays as the visitor left it across a redraw.
+    const health = renderHealth(data, now, healthOpen);
+    health.addEventListener("toggle", () => (healthOpen = (health as HTMLDetailsElement).open));
+    replace(mounts.health, health);
     replace(mounts.metrics, renderMetrics(data, now));
-    replace(mounts.board, renderBoard(data, { now, rules, commit: linkCommit() }));
+    replace(mounts.board, renderBoard(data, { now, rules, commit: linkCommit(), own }));
     replace(mounts.rules, renderRuleLibrary(index, linkCommit(), data.incidents));
+    // An incident of the visitor's own run pulses once when it first lands.
+    for (const i of data.incidents) {
+      if (!i.run_id || !own.has(i.run_id) || pulsed.has(i.id)) continue;
+      pulsed.add(i.id);
+      pulseCard(i.id);
+    }
+  };
+
+  const pulseCard = (id: string) => {
+    const card = mounts.board.querySelector<HTMLElement>(`.incident[data-incident="${id}"]`);
+    if (card) pulse(card);
   };
 
   const show = (on: boolean) => {
@@ -554,7 +718,8 @@ export function mountCorrelation(
     } else {
       show(false);
     }
-    schedule(!r.ok && r.status === 404 ? POLL_404_MS : POLL_MS);
+    opts.onData?.(r.ok && r.value.available ? r.value : null);
+    schedule(!r.ok && r.status === 404 ? POLL_404_MS : eager ? eagerMs : POLL_MS);
   };
 
   if (typeof document !== "undefined") {
@@ -575,5 +740,22 @@ export function mountCorrelation(
       active = on;
       draw();
     },
+    setVisitor(v) {
+      scenario = v.scenario;
+      drawScenario();
+      const next = new Set(v.ownRuns);
+      if ([...next].some((r) => !own.has(r))) {
+        own = next;
+        draw();
+      }
+      // Asked sooner while a filing is awaited; back to the minute once it has landed.
+      if (v.eager && !eager) schedule(eagerMs);
+      eager = v.eager;
+    },
+    setTerminal(on) {
+      terminal = on;
+      drawScenario();
+    },
+    pulse: (id) => pulseCard(id),
   };
 }
