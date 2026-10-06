@@ -115,9 +115,10 @@ periodicity and interval logic. Wazuh is not used.
 - OpenSearch and OpenSearch Dashboards 3.9.0 from the official Debian repository (apt signature
   checked), version pinned (ADR 0008), run by systemd as their package users. Security Analytics,
   Alerting, Notifications and Index Management ship in the distribution; Performance Analyzer is
-  disabled. Heap 3 GB; `discovery.type: single-node`; 0 replicas everywhere (`.opensearch-sap-*`
-  checked for yellow health). Security plugin on, no demo configuration (no demo certificates or
-  users); resource sharing for SA objects stays disabled, so access follows roles only.
+  disabled. Heap 3 GB (4 GB since the amendment of 2026-10-06); `discovery.type: single-node`; 0
+  replicas everywhere (`.opensearch-sap-*` checked for yellow health). Security plugin on, no demo
+  configuration (no demo certificates or users); resource sharing for SA objects stays disabled, so
+  access follows roles only.
 - **Data streams, not fixed indices:** one data stream per source - `sdp-falco`, `sdp-talon`,
   `sdp-hubble`, `sdp-k8s-audit`, `sdp-api`, `sdp-host`, `sdp-siem01` (the SIEM host's own sshd and
   auditd) - created with their index templates (explicit mappings, `"dynamic": false`, so ingest never
@@ -600,3 +601,46 @@ canary land with the rules (P3), the incident with the section (P4).
 
 **Still open after P5:** the Hubble DNS rule and its canary (P3), the `dns-exfil` incident with the flag
 match and `falco_events: 0` (P4); L7 closes in those phases.
+
+## Amendment 2026-10-06: the OutOfMemoryError of 2026-10-06
+
+**Context.** After a restart on 2026-10-06, Security Analytics' correlation fan-out filled siem01's
+3 GB heap. The JVM spent ~50 s in back-to-back GC, wrote a 4.35 GB heap dump into
+`/var/lib/opensearch` (the package's `-XX:+HeapDumpOnOutOfMemoryError`) and exited 127. The
+package's unit has no `Restart=`, so the node stayed down until it was started by hand; an emergency
+drop-in was then put on the host by hand. The running JVM also carried the package's `-Xms1g -Xmx1g`
+next to the role's 3 GB: the last occurrence won, but there were two heap settings.
+
+**Decision.** The role (`ansible/roles/opensearch`) now owns:
+- **`Restart=on-failure`**, `RestartSec=30`, at most three starts in 600 s
+  (`/etc/systemd/system/opensearch.service.d/sdp-restart.conf`, the hand-made drop-in's settings). A
+  crash, whether a non-zero exit or the kernel's OOM kill, brings the node back after 30 s. A stop
+  stays a stop: SIGTERM's exit 143 counts as success. A node that dies on every start gives up after
+  three tries and is left failed for the operator (`systemctl reset-failed opensearch`), instead of
+  looping. Restart= takes effect with a daemon-reload and does not restart the node.
+- **`-XX:+ExitOnOutOfMemoryError`**: the first OutOfMemoryError ends the JVM at once (exit 3), so the
+  node never limps on with threads the error killed, and systemd restarts it.
+- **No heap dumps** (`-XX:-HeapDumpOnOutOfMemoryError`; the package's line is commented out). A dump
+  is a copy of the heap: documents, request bodies, credentials and key material the node held. It
+  lands in a file outside every OpenSearch permission, goes into the VM's backups, and takes the
+  heap's size of disk on every crash. The GC log and the node stats are enough to diagnose an OOM
+  here. A dump that is really needed is taken once, by hand, into a 0700 directory and deleted
+  afterwards.
+- **Heap 4 GB, set once.** The role comments out the package's `-Xms1g`/`-Xmx1g` in `jvm.options`,
+  so `jvm.options.d/sdp-heap.options` holds the only heap setting. Measured with the 3 GB heap: the
+  JVM's RSS was 3.85 GB, Dashboards used 0.23 GB, Fluent Bit stayed under its 192 MB cap and the sync
+  under its 512 MB cap; the VM has no swap. At 4 GB, ~5.8 GB of the 7.7 GB are in use and the rest is
+  page cache. OpenSearch caps direct memory at half the heap, so the worst case is tighter. The role
+  asserts that the heap leaves at least 3 GB of the host's memory, which rules out 5 GB on this VM.
+  Going a little over the usual "half the RAM" is accepted: the data set is small (L13: ≤ 300 MB of
+  ingest a day, 30 days), and SA needs the heap more than Lucene needs the cache.
+- The tests ask for less at a time: `tests/siem/sync_check.py` caps its findings query at 1000 per
+  log type (it asked for 10000).
+
+`make siem-verify` checks `Restart=on-failure`, the running JVM's arguments (one `-Xms`/`-Xmx` at the
+role's heap, exit on OutOfMemoryError, heap dumps off) and that no `*.hprof` is in
+`/var/lib/opensearch`. `tests/smoke.sh` applies the JVM and unit tasks (tag `opensearch_service`)
+twice to a stand-in for the package; the second run must change nothing.
+
+**Not done.** This limits what an OutOfMemoryError costs, not what causes it: the correlation fan-out
+itself is not bounded here.
