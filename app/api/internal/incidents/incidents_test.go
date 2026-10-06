@@ -419,7 +419,10 @@ func TestExecOutsideAPI(t *testing.T) {
 		t.Fatalf("%d exec-outside-api incidents, want 3 (one per pod): %v", len(byTitle), byTitle)
 	}
 	two := byTitle["2 exec/attach/port-forward sessions into sandbox/network-tool-b2c3d4e5f6 outside the API"]
-	if len(two.Steps) != 2 || two.Steps[0].Detail != "create pods/exec on sandbox/network-tool-b2c3d4e5f6 not by the API, response 101" || len(two.Evidence) != 3 {
+	// The two sessions publish the same evidence (the principal never is): one step, counted twice,
+	// at the first session's time; last_at is the second's.
+	if len(two.Steps) != 1 || two.Steps[0].Detail != "create pods/exec on sandbox/network-tool-b2c3d4e5f6 not by the API, response 101" ||
+		two.Steps[0].Count != 2 || !two.Steps[0].At.Equal(t0) || !two.LastAt.Equal(t0.Add(5*time.Second)) || len(two.Evidence) != 3 {
 		t.Fatalf("two sessions: %+v", two)
 	}
 	if _, ok := byTitle["Attach to sandbox/shell-in-container-a1b2c3d4e5 outside the API"]; !ok {
@@ -535,8 +538,9 @@ func TestCaps(t *testing.T) {
 		f.findings["sdp_k8s_audit"] = append(f.findings["sdp_k8s_audit"], finding(fmt.Sprintf("ex-%d", i), t0.Add(time.Duration(i)*time.Second),
 			"Exec", nil, map[string]any{"audit.object.subresource": "exec", "audit.object.resource": "pods", "k8s.pod.ref": fmt.Sprintf("sandbox_p-%d", i), "user.name": "system:admin"}))
 	}
+	// 70 different Falco rules: steps that are not the same evidence, so none collapses.
 	for i := 0; i < 70; i++ {
-		f.findings["sdp_falco"] = append(f.findings["sdp_falco"], falcoFinding(fmt.Sprintf("fa-%d", i), t0.Add(time.Duration(i)*time.Second), cmpRef, "Terminal shell in container"))
+		f.findings["sdp_falco"] = append(f.findings["sdp_falco"], falcoFinding(fmt.Sprintf("fa-%d", i), t0.Add(time.Duration(i)*time.Second), cmpRef, fmt.Sprintf("Terminal shell %d", i)))
 	}
 	f.findings["sdp_talon"] = []siem.Finding{talonFinding("ta", t0.Add(time.Second), cmpRef, "Terminate Pod", "kubernetes:terminate")}
 	tr := newTracker(t, f, &clock{t: t0.Add(time.Hour)})
@@ -663,6 +667,11 @@ func TestViewLeaksNothing(t *testing.T) {
 		"audit.verb": "patch " + poison, "audit.object.resource": "pods", "k8s.pod.ref": termRef, "user.name": talonUser, "source.ip": "hm1:aabbccddeeff0011"}))
 	f.hits["sdp-hubble"] = append(f.hits["sdp-hubble"], hit("sdp-hubble", "h9", t0.Add(28*time.Second), map[string]any{
 		"hubble.verdict": "DROPPED", "hubble.drop_reason": poison, "k8s.pod.ref": termRef, "dns.query": "sdp-" + flagHex + ".x.exfil.sdp.test."}))
+	// A second lookup of the run's DNS query, its direction poisoned: one step with f-dns-1, whose
+	// detail lists both directions.
+	f.findings["sdp_hubble"] = append(f.findings["sdp_hubble"], finding("f-dns-p", t0.Add(20200*time.Millisecond), "DNS query carries an exfil label", nil,
+		map[string]any{"dns.query": "sdp-" + flagHex + ".x.exfil.sdp.test.", "hubble.verdict": "FORWARDED", "hubble.traffic_direction": poison,
+			"hubble.l4.protocol": "udp", "hubble.l4.destination_port": 53, "k8s.pod.ref": termRef}))
 	f.alerts = []siem.Alert{{ID: "al-p", MonitorName: "sdp-git: policy probing " + poison, State: "ACTIVE", StartTime: ptrInt(t0.UnixMilli()),
 		Agg: &siem.AlertAgg{BucketKeys: []any{"hm1:0011223344556677", "system:serviceaccount:x:y"}}}}
 	clk := &clock{t: t0}
@@ -673,6 +682,9 @@ func TestViewLeaksNothing(t *testing.T) {
 	v := tr.View()
 	if len(v.Incidents) < 6 {
 		t.Fatalf("only %d incidents: the leak test must see every kind", len(v.Incidents))
+	}
+	if dx := one(t, v, KindDNSExfil); !hasStep(dx, "DNS query under the exfil zone") || dx.Steps[len(dx.Steps)-1].Count != 2 {
+		t.Fatalf("the leak test must see a collapsed step: %+v", dx.Steps)
 	}
 	b, _ := json.Marshal(v)
 	for _, ip := range ipv4.FindAllString(string(b), -1) {
@@ -1039,6 +1051,97 @@ func TestOneDocumentOneEvent(t *testing.T) {
 	dx := one(t, v, KindDNSExfil)
 	if dx.FlagMatch == nil || !*dx.FlagMatch || dx.Evidence[len(dx.Evidence)-1].ID != "f-dns-1" {
 		t.Fatalf("dns on a searched document: %+v", dx)
+	}
+}
+
+// Records that are the same evidence (source, rule, pod, command, kind) are one step with a count:
+// a DNS lookup's request and response, both directions, at the earliest record's time, citing the
+// earliest maxStepEvidence ids; another rule, another verdict or another command is a step of its own.
+func TestSameEvidenceOneStep(t *testing.T) {
+	f := newFake()
+	terminalRun(f, "sdp-"+flagHex) // f-dns-1: FORWARDED EGRESS at 20.101 s, under command 3
+	lookup := func(id string, at time.Time, rule, verdict, dir string) siem.Finding {
+		return finding(id, at, rule, []string{"sdp_hubble", "attack.t1048.003"}, map[string]any{
+			"dns.query": "sdp-" + flagHex + ".x.exfil.sdp.test.", "hubble.verdict": verdict, "hubble.traffic_direction": dir,
+			"hubble.l4.protocol": "udp", "hubble.l4.destination_port": 53, "k8s.pod.ref": termRef})
+	}
+	const rule = "DNS query carries an exfil label"
+	// The earliest record is a response (INGRESS): the directions are listed sorted, not first seen.
+	f.findings["sdp_hubble"] = append(f.findings["sdp_hubble"], lookup("f-dns-0", t0.Add(20050*time.Millisecond), rule, "FORWARDED", "INGRESS"))
+	for i := 2; i <= 11; i++ {
+		dir := "EGRESS"
+		if i%2 == 0 {
+			dir = "INGRESS"
+		}
+		f.findings["sdp_hubble"] = append(f.findings["sdp_hubble"], lookup(fmt.Sprintf("f-dns-%d", i), t0.Add(20*time.Second+time.Duration(i)*100*time.Millisecond), rule, "FORWARDED", dir))
+	}
+	f.findings["sdp_hubble"] = append(f.findings["sdp_hubble"],
+		lookup("f-dns-rule", t0.Add(20250*time.Millisecond), "Hubble - flag-shaped DNS lookup", "FORWARDED", "EGRESS"),
+		lookup("f-dns-drop", t0.Add(20350*time.Millisecond), rule, "DROPPED", "EGRESS"),
+		lookup("f-dns-late", t0.Add(41*time.Second), rule, "FORWARDED", "EGRESS"))
+	f.hits["sdp-api"] = append(f.hits["sdp-api"], apiCommand("c5", t0.Add(40*time.Second), termRun, termRef, 4, "dns-exfil", "T1048.003", "exfiltration", "started"))
+	compareRun(f)
+	quarantineRun(f)
+	clk := &clock{t: t0}
+	tr := newTracker(t, f, clk)
+	registerTerminalFlag(tr, flagHex)
+	clk.Set(t0.Add(3 * time.Hour))
+	tr.Poll(context.Background())
+	v := tr.View()
+	// Every kind's steps stay in time order (a check adds its records in its own order).
+	for _, inc := range v.Incidents {
+		for i := 1; i < len(inc.Steps); i++ {
+			if inc.Steps[i].At.Before(inc.Steps[i-1].At) {
+				t.Errorf("%s: step %d before step %d", inc.Kind, i, i-1)
+			}
+		}
+	}
+	inc := one(t, v, KindDNSExfil)
+	b, _ := json.MarshalIndent(inc.Steps, "", " ")
+	type want struct {
+		at     time.Duration
+		source string
+		seq    int
+		count  int
+		detail string
+	}
+	pod := "sandbox/terminal-3755e65530"
+	wants := []want{
+		{9 * time.Second, "api", 2, 0, "command read-flag (T1552.001, credentials) started on " + pod},
+		{19 * time.Second, "api", 3, 0, "command dns-exfil (T1048.003, exfiltration) started on " + pod},
+		{20050 * time.Millisecond, "hubble", 3, 12, "DNS query under the exfil zone from " + pod + ", FORWARDED egress+ingress udp/53"},
+		{20250 * time.Millisecond, "hubble", 3, 0, "DNS query under the exfil zone from " + pod + ", FORWARDED egress udp/53"},
+		{20350 * time.Millisecond, "hubble", 3, 0, "DNS query under the exfil zone from " + pod + ", DROPPED egress udp/53"},
+		{41 * time.Second, "hubble", 4, 0, "DNS query under the exfil zone from " + pod + ", FORWARDED egress udp/53"},
+	}
+	if len(inc.Steps) != len(wants) {
+		t.Fatalf("%d steps, want %d: %s", len(inc.Steps), len(wants), b)
+	}
+	for i, w := range wants {
+		st := inc.Steps[i]
+		if !st.At.Equal(t0.Add(w.at)) || st.Source != w.source || st.CommandSeq == nil || *st.CommandSeq != w.seq || st.Count != w.count || st.Detail != w.detail {
+			t.Errorf("step %d: %+v, want %+v", i, st, w)
+		}
+	}
+	if inc.Steps[3].Rule != "Hubble - flag-shaped DNS lookup" {
+		t.Errorf("rule step: %+v", inc.Steps[3])
+	}
+	// "count" is published for a collapsed step only.
+	if one, _ := json.Marshal(inc.Steps[2]); !strings.Contains(string(one), `"count":12`) {
+		t.Errorf("collapsed step JSON %s", one)
+	}
+	if single, _ := json.Marshal(inc.Steps[3]); strings.Contains(string(single), `"count"`) {
+		t.Errorf("single step JSON %s", single)
+	}
+	var ids []string
+	for _, e := range inc.Evidence {
+		ids = append(ids, e.ID)
+	}
+	if got := strings.Join(ids, ","); got != "c2,c3,f-dns-0,f-dns-1,f-dns-2,f-dns-3,f-dns-4,f-dns-rule,f-dns-drop,f-dns-late" {
+		t.Errorf("evidence %s", got)
+	}
+	if !inc.FirstAt.Equal(t0.Add(9*time.Second)) || !inc.LastAt.Equal(t0.Add(41*time.Second)) {
+		t.Errorf("times %v %v", inc.FirstAt, inc.LastAt)
 	}
 }
 

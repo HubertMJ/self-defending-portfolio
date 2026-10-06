@@ -67,7 +67,8 @@ type Incident struct {
 	Evidence    []Evidence `json:"evidence"`
 }
 
-// Step is one piece of an incident's evidence in time order.
+// Step is one piece of an incident's evidence in time order. Count is the number of records that are
+// the same evidence (ADR 0036 section 4), omitted for one.
 type Step struct {
 	At         time.Time `json:"at"`
 	Source     string    `json:"source"`
@@ -75,6 +76,7 @@ type Step struct {
 	RuleID     string    `json:"rule_id"`
 	CommandSeq *int      `json:"command_seq"`
 	Detail     string    `json:"detail"`
+	Count      int       `json:"count,omitempty"`
 }
 
 // Evidence is an id in the SIEM an incident is built from.

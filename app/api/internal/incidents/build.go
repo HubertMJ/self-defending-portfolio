@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -31,6 +32,8 @@ const (
 	maxEvidence  = 50
 	// maxExtraFindings: more finding ids kept for one document beyond its first.
 	maxExtraFindings = 4
+	// maxStepEvidence: ids one step cites - a document's findings, or a collapsed step's records.
+	maxStepEvidence = 1 + maxExtraFindings
 )
 
 // Windows of the checks.
@@ -653,15 +656,28 @@ func (ix *index) finish(d *draft) Incident {
 	}
 
 	var findings []string
+	// Records that are the same evidence - same source, rule, pod, command and kind (the published
+	// detail without the traffic direction: a Hubble DNS lookup's request and response, seen as trace
+	// and L7 events) - are one step with a count, at the earliest record's time, citing at most
+	// maxStepEvidence ids. Groups keep the order of their first record.
+	type group struct {
+		seq  int
+		recs []*record
+	}
+	var groups []*group
+	byKey := map[string]*group{}
 	for _, r := range d.recs {
-		st := Step{At: r.at, Source: r.source, Rule: clean(r.rule, maxRule), Detail: clean(ix.t.detail(r), maxDetail)}
-		if r.rule != "" {
-			st.RuleID = ix.t.cfg.Rules.RuleID(r.rule)
+		seq := ix.commandSeq(r)
+		kind := *r
+		kind.direction = ""
+		k := strings.Join([]string{r.source, r.rule, r.ref, strconv.Itoa(seq), ix.t.detail(&kind)}, "\x00")
+		g := byKey[k]
+		if g == nil {
+			g = &group{seq: seq}
+			byKey[k] = g
+			groups = append(groups, g)
 		}
-		if seq := ix.commandSeq(r); seq > 0 {
-			st.CommandSeq = &seq
-		}
-		inc.Steps = append(inc.Steps, st)
+		g.recs = append(g.recs, r)
 		for _, a := range r.attack {
 			inc.Attack = appendUnique(inc.Attack, a)
 		}
@@ -672,18 +688,56 @@ func (ix *index) finish(d *draft) Incident {
 			findings = append(findings, r.findingID)
 		}
 		findings = append(findings, r.extraFindings...)
-		inc.Evidence = append(inc.Evidence, evidenceOf(r))
-		for _, id := range r.extraFindings {
-			inc.Evidence = append(inc.Evidence, Evidence{Type: "finding", ID: id})
-		}
 		if r.source == "falco" && d.Kind != KindDNSExfil {
 			inc.FalcoEvents++
 		}
 	}
+	// last: the latest record of a step, for last_at.
+	type timedStep struct {
+		Step
+		last time.Time
+	}
+	var steps []timedStep
+	for _, g := range groups {
+		sort.SliceStable(g.recs, func(i, j int) bool { return g.recs[i].at.Before(g.recs[j].at) })
+		r0 := g.recs[0]
+		shown := *r0
+		var dirs []string
+		var ev []Evidence
+		for _, r := range g.recs {
+			if r.direction != "" {
+				dirs = appendUnique(dirs, strings.ToLower(r.direction))
+			}
+			ev = append(ev, evidenceOf(r))
+			for _, id := range r.extraFindings {
+				ev = append(ev, Evidence{Type: "finding", ID: id})
+			}
+		}
+		if len(dirs) > 1 {
+			sort.Strings(dirs)
+			shown.direction = strings.Join(dirs, "+")
+		}
+		st := Step{At: r0.at, Source: r0.source, Rule: clean(r0.rule, maxRule), Detail: clean(ix.t.detail(&shown), maxDetail)}
+		if r0.rule != "" {
+			st.RuleID = ix.t.cfg.Rules.RuleID(r0.rule)
+		}
+		if g.seq > 0 {
+			seq := g.seq
+			st.CommandSeq = &seq
+		}
+		if len(g.recs) > 1 {
+			st.Count = len(g.recs)
+		}
+		if len(ev) > maxStepEvidence {
+			ev = ev[:maxStepEvidence]
+		}
+		inc.Evidence = append(inc.Evidence, ev...)
+		steps = append(steps, timedStep{st, g.recs[len(g.recs)-1].at})
+	}
 	for _, st := range d.extra {
 		st.Rule = clean(st.Rule, maxRule)
 		st.Detail = clean(st.Detail, maxDetail)
-		inc.Steps = append(inc.Steps, st)
+		steps = append(steps, timedStep{st, st.At})
 	}
 	inc.Evidence = append(inc.Evidence, d.ev...)
 	for _, e := range d.ev {
@@ -707,16 +761,17 @@ func (ix *index) finish(d *draft) Incident {
 	if len(inc.Evidence) > maxEvidence {
 		inc.Evidence = inc.Evidence[:maxEvidence]
 	}
-	sort.SliceStable(inc.Steps, func(i, j int) bool { return inc.Steps[i].At.Before(inc.Steps[j].At) })
-	if len(inc.Steps) > maxSteps {
-		inc.Steps = inc.Steps[:maxSteps]
+	sort.SliceStable(steps, func(i, j int) bool { return steps[i].At.Before(steps[j].At) })
+	if len(steps) > maxSteps {
+		steps = steps[:maxSteps]
 	}
-	if len(inc.Steps) > 0 {
-		inc.FirstAt, inc.LastAt = inc.Steps[0].At, inc.Steps[0].At
-		for _, st := range inc.Steps {
-			if st.At.After(inc.LastAt) {
-				inc.LastAt = st.At
-			}
+	if len(steps) > 0 {
+		inc.FirstAt, inc.LastAt = steps[0].At, steps[0].At
+	}
+	for _, st := range steps {
+		inc.Steps = append(inc.Steps, st.Step)
+		if st.last.After(inc.LastAt) {
+			inc.LastAt = st.last
 		}
 	}
 	return inc
