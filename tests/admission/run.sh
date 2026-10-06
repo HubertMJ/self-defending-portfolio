@@ -108,7 +108,11 @@ for manifest in "${MANIFESTS[@]}"; do
 done
 sed -i "s#SCENARIO_IMAGE#$SCENARIO_IMAGE#" "$WORK_DIR"/*.yaml
 
-for doc in "$WORK_DIR"/*.yaml; do
+# Admitted Pods last: the canary of the policy-probing monitor (siem/canaries.yaml) is this run, and
+# the monitor wants the allowed create after the last refusal.
+admitted_re='^[[:space:]]*tests\.hubertjablon\.ski/expect-admitted:[[:space:]]*"?true"?$'
+mapfile -t docs < <(grep -LE "$admitted_re" "$WORK_DIR"/*.yaml; grep -lE "$admitted_re" "$WORK_DIR"/*.yaml)
+for doc in "${docs[@]}"; do
   expected=$(sed -n 's#^[[:space:]]*tests\.hubertjablon\.ski/expect-policy:[[:space:]]*##p' "$doc")
   name=$(sed -n 's/^  name:[[:space:]]*//p' "$doc" | head -1)
   if grep -qE '^[[:space:]]*tests\.hubertjablon\.ski/expect-admitted:[[:space:]]*"?true"?$' "$doc"; then

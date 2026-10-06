@@ -157,7 +157,16 @@ def main():
                         out["rules"][sid] = out["rules"].get(sid, 0) + 1
         for name, m in snap["monitors"].items():
             code, res = c.req("GET", f"/_plugins/_alerting/monitors/alerts?monitorId={m['id']}&size=500")
-            n = sum(1 for a in res.get("alerts", []) if (a.get("start_time") or 0) >= since)
+            alerts = res.get("alerts", [])
+            n = sum(1 for a in alerts if (a.get("start_time") or 0) >= since)
+            if not n and any(a.get("state") == "ACTIVE" for a in alerts):
+                # An alert already ACTIVE for the same bucket absorbs this run's evidence (no new alert
+                # starts). The monitor run as a dry run over the current period says whether this run
+                # alone still fires it.
+                code, ex = c.req("POST", f"/_plugins/_alerting/monitors/{m['id']}/_execute?dryrun=true")
+                trig = ex.get("trigger_results") or {}
+                n = sum(1 for t in trig.values()
+                        if t.get("triggered") or any(b for b in (t.get("agg_result_buckets") or {}).values()))
             if n:
                 out["monitors"][name] = n
         code, res = c.req("GET", f"{SA}/correlations?start_timestamp={since}&end_timestamp=9999999999999")

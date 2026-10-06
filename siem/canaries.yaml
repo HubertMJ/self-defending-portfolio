@@ -103,7 +103,7 @@ monitors:
   "sdp-git: policy-probing":
     kind: exec
     run: "tests/admission/run.sh"
-    step: "its refused pods, then the pod it expects admitted"
+    step: "its refused pods, then the pods it expects admitted (run.sh applies those last)"
   "sdp-git: prevented-not-detected":
     kind: api
     terminal: [touch-bin]
