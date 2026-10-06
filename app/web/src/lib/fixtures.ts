@@ -368,3 +368,60 @@ export function correlation(now: number = Date.now(), available = true): unknown
 }
 
 export const RULE_INDEX: unknown = correlationFixture.rules;
+
+/**
+ * An incident the mock's SIEM files for a terminal run of this page view (UX stage 1), in the shape
+ * app/api/internal/incidents builds: the DNS exfil once its command exited 0, a contained intrusion
+ * once Talon answered a detected command. `seq` and `startedAt` are the command's; ids are derived
+ * from the run id, so a run files each kind once.
+ */
+export function runIncident(kind: "dns-exfil" | "contained-intrusion", runId: string, pod: string, seq: number, startedAt: number, opts: { command?: string; rule?: string; action?: "terminate" | "quarantine" } = {}): unknown {
+  const at = (ms: number) => new Date(startedAt + ms).toISOString();
+  const ref = `sandbox/${pod}`;
+  if (kind === "dns-exfil") {
+    return {
+      id: `d${runId.slice(1)}`,
+      kind,
+      severity: "critical",
+      title: `Exfiltration over DNS: this run's secret left ${ref} in a DNS query; Falco: no event`,
+      run_id: runId,
+      arm: "",
+      first_at: at(0),
+      last_at: at(437),
+      attack: ["T1048.003", "T1071.004"],
+      falco_events: 0,
+      flag_match: true,
+      ttd_ms: null,
+      tti_ms: null,
+      steps: [
+        { at: at(0), source: "api", rule: "Terminal exfiltration command", rule_id: "8e4f5061-7283-4d94-bea5-c6d7e8f90a12", command_seq: seq, detail: `command dns-exfil (T1048.003, exfiltration) started on ${ref}` },
+        { at: at(437), source: "hubble", rule: "DNS query carries an exfil label", rule_id: "7d3e4f50-6172-4c83-ad94-b5c6d7e8f901", command_seq: seq, detail: `DNS query under the exfil zone from ${ref}, FORWARDED egress UDP/53` },
+      ],
+      evidence: [{ type: "finding", id: `f${runId.slice(1)}` }],
+    };
+  }
+  const quarantine = opts.action === "quarantine";
+  return {
+    id: `c${runId.slice(1)}`,
+    kind,
+    severity: "high",
+    title: `Contained intrusion: ${opts.rule ?? "Falco alert"} on ${ref}, ${quarantine ? "quarantined" : "terminated"} by Talon in 12 ms`,
+    run_id: runId,
+    arm: "",
+    first_at: at(0),
+    last_at: at(480),
+    attack: ["T1003.008"],
+    falco_events: 1,
+    flag_match: null,
+    ttd_ms: 443,
+    tti_ms: 12,
+    steps: [
+      { at: at(0), source: "api", rule: "", rule_id: "", command_seq: seq, detail: `command ${opts.command ?? "?"} started on ${ref}` },
+      // Talon's record carries whole seconds: the page lists it by the end of its second.
+      { at: new Date(Math.floor((startedAt + 455) / 1000) * 1000).toISOString(), source: "talon", rule: "Talon - pod terminated", rule_id: "", command_seq: seq, detail: `Talon: ${quarantine ? "Quarantine" : "Terminate"} Pod success on ${ref}` },
+      { at: at(443), source: "falco", rule: "Credential file read in a sandbox pod", rule_id: "5b1c2d3e-4f50-4a61-8b72-93a4b5c6d7e8", command_seq: seq, detail: `Falco: ${opts.rule ?? "alert"} on ${ref}` },
+      { at: at(455), source: "k8s-audit", rule: "", rule_id: "", command_seq: seq, detail: `${quarantine ? "patch" : "delete"} pods on ${ref} by Talon, response 200` },
+    ],
+    evidence: [{ type: "finding", id: `e${runId.slice(1)}` }],
+  };
+}

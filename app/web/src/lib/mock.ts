@@ -25,6 +25,7 @@ import {
   TERMINAL_OUTPUT,
   FIXTURE_MARKER,
   correlation,
+  runIncident,
   falcoFields,
   falcoOutput,
   postureAdditions,
@@ -63,6 +64,11 @@ export interface MockOptions {
   noResponse?: boolean;
   /** GET /api/correlation says `available: false`, as with the SIEM down: the section stays hidden. */
   noSiem?: boolean;
+  /**
+   * How long (ms, before the speed factor) the mock's SIEM takes to file an incident for a terminal
+   * run of this page: a dns-exfil that exited 0, a detected command Talon answered. Live it is 1-3 min.
+   */
+  siemDelayMs?: number;
 }
 
 const REPLAY = 100;
@@ -170,6 +176,9 @@ export class MockBackend {
   private readonly noDetails: boolean;
   private readonly noResponse: boolean;
   private readonly noSiem: boolean;
+  private readonly siemDelayMs: number;
+  /** Incidents the mock's SIEM has filed for this page's terminal runs, newest first. */
+  private readonly filed: unknown[] = [];
 
   constructor(opts: MockOptions = {}) {
     this.speed = opts.speed ?? 1;
@@ -181,6 +190,7 @@ export class MockBackend {
     this.noDetails = opts.noDetails ?? false;
     this.noResponse = opts.noResponse ?? false;
     this.noSiem = opts.noSiem ?? false;
+    this.siemDelayMs = opts.siemDelayMs ?? 8000;
     if (opts.history ?? true) this.seedHistory();
     if (opts.visitorAfterMs !== undefined) {
       setTimeout(() => {
@@ -233,7 +243,14 @@ export class MockBackend {
     }
     if (method === "GET" && path === "/build.json") return json(200, BUILD_INFO);
     if (method === "GET" && path === "/api/runs") return json(200, { runs: this.runList(), kept: 50 });
-    if (method === "GET" && path === "/api/correlation") return json(200, correlation(Date.now(), !this.noSiem));
+    if (method === "GET" && path === "/api/correlation") {
+      const c = correlation(Date.now(), !this.noSiem) as { available?: boolean; incidents?: unknown[]; metrics?: { incidents: number } };
+      if (c.available && c.incidents && c.metrics) {
+        c.incidents = [...this.filed, ...c.incidents];
+        c.metrics.incidents += this.filed.length;
+      }
+      return json(200, c);
+    }
     if (method === "GET" && path === "/api/correlation/rules") return json(200, RULE_INDEX);
 
     const details = /^\/api\/scenarios\/([^/]+)\/details$/.exec(path);
@@ -668,8 +685,10 @@ export class MockBackend {
         ms += 15;
       }
     }
+    const startedAt = Date.now();
     const exited = () => {
       done();
+      if (id === "dns-exfil" && out.exit === 0) this.file(runIncident("dns-exfil", t.runId, t.pod, seq, startedAt));
       return cmdEv("exited", { exit_code: out.exit, ...(cmd.objective && out.exit === 0 ? { achieved: true } : {}) });
     };
     if (!cmd.tty) at(ms + 20, exited);
@@ -691,7 +710,10 @@ export class MockBackend {
       return;
     }
     at(talonMs, () => ({ type: "talon", data: { at: new Date(Date.now() - 10 * this.speed).toISOString(), action: quarantine ? "Quarantine Pod" : "Terminate Pod", actionner: quarantine ? "kubernetes:label" : "kubernetes:terminate", namespace: "sandbox", pod: t.pod, status: "success", output: quarantine ? `the pod '${t.pod}' in the namespace 'sandbox' has been labeled` : `the pod '${t.pod}' in the namespace 'sandbox' has been terminated`, api_received_at: new Date().toISOString(), command_seq: seq } }));
-    at(talonMs + 10, () => this.termRun(t, "responded", cmd.response ?? "", seq));
+    at(talonMs + 10, () => {
+      this.file(runIncident("contained-intrusion", t.runId, t.pod, seq, startedAt, { command: id, rule: cmd.detection, action: quarantine ? "quarantine" : "terminate" }));
+      return this.termRun(t, "responded", cmd.response ?? "", seq);
+    });
     if (quarantine) {
       at(talonMs - 5, () => {
         t.quarantined = true;
@@ -710,6 +732,14 @@ export class MockBackend {
       this.endTerminal("killed");
       return null;
     });
+  }
+
+  /** The mock's SIEM files an incident a while later, once per id (ADR 0036: 1-3 min live). */
+  private file(incident: unknown): void {
+    const id = (incident as { id: string }).id;
+    setTimeout(() => {
+      if (!this.filed.some((i) => (i as { id: string }).id === id)) this.filed.unshift(incident);
+    }, this.siemDelayMs * this.speed);
   }
 
   // ---------- compare / unguarded twin (ADR 0033) ----------
@@ -819,5 +849,6 @@ export function mockOptionsFromUrl(search: string): MockOptions | null {
     termVisitorAfterMs: num("mock-term-visitor"),
     noResponse: q.get("mock-no-response") === "1",
     noSiem: q.get("mock-siem") === "0",
+    siemDelayMs: num("mock-siem-delay"),
   };
 }
