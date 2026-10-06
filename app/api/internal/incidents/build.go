@@ -363,7 +363,7 @@ func (ix *index) dnsExfil(ref string) *draft {
 	}
 	// The anchor is the run's dns-exfil command that a lookup follows within dnsJoinWindow - the one
 	// before the first lookup matching the run's flag, else before the first lookup that follows any
-	// command. Lookups before that command are not this incident's.
+	// command. The flag match is taken over every lookup on the ref.
 	var cmd, q *record
 	for _, r := range dnsFindings {
 		c := latest(all, r.at, func(x *record) bool { return isExfilCmd(x) && !x.at.Before(r.at.Add(-dnsJoinWindow)) })
@@ -381,16 +381,18 @@ func (ix *index) dnsExfil(ref string) *draft {
 			d.add(rf)
 		}
 		d.add(cmd)
+		// A lookup before the command is not this incident's - unless it carries the run's flag:
+		// that is never dropped.
 		lookups = nil
 		for _, r := range dnsFindings {
-			if !r.at.Before(cmd.at) {
+			if !r.at.Before(cmd.at) || (r.flag != nil && *r.flag) {
 				lookups = append(lookups, r)
 			}
 		}
 	}
 	d.add(lookups...)
 	var match *bool
-	for _, r := range lookups {
+	for _, r := range dnsFindings {
 		if r.flag != nil && (match == nil || *r.flag) {
 			v := *r.flag
 			match = &v
@@ -432,10 +434,17 @@ func (ix *index) execOutsideAPI(ref string) []*draft {
 	testPod := operatorPod.MatchString(podName)
 	var out []*draft
 	drafts := map[bool]*draft{}
-	firsts := map[bool]*record{}
-	seen := map[string]bool{}
+	owner := map[string]*draft{} // a session's draft, by audit id
 	for _, r := range ix.on(ref, isFinding("k8s-audit")) {
 		if r.actor == actorAPI || (r.subresource != "exec" && r.subresource != "attach" && r.subresource != "portforward") {
+			continue
+		}
+		key := r.auditID
+		if key == "" {
+			key = r.subresource + "@" + r.at.Format(time.RFC3339Nano)
+		}
+		if d := owner[key]; d != nil {
+			d.ev = append(d.ev, evidenceOf(r))
 			continue
 		}
 		test := testPod && r.operator
@@ -449,24 +458,19 @@ func (ix *index) execOutsideAPI(ref string) []*draft {
 			drafts[test] = d
 			out = append(out, d)
 		}
-		key := r.auditID
-		if key == "" {
-			key = r.subresource + "@" + r.at.Format(time.RFC3339Nano)
-		}
-		if seen[key] {
-			d.ev = append(d.ev, evidenceOf(r))
-			continue
-		}
-		seen[key] = true
-		if firsts[test] == nil {
-			firsts[test] = r
-		}
+		owner[key] = d
 		d.add(r)
 	}
 	pod := ix.t.publicRef(ref)
 	for _, d := range out {
-		first := firsts[d.OperatorTest]
+		first := d.recs[0] // a draft exists only with a session
+		mixed := false
+		for _, r := range d.recs {
+			mixed = mixed || r.subresource != first.subresource
+		}
 		switch {
+		case d.OperatorTest && mixed:
+			d.Title = fmt.Sprintf("Operator test run: %d sessions into %s", len(d.recs), pod)
 		case d.OperatorTest:
 			verb := map[string]string{"exec": "exec into", "attach": "attach to", "portforward": "port-forward to"}[first.subresource]
 			d.Title = "Operator test run: " + verb + " " + pod
@@ -706,6 +710,10 @@ func (ix *index) finish(d *draft) Incident {
 		seq := ix.commandSeq(r)
 		kind := *r
 		kind.direction = ""
+		if r.dns {
+			// A lookup's response goes to the client's ephemeral port, its query to 53.
+			kind.port = 0
+		}
 		k := strings.Join([]string{r.source, r.rule, r.ref, strconv.Itoa(seq), ix.t.detail(&kind)}, "\x00")
 		g := byKey[k]
 		if g == nil {
@@ -743,6 +751,9 @@ func (ix *index) finish(d *draft) Incident {
 		for _, r := range g.recs {
 			if r.direction != "" {
 				dirs = appendUnique(dirs, strings.ToLower(r.direction))
+			}
+			if r.dns && r.port == 53 {
+				shown.port = 53 // a lookup reads as its query's port
 			}
 			ev = append(ev, evidenceOf(r))
 			for _, id := range r.extraFindings {

@@ -1080,13 +1080,14 @@ func TestSameEvidenceOneStep(t *testing.T) {
 	f := newFake()
 	terminalRun(f, "sdp-"+flagHex) // f-dns-1: FORWARDED EGRESS at 20.101 s, under command 3
 	lookup := func(id string, at time.Time, verdict, dir string) siem.Finding {
-		l7 := "REQUEST"
+		// Live shape: the query goes to port 53, the response back to the client's ephemeral port.
+		l7, port := "REQUEST", 53
 		if dir == "INGRESS" {
-			l7 = "RESPONSE"
+			l7, port = "RESPONSE", 40000+int(at.Sub(t0)/time.Millisecond)%20000
 		}
 		return finding(id, at, dnsRule, []string{"sdp_hubble", "attack.t1048.003"}, map[string]any{
 			"dns.query": "sdp-" + flagHex + ".x.exfil.sdp.test.", "hubble.verdict": verdict, "hubble.traffic_direction": dir,
-			"hubble.event_type": 129, "hubble.l7.type": l7, "hubble.l4.protocol": "udp", "hubble.l4.destination_port": 53, "k8s.pod.ref": termRef})
+			"hubble.event_type": 129, "hubble.l7.type": l7, "hubble.l4.protocol": "udp", "hubble.l4.destination_port": port, "k8s.pod.ref": termRef})
 	}
 	// The earliest record is a response (INGRESS): the directions are listed sorted, not first seen.
 	f.findings["sdp_hubble"] = append(f.findings["sdp_hubble"], lookup("f-dns-0", t0.Add(20050*time.Millisecond), "FORWARDED", "INGRESS"))
@@ -1557,9 +1558,10 @@ func TestStaleDNSQueryIsNotALookup(t *testing.T) {
 	}
 }
 
-// Live (2026-10-06): lookups at 05:06:06-09 preceded the run's dns-exfil command at 05:06:29.5 and
+// Live (2026-10-06): records at 05:06:06-09 preceded the run's dns-exfil command at 05:06:29.5 and
 // the step cap cut the command. A dns-exfil incident is anchored on the command before the first
-// lookup matching the run's flag; no lookup before that command is a step.
+// lookup matching the run's flag; a lookup before that command is a step only when it carries the
+// run's flag.
 func TestDNSExfilAnchoredAfterCommand(t *testing.T) {
 	poll := func(f *fakeSource) Incident {
 		t.Helper()
@@ -1588,8 +1590,9 @@ func TestDNSExfilAnchoredAfterCommand(t *testing.T) {
 
 	f := newFake()
 	f.hits["sdp-api"] = []siem.Hit{readFlag, exfil("c3", 29500*time.Millisecond, 3)}
+	// 50 lookups before the command, of another label (the flag's lookups are never dropped: below).
 	for i := 0; i < 50; i++ {
-		f.findings["sdp_hubble"] = append(f.findings["sdp_hubble"], dnsFinding(fmt.Sprintf("f-pre-%02d", i), t0.Add(6*time.Second+time.Duration(i)*60*time.Millisecond), termRef, "sdp-"+flagHex))
+		f.findings["sdp_hubble"] = append(f.findings["sdp_hubble"], dnsFinding(fmt.Sprintf("f-pre-%02d", i), t0.Add(6*time.Second+time.Duration(i)*60*time.Millisecond), termRef, "sdp-"+otherHex))
 	}
 	f.findings["sdp_hubble"] = append(f.findings["sdp_hubble"], dnsFinding("f-dns", t0.Add(30200*time.Millisecond), termRef, "sdp-"+flagHex))
 	inc := poll(f)
@@ -1619,6 +1622,83 @@ func TestDNSExfilAnchoredAfterCommand(t *testing.T) {
 	if inc.FlagMatch == nil || !*inc.FlagMatch || inc.Severity != "critical" {
 		t.Fatalf("incident %+v", inc)
 	}
+
+	// Review M1: this run's flag looked up with no command before it, then a command followed by another
+	// label. The command still anchors; the flag's lookup is never dropped and decides the match.
+	f = newFake()
+	f.hits["sdp-api"] = []siem.Hit{readFlag, exfil("c4", 60*time.Second, 4)}
+	f.findings["sdp_hubble"] = []siem.Finding{
+		dnsFinding("f-flag-early", t0.Add(10*time.Second), termRef, "sdp-"+flagHex),
+		dnsFinding("f-other-late", t0.Add(60500*time.Millisecond), termRef, "sdp-"+otherHex),
+	}
+	inc = poll(f)
+	if got := steps(inc); got != "10s hubble 0, 20s api 2, 1m0s api 4, 1m0.5s hubble 4" {
+		t.Fatalf("steps %s", got)
+	}
+	if inc.FlagMatch == nil || !*inc.FlagMatch || inc.Severity != "critical" || !strings.Contains(inc.Title, "this run's secret") {
+		t.Fatalf("incident %+v", inc)
+	}
+	cited := false
+	for _, e := range inc.Evidence {
+		cited = cited || e.ID == "f-flag-early"
+	}
+	if !cited {
+		t.Fatalf("the flag's lookup is not cited: %v", inc.Evidence)
+	}
+}
+
+// Review M2: under deploy skew (the rules synced to the SIEM before the API's index is rebuilt) a
+// finding's rule title is unknown to the index. Such a finding on an L7 DNS event whose query has the
+// flag's shape is still a lookup - fail-safe, not fail-open - and the unknown titles are logged once.
+func TestUnknownRuleFlagShapedLookup(t *testing.T) {
+	const renamed = "Hubble - flag-shaped DNS lookup (renamed)"
+	l7 := func(id string, at time.Time, rule string, eventType int, query string) siem.Finding {
+		doc := map[string]any{"dns.query": query, "hubble.verdict": "FORWARDED", "hubble.traffic_direction": "EGRESS", "hubble.event_type": eventType,
+			"hubble.l4.protocol": "udp", "hubble.l4.destination_port": 53, "k8s.pod.ref": termRef}
+		if eventType == hubbleL7 {
+			doc["hubble.l7.type"] = "REQUEST"
+		}
+		return finding(id, at, rule, []string{"sdp_hubble"}, doc)
+	}
+	flagQ := "sdp-" + flagHex + ".x.exfil.sdp.test."
+	run := func(fs ...siem.Finding) ([]Incident, string) {
+		t.Helper()
+		f := newFake()
+		f.hits["sdp-api"] = []siem.Hit{apiCommand("c3", t0.Add(19*time.Second), termRun, termRef, 3, "dns-exfil", "T1048.003", "exfiltration", "started")}
+		f.findings["sdp_hubble"] = fs
+		var buf strings.Builder
+		var mu sync.Mutex
+		clk := &clock{t: t0}
+		tr := New(Config{Source: f, Rules: rulesIndex(t), Namespace: "sandbox", UnguardedNamespace: "sandbox-unguarded", Now: clk.Now,
+			Log: slog.New(slog.NewTextHandler(&lockedWriter{w: &buf, mu: &mu}, nil))})
+		registerTerminalFlag(tr, flagHex)
+		clk.Set(t0.Add(time.Minute))
+		tr.Poll(context.Background())
+		mu.Lock()
+		defer mu.Unlock()
+		return incidentsOf(tr.View(), KindDNSExfil), buf.String()
+	}
+	dx, log := run(l7("f-u", t0.Add(20*time.Second), renamed, hubbleL7, flagQ))
+	if len(dx) != 1 || dx[0].Severity != "critical" || dx[0].FlagMatch == nil || !*dx[0].FlagMatch {
+		t.Fatalf("unknown rule, L7 flag-shaped lookup: %+v", dx)
+	}
+	if !strings.Contains(log, "rule title the embedded index does not know") || !strings.Contains(log, "findings=1") {
+		t.Fatalf("unknown rule not logged: %s", log)
+	}
+	for name, fd := range map[string]siem.Finding{
+		"a trace flow":        l7("f-u4", t0.Add(20*time.Second), renamed, 4, flagQ),
+		"another label shape": l7("f-up", t0.Add(20*time.Second), renamed, hubbleL7, "probe-0a1b2c3d.x.exfil.sdp.test."),
+		"a flag-like prefix":  l7("f-ux", t0.Add(20*time.Second), renamed, hubbleL7, "x"+flagQ),
+		"a flag-like suffix":  l7("f-uy", t0.Add(20*time.Second), renamed, hubbleL7, flagQ+"evil."),
+		"a known other rule":  l7("f-uk", t0.Add(20*time.Second), "Hubble - sandbox traffic dropped by policy", hubbleL7, flagQ),
+	} {
+		if dx, _ := run(fd); len(dx) != 0 {
+			t.Errorf("%s made a dns-exfil incident: %+v", name, dx)
+		}
+	}
+	if _, log := run(l7("f-k", t0.Add(20*time.Second), dnsRule, hubbleL7, flagQ)); strings.Contains(log, "does not know") {
+		t.Errorf("a known rule logged as unknown: %s", log)
+	}
 }
 
 // The live test suites exec into the pods they create with the admin kubeconfig: an operator test
@@ -1631,6 +1711,11 @@ func TestOperatorTestRun(t *testing.T) {
 			"audit.id": auditID, "audit.stage": stage, "audit.verb": "create", "audit.object.resource": "pods",
 			"audit.object.subresource": "exec", "audit.response.code": 101, "k8s.pod.ref": ref, "user.name": user})
 	}
+	attach := func(id string, at time.Time, ref, user, auditID string) siem.Finding {
+		fd := exec(id, at, ref, user, auditID, "ResponseComplete")
+		fd.Documents[0].Document = strings.Replace(fd.Documents[0].Document, `"audit.object.subresource":"exec"`, `"audit.object.subresource":"attach"`, 1)
+		return fd
+	}
 	const admin = "system:admin"
 	sc := "sandbox_sc-network-tool-a1b2c3"
 	f.findings["sdp_k8s_audit"] = []siem.Finding{
@@ -1641,7 +1726,11 @@ func TestOperatorTestRun(t *testing.T) {
 		// Someone else in the same pod: not a test run.
 		exec("p-1", t0.Add(2*time.Second), sc, "hm1:8899aabbccddeeff", "aud-3", "ResponseComplete"),
 		exec("o-3", t0, "sandbox_rt-iso-ab12c", admin, "aud-4", "ResponseComplete"),
-		exec("o-4", t0, "sandbox_l3probe", admin, "aud-5", "ResponseComplete"),
+		attach("o-3b", t0.Add(time.Second), "sandbox_rt-iso-ab12c", admin, "aud-4b"),
+		exec("o-4", t0, "sandbox_rt-shell-x9y8z", admin, "aud-5", "ResponseComplete"),
+		// l3probe is no committed suite's pod (a manual probe): not a test run.
+		exec("n-0", t0, "sandbox_l3probe", admin, "aud-16", "ResponseComplete"),
+		exec("n-9", t0, "sandbox_rt-shell-abcdef", admin, "aud-17", "ResponseComplete"),
 		exec("o-5", t0, "sandbox_sdp-probe-0a1b2c", admin, "aud-6", "ResponseComplete"),
 		exec("o-6", t0, "sandbox-unguarded_sc-terminal-d4e5f6", admin, "aud-7", "ResponseComplete"),
 		// Principals that are not exactly the admin certificate's.
@@ -1664,8 +1753,8 @@ func TestOperatorTestRun(t *testing.T) {
 	}
 	tests := []string{
 		"Operator test run: exec into sandbox/sc-network-tool-a1b2c3 (2 sessions)",
-		"Operator test run: exec into sandbox/rt-iso-ab12c",
-		"Operator test run: exec into sandbox/l3probe",
+		"Operator test run: 2 sessions into sandbox/rt-iso-ab12c",
+		"Operator test run: exec into sandbox/rt-shell-x9y8z",
 		"Operator test run: exec into sandbox/sdp-probe-0a1b2c",
 		"Operator test run: exec into sandbox-unguarded/sc-terminal-d4e5f6",
 	}
@@ -1679,6 +1768,8 @@ func TestOperatorTestRun(t *testing.T) {
 		"Exec into sandbox/sc-network-tool-a1b2c outside the API",
 		"Exec into sandbox/sc-network-tool-a1b2cz outside the API",
 		"Exec into sandbox/xl3probe outside the API",
+		"Exec into sandbox/l3probe outside the API",
+		"Exec into sandbox/rt-shell-abcdef outside the API",
 	}
 	if len(byTitle) != len(tests)+len(high) {
 		t.Errorf("%d exec-outside-api incidents, want %d: %v", len(byTitle), len(tests)+len(high), byTitle)
@@ -1743,5 +1834,58 @@ func TestEvidenceRewrittenFromOverwriteCount(t *testing.T) {
 	f.countErr, f.rewrite = nil, 0
 	if rewritten() {
 		t.Fatal("still rewritten once no overwritten document is left in the window")
+	}
+}
+
+// Review L4: an audit document is named only for a pod itself - not a subresource, not another
+// resource - and only for the response engine or the API.
+func TestAuditTitle(t *testing.T) {
+	pod := func(verb, resource, sub, actor string) *record {
+		return &record{source: "k8s-audit", verb: verb, resource: resource, subresource: sub, actor: actor}
+	}
+	for r, want := range map[*record]string{
+		pod("delete", "pods", "", actorTalon):                                                      "Kubernetes audit - pod deleted by the response engine",
+		pod("patch", "pods", "", actorTalon):                                                       "Kubernetes audit - pod labelled by the response engine",
+		pod("create", "pods", "", actorAPI):                                                        "Kubernetes audit - pod created by the API",
+		pod("create", "pods", "eviction", actorTalon):                                              "",
+		pod("patch", "pods", "status", actorTalon):                                                 "",
+		pod("delete", "configmaps", "", actorAPI):                                                  "",
+		pod("delete", "pods", "", actorOther):                                                      "",
+		pod("get", "pods", "", actorAPI):                                                           "",
+		{source: "k8s-audit", findingID: "f", verb: "delete", resource: "pods", actor: actorTalon}: "",
+		{source: "hubble", verb: "delete", resource: "pods", actor: actorTalon}:                    "",
+	} {
+		if got := auditTitle(r); got != want {
+			t.Errorf("%+v: %q, want %q", *r, got, want)
+		}
+	}
+}
+
+// Review M1, the match itself: it is taken over every lookup on the ref, not only those kept as steps.
+// A lookup before the command known not to be this run's flag (read after the run registered) and a
+// lookup after it whose match is unavailable (read before) make "not this run's flag", not
+// "unavailable". Built from records directly: the read order is what decides each flag.
+func TestFlagMatchOverEveryLookup(t *testing.T) {
+	tr := newTracker(t, newFake(), &clock{t: t0})
+	no := false
+	recs := []*record{
+		{key: "finding:pre", findingID: "pre", docID: "d-pre", source: "hubble", at: t0.Add(10 * time.Second), ref: termRef, dns: true, flag: &no, rule: dnsRule},
+		{key: "doc:c4", docID: "c4", source: "api", at: t0.Add(20 * time.Second), ref: termRef, apiAction: "siem.command", state: "started",
+			commandID: "dns-exfil", runID: termRun, seq: 4},
+		{key: "finding:post", findingID: "post", docID: "d-post", source: "hubble", at: t0.Add(21 * time.Second), ref: termRef, dns: true, rule: dnsRule},
+	}
+	incs, _ := tr.build(evidence{records: recs, now: t0.Add(time.Minute)})
+	var dx []Incident
+	for _, inc := range incs {
+		if inc.Kind == KindDNSExfil {
+			dx = append(dx, inc)
+		}
+	}
+	if len(dx) != 1 || dx[0].FlagMatch == nil || *dx[0].FlagMatch || !strings.Contains(dx[0].Title, "not this run's flag") {
+		t.Fatalf("%+v", dx)
+	}
+	// The earlier lookup is not this incident's step: it is not this run's flag.
+	if len(dx[0].Steps) != 2 {
+		t.Fatalf("steps %+v", dx[0].Steps)
 	}
 }

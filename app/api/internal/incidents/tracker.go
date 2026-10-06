@@ -289,6 +289,15 @@ func (t *Tracker) Poll(ctx context.Context) {
 	hb, hbOK := t.readHeartbeat(ctx, now)
 	rewrite, rewriteOK := t.readRewrite(ctx, now)
 
+	unknown := 0
+	for _, n := range news {
+		if n.r.source == "hubble" && n.r.findingID != "" && n.r.unknownRule {
+			unknown++
+		}
+	}
+	t.note("unknown hubble rule", unknown > 0, "siem: Hubble findings under a rule title the embedded index does not know (rules synced before the API image?)",
+		"findings", unknown)
+
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	for _, n := range news {

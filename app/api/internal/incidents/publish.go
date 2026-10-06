@@ -179,7 +179,7 @@ func (t *Tracker) detail(r *record) string {
 // auditTitle names an audit document no rule fired on - Talon's response, the twin's create and
 // delete - so its step does not read as a bare detail; "" for anything else.
 func auditTitle(r *record) string {
-	if r.source != "k8s-audit" || r.findingID != "" {
+	if r.source != "k8s-audit" || r.findingID != "" || r.resource != "pods" || r.subresource != "" {
 		return ""
 	}
 	what := map[string]string{"patch": "pod labelled", "delete": "pod deleted", "create": "pod created"}[r.verb]

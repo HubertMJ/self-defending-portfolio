@@ -22,8 +22,9 @@ const (
 )
 
 // operatorPod: the pods the live test suites create, matched whole - tests/scenarios/run.sh's
-// sc-<scenario>-<6 hex> and sdp-probe-<6 hex>, tests/runtime/run.sh's rt-iso-<5 [a-z0-9]>, and l3probe.
-var operatorPod = regexp.MustCompile(`^(sc-[a-z0-9]+(-[a-z0-9]+)*-[0-9a-f]{6}|sdp-probe-[0-9a-f]{6}|rt-iso-[a-z0-9]{5}|l3probe)$`)
+// sc-<scenario>-<6 hex> and sdp-probe-<6 hex>, tests/runtime/run.sh's rt-iso-<5 [a-z0-9]> and
+// rt-shell-<5 [a-z0-9]>.
+var operatorPod = regexp.MustCompile(`^(sc-[a-z0-9]+(-[a-z0-9]+)*-[0-9a-f]{6}|sdp-probe-[0-9a-f]{6}|rt-(iso|shell)-[a-z0-9]{5})$`)
 
 // Who an audit record's request came from - the only thing kept of its user.
 const (
@@ -35,6 +36,10 @@ const (
 // dnsExfilRule is the Sigma id of siem/rules/hubble-dns-exfil.yml ("Hubble - flag-shaped DNS lookup"),
 // looked up by a finding's rule title in the embedded index: the one rule whose finding is a DNS lookup.
 const dnsExfilRule = "fa0bd074-18fc-4827-834c-705c707a94f9"
+
+// flagQuery: a DNS query shaped like the run flag turned into a label (siem/rules/hubble-dns-exfil.yml),
+// as the shipper stores it - lower-cased, the trailing dot kept.
+var flagQuery = regexp.MustCompile(`^sdp-[0-9a-f]{16}\.x\.exfil\.sdp\.test\.?$`)
 
 // hubbleL7 is Hubble's event type of an L7 (DNS proxy) flow; 1 is a drop, 4 a trace.
 const hubbleL7 = 129
@@ -61,8 +66,10 @@ type record struct {
 	ref           string    // "<ns>_<pod>", only for the two sandbox namespaces
 	synthetic     bool      // a P3 acceptance canary (pod ref or principal carries p3c-): never an incident
 
-	rule   string   // the finding's Sigma rule title
-	attack []string // ATT&CK ids from the finding's tags
+	rule string // the finding's Sigma rule title
+	// unknownRule: no rule title of the finding is in the embedded index (deploy skew, or a renamed rule)
+	unknownRule bool
+	attack      []string // ATT&CK ids from the finding's tags
 
 	falcoRule, proc                     string
 	talonAction, actionner, talonStatus string
@@ -227,9 +234,10 @@ func (t *Tracker) fromFinding(f siem.Finding, source string) (r record, dnsQuery
 	if len(f.Queries) > 0 {
 		r.rule = f.Queries[0].Name
 	}
-	dnsRule := false
+	dnsRule, known := false, false
 	for _, q := range f.Queries {
-		dnsRule = dnsRule || t.cfg.Rules.RuleID(q.Name) == dnsExfilRule
+		id := t.cfg.Rules.RuleID(q.Name)
+		dnsRule, known = dnsRule || id == dnsExfilRule, known || id != ""
 		for _, tag := range q.Tags {
 			if m := tagPat.FindStringSubmatch(strings.ToLower(tag)); m != nil {
 				r.attack = appendUnique(r.attack, strings.ToUpper(m[1]))
@@ -245,8 +253,11 @@ func (t *Tracker) fromFinding(f siem.Finding, source string) (r record, dnsQuery
 		dnsQuery = t.fill(&r, m)
 		break
 	}
-	// A DNS lookup is a finding of the flag-shaped DNS rule on an L7 DNS event, nothing else.
-	r.dns = r.dns && dnsRule
+	// A DNS lookup is a finding of the flag-shaped DNS rule on an L7 DNS event. Fail-safe under deploy
+	// skew (rules synced to the SIEM before the API's index is rebuilt): a finding whose rule the index
+	// does not know at all counts when its L7 DNS event's query has the flag's shape.
+	r.unknownRule = !known
+	r.dns = r.dns && (dnsRule || (!known && flagQuery.MatchString(dnsQuery)))
 	if !r.dns {
 		dnsQuery = ""
 	}
