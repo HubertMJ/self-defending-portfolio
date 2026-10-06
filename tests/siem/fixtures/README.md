@@ -153,3 +153,10 @@ hubble.log is replaced by a live capture from /var/run/cilium/hubble/events.log 
 exporter is rolled out in the P2 maintenance window (L9); until then it is the shape the exporter is
 documented to write, not a capture. The address-free projection does not depend on it: sdp.lua reads
 only the listed paths of `.flow`.
+
+## opensearch-jvm.options (role `opensearch`, 2026-10-06)
+
+/etc/opensearch/jvm.options of the pinned OpenSearch 3.9.0 deb as installed on siem01 (paths already
+rewritten by the package's postinst), captured read-only with `sudo -n cat` before the role first
+changed it. tests/smoke.sh puts it under a stand-in unit so the role's JVM options and unit tasks
+(tag `opensearch_service`) run without the package.

@@ -384,6 +384,21 @@
         fail_msg: "Cluster health is {{ verify_health.json.status }}."
         success_msg: The cluster is green.
 
+    # ADR 0034 amendment of 2026-10-06: the node comes back on its own after a crash.
+    # The module's status is `systemctl show opensearch`.
+    - name: Read the OpenSearch unit
+      ansible.builtin.systemd_service:
+        name: opensearch
+      register: verify_os_unit
+      check_mode: true
+
+    - name: Assert OpenSearch restarts after a failure
+      ansible.builtin.assert:
+        that:
+          - verify_os_unit.status.Restart == 'on-failure'
+        fail_msg: "The OpenSearch unit has Restart={{ verify_os_unit.status.Restart }}, not on-failure."
+        success_msg: The OpenSearch unit restarts on failure.
+
     - name: Read the Performance Analyzer state
       ansible.builtin.uri:
         url: "{{ verify_os_url }}/_plugins/_performanceanalyzer/config"

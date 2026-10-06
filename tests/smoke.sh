@@ -2,7 +2,9 @@
 # Smoke-test the host playbooks twice against throwaway systemd containers.
 # Proves: roles apply on a clean Debian 13, and the second run is idempotent (changed=0) - for the k3s
 # host (hardening.yml) and for the SIEM host (siem.yml --tags base,ssh,firewall,patching, where the
-# group switches the shared roles to their non-k3s shape).
+# group switches the shared roles to their non-k3s shape). Then the opensearch role's JVM options and
+# unit (--tags opensearch_service) on the SIEM container, against a stand-in for the package: a unit
+# that sleeps and the package's jvm.options as installed on siem01 (tests/siem/fixtures).
 # Kernel-level tags (sysctl, auditd) are skipped here and need a real VM; their output is checked by
 # tests/golden/render.sh and on the hosts by verify.yml.
 set -euo pipefail
@@ -47,3 +49,20 @@ twice() { # <label> <ansible-playbook arguments>
 twice k3s "playbooks/hardening.yml --limit sdp-smoke --skip-tags '$SKIP_TAGS'"
 # hostname: containers own no UTS namespace we can write to (as SKIP_TAGS above).
 twice siem "playbooks/siem.yml --limit sdp-smoke-siem --tags '$SIEM_TAGS' --skip-tags hostname"
+
+# The stand-in for the OpenSearch package: its group, its jvm.options and a unit of the same name.
+$DOCKER exec -i sdp-smoke-siem sh -ec '
+  groupadd -r opensearch
+  mkdir -p /etc/opensearch/jvm.options.d
+  cat > /etc/opensearch/jvm.options
+  printf "[Service]\nExecStart=/bin/sleep infinity\n\n[Install]\nWantedBy=multi-user.target\n" \
+    > /usr/lib/systemd/system/opensearch.service
+  systemctl daemon-reload' < tests/siem/fixtures/opensearch-jvm.options
+twice opensearch "playbooks/siem.yml --limit sdp-smoke-siem --tags opensearch_service"
+# shellcheck disable=SC2016  # the quoted block runs inside the container
+$DOCKER exec sdp-smoke-siem sh -ec '
+  fail() { echo "opensearch: $*"; exit 1; }
+  [ "$(systemctl show opensearch -p Restart --value)" = on-failure ] || fail "Restart= is not on-failure"
+  [ "$(stat -c "%U:%G %a" /etc/systemd/system/opensearch.service.d/sdp-restart.conf)" = "root:root 644" ] \
+    || fail "the drop-in is not root:root 0644"
+  echo "opensearch: Restart=on-failure from the drop-in"'

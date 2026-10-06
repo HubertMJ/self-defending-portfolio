@@ -99,11 +99,43 @@
     enabled: false
     masked: true
 
+# ADR 0034 amendment of 2026-10-06: the package's unit never restarts, so the OOM exit of 2026-10-06
+# left the node down. A changed Restart= takes effect with the daemon-reload below, without a
+# restart of the node. The tag opensearch_service runs the JVM options and the unit on their own
+# (tests/smoke.sh).
+- name: Create the unit's drop-in directory
+  ansible.builtin.file:
+    path: /etc/systemd/system/opensearch.service.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  tags: [opensearch_service]
+
+- name: Restart OpenSearch after a failure, at most three starts in ten minutes
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/opensearch.service.d/sdp-restart.conf
+    content: |
+      # Managed by Ansible (role: opensearch). ADR 0034 amendment of 2026-10-06.
+      [Unit]
+      StartLimitIntervalSec=600
+      StartLimitBurst=3
+
+      [Service]
+      Restart=on-failure
+      RestartSec=30
+    owner: root
+    group: root
+    mode: "0644"
+  tags: [opensearch_service]
+
 - name: Enable and start OpenSearch
   ansible.builtin.systemd_service:
     name: opensearch
     enabled: true
     state: started
+    daemon_reload: true
+  tags: [opensearch_service]
 
 - name: Apply configuration changes before talking to the node
   ansible.builtin.meta: flush_handlers
