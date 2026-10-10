@@ -14,7 +14,7 @@
 #     points at (`git ls-remote https://github.com/kubernetes-sigs/metrics-server refs/tags/v0.9.0`).
 #     Fetched by full commit hash and checked after the checkout, so a moved tag cannot change what is
 #     compiled. Not one line of upstream's Go source is changed.
-#   * dependencies: upstream's go.mod/go.sum at that commit with two modules raised to the first
+#   * dependencies: upstream's go.mod/go.sum at that commit with the modules raised to the first
 #     releases that fix the findings, and nothing else changed by hand. modules/ holds the result; it
 #     replaces upstream's two files before `go mod download`, and `go mod verify` checks every module
 #     against go.sum (and go.sum against the public checksum database, which the golang image enables
@@ -23,13 +23,22 @@
 #       go mod tidy
 #     The same releases app/talon and app/ksops raised to. Minimal version selection then moved what
 #     those two require - x/text to v0.41.0 (which fixes its finding), x/net, x/sys, x/term, x/sync,
-#     x/mod, x/tools; `diff` against upstream's go.mod at METRICS_SERVER_COMMIT shows the whole set.
+#     x/mod, x/tools. Then, for the MEDIUM and LOW findings with a fix (2026-10-10), on top of that
+#     result:
+#       go get github.com/google/cel-go@v0.29.0 golang.org/x/net@v0.60.0 \
+#              go.opentelemetry.io/otel/sdk@v1.45.0 \
+#              go.opentelemetry.io/otel/exporters/otlp/otlptrace@v1.45.0 \
+#              go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc@v1.45.0
+#       go mod tidy
+#     cel-go is k8s.io/apiserver's (its admission policy plugins), which compiles unchanged against
+#     v0.29.0; x/net v0.60.0 requires x/crypto v0.57.0, which also fixes x/crypto's two
+#     MEDIUM findings. `diff` against upstream's go.mod at METRICS_SERVER_COMMIT shows the whole set.
 #     The Kubernetes libraries (apiserver, client-go, component-base, metrics) are upstream's.
 #   * upstream's own unit tests (`make test-unit`: `go test --test.short -race ./pkg/... ./cmd/...`)
 #     run in the builder against the raised dependencies, with --network=none: no tests, no image.
 #   * the binary as upstream's Makefile builds it: CGO off, -mod=readonly, -trimpath, the same
 #     k8s.io/client-go/pkg/version variables (what `--version` prints), plus -s and an empty build id.
-#     The Go standard library is the toolchain's: 1.26.8 instead of 1.26.4.
+#     The Go standard library is the toolchain's: 1.26.9 instead of 1.26.4.
 #   * runtime: distroless `static` nonroot, the base app/api, app/talon and app/ksops use. Upstream's
 #     image is distroless `static` too, with the binary at /metrics-server and USER 65534; both are
 #     kept, so the Deployment's args and its runAsUser are what k3s's manifest used.
@@ -38,10 +47,11 @@
 # that commit's go.mod/go.sum with the commands above (drop any raise the release has caught up with),
 # compare upstream's manifests/ with cluster/infra/metrics-server, push.
 #
-# Bases pinned by tag and digest (ADR 0008); both are the pins app/api, app/talon and app/ksops use:
-#   golang:1.26.8                          docker.io
-#   distroless/static-debian13:nonroot     gcr.io
-FROM docker.io/library/golang:1.26.8@sha256:0f063af2d465d8dcae54cce04278ada488b96f77b42449c8d071e47d016cc65a AS deps
+# Bases pinned by tag and digest (ADR 0008):
+#   golang:1.26.9                          docker.io   (as app/talon; 1.26.8's standard library has
+#                                                       fixed findings)
+#   distroless/static-debian13:nonroot     gcr.io      (as app/api, app/talon and app/ksops)
+FROM docker.io/library/golang:1.26.9@sha256:d7722066f0b60ceccb6c0643cbed1f5f9e15506ac237146c95333504d7805d89 AS deps
 # kubernetes-sigs/metrics-server tag v0.9.0.
 ARG METRICS_SERVER_COMMIT=2a7c4b2c7d46552ff47f4aeaa3a735c582587ecd
 WORKDIR /src
