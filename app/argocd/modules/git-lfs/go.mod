@@ -46,3 +46,5 @@ require (
 )
 
 go 1.26.0
+
+godebug default=go1.25

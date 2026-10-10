@@ -31,6 +31,10 @@
 #              golang.org/x/net@v0.60.0
 #       go mod tidy
 #     (x/net v0.60.0 requires x/crypto v0.57.0, which also fixes x/crypto's two MEDIUM findings.)
+#     x/net v0.60.0 also moves the go directive from 1.25.0 to 1.26.0, which would switch the binary
+#     to Go 1.26's GODEBUG defaults (urlstrictcolons, tlssecpmlkem, cryptocustomrand among them);
+#     go.mod carries `godebug default=go1.25` by hand right below it, so they stay upstream's
+#     (`go mod tidy` keeps the line; `go version -m` on the binary shows DefaultGODEBUG).
 #     cilium v1.17.17 rather than 1.19: the smallest jump that fixes all four Cilium advisories, so the
 #     cilium networkpolicy actionner compiles against an API closest to the one upstream tested.
 #     Minimal version selection and `go mod tidy` then raised further transitive modules (the

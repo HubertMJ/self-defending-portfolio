@@ -2,6 +2,8 @@ module github.com/falcosecurity/falco-talon
 
 go 1.26.0
 
+godebug default=go1.25
+
 require (
 	cloud.google.com/go/functions v1.19.7
 	cloud.google.com/go/storage v1.56.0

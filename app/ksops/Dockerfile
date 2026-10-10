@@ -32,8 +32,10 @@
 #       go mod tidy
 #     mongo-driver is indirect (its bson package, via sops's Huawei Cloud KMS SDK); v1.17.7 is the
 #     fixed release of its v1 line. x/net v0.60.0 requires x/crypto v0.57.0, which also fixes
-#     x/crypto's two MEDIUM findings. `diff` against upstream's go.mod at KSOPS_COMMIT shows the
-#     whole set.
+#     x/crypto's two MEDIUM findings. It also moves the go directive from 1.25.0 to 1.26.0, which
+#     would switch the binary to Go 1.26's GODEBUG defaults; go.mod carries `godebug default=go1.25`
+#     by hand right below it, so they stay upstream's (`go mod tidy` keeps the line). `diff` against
+#     upstream's go.mod at KSOPS_COMMIT shows the whole set.
 #     sops, age and kustomize/api - the modules that actually do the decryption and the KRM I/O - are
 #     upstream's versions, untouched.
 #   * upstream's own test suite (`go vet` + `go test -race`, as upstream's `make test`) runs in the

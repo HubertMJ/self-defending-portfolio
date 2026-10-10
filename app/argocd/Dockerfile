@@ -56,6 +56,10 @@
 #       git-lfs:   go get golang.org/x/net@v0.60.0
 #       then       go mod tidy
 #     x/net v0.60.0 requires x/crypto v0.57.0, which also fixes x/crypto's two MEDIUM findings.
+#     It also needs `go 1.26.0`, which in git-lfs's go.mod (1.25.0 before) would switch git-lfs to
+#     Go 1.26's GODEBUG defaults; its go.mod carries `godebug default=go1.25` by hand below the go
+#     line, so they stay those of the git-lfs this image shipped before (`go mod tidy` keeps the
+#     line; `go version -m` shows DefaultGODEBUG).
 #     slack-go is notifications-engine's; v0.23.1 is the release Argo CD 3.6 (v3.6.0-rc2) requires.
 #     Argo CD's notification packages pass their tests against it; notifications-engine's own slack
 #     tests pass but for two that expect an empty `blocks=[]` form field, which slack-go v0.23.1
@@ -214,12 +218,14 @@ ARG GIT_LFS_COMMIT=b84b33847fe6458f36ef521534dc0eac953cb379
 RUN chown -R 1000:1000 /src
 USER 1000:1000
 ENV HOME=/tmp/home GOCACHE=/tmp/gocache GOFLAGS=-buildvcs=false
-# go test's own vet checks, less printf: x/net v0.60.0 needs `go 1.26.0` in go.mod (upstream: 1.23.0),
-# and at that language version vet's printf check flags a line upstream has always had
-# (commands/lockverifier.go passes a *git.Ref to %q in a translated message). Every other check of
-# go test's default list (cmd/go/internal/test, Go 1.26.9) still runs.
+# go test's own vet checks less printf, then printf alone on every package but `commands`: x/net
+# v0.60.0 needs `go 1.26.0` in go.mod (upstream: 1.23.0), and at that language version vet's printf
+# check flags a line upstream has always had (commands/lockverifier.go passes a *git.Ref to %q in a
+# translated message). Every check of go test's default list (cmd/go/internal/test, Go 1.26.9) still
+# runs on every package; only printf on that one package is left out.
 RUN --network=none go test -count=1 \
-      -vet=atomic,bool,buildtags,directive,errorsas,ifaceassert,nilfunc,slog,stringintconv,tests ./...
+      -vet=atomic,bool,buildtags,directive,errorsas,ifaceassert,nilfunc,slog,stringintconv,tests ./... \
+ && go vet -printf $(go list ./... | grep -vxF github.com/git-lfs/git-lfs/v3/commands)
 # git-lfs's Makefile: -trimpath, -s -w, Vendor "GitHub" and the short commit (as its release build).
 RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w \
       -X 'github.com/git-lfs/git-lfs/v3/config.Vendor=GitHub' \

@@ -228,8 +228,13 @@ Not taken as-is:
   (v3.6.0-rc2) requires. Argo CD's notification packages pass their tests and are now in the build's
   test list; notifications-engine's own slack tests pass but for two that expect an empty
   `blocks=[]` form field, which v0.23.1 leaves out. No notifications controller runs here (ADR 0024).
-- git-lfs's tests run with go test's default vet checks less printf: x/net v0.60.0 needs `go 1.26.0`
-  in its go.mod, and at that language version vet flags a line upstream has always had.
+- x/net v0.60.0 needs `go 1.26.0` in go.mod. Where that raised the go directive from 1.25.0 -
+  talon, ksops and git-lfs - go.mod also carries `godebug default=go1.25` by hand right below it,
+  so those binaries keep Go 1.25's GODEBUG defaults (urlstrictcolons, tlssecpmlkem,
+  cryptocustomrand, httpservecontentmaxranges) rather than switch to 1.26's; `go mod tidy` keeps the
+  line and `go version -m` shows the DefaultGODEBUG it sets.
+- git-lfs's tests run go test's default vet checks less printf, then printf alone on every package
+  but `commands`: at `go 1.26.0` vet's printf check flags a line upstream has always had there.
 - argocd: `/usr/bin/pebble`, which the Ubuntu 26.04 image ships outside any package and which is
   compiled with Go 1.26.7 (3 HIGH, 5 MEDIUM, 1 LOW), is deleted from the runtime image; nothing
   runs it.

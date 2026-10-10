@@ -2,6 +2,8 @@ module github.com/viaduct-ai/kustomize-sops
 
 go 1.26.0
 
+godebug default=go1.25
+
 require (
 	github.com/getsops/sops/v3 v3.12.2
 	github.com/joho/godotenv v1.5.1
