@@ -166,7 +166,7 @@ cilium_values:
     # (ADR 0028, as operator.image above).
     image:
       # yamllint disable-line rule:line-length
-      override: ghcr.io/hubertmj/self-defending-portfolio/cilium-envoy:main@sha256:6ad67d1d41da91b9b93b7b42cc16c1f899fefd2e4dfc425438c00017f95c91e0
+      override: ghcr.io/hubertmj/self-defending-portfolio/cilium-envoy:main@sha256:ea053fa661b97c6942dc8102e19105942ed37d5406d372a1a38d009c4e199df0
 
 # helm install/upgrade behaviour.
 cilium_helm_wait: true
