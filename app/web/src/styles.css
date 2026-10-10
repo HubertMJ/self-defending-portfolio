@@ -365,14 +365,10 @@ main {
   }
 }
 
-/* Five section links still fit a 320 px screen in one row. */
+/* Five section links fit a 320-380 px screen in one row, in any font: "How it works" says "How". */
 @media (max-width: 380px) {
-  .site-nav ul {
-    gap: 0.1rem;
-  }
-
-  .site-nav a {
-    padding: 0.3rem 0.4rem;
+  .site-nav__more {
+    display: none;
   }
 }
 

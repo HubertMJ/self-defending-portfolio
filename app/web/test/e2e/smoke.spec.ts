@@ -277,6 +277,8 @@ test.describe("layout (ADR 0035, amended 2026-10-05; ?mock=1)", () => {
         await expect(toggles).toHaveCount(9);
         expect(await past()).toEqual([]);
         await noHorizontalScroll(page);
+        // The jump bar's five links fit in one row, in any font: "How it works" says "How" this narrow.
+        await nothingPastEdge(page, ".site-header");
         for (const t of await toggles.all()) await t.click();
         expect(await past()).toEqual([]);
         await noHorizontalScroll(page);
@@ -1457,7 +1459,7 @@ test.describe("the visitor's run, told back (mock, ADR 0035 amendment: UX stage 
       await page.goto("/?mock=1&mock-speed=0.2");
       const nav = page.locator(".site-nav");
       await expect(nav).toBeVisible();
-      await expect(nav.locator("a:visible")).toHaveText(["Attack it", "SIEM", "How it works", "About", "Posture"]);
+      await expect(nav.locator("a:visible")).toHaveText(["Attack it", "SIEM", "How", "About", "Posture"], { useInnerText: true });
       await page.locator("#terminal").getByRole("button", { name: /Open the terminal/ }).click();
       await expect(page.locator("#term-input")).toBeEnabled({ timeout: 10_000 });
       for (const d of await page.locator("#console details.verify").all()) await d.evaluate((e) => ((e as HTMLDetailsElement).open = true));
