@@ -365,6 +365,17 @@ main {
   }
 }
 
+/* Five section links still fit a 320 px screen in one row. */
+@media (max-width: 380px) {
+  .site-nav ul {
+    gap: 0.1rem;
+  }
+
+  .site-nav a {
+    padding: 0.3rem 0.4rem;
+  }
+}
+
 .theme-toggle {
   display: grid;
   place-items: center;

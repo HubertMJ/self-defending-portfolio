@@ -54,6 +54,19 @@ describe("stripTodoContent (FIX 2, ADR 0033 review item 25)", () => {
     expect(() => stripTodoContent("<main><!-- TODO-CONTENT: a note --><p>Hi</p></main>")).toThrow(/left in the output/);
   });
 
+  it("drops an unwritten section's navigation link with it, and keeps both once it is written", () => {
+    const nav = '<nav><ul><li><a href="#how">How</a></li><li><a href="#about">About</a></li></ul></nav>';
+    const about = (body) => `<section id="about" data-todo-section><header><h2>About</h2></header><div class="todo-content" data-todo-content="a">${body}</div></section>`;
+    const unwritten = stripTodoContent(nav + about("<p>[TODO-CONTENT: x]</p><p>[TODO-CONTENT: y]</p>"));
+    expect(unwritten).not.toContain('id="about"');
+    expect(unwritten).not.toContain('href="#about"');
+    expect(unwritten).toContain('href="#how"');
+    const partly = stripTodoContent(nav + about("<p>I build and harden platforms.</p><p>[TODO-CONTENT: y]</p>"));
+    expect(partly).toContain("<p>I build and harden platforms.</p>");
+    expect(partly).toContain('href="#about"');
+    expect(partly).not.toContain("TODO-CONTENT");
+  });
+
   it("fails rather than leave a link to a section it removed", () => {
     const html = '<a href="#about">read about me</a><section id="about" data-todo-section><header><h2>About</h2></header><p class="todo-content" data-todo-content="a">[TODO-CONTENT: x]</p></section>';
     expect(() => stripTodoContent(html)).toThrow(/#about/);
@@ -75,31 +88,20 @@ describe("stripTodoContent on src/index.html (review 2, item 9)", () => {
   const sectionIds = (html) => [...html.matchAll(/<section[^>]*\sid="([^"]+)"/g)].map((m) => m[1]);
   const navLinks = (html) => [...html.matchAll(/<nav[\s\S]*?<\/nav>/g)].flatMap((n) => [...n[0].matchAll(/href="#([^"]+)"/g)].map((m) => m[1]));
 
-  it("ships no placeholder, and no About section or About link while nothing of it is written", () => {
+  it("ships no placeholder; the written About stays with its navigation link", () => {
     const out = stripTodoContent(page);
     expect(out).not.toMatch(/todo-content/i);
-    expect(sectionIds(out)).not.toContain("about");
-    expect(navLinks(out)).not.toContain("about");
     // Everything else stays: the sections, the skills list, the real project card, every other link.
     // ADR 0035, amended 2026-10-05: the attack, its response and the SIEM's correlation come right after
-    // the hero; the evidence, the posture and the verify panel follow How it works, above the skills; the
-    // one link to the verify panel is in the footer, not the hero.
-    expect(sectionIds(out)).toEqual(["top", "attack", "console", "correlation", "how", "evidence", "posture", "verify", "skills", "projects"]);
+    // the hero; About, the evidence, the posture and the verify panel follow How it works, above the
+    // skills; the one link to the verify panel is in the footer, not the hero.
+    expect(sectionIds(out)).toEqual(["top", "attack", "console", "correlation", "how", "about", "evidence", "posture", "verify", "skills", "projects"]);
     expect([...out.matchAll(/href="#verify"/g)]).toHaveLength(1);
     expect(out.slice(out.indexOf("<footer"))).toContain('<a href="#verify">Verify the running images</a>');
-    expect(navLinks(out)).toEqual(["attack", "correlation", "how", "posture"]);
+    expect(navLinks(out)).toEqual(["attack", "correlation", "how", "about", "posture"]);
     expect(out).toContain("<li>Kubernetes (k3s)</li>");
     expect(out).toContain("self-defending-portfolio</a></h3>");
     expect(out).not.toContain("[TODO");
-  });
-
-  it("keeps a written About paragraph when the other is still a placeholder, and the section with its link", () => {
-    const out = stripTodoContent(page.replace("<p>[TODO-CONTENT: background and current focus]</p>", "<p>I build and harden platforms.</p>"));
-    expect(out).toContain("<p>I build and harden platforms.</p>");
-    expect(out).not.toContain("what kind of work or role");
-    expect(sectionIds(out)).toContain("about");
-    expect(navLinks(out)).toContain("about");
-    expect(out).not.toMatch(/todo-content/i);
   });
 
   it("keeps a project card's written lines and drops its unwritten tag line", () => {
