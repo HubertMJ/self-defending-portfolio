@@ -195,3 +195,119 @@ CRITICAL/HIGH (`aquasec/trivy:0.75.0`), against upstream's 15, 14, 4 and 13 with
 - Staged like ADR 0023/0024: the images first, from `main`; then the switch commits with the real
   digests (metrics-server after the Ansible run); then the policy commit. The CIS file-mode change is
   a separate Ansible commit, applied with the k3s role run that disables metrics-server.
+
+## Amendment 2026-10-10: the CIS benchmark - not applicable is shown as such, the manual checks get real controls
+
+**Context.** The posture page showed kube-bench at 59 PASS / 3 FAIL / 12 WARN / 14 INFO. The three
+FAILs are the ones this ADR already called "not a finding" (1.1.9 and 1.1.10: no host-local IPAM
+directory under Cilium's own IPAM; 1.2.26: no etcd behind kine), yet the page counted them as
+failures. The 14 INFO are upstream's own k3s skips ("Not Applicable.", e.g. no API server pod
+specification file), which the page lumped into a bare "Info". The 12 WARN are manual or unscored
+checks. Owner decisions, 2026-10-10: mark the three as not applicable with the reason, honestly -
+never a PASS, never hidden, the counts adding up; then drive every WARN that has a real control to a
+verified PASS, and keep what has none as a visible, documented exception.
+
+**1. Where the benchmark is changed: a patch applied at build time.** `app/kube-bench/k3s-cis-1.9.patch`,
+applied by the Dockerfile with `git apply` to upstream's cfg/ at the pinned commit, before upstream's
+tests run. The image is still the one versioned unit the CronJob runs, a bump whose upstream text
+moved fails the build instead of running a stale copy, and the change is one reviewable diff (its
+header lists every check it touches). Rejected: a ConfigMap copy of the benchmark (what this ADR
+removed, for drift); kube-bench's `--skip` flag in the CronJob, which carries no reason - the reason
+would have had to live in the API as a second copy.
+
+**2. Not applicable.** 1.1.9, 1.1.10 and 1.2.26 get `type: skip`, with the reason as the
+remediation in upstream's own form for its k3s skips ("Not Applicable." and why). kube-bench reports
+any skipped check as INFO with `type: skip`; the posture API now counts those in
+`kube_bench.not_applicable` - taken out of `info`, so pass + fail + warn + info + not_applicable is
+every check that ran - and lists them in `not_applicable_checks` (id, title, reason: the
+remediation without its "Not Applicable." opener, scrubbed and capped like the failing list's). The
+reason has one source, the benchmark configuration. upstream's 14 skips are shown the same way,
+with upstream's reasons. The page draws them as their own hatched segment and a folded "Not
+applicable (n)" list under the CIS tile; the percentage stays pass / (pass + fail + warn), which
+never counted INFO and so does not move. The API also lists the WARN checks (`warning`, as `failing`)
+under a folded "Manual / warn (n)", so the exceptions below are named on the page with what would
+fix them. Older API responses (no `not_applicable`) render as before.
+
+**3. The manual checks, with real controls** (Ansible, `ansible/roles/k3s`; each value and its
+reason is in the role's defaults). kube-bench reads every one from the flags k3s logs at start-up,
+as the journal checks above, so removing a setting makes its check WARN again:
+
+| Check | Control | Note |
+|---|---|---|
+| 1.1.11 etcd data directory 700 | the check now stats `/var/lib/rancher/k3s/server/db` (kine's SQLite here, embedded etcd's `db/etcd` otherwise); the role keeps it 0700 | upstream stats the etcd default path, which does not exist on k3s. Rancher's k3s guide echoes `permissions=700` for a non-etcd cluster - a manufactured PASS, rejected. k3s creates the directory 0700 itself (checked) |
+| 1.2.3 DenyServiceExternalIPs | admission plugin | no Service sets `externalIPs` (none on 2026-10-10) |
+| 1.2.9 EventRateLimit | admission plugin + `/etc/rancher/k3s/admission-config.yaml` (0600): server 500 qps / burst 1000, per namespace 50 / 100 | the cluster records almost no events (none in the hour checked) |
+| 1.2.11 AlwaysPullImages | admission plugin | see the trade-off below |
+| 1.2.20 `--request-timeout` | `60s`, the default made explicit | |
+| 1.3.1 `--terminated-pod-gc-threshold` | 100 (default 12500) | finished pods here: 2; the API reads the newest kube-bench pod's log, which the CronJob's history keeps far below 100 |
+| 3.1.3 bootstrap tokens | `--enable-bootstrap-token-auth=false`; the check is automated: PASS only if the API server runs with it false | k3s enables it for `k3s token create` agent joins; this single node joins none and holds no bootstrap token Secret. Joining an agent with such a token needs `k3s_bootstrap_token_auth: true` first |
+| 3.2.2 audit policy covers key concerns | policy gaps closed (below); the check is automated | |
+| 4.2.12 kubelet cipher suites | `tls-cipher-suites` = the six ECDHE AEAD suites k3s already gives the API server | upstream's audit could never pass on k3s: k3s logs the kubelet's flags sorted inside `msg="..."`, `--tls-cipher-suites` comes last, and the closing quote was read as part of the last suite name. The patch drops that quote before the flags are read |
+| 4.2.13 `--pod-max-pids` | 4096 | far above any workload here; bounds a fork bomb in a sandbox pod to one pod's share |
+
+*AlwaysPullImages, the trade-off.* Every new pod's containers get `imagePullPolicy: Always`, so
+the kubelet asks the registry each time a container starts, also when it already holds the image.
+What runs does not change - every image is pinned by digest - but a pod start or a container restart
+now needs its registry (ghcr.io for this repository's images, and the other registries the pins
+name) to answer: during a registry outage a crashed container or a rebooted node does not come back
+until it does, and each sandbox run's pod start makes one more registry round trip. The control's
+purpose - a pod cannot use an image another tenant's credentials pulled - is about multi-tenancy,
+which this cluster does not have; the owner chose it for the benchmark with this cost written down.
+Pods created before the restart keep their policy until recreated; a label or annotation change on
+one (Talon's quarantine label) is still admitted (checked).
+
+*3.2.2, the audit policy.* Against the CIS list: Secrets, `serviceaccounts/token` and the
+`authentication.k8s.io` group (TokenReviews) move into one Metadata rule at the top, ahead of the
+exclusions - so a node's or a controller's read of a Secret is now recorded (it was dropped), and
+TokenReviews still never reach a body-logging rule (ADR 0034's guarantee, kept); ConfigMaps keep
+their Metadata rule; `pods/proxy`, `services/proxy` and `nodes/proxy` get an explicit Metadata rule
+(the proxied traffic is not logged). Pod and Deployment changes were and are covered by the
+Metadata catch-all. More local audit log (reads of Secrets by the node and controllers); nothing
+more is shipped to siem01, whose filter (F2) ships no reads. The automated check reads the node's
+policy file as YAML and requires: the first rule at Metadata naming Secrets and
+`authentication.k8s.io`; no Request/RequestResponse rule naming Secrets or ConfigMaps; `pods/exec`
+and `pods/portforward` at RequestResponse; `pods/proxy` and `services/proxy` at Metadata; every
+exclusion naming only events, endpoints, endpointslices and leases and dropping only get/list/watch;
+an unconditional Metadata catch-all last. It does not prove first-match semantics in general (an
+exclusion with neither verbs nor resources would slip past it); `tests/golden/audit-policy.sh`
+evaluates the policy first-match against 18 requests and is the review.
+
+**4. What stays WARN - visible, with the reason:**
+- **3.1.1 Client certificate authentication should not be used for users.** It is used: the owner
+  (and the automation acting for the owner) authenticates with k3s's `system:admin` client
+  certificate. The alternative the benchmark names, OIDC, needs an identity provider and the API
+  server's OIDC flags, and would not remove k3s's own client-certificate authentication, which its
+  components rely on. Not in reach in this change; a possible follow-up. Not N/A: the check applies.
+- **3.1.2 Service account token authentication should not be used for users.** True today - no
+  person uses a ServiceAccount token, and no long-lived token Secret exists (2026-10-10) - but
+  nothing on the node can verify it, and kube-bench's pod has no API access by design (ADR 0014). A
+  PASS here would be an attestation dressed as a measurement; it stays a manual check.
+
+**Result** (verified, below): 69 PASS / 0 FAIL / 2 WARN / 0 INFO / 17 not applicable = 88 checks,
+97% on the page.
+
+**Verified locally (2026-10-10),** nothing deployed:
+- the image builds with the patch (`git apply` clean, upstream's tests pass on the patched cfg/);
+- a throwaway k3s v1.35.9+k3s1 (Docker, `--privileged`) with k3s01's files rendered by Ansible from
+  this tree (config.yaml, admission-config.yaml, audit-policy.yaml; test-only: no node-ip,
+  protect-kernel-defaults off) starts and answers /readyz; its start-up log written into a journal by
+  systemd-journal-remote 257 (Debian 13, the node's systemd) and read by this image under the
+  CronJob's constraints (shared PID namespace, no network, read-only root, no capabilities,
+  no-new-privileges, every path read-only), with the role's 1.1.20 step applied: the result above.
+  The same with main's files: 60 PASS / 11 WARN / 17 INFO - each of 1.2.3, 1.2.9, 1.2.11, 1.2.20,
+  1.3.1, 3.1.3, 3.2.2, 4.2.12, 4.2.13 WARNs without its setting;
+- behaviour, new vs main's files: a Service with `externalIPs` is refused vs created; a pod asking
+  for IfNotPresent gets Always vs IfNotPresent; a fresh bootstrap token gets 401 vs 200 on `/api`;
+  400 events posted at once into one namespace: 120 created, 280 refused with 429 vs 400 created;
+- 3.2.2 against ten mutations of the policy (Secrets behind the exclusions, `authentication.k8s.io`
+  out of the first rule, the first rule at RequestResponse, ConfigMaps with bodies, no `pods/exec`,
+  no proxies, an exclusion naming pods, an exclusion dropping writes, the catch-all limited to a
+  namespace, no catch-all): each turns PASS into WARN;
+- the API's parser on that run's log (`testdata/kube-bench-cis.log`) and on the live log before the
+  change; the page's parser and render; `tests/golden/audit-policy.sh` rebased onto this change, its
+  two mutations killed.
+
+**Consequences.** A kube-bench image rebuild (CI) and digest pin, and a k3s restart through the
+role in a window (docs/bootstrap.md 8.11). The patch is re-read on each kube-bench bump. Bootstrap
+token joins are off. Pod starts depend on the registries (above). The 3.1.1 and 3.1.2 WARNs stay on
+the page until OIDC (3.1.1) or an API-side check (3.1.2) is decided.

@@ -527,10 +527,21 @@ kubectl -n kube-bench logs job/kube-bench-manual | jq '.Totals'
 ```
 
 kube-bench reads the k3s components' flags from the node's journal (`journalctl -m -u k3s`, the
-`Running kube-apiserver ...` line k3s logs at start-up), with upstream's k3s-cis-1.9 as shipped
-(ADR 0025; until then from `/etc/rancher/k3s/config.yaml`, ADR 0014, which made every flag k3s sets
-itself fail). A flag check that FAILs with an empty actual value means the journal no longer holds
-the last start's lines: `journalctl -u k3s | grep -c 'Running kube-apiserver'` on the node.
+`Running kube-apiserver ...` line k3s logs at start-up), with upstream's k3s-cis-1.9 plus this
+repository's patch (ADR 0025 and its 2026-10-10 amendment; until ADR 0025 from
+`/etc/rancher/k3s/config.yaml`, ADR 0014, which made every flag k3s sets itself fail). A flag check
+that FAILs or WARNs with an empty actual value means the journal no longer holds the last start's
+lines: `journalctl -u k3s | grep -c 'Running kube-apiserver'` on the node.
+
+Expected since 8.11: 69 PASS / 0 FAIL / 2 WARN / 17 INFO in kube-bench's own totals. The 17 INFO
+are the checks the benchmark marks not applicable (`type: skip`) - the posture page shows them as
+"not applicable" with their reason, not as INFO. The 2 WARN are 3.1.1 and 3.1.2, documented
+exceptions (ADR 0025, amendment).
+
+```sh
+kubectl -n kube-bench logs job/kube-bench-manual \
+  | jq -r '.Controls[].tests[].results[] | select(.status!="PASS") | "\(.status) \(.type) \(.test_number)"'
+```
 
 ### 6.2 Falco is running with the least-privileged probe
 
@@ -1400,6 +1411,64 @@ Rollback, per stage: revert the policy commit first (it would refuse upstream's 
 kube-bench images); then revert 2a, and upstream's images come back with the same values. For
 metrics-server: revert the switch commit (Argo CD prunes its objects), then revert the Ansible change
 and run the k3s role again - k3s re-extracts its bundled manifests on start and deploys its own copy.
+
+### 8.11 The CIS benchmark: not applicable, and the manual checks' controls (ADR 0025, amendment 2026-10-10)
+
+Three parts: the kube-bench image (its benchmark patch), the API and the page (the not-applicable
+count and lists), and the k3s role (admission plugins, flags, audit policy). Each is safe alone in
+either order; the page reaches its final numbers when all three are live and kube-bench has run.
+
+1. **Images.** The push builds `kube-bench`, `api` and `web` (build-images.yml). Check and pin:
+
+   ```sh
+   docker run --rm --read-only ghcr.io/hubertmj/self-defending-portfolio/kube-bench@sha256:<d> version   # v0.16.0
+   scripts/bump-image-digest.sh kube-bench sha256:<d>   # cluster/infra/kube-bench/kustomization.yaml
+   scripts/bump-image-digest.sh api sha256:<d>
+   scripts/bump-image-digest.sh web sha256:<d>
+   make lint validate
+   git commit -am "kube-bench, api, web: pin the build-images digests (CIS not applicable)" && git push
+   kubectl -n argocd get application kube-bench portfolio-api hello   # Synced, Healthy
+   ```
+
+   From here the page lists not-applicable checks (upstream's 14 now; 17 after the next kube-bench
+   run) and the WARN checks, and 1.1.9, 1.1.10 and 1.2.26 leave the FAIL count.
+
+2. **The k3s role, in a maintenance window** (one k3s restart, as in 8.2). It writes
+   `/etc/rancher/k3s/admission-config.yaml`, adds the admission plugins and flags to config.yaml,
+   reorders the audit policy, keeps `server/db` at 0700 and restarts k3s once. Running pods keep
+   running; from now on new pods get `imagePullPolicy: Always` (AlwaysPullImages, ADR 0025
+   amendment: their registry must answer).
+
+   ```sh
+   make golden                                                         # the audit-policy golden passes
+   cd ansible
+   ansible-playbook playbooks/cluster.yml --tags k3s --check --diff   # expect: admission-config.yaml (new),
+                                                                       # config.yaml (+ CIS args), audit-policy.yaml,
+                                                                       # "Restart k3s"
+   ansible-playbook playbooks/cluster.yml --tags k3s
+   ssh k3s01 sudo journalctl -u k3s -n 2000 | grep -o 'Running kube-apiserver.*' | tail -n1 \
+     | tr ' ' '\n' | grep -E 'admission|request-timeout|bootstrap-token'   # the four flags
+   cd .. && kubectl get nodes && make runtime-test                     # Ready; Talon still quarantines
+   ```
+
+3. **Run kube-bench now** rather than at 03:17 UTC; the API picks the newest successful run up within
+   its 60 s cache:
+
+   ```sh
+   kubectl -n kube-bench create job --from=cronjob/kube-bench kube-bench-cis-check
+   kubectl -n kube-bench wait --for=condition=complete job/kube-bench-cis-check --timeout=300s
+   kubectl -n kube-bench logs job/kube-bench-cis-check | jq '.Totals'   # 69 pass, 0 fail, 2 warn, 17 info
+   curl -s https://hubertjablon.ski/api/posture | jq '.kube_bench | {pass, fail, warn, info, not_applicable}'
+   ```
+
+   Leave the Job; its TTL removes it after a day, like the CronJob's own.
+
+Rollback: the role first - set `k3s_admission_plugins: [NodeRestriction]`, drop the other CIS
+arguments (or revert the commit; `admission-config.yaml` may stay, nothing reads it once the flag is
+gone) and run the k3s role again: one more restart. A bootstrap-token join needs only
+`k3s_bootstrap_token_auth: true`. Then revert the digest pins if the images are the problem; the
+previous web renders the new API's response as before (it ignores the new fields), and the previous
+API reads the new kube-bench log with the 17 skips in INFO.
 
 ## 9. The SIEM host siem01 (ADR 0034)
 
