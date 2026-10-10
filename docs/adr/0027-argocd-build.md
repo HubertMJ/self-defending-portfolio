@@ -152,3 +152,21 @@ and it reaches the cluster only through `kubectl apply -k cluster/bootstrap/argo
   every other package here, before `bootstrap.sh` runs - otherwise Argo CD itself cannot start.
 - Rollback is the switch commit reverted and the bootstrap re-applied: upstream's image comes back
   with nothing else changed, because the paths, user and configuration are upstream's.
+
+## Amendment 2026-10-10: v3.5.4
+
+`app/argocd` builds upstream's v3.5.4 (`d6d5b248ce00e1a2c512068002a93d3319767087`, 2026-10-06),
+which fixes CVE-2026-55797 (HIGH) in Argo CD itself. Its go.mod, go.sum, `hack/tool-versions.sh` (helm
+4.2.1, kustomize 5.8.1, git-lfs 3.7.1) and Dockerfile are v3.5.3's, so `modules/` carries over
+unchanged, with the raises of ADR 0025's amendment of the same date. Upstream's v3.5.3 -> v3.5.4
+change to `manifests/install.yaml` is the argocd image tag alone - no CRD, RBAC or configuration
+change - and the bootstrap's install.yaml URL moves with the image, now by that commit rather than
+the tag (docs/bootstrap.md 8.11). `argocd version` reports v3.5.4+d6d5b24.dirty.
+
+One behaviour change upstream made in v3.5.4 matters here: the repo-server runs every `kustomize
+build` with upstream's `git` and `helm` wrappers ahead of the real binaries on its PATH (`/bin/sh`
+scripts written under the temp directory; util/kustomize/gitwrapper.go and helmwrapper.go,
+GHSA-9v9p-x54c-58gc and GHSA-fw5c-w8rc-j7fx). The git wrapper refuses a `git fetch` shape it does
+not know; the helm wrapper fixes Helm's config, data and plugin directories. This image has the
+`/bin/sh`, git and helm they need; after rollout, chart rendering (falco), the KSOPS exec plugin
+(cert-manager-issuers) and the remote resource (gateway-api-crds) are each hard-refreshed once.

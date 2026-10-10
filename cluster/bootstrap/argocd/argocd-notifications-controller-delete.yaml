@@ -6,7 +6,7 @@
 # zero subscribers - with the full argocd image, its own Role, a metrics Service and a NetworkPolicy.
 # Alerting in this project is Falco -> Falcosidekick (ADR 0013), not Argo CD.
 #
-# How: kustomize `$patch: delete` on every object install.yaml (v3.5.3) creates for the controller,
+# How: kustomize `$patch: delete` on every object install.yaml (v3.5.4) creates for the controller,
 # matched by kind and name, as argocd-dex-server-delete.yaml does for Dex.
 #
 # The configuration objects:

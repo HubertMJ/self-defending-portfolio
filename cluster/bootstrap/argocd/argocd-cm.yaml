@@ -25,7 +25,7 @@ data:
   # This key is a single string, and a strategic-merge patch replaces a ConfigMap value whole: it
   # cannot append to the list install.yaml ships. Since Argo CD 3.0 the upstream defaults live in
   # that string (they used to be compiled in), so everything above the Trivy block is copied
-  # verbatim from v3.5.3/manifests/install.yaml. An Argo CD bump must re-diff this block against the
+  # verbatim from v3.5.4/manifests/install.yaml. An Argo CD bump must re-diff this block against the
   # new install.yaml, or new upstream defaults are silently dropped:
   #   kubectl kustomize cluster/bootstrap/argocd | grep -A80 'resource.exclusions'
   #

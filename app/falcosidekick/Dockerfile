@@ -14,7 +14,7 @@
 #     points at (`git ls-remote https://github.com/falcosecurity/falcosidekick refs/tags/2.35.0`).
 #     Fetched by full commit hash and checked after the checkout, so a moved tag cannot change what is
 #     compiled. Not one line of upstream's Go source is changed.
-#   * dependencies: upstream's go.mod/go.sum at that commit with three modules raised to the first
+#   * dependencies: upstream's go.mod/go.sum at that commit with the modules raised to the first
 #     releases that fix the findings, and nothing else changed by hand. modules/ holds the result; it
 #     replaces upstream's two files before `go mod download`, and `go mod verify` checks every module
 #     against go.sum (and go.sum against the public checksum database, which the golang image enables
@@ -24,7 +24,22 @@
 #       go mod tidy
 #     grpc and x/crypto are the releases app/talon and app/ksops raised to. Minimal version selection
 #     then moved what those three require (x/net, x/sys, x/text, x/term, x/sync and a few gcp/spiffe
-#     modules); `diff` against upstream's go.mod at FALCOSIDEKICK_COMMIT shows the whole set.
+#     modules). Then, for the MEDIUM and LOW findings with a fix (2026-10-10), on top of that result:
+#       go get github.com/rabbitmq/amqp091-go@v1.14.0 golang.org/x/net@v0.60.0 \
+#              go.opentelemetry.io/otel/sdk@v1.45.0 \
+#              go.opentelemetry.io/otel/exporters/otlp/otlptrace@v1.45.0 \
+#              go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc@v1.45.0 \
+#              go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp@v1.45.0 \
+#              go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploggrpc@v0.21.0 \
+#              go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploghttp@v0.21.0 \
+#              go.opentelemetry.io/otel/sdk/log@v0.21.0 \
+#              go.opentelemetry.io/contrib/bridges/otelslog@v0.20.0
+#       go mod tidy
+#     otlploghttp and otelslog carry no finding: they are raised with the log exporter because the
+#     otel/log API they compile against changed between v0.19.0 and v0.21.0 (otelslog v0.20.0 is the
+#     release built on otel v1.45.0 and log v0.21.0). x/net v0.60.0 requires x/crypto v0.57.0, which
+#     also fixes x/crypto's two MEDIUM findings. `diff` against upstream's go.mod at
+#     FALCOSIDEKICK_COMMIT shows the whole set.
 #   * upstream's own test suite (`make test`: `go vet` + `go test -race`) runs in the builder against
 #     the raised dependencies, with --network=none: no tests, no image (as app/talon, app/ksops).
 #   * the binary as upstream's release builds it (.goreleaser.yml + Makefile LDFLAGS): CGO off,
@@ -42,10 +57,11 @@
 # commit's go.mod/go.sum with the commands above (drop any raise the release has caught up with - if it
 # carries all of them, this image can go and the upstream one comes back), push.
 #
-# Bases pinned by tag and digest (ADR 0008); both are the pins app/api, app/talon and app/ksops use:
-#   golang:1.26.8                          docker.io
-#   distroless/static-debian13:nonroot     gcr.io
-FROM docker.io/library/golang:1.26.8@sha256:0f063af2d465d8dcae54cce04278ada488b96f77b42449c8d071e47d016cc65a AS deps
+# Bases pinned by tag and digest (ADR 0008):
+#   golang:1.26.9                          docker.io   (as app/talon; 1.26.8's standard library has
+#                                                       fixed findings)
+#   distroless/static-debian13:nonroot     gcr.io      (as app/api, app/talon and app/ksops)
+FROM docker.io/library/golang:1.26.9@sha256:d7722066f0b60ceccb6c0643cbed1f5f9e15506ac237146c95333504d7805d89 AS deps
 # falcosecurity/falcosidekick tag 2.35.0.
 ARG FALCOSIDEKICK_COMMIT=09883e3f55dade3c2ab2a471736ea5519aeac418
 WORKDIR /src

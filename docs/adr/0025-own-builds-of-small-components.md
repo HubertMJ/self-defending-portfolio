@@ -195,3 +195,63 @@ CRITICAL/HIGH (`aquasec/trivy:0.75.0`), against upstream's 15, 14, 4 and 13 with
 - Staged like ADR 0023/0024: the images first, from `main`; then the switch commits with the real
   digests (metrics-server after the Ansible run); then the policy commit. The CIS file-mode change is
   a separate Ansible commit, applied with the k3s role run that disables metrics-server.
+
+## Amendment 2026-10-10: MEDIUM and LOW findings with a fix are raised too
+
+Owner decision: the six Go images built from a pinned upstream commit - Talon (ADR 0023), KSOPS
+(ADR 0024), Falcosidekick, metrics-server and the Trivy Operator (this ADR) and Argo CD with its
+helm, kustomize and git-lfs (ADR 0027) - also take every MEDIUM and LOW finding that has a fixed
+release, not only CRITICAL and HIGH. The method is unchanged: a second `go get` of the fixed releases
+on top of the existing `modules/`, `go mod tidy`, upstream's tests in the build with
+`--network=none`; each Dockerfile header lists the commands. The CI gate stays CRITICAL,HIGH.
+
+| Image | Raised (2026-10-10) |
+|---|---|
+| talon | cilium v1.17.17, gopacket v1.6.1, otel sdk/otlptrace/otlptracegrpc v1.45.0 |
+| falcosidekick | amqp091-go v1.14.0, otel sdk and otlptrace exporters v1.45.0, otlploggrpc/otlploghttp/sdk/log v0.21.0, otelslog v0.20.0 |
+| trivy-operator | containerd/v2 v2.3.6, otel sdk/otlptrace/otlptracegrpc v1.45.0 |
+| ksops | mongo-driver v1.17.7, otel sdk v1.45.0 |
+| metrics-server | cel-go v0.29.0, otel sdk/otlptrace/otlptracegrpc v1.45.0 |
+| argocd | slack-go v0.23.1, otel sdk/otlptrace/otlptracegrpc v1.45.0 (helm, git-lfs: x/net only) |
+
+All six, and helm and git-lfs: x/net v0.60.0 (with x/crypto v0.57.0, which it requires) and
+`golang:1.26.9`. The 2026-10-10 Trivy DB has new findings in x/net v0.58.0 (1 HIGH, 2 MEDIUM),
+x/crypto v0.55.0 (2 MEDIUM) and Go 1.26.8's standard library (3 HIGH, 5 MEDIUM, 1 LOW) - in every
+image built with them, so the CRITICAL,HIGH gate would have failed the next build of each image here
+anyway. Images outside this list that still pin 1.26.8 (app/api, app/scenario, app/kube-bench,
+app/coredns, the Cilium images) meet the same gate on their next build.
+
+Not taken as-is:
+- otelslog and otlploghttp (falcosidekick) carry no finding: they move with otlploggrpc and sdk/log
+  because the otel/log API they compile against changed between v0.19.0 and v0.21.0.
+- slack-go v0.16.0 -> v0.23.1 (argocd, through notifications-engine) is the release Argo CD 3.6
+  (v3.6.0-rc2) requires. Argo CD's notification packages pass their tests and are now in the build's
+  test list; notifications-engine's own slack tests pass but for two that expect an empty
+  `blocks=[]` form field, which v0.23.1 leaves out. No notifications controller runs here (ADR 0024).
+- x/net v0.60.0 needs `go 1.26.0` in go.mod. Where that raised the go directive from 1.25.0 -
+  talon, ksops and git-lfs - go.mod also carries `godebug default=go1.25` by hand right below it,
+  so those binaries keep Go 1.25's GODEBUG defaults (urlstrictcolons, tlssecpmlkem,
+  cryptocustomrand, httpservecontentmaxranges) rather than switch to 1.26's; `go mod tidy` keeps the
+  line and `go version -m` shows the DefaultGODEBUG it sets.
+- git-lfs's tests run go test's default vet checks less printf, then printf alone on every package
+  but `commands`: at `go 1.26.0` vet's printf check flags a line upstream has always had there.
+- argocd: `/usr/bin/pebble`, which the Ubuntu 26.04 image ships outside any package and which is
+  compiled with Go 1.26.7 (3 HIGH, 5 MEDIUM, 1 LOW), is deleted from the runtime image; nothing
+  runs it.
+- helm's tests run its two `lint/rules` packages after the rest: one of their tests renames a file
+  in the testdata chart the `lint` packages' TestInvalidYaml reads, an upstream race between
+  packages that failed that test twice on this loaded host. Every test still runs.
+
+Argo CD's own CVE-2026-55797 (HIGH, argo-cd v3.5.3) is a release bump, not a dependency raise: the
+image moves to upstream's v3.5.4 (`d6d5b248ce00e1a2c512068002a93d3319767087`, ADR 0027 "Bumping"),
+whose go.mod, go.sum, tool versions and Dockerfile are v3.5.3's, so every raise above still applies
+unchanged (`go mod tidy` at v3.5.4 changes nothing). The bootstrap's install.yaml URL moves with
+it; upstream's install.yaml differs only in the argocd image tag, which the `images:` entry
+replaces, so the rendered bootstrap is otherwise identical (docs/bootstrap.md 8.11).
+
+Verified locally (Trivy 0.75.0, same DB; "before" is each image's current `main` build): talon
+4 HIGH / 13 MEDIUM / 4 LOW -> 0, falcosidekick 4/12/5 -> 0, trivy-operator 4/11/4 -> 0, ksops
+4/10/2 -> 0, metrics-server 4/10/4 -> 0, argocd v3.5.4 (the full image) 19/38/8 -> 0, and
+`argocd version --client` reports v3.5.4+d6d5b24.dirty, go1.26.9. Upstream's test targets pass in
+every build; metrics-server also in a throwaway k3s v1.35.9+k3s1 (rollout, APIService Available,
+`kubectl top`), falcosidekick under the pod's constraints (`/ping`, an event, a malformed event).

@@ -25,7 +25,7 @@
 # creates them - Kyverno's chart renders five, and none of them is in the cluster. Judging them would
 # make the Enforce gate demand fixes for objects that are never admitted.
 #
-# Fidelity to Argo CD: the same Helm major/minor Argo CD v3.5.3 bundles (hack/tool-versions.sh:
+# Fidelity to Argo CD: the same Helm major/minor Argo CD v3.5.4 bundles (hack/tool-versions.sh:
 # helm4_version=4.2.1), the Application's releaseName and destination namespace, --include-crds
 # (Argo's default), and the Kubernetes version the cluster runs. Capabilities that the charts probe
 # at render time are restated below; anything else that differs from the live API server's answer
@@ -41,7 +41,7 @@ mkdir -p "$OUT_DIR"
 
 DOCKER=${DOCKER:-docker}
 
-# Pinned by tag and digest. Same Helm release Argo CD v3.5.3 renders charts with.
+# Pinned by tag and digest. Same Helm release Argo CD v3.5.4 renders charts with.
 # shellcheck disable=SC1091  # a one-line pin (HELM_IMAGE), sourced from the repository root
 . scripts/lib/helm-image.sh
 

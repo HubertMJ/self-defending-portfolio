@@ -15,7 +15,7 @@
 #     (`git ls-remote https://github.com/viaduct-ai/kustomize-sops refs/tags/v4.5.1`). Fetched by full
 #     commit hash and checked after the checkout, so a moved tag or branch cannot change what is
 #     compiled. Not one line of upstream's Go source is changed.
-#   * dependencies: upstream's go.mod/go.sum at that commit with four modules raised to the first
+#   * dependencies: upstream's go.mod/go.sum at that commit with the modules raised to the first
 #     releases that fix the findings in the binary, and nothing else changed by hand. modules/ holds
 #     the result; it replaces upstream's two files before `go mod download`, and `go mod verify`
 #     checks every module against go.sum (and go.sum against the public checksum database, which the
@@ -25,7 +25,17 @@
 #       go mod tidy
 #     The same grpc and x/crypto releases app/talon raised to. Minimal version selection then moved
 #     what those four require (x/sys, x/oauth2, x/sync, genproto, the opentelemetry and envoy
-#     families, among others); `diff` against upstream's go.mod at KSOPS_COMMIT shows the whole set.
+#     families, among others). Then, for the MEDIUM and LOW findings with a fix (2026-10-10), on top
+#     of that result:
+#       go get go.mongodb.org/mongo-driver@v1.17.7 go.opentelemetry.io/otel/sdk@v1.45.0 \
+#              golang.org/x/net@v0.60.0
+#       go mod tidy
+#     mongo-driver is indirect (its bson package, via sops's Huawei Cloud KMS SDK); v1.17.7 is the
+#     fixed release of its v1 line. x/net v0.60.0 requires x/crypto v0.57.0, which also fixes
+#     x/crypto's two MEDIUM findings. It also moves the go directive from 1.25.0 to 1.26.0, which
+#     would switch the binary to Go 1.26's GODEBUG defaults; go.mod carries `godebug default=go1.25`
+#     by hand right below it, so they stay upstream's (`go mod tidy` keeps the line). `diff` against
+#     upstream's go.mod at KSOPS_COMMIT shows the whole set.
 #     sops, age and kustomize/api - the modules that actually do the decryption and the KRM I/O - are
 #     upstream's versions, untouched.
 #   * upstream's own test suite (`go vet` + `go test -race`, as upstream's `make test`) runs in the
@@ -48,11 +58,11 @@
 # modules/ from that commit's go.mod/go.sum with the commands above (drop any raise the release has
 # caught up with - if it carries all of them, this image can go and the upstream one comes back), push.
 #
-# Bases pinned by tag and digest (ADR 0008), resolved from the registries' index manifests; both are
-# the pins app/api and app/talon already use:
-#   golang:1.26.8                          docker.io
-#   distroless/static-debian13:nonroot     gcr.io
-FROM docker.io/library/golang:1.26.8@sha256:0f063af2d465d8dcae54cce04278ada488b96f77b42449c8d071e47d016cc65a AS deps
+# Bases pinned by tag and digest (ADR 0008), resolved from the registries' index manifests:
+#   golang:1.26.9                          docker.io   (as app/talon; 1.26.8's standard library has
+#                                                       fixed findings)
+#   distroless/static-debian13:nonroot     gcr.io      (as app/api and app/talon)
+FROM docker.io/library/golang:1.26.9@sha256:d7722066f0b60ceccb6c0643cbed1f5f9e15506ac237146c95333504d7805d89 AS deps
 # viaduct-ai/kustomize-sops tag v4.5.1 (also master as of 2026-10-02).
 ARG KSOPS_COMMIT=d9442dc3153d9c16e517a68ce8926c9507386429
 WORKDIR /src
