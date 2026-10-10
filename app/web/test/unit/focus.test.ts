@@ -257,6 +257,29 @@ describe("the SIEM's board, scoped", () => {
     // The SOC figures say they are everyone's.
     expect(m.metrics.querySelector(".corr-metrics__title")?.textContent).toBe("SOC figures · last 24 h, all visitors");
   });
+
+  it("the operator test-suite list stays open across a redraw", async () => {
+    const section = document.createElement("section");
+    const m = { health: document.createElement("div"), metrics: document.createElement("div"), board: document.createElement("div"), rules: document.createElement("div") };
+    const c = answer([incident({ id: "a300000000000003" }), incident({ id: "0b5e7a10c0ff0001", kind: "exec-outside-api", severity: "low", operator_test: true, run_id: "" })]);
+    const handle = mountCorrelation(section, m, { correlation: async () => ({ ok: true, value: c }), correlationRules: async () => ({ ok: false as const, error: "offline" as const, message: "offline" }) });
+    handle.setFocus({ all: true, own: new Set() });
+    await new Promise((r) => setTimeout(r, 10));
+    const fold = m.board.querySelector<HTMLDetailsElement>("details.corr-optests");
+    if (!fold) throw new Error("no operator test-suite list");
+    expect(fold.open).toBe(false);
+    fold.open = true;
+    fold.dispatchEvent(new Event("toggle"));
+    // A redraw (here the scope changing) keeps it open; closing it is kept too.
+    handle.setFocus({ all: true, own: new Set([MINE]) });
+    const redrawn = m.board.querySelector<HTMLDetailsElement>("details.corr-optests");
+    expect(redrawn).not.toBe(fold);
+    expect(redrawn?.open).toBe(true);
+    redrawn!.open = false;
+    redrawn!.dispatchEvent(new Event("toggle"));
+    handle.setFocus({ all: true, own: new Set() });
+    expect(m.board.querySelector<HTMLDetailsElement>("details.corr-optests")?.open).toBe(false);
+  });
 });
 
 describe("the SIEM evidence line", () => {

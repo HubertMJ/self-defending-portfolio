@@ -338,6 +338,9 @@ function operatorTests(tests: CorrelationIncident[], now: number): HTMLElement {
   );
 }
 
+/** The folds a redraw must not close: one of each per board or rule library, keyed by class. */
+const FOLDS = ["corr-contained", "corr-optests", "corr-older", "corr-rulelist"] as const;
+
 /** The kinds that are the project's thesis: caught by correlating sources, where Falco alone says nothing. */
 const PINNED_KINDS: ReadonlySet<string> = new Set(["dns-exfil", "policy-probing", "prevented-not-detected"]);
 const SEVERITY_RANK: Record<string, number> = { critical: 4, high: 3, medium: 2, low: 1 };
@@ -696,6 +699,29 @@ export function mountCorrelation(
   const pulsed = new Set<string>();
   let healthOpen = false;
   const openEvidence = new Set<string>();
+  // The board's and the rule library's one-of-a-kind folds (contained, operator tests, older
+  // incidents, the rule list), by class: reopened after a redraw as the visitor left them.
+  const openFolds = new Set<string>();
+  const trackFolds = (mount: HTMLElement) =>
+    mount.addEventListener(
+      "toggle",
+      (e) => {
+        const t = e.target;
+        const fold = t instanceof HTMLDetailsElement ? FOLDS.find((f) => t.classList.contains(f)) : undefined;
+        if (!fold) return;
+        if ((t as HTMLDetailsElement).open) openFolds.add(fold);
+        else openFolds.delete(fold);
+      },
+      true,
+    );
+  const restoreFolds = (mount: HTMLElement) => {
+    for (const f of openFolds) {
+      const d = mount.querySelector<HTMLDetailsElement>(`details.${f}`);
+      if (d) d.open = true;
+    }
+  };
+  trackFolds(mounts.board);
+  trackFolds(mounts.rules);
   // The evidence folds stay as the visitor left them across a redraw (each poll can redraw the board).
   mounts.board.addEventListener(
     "toggle",
@@ -774,6 +800,8 @@ export function mountCorrelation(
     const tiers = new Set([...own, ...focus.own]);
     replace(mounts.board, focus.all ? renderBoard(data, { now, rules, commit: linkCommit(), own: tiers, openEvidence }) : renderSessionBoard(data, { now, rules, commit: linkCommit(), own: tiers, live: focus.live, openEvidence }));
     replace(mounts.rules, renderRuleLibrary(index, linkCommit(), data.incidents));
+    restoreFolds(mounts.board);
+    restoreFolds(mounts.rules);
     // An incident of the visitor's own run pulses once when it first lands.
     for (const i of data.incidents) {
       if (!i.run_id || !own.has(i.run_id) || pulsed.has(i.id)) continue;
