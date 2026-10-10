@@ -3,26 +3,42 @@ This repository's changes to upstream's cfg/k3s-cis-1.9 at the pinned commit (AD
 fails the build here instead of running a stale override. Everything above the first `diff` line is
 commentary, which `git apply` ignores.
 
-  1.1.9, 1.1.10, 1.2.26   type: skip, with the reason as the remediation, in upstream's own form for
-                          its k3s skips ("Not Applicable." and why). kube-bench reports them INFO with
-                          type "skip"; the posture API lists every skipped check as not applicable,
-                          with this text as the reason (app/api/internal/posture).
+  1.2.26                  type: skip, with the reason as the remediation, in upstream's own form for
+                          its k3s skips ("Not Applicable." and why). kube-bench reports it INFO with
+                          type "skip"; the posture API lists a skipped check whose remediation opens
+                          with "Not Applicable." as not applicable, with the rest as the reason
+                          (app/api/internal/posture). `make validate` (scripts/check-cis-na.sh)
+                          fails if the k3s role ever configures etcd while this skip stands.
+  1.1.9, 1.1.10           the CNI configuration directory this node really uses, /etc/cni/net.d
+                          (Cilium's 05-cilium.conflist; containerd's default, which k3s keeps when
+                          flannel is off), not the host-local IPAM directory /var/lib/cni/networks,
+                          which Cilium's own IPAM does not create. The CronJob mounts it read-only.
+                          An empty or missing directory still FAILs.
   1.1.11                  the datastore directory k3s really uses (server/db, kine's SQLite here),
                           not the etcd default path that does not exist on k3s.
   3.1.3                   automated: PASS only if the API server runs with
                           --enable-bootstrap-token-auth=false (ansible/roles/k3s).
-  3.2.2                   automated: the node's audit policy, read as YAML, has the structure the
-                          benchmark asks for (ansible/roles/k3s/templates/audit-policy.yaml.j2).
+  3.2.2                   automated: JSONPath tests over the node's audit policy
+                          (ansible/roles/k3s/templates/audit-policy.yaml.j2). They check: the first
+                          rule is an unconditional Metadata rule naming Secrets and
+                          authentication.k8s.io; there are exactly three None rules, at positions
+                          1-3, each pinned (the control-plane users' and the nodes' reads; events,
+                          endpoints, endpointslices, leases); no Request or RequestResponse rule
+                          names Secrets or ConfigMaps; pods/exec and pods/portforward are named by a
+                          RequestResponse rule, pods/proxy and services/proxy by a Metadata rule; the
+                          last rule is an unconditional Metadata catch-all. They do not evaluate
+                          first-match order between the other rules: tests/golden/audit-policy.sh does.
   4.2.12                  the closing quote of k3s's log line is dropped before the flags are read:
                           k3s logs the kubelet's flags sorted inside msg="...", --tls-cipher-suites
                           comes last, and upstream's audit read the quote as part of the last suite
                           name, so the check could never pass.
+  4.2.13                  --pod-max-pids must be at least 1 (upstream accepts any value, -1 = none).
 
 Regenerate: check out upstream at KUBE_BENCH_COMMIT, edit cfg/k3s-cis-1.9, `git diff` below this
 header.
 
 diff --git a/cfg/k3s-cis-1.9/controlplane.yaml b/cfg/k3s-cis-1.9/controlplane.yaml
-index c748b60..c531f17 100644
+index c748b60..03c0a40 100644
 --- a/cfg/k3s-cis-1.9/controlplane.yaml
 +++ b/cfg/k3s-cis-1.9/controlplane.yaml
 @@ -26,10 +26,20 @@ groups:
@@ -48,17 +64,21 @@ index c748b60..c531f17 100644
          scored: false
  
    - id: 3.2
-@@ -48,7 +58,66 @@ groups:
+@@ -48,7 +58,97 @@ groups:
  
        - id: 3.2.2
          text: "Ensure that the audit policy covers key security concerns (Manual)"
 -        type: "manual"
 +        audit_config: "cat /etc/rancher/k3s/audit-policy.yaml"
++        # The node's audit policy, read as YAML (this repository's ansible/roles/k3s template). The
++        # rule order is fixed: [0] Secrets/tokens, [1]-[3] the only None rules, then the rest. Every
++        # test below is a JSONPath over the policy; a path whose key is missing yields nothing, so the
++        # exclusions are pinned rule by rule and counted, not described in general.
 +        tests:
 +          bin_op: and
 +          test_items:
-+            # Secrets and the authentication API (TokenReviews) are matched by the first rule, at
-+            # Metadata: recorded for every user, and never with a body.
++            # [0]: Secrets and the authentication API (TokenReviews) at Metadata, for every user -
++            # no users, userGroups, verbs or namespaces narrow it.
 +            - path: "{.rules[0].level}"
 +              compare:
 +                op: eq
@@ -71,6 +91,41 @@ index c748b60..c531f17 100644
 +              compare:
 +                op: regex
 +                value: '(^| )authentication\.k8s\.io( |$)'
++            - path: "{.rules[0].users}{.rules[0].userGroups}{.rules[0].verbs}{.rules[0].namespaces}"
++              set: false
++            # The exclusions: exactly three None rules, at [1], [2] and [3], each pinned. [1] and [2]
++            # drop only reads, by the control-plane users and the nodes; [3] drops events, endpoints,
++            # endpointslices and leases (every verb, for every user).
++            - path: '{.rules[?(@.level=="None")].level}'
++              compare:
++                op: eq
++                value: "None None None"
++            - path: "{.rules[1].level} {.rules[2].level} {.rules[3].level}"
++              compare:
++                op: eq
++                value: "None None None"
++            - path: "{.rules[1].users[*]}"
++              compare:
++                op: eq
++                value: "system:kube-scheduler system:kube-controller-manager system:apiserver"
++            - path: "{.rules[1].verbs[*]}"
++              compare:
++                op: eq
++                value: "get list watch"
++            - path: "{.rules[1].userGroups}{.rules[2].users}"
++              set: false
++            - path: "{.rules[2].userGroups[*]}"
++              compare:
++                op: eq
++                value: "system:nodes"
++            - path: "{.rules[2].verbs[*]}"
++              compare:
++                op: eq
++                value: "get list watch"
++            - path: "{.rules[3].resources[*].resources[*]}"
++              compare:
++                op: eq
++                value: "events endpoints endpointslices leases"
 +            # ConfigMaps and Secrets are never logged with a request or response body.
 +            - path: '{.rules[?(@.level=="Request")].resources[*].resources[*]} {.rules[?(@.level=="RequestResponse")].resources[*].resources[*]}'
 +              compare:
@@ -97,16 +152,8 @@ index c748b60..c531f17 100644
 +              compare:
 +                op: regex
 +                value: '(^| )services/proxy( |$)'
-+            # The exclusions (level None) name only high-volume objects, and drop only reads.
-+            - path: '{.rules[?(@.level=="None")].resources[*].resources[*]}'
-+              compare:
-+                op: regex
-+                value: '^((events|endpoints|endpointslices|leases)( |$))+$'
-+            - path: '{.rules[?(@.level=="None")].verbs[*]}'
-+              compare:
-+                op: regex
-+                value: '^((get|list|watch)( |$))+$'
-+            # The last rule records everything else, Pod and Deployment changes included, at Metadata.
++            # The last rule records everything else, Pod and Deployment changes included, at Metadata,
++            # with nothing narrowing it.
 +            - path: "{.rules[-1:].level}"
 +              compare:
 +                op: eq
@@ -117,18 +164,19 @@ index c748b60..c531f17 100644
            Review the audit policy provided for the cluster and ensure that it covers
            at least the following areas,
 diff --git a/cfg/k3s-cis-1.9/master.yaml b/cfg/k3s-cis-1.9/master.yaml
-index 7159758..121932e 100644
+index 7159758..28cb182 100644
 --- a/cfg/k3s-cis-1.9/master.yaml
 +++ b/cfg/k3s-cis-1.9/master.yaml
-@@ -120,6 +120,7 @@ groups:
+@@ -120,7 +120,7 @@ groups:
  
        - id: 1.1.9
          text: "Ensure that the Container Network Interface file permissions are set to 600 or more restrictive (Automated)"
-+        type: "skip"
-         audit: find /var/lib/cni/networks -type f ! -name lock 2> /dev/null | xargs --no-run-if-empty stat -c permissions=%a
+-        audit: find /var/lib/cni/networks -type f ! -name lock 2> /dev/null | xargs --no-run-if-empty stat -c permissions=%a
++        audit: find /etc/cni/net.d -type f ! -name lock 2> /dev/null | xargs --no-run-if-empty stat -c permissions=%a
          use_multiple_values: true
          tests:
-@@ -129,28 +130,26 @@ groups:
+           test_items:
+@@ -129,28 +129,26 @@ groups:
                  op: bitmask
                  value: "600"
          remediation: |
@@ -136,14 +184,15 @@ index 7159758..121932e 100644
 -          Note that for many CNIs, a lock file is created with permissions 750. This is expected and can be ignored.
 -          If you modify your CNI configuration, ensure that the permissions are set to 600.
 -          For example, chmod 600 /var/lib/cni/networks/<filename>
-+          Not Applicable.
-+          The CNI is Cilium with its own IPAM. There is no host-local IPAM directory /var/lib/cni/networks, so there are no files to check; kube-bench would report the missing files as FAIL.
++          The CNI configuration is Cilium's, in /etc/cni/net.d (containerd's default directory, which k3s leaves unchanged when flannel is disabled). Cilium writes it 600.
++          If this check fails, run the below command on the node.
++          chmod 600 /etc/cni/net.d/<filename>
          scored: true
  
        - id: 1.1.10
          text: "Ensure that the Container Network Interface file ownership is set to root:root (Automated)"
-+        type: "skip"
-         audit: find /var/lib/cni/networks -type f 2> /dev/null | xargs --no-run-if-empty stat -c %U:%G
+-        audit: find /var/lib/cni/networks -type f 2> /dev/null | xargs --no-run-if-empty stat -c %U:%G
++        audit: find /etc/cni/net.d -type f 2> /dev/null | xargs --no-run-if-empty stat -c %U:%G
          use_multiple_values: true
          tests:
            test_items:
@@ -152,8 +201,8 @@ index 7159758..121932e 100644
 -          Run the below command (based on the file location on your system) on the control plane node.
 -          For example,
 -          chown root:root /var/lib/cni/networks/<filename>
-+          Not Applicable.
-+          The CNI is Cilium with its own IPAM. There is no host-local IPAM directory /var/lib/cni/networks, so there are no files to check; kube-bench would report the missing files as FAIL.
++          The CNI configuration is Cilium's, in /etc/cni/net.d. If this check fails, run the below command on the node.
++          chown root:root /etc/cni/net.d/<filename>
          scored: true
  
        - id: 1.1.11
@@ -163,7 +212,7 @@ index 7159758..121932e 100644
          tests:
            test_items:
              - flag: "permissions"
-@@ -158,12 +157,9 @@ groups:
+@@ -158,12 +156,9 @@ groups:
                  op: bitmask
                  value: "700"
          remediation: |
@@ -179,7 +228,7 @@ index 7159758..121932e 100644
          scored: false
  
        - id: 1.1.12
-@@ -736,17 +732,14 @@ groups:
+@@ -736,17 +731,14 @@ groups:
  
        - id: 1.2.26
          text: "Ensure that the --etcd-cafile argument is set as appropriate (Automated)"
@@ -201,7 +250,7 @@ index 7159758..121932e 100644
  
        - id: 1.2.27
 diff --git a/cfg/k3s-cis-1.9/node.yaml b/cfg/k3s-cis-1.9/node.yaml
-index d6c5cc3..5daea36 100644
+index d6c5cc3..64b0520 100644
 --- a/cfg/k3s-cis-1.9/node.yaml
 +++ b/cfg/k3s-cis-1.9/node.yaml
 @@ -390,7 +390,7 @@ groups:
@@ -213,3 +262,13 @@ index d6c5cc3..5daea36 100644
          audit_config: "/bin/sh -c 'if test -e $kubeletconf; then /bin/cat $kubeletconf; fi' "
          tests:
            test_items:
+@@ -417,6 +417,9 @@ groups:
+           test_items:
+             - flag: --pod-max-pids
+               path: '{.podPidsLimit}'
++              compare:
++                op: gte
++                value: 1
+         remediation: |
+           Decide on an appropriate level for this parameter and set it,
+           If using a K3s config file /etc/rancher/k3s/config.yaml, edit the file to set `podPidsLimit` to

@@ -20,12 +20,13 @@
 #     plus -trimpath, -s -w and an empty build id.
 #   * cfg/ is upstream's at the same commit, at /opt/kube-bench/cfg as in upstream's image (kube-bench
 #     looks for ./cfg in its working directory), with one change: k3s-cis-1.9.patch, applied with
-#     `git apply` before upstream's tests run (ADR 0025, amendment 2026-10-10). It marks the three
-#     checks that do not apply to this cluster as skipped, with the reason, points 1.1.11 at k3s's
-#     datastore directory, makes 4.2.12 read the kubelet's flags without k3s's closing quote, and
-#     turns the manual 3.1.3 and 3.2.2 into automated checks; the patch's header lists them. Every
-#     other check, journalctl audits included, runs as upstream ships it. A bump whose upstream text
-#     moved fails at `git apply`, rather than running a stale copy.
+#     `git apply` before upstream's tests run (ADR 0025, amendment 2026-10-10). It marks 1.2.26 (no
+#     etcd) as not applicable, with the reason; points 1.1.9 and 1.1.10 at the CNI configuration
+#     directory and 1.1.11 at the datastore directory this node really uses; makes 4.2.12 read the
+#     kubelet's flags without k3s's closing quote and 4.2.13 require a positive limit; and turns the
+#     manual 3.1.3 and 3.2.2 into automated checks. The patch's header lists them. Every other check,
+#     journalctl audits included, runs as upstream ships it. A bump whose upstream text moved fails at
+#     `git apply`, rather than running a stale copy.
 #   * runtime: Wolfi (Chainguard's glibc distribution), not upstream's Alpine, because the checks need
 #     a journal reader. kube-bench's k3s-cis-1.9 reads the flags each k3s component really runs with
 #     from the line k3s logs at start-up (`journalctl -m -u k3s | grep 'Running kube-apiserver'`);

@@ -16,8 +16,8 @@
 # 2026-10-10).
 #
 # The benchmark is upstream's k3s-cis-1.9 in the image, with app/kube-bench/k3s-cis-1.9.patch applied
-# (ADR 0025, amendment 2026-10-10: three checks marked not applicable, four others made to read this
-# node correctly; the patch's header lists them). Its audits read the flags
+# (ADR 0025, amendment 2026-10-10: 1.2.26 marked not applicable, others made to read this node's real
+# paths and flags; the patch's header lists them). Its audits read the flags
 # each k3s component really runs with from the line k3s logs at start-up, `journalctl -m -u k3s |
 # grep 'Running kube-apiserver'`, so the node's journal is mounted read-only below and the image
 # carries journalctl. (Until ADR 0025 the audits read /etc/rancher/k3s/config.yaml instead, which
@@ -133,6 +133,12 @@ spec:
                 - name: journal
                   mountPath: /var/log/journal
                   readOnly: true
+                # The CNI configuration (Cilium's 05-cilium.conflist), whose mode and owner 1.1.9 and
+                # 1.1.10 check (ADR 0025, amendment 2026-10-10). containerd's default directory: k3s
+                # with flannel off configures no other, and the Cilium chart's cni.confPath is unset.
+                - name: cni-conf
+                  mountPath: /etc/cni/net.d
+                  readOnly: true
                 - name: tmp
                   mountPath: /tmp
           volumes:
@@ -153,6 +159,10 @@ spec:
             - name: journal
               hostPath:
                 path: /var/log/journal
+                type: Directory
+            - name: cni-conf
+              hostPath:
+                path: /etc/cni/net.d
                 type: Directory
             - name: tmp
               emptyDir:
