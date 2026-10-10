@@ -119,6 +119,38 @@ argument_specs:
         description: Namespaces whose workload changes are audited at RequestResponse level.
         type: list
         elements: str
+      k3s_admission_plugins:
+        description: kube-apiserver enable-admission-plugins; replaces k3s's NodeRestriction, so it must list it.
+        type: list
+        elements: str
+      k3s_admission_config_path:
+        description: Path of the API server's admission configuration file (EventRateLimit).
+        type: str
+        default: /etc/rancher/k3s/admission-config.yaml
+      k3s_event_rate_limits:
+        description: EventRateLimit limits, each with type, qps, burst and optionally cache_size.
+        type: list
+        elements: dict
+      k3s_request_timeout:
+        description: kube-apiserver request-timeout.
+        type: str
+        default: 60s
+      k3s_bootstrap_token_auth:
+        description: kube-apiserver enable-bootstrap-token-auth; k3s defaults it to true.
+        type: bool
+        default: false
+      k3s_terminated_pod_gc_threshold:
+        description: kube-controller-manager terminated-pod-gc-threshold.
+        type: int
+        default: 100
+      k3s_kubelet_tls_cipher_suites:
+        description: kubelet tls-cipher-suites.
+        type: list
+        elements: str
+      k3s_pod_max_pids:
+        description: kubelet pod-max-pids.
+        type: int
+        default: 4096
       k3s_kube_apiserver_extra_args:
         description: Additional kube-apiserver-arg entries.
         type: list

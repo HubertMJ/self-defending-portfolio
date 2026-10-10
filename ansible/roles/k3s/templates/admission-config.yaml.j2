@@ -1,0 +1,21 @@
+# {{ ansible_managed }}
+# The API server's admission configuration (--admission-control-config-file): EventRateLimit's limits
+# (CIS k3s 1.2.9; ADR 0025, amendment 2026-10-10). Plugins without an entry here run with their
+# defaults, as they did before this file existed.
+---
+apiVersion: apiserver.config.k8s.io/v1
+kind: AdmissionConfiguration
+plugins:
+  - name: EventRateLimit
+    configuration:
+      apiVersion: eventratelimit.admission.k8s.io/v1alpha1
+      kind: Configuration
+      limits:
+{% for limit in k3s_event_rate_limits %}
+        - type: {{ limit.type }}
+          qps: {{ limit.qps }}
+          burst: {{ limit.burst }}
+{% if limit.cache_size is defined %}
+          cacheSize: {{ limit.cache_size }}
+{% endif %}
+{% endfor %}

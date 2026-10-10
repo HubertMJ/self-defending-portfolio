@@ -100,6 +100,17 @@
     - k3s_was_running | bool
     - not ansible_check_mode
 
+# Before config.yaml: the API server refuses to start with an admission-control-config-file that
+# does not exist.
+- name: Render the API server admission configuration
+  ansible.builtin.template:
+    src: admission-config.yaml.j2
+    dest: "{{ k3s_admission_config_path }}"
+    owner: root
+    group: root
+    mode: "0600"
+  notify: Restart k3s
+
 - name: Render the k3s server configuration
   ansible.builtin.template:
     src: config.yaml.j2
@@ -181,6 +192,17 @@
   loop: "{{ k3s_server_certs.files }}"
   loop_control:
     label: "{{ item.path }}"
+
+# CIS k3s 1.1.11 (this repository's version of the check, ADR 0025 amendment 2026-10-10): the
+# datastore directory - kine's SQLite database here, embedded etcd's data under db/etcd otherwise -
+# root-only. k3s creates it 0700; this keeps it so, and is a no-op while it is.
+- name: Restrict the k3s datastore directory to root (CIS 1.1.11)
+  ansible.builtin.file:
+    path: /var/lib/rancher/k3s/server/db
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
 
 # no_log on both tasks below: the kubeconfig embeds the cluster CA plus the
 # admin client certificate and key, and without it Ansible prints the whole

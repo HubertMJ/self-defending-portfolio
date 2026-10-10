@@ -29,22 +29,31 @@ tls-san:
   - "{{ san }}"
 {% endfor %}
 
+# The CIS settings (ADR 0025, amendment 2026-10-10) are explained in the role's defaults; kube-bench
+# checks each of them daily from the flags k3s logs at start-up.
 kube-apiserver-arg:
   - "audit-log-path={{ k3s_audit_log_path }}"
   - "audit-policy-file={{ k3s_audit_policy_path }}"
   - "audit-log-maxage={{ k3s_audit_log_maxage }}"
   - "audit-log-maxbackup={{ k3s_audit_log_maxbackup }}"
   - "audit-log-maxsize={{ k3s_audit_log_maxsize }}"
+  - "enable-admission-plugins={{ k3s_admission_plugins | join(',') }}"
+  - "admission-control-config-file={{ k3s_admission_config_path }}"
+  - "request-timeout={{ k3s_request_timeout }}"
+  - "enable-bootstrap-token-auth={{ k3s_bootstrap_token_auth | ternary('true', 'false') }}"
 {% for arg in k3s_kube_apiserver_extra_args %}
   - "{{ arg }}"
 {% endfor %}
 
-{% if k3s_kubelet_extra_args | length > 0 %}
+kube-controller-manager-arg:
+  - "terminated-pod-gc-threshold={{ k3s_terminated_pod_gc_threshold }}"
+
 # protect-kernel-defaults is not repeated here: the server-level key above is
 # already passed through to the embedded kubelet, and setting it twice made the
 # two definitions able to drift.
 kubelet-arg:
+  - "tls-cipher-suites={{ k3s_kubelet_tls_cipher_suites | join(',') }}"
+  - "pod-max-pids={{ k3s_pod_max_pids }}"
 {% for arg in k3s_kubelet_extra_args %}
   - "{{ arg }}"
 {% endfor %}
-{% endif %}
