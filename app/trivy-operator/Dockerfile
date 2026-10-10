@@ -15,16 +15,24 @@
 #     points at (`git ls-remote https://github.com/aquasecurity/trivy-operator refs/tags/v0.34.0`).
 #     Fetched by full commit hash and checked after the checkout, so a moved tag cannot change what is
 #     compiled. Not one line of upstream's Go source is changed.
-#   * dependencies: upstream's go.mod/go.sum at that commit with one module raised, and nothing else
-#     changed by hand. modules/ holds the result; it replaces upstream's two files before `go mod
+#   * dependencies: upstream's go.mod/go.sum at that commit with the modules raised that carry findings
+#     in the binary, and nothing else changed by hand. modules/ holds the result; it replaces upstream's two files before `go mod
 #     download`, and `go mod verify` checks every module against go.sum (and go.sum against the public
 #     checksum database, which the golang image enables by default). Produced with, in a checkout of
 #     TRIVY_OPERATOR_COMMIT:
 #       go get google.golang.org/grpc@v1.83.2
 #       go mod tidy
 #     The grpc release app/talon and app/ksops raised to. Minimal version selection then moved three
-#     modules grpc requires (two gcp detectors, go-spiffe); `diff` against upstream's go.mod at
-#     TRIVY_OPERATOR_COMMIT shows the whole set. Trivy itself (the library the operator embeds for
+#     modules grpc requires (two gcp detectors, go-spiffe). Then, for the MEDIUM and LOW findings with
+#     a fix (2026-10-10), on top of that result:
+#       go get github.com/containerd/containerd/v2@v2.3.6 golang.org/x/net@v0.60.0 \
+#              go.opentelemetry.io/otel/sdk@v1.45.0 \
+#              go.opentelemetry.io/otel/exporters/otlp/otlptrace@v1.45.0 \
+#              go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc@v1.45.0
+#       go mod tidy
+#     containerd v2.3.6, the patch release of upstream's 2.3 line that fixes both advisories; x/net
+#     v0.60.0 requires x/crypto v0.57.0, which also fixes x/crypto's two MEDIUM findings. `diff`
+#     against upstream's go.mod at TRIVY_OPERATOR_COMMIT shows the whole set. Trivy itself (the library the operator embeds for
 #     config audits and report types) and the Kubernetes libraries are upstream's versions.
 #   * upstream's own unit tests (`mage test:unit`: `go test -short -timeout 60s ./...`, with
 #     magefile.go's CGO_ENABLED=0 and GOEXPERIMENT=jsonv2) run in the builder against the raised
@@ -42,10 +50,11 @@
 # chart release), regenerate modules/ with the commands above (drop any raise the release has caught up
 # with - if it carries all of them, this image can go and the upstream one comes back), push.
 #
-# Bases pinned by tag and digest (ADR 0008); both are the pins app/api, app/talon and app/ksops use:
-#   golang:1.26.8                          docker.io
-#   distroless/static-debian13:nonroot     gcr.io
-FROM docker.io/library/golang:1.26.8@sha256:0f063af2d465d8dcae54cce04278ada488b96f77b42449c8d071e47d016cc65a AS deps
+# Bases pinned by tag and digest (ADR 0008):
+#   golang:1.26.9                          docker.io   (as app/talon; 1.26.8's standard library has
+#                                                       fixed findings)
+#   distroless/static-debian13:nonroot     gcr.io      (as app/api, app/talon and app/ksops)
+FROM docker.io/library/golang:1.26.9@sha256:d7722066f0b60ceccb6c0643cbed1f5f9e15506ac237146c95333504d7805d89 AS deps
 # aquasecurity/trivy-operator tag v0.34.0.
 ARG TRIVY_OPERATOR_COMMIT=7107830178ae50e96e9f09d98976e51e6152759f
 WORKDIR /src
