@@ -493,8 +493,8 @@ describe("code review (REQUEST_CHANGES) fixes", () => {
       failing: [],
       not_applicable: 3,
       not_applicable_checks: [
-        { id: "1.1.9", title: "CNI file permissions", reason: "The CNI is Cilium with its own IPAM." },
-        { id: "1.1.10", title: "CNI file ownership", reason: "The CNI is Cilium with its own IPAM." },
+        { id: "1.1.1", title: "API server pod specification file permissions", reason: "By default, K3s embeds the api server within the k3s process." },
+        { id: "1.1.12", title: "etcd data directory ownership", reason: "For K3s, etcd is embedded within the k3s process." },
         { id: "1.2.26", title: "--etcd-cafile", reason: "There is no etcd." },
       ],
       warning: [
@@ -505,13 +505,14 @@ describe("code review (REQUEST_CHANGES) fixes", () => {
     const el = renderPostureData({ ...p, kube_bench }, T);
     const cis = [...el.querySelectorAll(".tile")][2];
     expect(cis.querySelector(".tile__value")?.textContent).toBe("97% pass");
+    expect(cis.querySelector(".chip")?.textContent).toBe("✓No failures · 2 manual / warn");
     const groups = [...cis.querySelectorAll("details.tile__group")] as HTMLDetailsElement[];
     expect(groups.map((g) => g.querySelector("summary")?.textContent)).toEqual(["Manual / warn (2)", "Not applicable (3)"]);
     expect(groups.every((g) => !g.open)).toBe(true);
     expect(groups[0].querySelectorAll("li")).toHaveLength(2);
     expect(groups[0].querySelector(".tile__remedy p")?.textContent).toBe("Use OIDC.");
     const na = [...groups[1].querySelectorAll("li")];
-    expect(na.map((li) => li.querySelector("code")?.textContent)).toEqual(["1.1.9", "1.1.10", "1.2.26"]);
+    expect(na.map((li) => li.querySelector("code")?.textContent)).toEqual(["1.1.1", "1.1.12", "1.2.26"]);
     expect(na[2].querySelector(".tile__reason")?.textContent).toBe("There is no etcd.");
     const legend = [...el.querySelectorAll(".stack-figure")].find((f) => f.textContent?.includes("CIS"));
     expect([...(legend?.querySelectorAll(".legend li") ?? [])].map((li) => li.textContent)).toEqual(["Pass69", "Fail0", "Manual / warn2", "Info0", "Not applicable3"]);

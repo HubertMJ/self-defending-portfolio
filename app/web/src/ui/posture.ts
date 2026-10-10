@@ -313,7 +313,7 @@ export function renderPostureData(p: Posture, now: number = Date.now(), commit =
       value: kbScored ? `${kbPct}%` : "–",
       unit: "pass",
       tone: kb.fail > 0 ? "warning" : kbScored ? "good" : "neutral",
-      status: kb.fail > 0 ? `${kb.fail} failing` : kbScored ? "No failures" : "Not run yet",
+      status: kb.fail > 0 ? `${kb.fail} failing` : kbScored ? (kb.warn > 0 ? `No failures · ${kb.warn} manual / warn` : "No failures") : "Not run yet",
       foot: kb.last_run ? ["kube-bench, last run ", timeEl(kb.last_run, when(kb.last_run, now))] : ["kube-bench, last run never"],
       more: benchMore(kb),
     }),
