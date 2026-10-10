@@ -365,7 +365,7 @@ main {
   }
 }
 
-/* Five section links fit a 320-380 px screen in one row, in any font: "How it works" says "How". */
+/* Five section links fit a 320-380 px screen in one row: "How it works" says "How". */
 @media (max-width: 380px) {
   .site-nav__more {
     display: none;

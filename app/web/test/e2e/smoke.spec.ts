@@ -277,8 +277,9 @@ test.describe("layout (ADR 0035, amended 2026-10-05; ?mock=1)", () => {
         await expect(toggles).toHaveCount(9);
         expect(await past()).toEqual([]);
         await noHorizontalScroll(page);
-        // The jump bar's five links fit in one row, in any font: "How it works" says "How" this narrow.
-        await nothingPastEdge(page, ".site-header");
+        // The jump bar's five links fit in one row ("How it works" says "How" this narrow); with a wider
+        // font it scrolls sideways inside itself, never the page (noHorizontalScroll above).
+        if (!wide) await nothingPastEdge(page, ".site-header");
         for (const t of await toggles.all()) await t.click();
         expect(await past()).toEqual([]);
         await noHorizontalScroll(page);
