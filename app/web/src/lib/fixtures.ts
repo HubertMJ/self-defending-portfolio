@@ -169,7 +169,8 @@ export function posture(now: number = Date.now()): Posture {
         { image: "ghcr.io/hubertmj/self-defending-portfolio/web:main", own: true, critical: 0, high: 0, fixable: 0 },
       ],
     },
-    kube_bench: { last_run: new Date(now - 5 * 3600_000).toISOString(), pass: 98, fail: 4, warn: 21, info: 2, not_applicable: 17 },
+    // The k3s benchmark's 88 checks (ADR 0025, amendment 2026-10-10): pass + fail + warn + info + not_applicable.
+    kube_bench: { last_run: new Date(now - 5 * 3600_000).toISOString(), pass: 69, fail: 2, warn: 2, info: 0, not_applicable: 15 },
     falco: { alerts_24h: 17 },
     talon: { actions_24h: 9 },
   };

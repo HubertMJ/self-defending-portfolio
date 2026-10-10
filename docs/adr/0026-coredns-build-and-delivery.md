@@ -353,7 +353,10 @@ golang.org/x/crypto@v0.57.0` + `go mod tidy` (the Dockerfile header lists it). x
 printf check reports `%q` applied to a non-rune integer. Upstream has three, all in test code (two
 test failure messages and one test helper print a number as a quoted character), which make
 `go vet` and go test's own vet pass fail. Checked: the same three with Go 1.26.8 and 1.26.9 once
-go.mod says 1.26.0, none with 1.25.0. The test stage now runs vet without the printf analyzer
-(`-printf=false`; go test with the default vet list minus printf); every other vet check and every
-test still runs, and the shipped binary is not affected. printf goes back on when upstream fixes the
-three. The image reaches the cluster only through the k3s role (`k3s_coredns_image`), as before.
+go.mod says 1.26.0, none with 1.25.0. The test stage now runs those three packages (plugin/dns64,
+plugin/file, plugin/test) without the printf analyzer - `go vet -printf=false`, and go test with
+its default vet list minus printf - and every other package with the full set; every test still
+runs, and the shipped binary is not affected. printf goes back on for the three when upstream fixes
+them. go.mod also says `godebug default=go1.25`, so the binary keeps the run-time defaults it had
+under `go 1.25.0` (`go version -m` shows the go1.25 DefaultGODEBUG set): the language-version bump
+changes what vet reads, not how CoreDNS behaves. The image reaches the cluster only through the k3s role (`k3s_coredns_image`), as before.

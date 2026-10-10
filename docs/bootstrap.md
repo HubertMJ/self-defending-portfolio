@@ -1433,7 +1433,10 @@ either order; the page reaches its final numbers when all three are live and kub
    From here the page lists not-applicable checks (upstream's 14 now; 15 after the next kube-bench
    run, with 1.2.26) and the WARN checks. The next kube-bench run also mounts `/etc/cni/net.d`:
    1.1.9 and 1.1.10 read Cilium's conflist there (0600 root:root on 2026-10-10) and pass, and
-   1.2.26 leaves the FAIL count.
+   1.2.26 leaves the FAIL count. The mount is `type: Directory`: on a node without
+   `/etc/cni/net.d` the kube-bench pod does not start at all (the Job fails, and the panel keeps the
+   last good run, growing stale) rather than reporting 1.1.9/1.1.10 as FAIL -
+   `kubectl -n kube-bench describe pod` names the missing path.
 
 2. **The k3s role, in a maintenance window** (one k3s restart, as in 8.2). It writes
    `/etc/rancher/k3s/admission-config.yaml`, adds the admission plugins and flags to config.yaml,

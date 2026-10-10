@@ -2,8 +2,9 @@
 # ADR 0025, amendment 2026-10-10: a check the kube-bench patch skips as "Not Applicable." must stay
 # not applicable. 1.2.26 (--etcd-cafile) is skipped because this k3s keeps its datastore in SQLite
 # through kine, with no etcd. If the k3s role ever configures etcd - embedded (cluster-init) or
-# external (datastore-endpoint, etcd-* flags) - the reason is false and the skip would hide a real
-# check: fail here until the skip is removed from app/kube-bench/k3s-cis-1.9.patch.
+# external (datastore-endpoint, any etcd-* flag, --etcd-servers included) - the reason is false and
+# the skip would hide a real check: fail here until the skip is removed from
+# app/kube-bench/k3s-cis-1.9.patch.
 #
 # What is read: the checks the patch adds `type: "skip"` to (by the `- id:` line above each in the
 # hunk), and every non-comment line of the k3s role and its inventory (templates, defaults, tasks,
@@ -24,7 +25,7 @@ for line in open(patch):
         skipped.append(last_id)
 print(f"check-cis-na: the patch skips {', '.join(map(str, skipped)) or 'nothing'}")
 
-etcd = re.compile(r'cluster[-_]init|datastore[-_]endpoint|\betcd[-_](?!servers)|etcd-arg|k3s_etcd', re.I)
+etcd = re.compile(r'cluster[-_]init|datastore[-_]endpoint|\betcd[-_]|etcd-arg|k3s_etcd', re.I)
 hits = []
 for root in roots:
     for dirpath, _, files in os.walk(root):

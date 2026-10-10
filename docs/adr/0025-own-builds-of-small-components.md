@@ -233,16 +233,18 @@ about (the benchmark's own remediation names the configuration files).
 **3. Not applicable.** 1.2.26 gets `type: skip`, with the reason as the remediation in upstream's
 own form for its k3s skips ("Not Applicable." and why: SQLite through kine on a unix socket, no
 etcd, no etcd CA). kube-bench reports any skipped check as INFO with `type: skip`. The posture API
-counts a skipped check as not applicable only when its remediation opens with "Not Applicable." -
-the configuration's statement that it does not apply; a check skipped another way (kube-bench's
-`--skip` flag, a skipped group) keeps upstream's remediation and stays in INFO. Not-applicable
+counts a skipped check as not applicable only when its remediation opens with exactly "Not
+Applicable." (that case, the full stop, then white space or the end) - the configuration's
+statement that it does not apply; a check skipped another way (kube-bench's `--skip` flag, a
+skipped group) keeps upstream's remediation and stays in INFO. Not-applicable
 checks are counted in `kube_bench.not_applicable` - taken out of `info`, so pass + fail + warn +
 info + not_applicable is every check that ran - and listed in `not_applicable_checks` (id, title,
 reason: the remediation after the opener, scrubbed and capped like the failing list's; the list
 never names more checks than the count). The reason has one source, the benchmark configuration;
 upstream's 14 are shown the same way with upstream's reasons. The reason must stay true:
 `make validate` runs `scripts/check-cis-na.sh`, which fails while the patch skips 1.2.26 and the k3s
-role or its inventory configure etcd (`cluster-init`, `datastore-endpoint`, `etcd-*`). The page
+role or its inventory configure etcd (`cluster-init`, `datastore-endpoint`, any `etcd-*` argument,
+`--etcd-servers` included). The page
 draws not applicable as its own hatched segment and a folded "Not applicable (n)" list under the
 CIS tile; the percentage stays pass / (pass + fail + warn), which never counted INFO. The API also
 lists the WARN checks (`warning`, as `failing`) under a folded "Manual / warn (n)", and the tile's
@@ -289,17 +291,20 @@ Metadata catch-all. More local audit log. More reaches siem01 too: its filter (A
 every refused request (code >= 400), so a refused Secret read by a node or controller (403, 404),
 which the old policy dropped before the filter saw it, is now shipped - Metadata only, no body.
 Successful reads are not shipped (F2 ships no reads). The automated check is a set of JSONPath tests
-over the node's policy file; the patch header lists them exactly. In short: the first rule is an
-unconditional Metadata rule naming Secrets and `authentication.k8s.io`; there are exactly three
-None rules, at positions 1-3, each pinned (the three control-plane users' and the nodes' get/list/
-watch; events, endpoints, endpointslices and leases); no Request or RequestResponse rule names
-Secrets or ConfigMaps; `pods/exec` and `pods/portforward` are named by a RequestResponse rule,
-`pods/proxy` and `services/proxy` by a Metadata rule; the last rule is an unconditional Metadata
-catch-all. A JSONPath over a missing key yields nothing, so a general "every exclusion drops only
-reads" cannot be expressed (a rule without `verbs` would slip past); the exclusions are therefore
-pinned rule by rule and counted. What the tests do not evaluate is first-match order among the other
-rules; `tests/golden/audit-policy.sh` evaluates the policy first-match against 18 requests and is
-the review.
+over the node's policy file; the patch header lists them exactly. kube-bench's JSONPath cannot
+print a whole rule (it fails on a YAML map), and a path over a missing key yields nothing, so a
+general "every exclusion drops only reads" cannot be expressed. Instead rules [0]-[6] are pinned
+whole, field by field: level, users, userGroups, verbs, namespaces, nonResourceURLs, omitStages,
+and every resources entry's group, resources and resourceNames - [0] Secrets,
+`serviceaccounts/token` and `authentication.k8s.io` at Metadata for everyone; [1]-[3] the three
+exclusions (the control-plane users' and the nodes' get/list/watch; events, endpoints,
+endpointslices and leases); [4] ConfigMaps at Metadata; [5] `pods/exec`, `pods/attach`,
+`pods/portforward` at RequestResponse; [6] the proxies at Metadata. Further: exactly three None
+rules; no Request or RequestResponse rule names Secrets or ConfigMaps; the last rule is an
+unconditional Metadata catch-all. Not checked: what sits between [6] and the last rule - it can only
+add logging, since Secrets, ConfigMaps and the exclusions are matched first;
+`tests/golden/audit-policy.sh` evaluates the policy first-match against 18 requests and is the
+review.
 
 **5. What stays WARN - visible, with the reason:**
 - **3.1.1 Client certificate authentication should not be used for users.** It is used: the owner
@@ -331,14 +336,17 @@ the review.
 - behaviour, new vs main's files: a Service with `externalIPs` is refused vs created; a pod asking
   for IfNotPresent gets Always vs IfNotPresent; a fresh bootstrap token gets 401 vs 200 on `/api`;
   400 events posted at once into one namespace: 120 created, 280 refused with 429 vs 400 created;
-- 3.2.2 against seventeen mutations of the policy (Secrets behind the exclusions, or limited to a
-  namespace; `authentication.k8s.io` out of the first rule; the first rule at RequestResponse;
-  ConfigMaps with bodies; no `pods/exec`; no proxies; pods added to an exclusion; an exclusion
-  dropping writes; a fourth None rule; the nodes' or the control-plane users' exclusion dropping every
-  verb; a ServiceAccount or a group added to an exclusion; the catch-all limited to a namespace; no
-  catch-all): each turns PASS into WARN;
+- 3.2.2 against twenty-one mutations of the policy (Secrets behind the exclusions, or limited to a
+  namespace, or to named Secrets with `resourceNames`; `authentication.k8s.io` out of the first
+  rule; the first rule at RequestResponse; ConfigMaps with bodies; no `pods/exec`; `pods/attach`
+  dropped; no proxies, or the proxies' rule moved to just before the catch-all; pods
+  added to an exclusion; the events exclusion gaining a bare `group: ""` entry, i.e. the whole core
+  group; an exclusion dropping writes; a fourth None rule; the nodes' or the control-plane users'
+  exclusion dropping every verb; a ServiceAccount or a group added to an exclusion; the catch-all
+  limited to a namespace; no catch-all): each turns PASS into WARN;
 - `scripts/check-cis-na.sh` fails on `cluster-init`, `datastore-endpoint` or an `etcd-*` argument
-  added to the role's config template, and on an etcd variable in the inventory;
+  (`etcd-servers` included) added to the role's config template, and on an etcd variable in the
+  inventory;
 - the API's parser on that run's log (`testdata/kube-bench-cis.log`) and on the live log before the
   change; the page's parser and render; `tests/golden/audit-policy.sh` rebased onto this change, its
   two mutations killed.
@@ -361,4 +369,8 @@ x/term, x/text; x/crypto is not in the build graph), the builder is golang:1.26.
 to Wolfi's kubectl-1.37 1.37.1-r2 - kube-bench only runs `kubectl version`, which fails harmlessly
 without credentials, so the minor does not matter. Upstream's tests run against the raised modules in
 the build. Remaining, below the gate: MEDIUMs in Wolfi's glibc 2.44-r7 (fixed in r8), which comes with
-the pinned wolfi-base digest.
+the pinned wolfi-base digest. app/api moves the same way (golang:1.26.9, x/net v0.60.0, which needs
+`go 1.26.0` in go.mod); its go.mod also says `godebug default=go1.25`, so the binary keeps the
+run-time defaults it had under `go 1.25.0` (`go version -m` shows the go1.25 DefaultGODEBUG set) and
+the language-version bump changes no behaviour (as the Cilium images' go.mod, ADR 0028). kube-bench's
+go.mod is upstream's `go 1.26.3`, unchanged.
