@@ -100,6 +100,19 @@
     - k3s_was_running | bool
     - not ansible_check_mode
 
+# k3s_admission_plugins replaces k3s's own list, so NodeRestriction (a kubelet may change only its
+# own Node and pods) must be in it; and the API server does not start with EventRateLimit enabled and
+# no limits configured. Refuse both here, before anything is written or k3s is restarted.
+- name: Check the admission settings before they reach the API server
+  ansible.builtin.assert:
+    that:
+      - "'NodeRestriction' in k3s_admission_plugins"
+      - "'EventRateLimit' not in k3s_admission_plugins or (k3s_event_rate_limits | length > 0)"
+    fail_msg: >-
+      k3s_admission_plugins must list NodeRestriction, and k3s_event_rate_limits must not be empty
+      while EventRateLimit is enabled (the API server would not start).
+    quiet: true
+
 # Before config.yaml: the API server refuses to start with an admission-control-config-file that
 # does not exist.
 - name: Render the API server admission configuration
