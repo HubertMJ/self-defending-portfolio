@@ -1035,13 +1035,13 @@ bundled `coredns.yaml`; the pin is `k3s_coredns_image` in `ansible/roles/k3s/def
 ### 8.8 Cilium from this repository (stage 1, then three switch commits, agent last; ADR 0028)
 
 `app/cilium`, `app/cilium-operator-generic`, `app/hubble-relay` and `app/cilium-envoy` are Cilium
-1.19.8 with the Go binaries rebuilt against fixed dependencies (and Ubuntu's OpenSSL updated), on
-upstream's own layers. They are deployed through chart image overrides in `cluster/apps/cilium.yaml`
-(Argo CD) and, identically, in `cilium_values` of the cilium role (which only matters for a rebuild
-from zero: the role leaves a release Argo CD owns alone). This is the one component where a bad
-image takes the whole node off the network, Argo CD included, so the switch is three commits pushed
-one at a time, each image pre-pulled, each step checked before the next, and the rollback rehearsed
-in your head before you start.
+1.19.8 with the Go binaries rebuilt against fixed dependencies (and Ubuntu's OpenSSL and perl-base
+updated), on upstream's own layers. They are deployed through chart image overrides in
+`cluster/apps/cilium.yaml` (Argo CD) and, identically, in `cilium_values` of the cilium role (which
+only matters for a rebuild from zero: the role leaves a release Argo CD owns alone). This is the one
+component where a bad image takes the whole node off the network, Argo CD included, so the switch is
+three commits pushed one at a time, each image pre-pulled, each step checked before the next, and
+the rollback rehearsed in your head before you start.
 
 1. **Stage 1: the images (done).** The commit that adds `app/cilium*` and `app/hubble-relay` is on
    `main` (with the smoke-test fix after it). The workflow builds four images
@@ -1065,7 +1065,8 @@ in your head before you start.
    kubectl -n kube-system get ds,deploy -l app.kubernetes.io/part-of=cilium -o wide
    kubectl -n kube-system exec ds/cilium -c cilium-agent -- cilium-dbg status --brief   # OK
    kubectl -n kube-system exec ds/cilium -c cilium-agent -- cilium-dbg version
-   # Client: 1.19.8 5791d208 2026-09-15T18:23:52+00:00 go version go1.26.8 linux/amd64 (Daemon: the same)
+   # Client: 1.19.8 5791d208 2026-09-15T18:23:52+00:00 go version go1.26.9 linux/amd64 (Daemon: the same)
+   # (go1.26.8 for the images before the 2026-10-10 rebuild, ADR 0028 amendment)
    kubectl -n kube-system exec ds/cilium -c cilium-agent -- cilium-dbg status --verbose \
      | grep -E 'KubeProxyReplacement|Envoy|Hubble|Controller Status|Proxy Status|Cluster health'
    RELAY=$(kubectl -n kube-system get svc hubble-relay -o jsonpath='{.spec.clusterIP}')
