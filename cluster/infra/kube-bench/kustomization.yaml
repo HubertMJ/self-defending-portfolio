@@ -1,14 +1,15 @@
 # kube-bench: the CIS Kubernetes Benchmark for k3s, run daily as a CronJob (ADR 0014). Deployed by
 # cluster/apps/kube-bench.yaml. Results are the Job's log (JSON); the phase 6 posture page reads them.
 #
-# The benchmark is the image's own cfg/k3s-cis-1.9, i.e. upstream's at the v0.16.0 commit, unchanged
-# (ADR 0025). Until then this directory carried a copy whose 54 journalctl audits read
+# The benchmark is the image's own cfg/k3s-cis-1.9, i.e. upstream's at the v0.16.0 commit with
+# app/kube-bench/k3s-cis-1.9.patch applied at build time (ADR 0025 and its 2026-10-10 amendment).
+# Until ADR 0025 this directory carried a copy whose 54 journalctl audits read
 # /etc/rancher/k3s/config.yaml instead, because upstream's image has no journalctl; that copy could not
 # see the flags k3s sets itself and made those checks fail falsely. This repository's image
 # (app/kube-bench) carries journalctl, and the CronJob mounts the node's journal read-only.
 #
 # Reviewing a kube-bench bump is reading the upstream diff of cfg/k3s-cis-1.9 between the two release
-# commits; nothing here has to be re-derived from it.
+# commits, and regenerating the patch if it no longer applies; nothing here has to be re-derived.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 

@@ -13,14 +13,19 @@
 #   * source: github.com/aquasecurity/kube-bench at KUBE_BENCH_COMMIT, the commit tag v0.16.0 points at
 #     (`git ls-remote https://github.com/aquasecurity/kube-bench refs/tags/v0.16.0`). Fetched by full
 #     commit hash and checked after the checkout, so a moved tag cannot change what is compiled.
-#     Nothing is changed: upstream's Go source, go.mod and go.sum (`go mod verify`).
+#     Upstream's Go source, go.mod and go.sum are not changed (`go mod verify`).
 #   * upstream's own tests (`make tests`: `go test -vet all -short -race -timeout 30s ./...`) run in
 #     the builder with --network=none: no tests, no image.
 #   * the binary as upstream's makefile builds it: CGO off, the same cmd.KubeBenchVersion variable,
 #     plus -trimpath, -s -w and an empty build id.
-#   * cfg/ is upstream's at the same commit, unchanged, at /opt/kube-bench/cfg as in upstream's image
-#     (kube-bench looks for ./cfg in its working directory). The CronJob runs k3s-cis-1.9 from it as
-#     shipped, journalctl audits included.
+#   * cfg/ is upstream's at the same commit, at /opt/kube-bench/cfg as in upstream's image (kube-bench
+#     looks for ./cfg in its working directory), with one change: k3s-cis-1.9.patch, applied with
+#     `git apply` before upstream's tests run (ADR 0025, amendment 2026-10-10). It marks the three
+#     checks that do not apply to this cluster as skipped, with the reason, points 1.1.11 at k3s's
+#     datastore directory, makes 4.2.12 read the kubelet's flags without k3s's closing quote, and
+#     turns the manual 3.1.3 and 3.2.2 into automated checks; the patch's header lists them. Every
+#     other check, journalctl audits included, runs as upstream ships it. A bump whose upstream text
+#     moved fails at `git apply`, rather than running a stale copy.
 #   * runtime: Wolfi (Chainguard's glibc distribution), not upstream's Alpine, because the checks need
 #     a journal reader. kube-bench's k3s-cis-1.9 reads the flags each k3s component really runs with
 #     from the line k3s logs at start-up (`journalctl -m -u k3s | grep 'Running kube-apiserver'`);
@@ -56,8 +61,9 @@
 #     to the host (`install`); the CronJob called the binary directly already.
 #
 # Bumping: set KUBE_BENCH_COMMIT to the commit of a newer release tag, read its cfg/k3s-cis-1.9 diff
-# (the CronJob runs these audits as shipped) and its Dockerfile's package list against the one below;
-# push.
+# (the CronJob runs these audits as shipped, apart from k3s-cis-1.9.patch), regenerate the patch if it
+# no longer applies (its header says how) and read the new Dockerfile's package list against the one
+# below; push.
 #
 # Bases pinned by tag and digest (ADR 0008):
 #   golang:1.26.8      docker.io, the pin app/api, app/talon and app/ksops use
@@ -74,6 +80,10 @@ RUN git init -q . \
  && git checkout -q FETCH_HEAD \
  && test "$(git rev-parse HEAD)" = "$KUBE_BENCH_COMMIT"
 RUN go mod download && go mod verify
+# This repository's change to the benchmark (see the header). After the module download, so a patch
+# change does not download again; before the test stage, so upstream's tests run on the patched cfg/.
+COPY k3s-cis-1.9.patch /tmp/k3s-cis-1.9.patch
+RUN git apply --verbose /tmp/k3s-cis-1.9.patch && git diff --stat
 
 FROM deps AS test
 # --network=none: nothing in upstream's tests needs the network. -race needs cgo, which the golang
