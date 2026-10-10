@@ -11,9 +11,13 @@
 #   * policies - those checks query the API server with kubectl, and this pod deliberately has no
 #     credentials. RBAC, Pod Security and network policy posture come from Kyverno's PolicyReports and
 #     the Trivy Operator's RBAC and config audits instead.
-# FAIL and WARN results are findings to read, not a gate (plan section 4.5).
+# FAIL and WARN results are findings to read, not a gate (plan section 4.5). Checks the benchmark marks
+# not applicable (type skip, reported INFO) are shown as such, with their reason (ADR 0025, amendment
+# 2026-10-10).
 #
-# The benchmark is upstream's k3s-cis-1.9 as shipped in the image (ADR 0025): its audits read the flags
+# The benchmark is upstream's k3s-cis-1.9 in the image, with app/kube-bench/k3s-cis-1.9.patch applied
+# (ADR 0025, amendment 2026-10-10: 1.2.26 marked not applicable, others made to read this node's real
+# paths and flags; the patch's header lists them). Its audits read the flags
 # each k3s component really runs with from the line k3s logs at start-up, `journalctl -m -u k3s |
 # grep 'Running kube-apiserver'`, so the node's journal is mounted read-only below and the image
 # carries journalctl. (Until ADR 0025 the audits read /etc/rancher/k3s/config.yaml instead, which
@@ -69,8 +73,9 @@ spec:
           containers:
             - name: kube-bench
               # This repository's build of kube-bench v0.16.0 (app/kube-bench, ADR 0025): upstream's
-              # release commit compiled with Go 1.26.8, upstream's cfg/, on Alpine with only what the
-              # k3s checks run. Pinned by digest in kustomization.yaml (`images:`).
+              # release commit compiled with Go 1.26.9, upstream's cfg/ with this repository's patch,
+              # on Wolfi with only what the k3s checks run. Pinned by digest in kustomization.yaml
+              # (`images:`).
               image: ghcr.io/hubertmj/self-defending-portfolio/kube-bench:main
               # The binary, by name, as before: upstream's image had a shell-wrapper entrypoint whose
               # only other mode copies the binary to the host (`install`); this image's entrypoint is
@@ -128,6 +133,12 @@ spec:
                 - name: journal
                   mountPath: /var/log/journal
                   readOnly: true
+                # The CNI configuration (Cilium's 05-cilium.conflist), whose mode and owner 1.1.9 and
+                # 1.1.10 check (ADR 0025, amendment 2026-10-10). containerd's default directory: k3s
+                # with flannel off configures no other, and the Cilium chart's cni.confPath is unset.
+                - name: cni-conf
+                  mountPath: /etc/cni/net.d
+                  readOnly: true
                 - name: tmp
                   mountPath: /tmp
           volumes:
@@ -148,6 +159,10 @@ spec:
             - name: journal
               hostPath:
                 path: /var/log/journal
+                type: Directory
+            - name: cni-conf
+              hostPath:
+                path: /etc/cni/net.d
                 type: Directory
             - name: tmp
               emptyDir:

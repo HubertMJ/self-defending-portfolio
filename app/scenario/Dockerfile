@@ -18,8 +18,8 @@
 # Alpine's busybox (it is in busybox-extras, with telnet and friends, which is more attack surface than
 # this needs) and could not compute the bounded state the API relays, so the server is a small static
 # Go binary, standard library only. Its tests run in the builder stage: no tests, no image (as app/api).
-#   golang:1.26.8   docker.io, the same pin as app/api
-FROM docker.io/library/golang:1.26.8@sha256:0f063af2d465d8dcae54cce04278ada488b96f77b42449c8d071e47d016cc65a AS victim
+#   golang:1.26.9   docker.io, the same pin as app/api
+FROM docker.io/library/golang:1.26.9@sha256:d7722066f0b60ceccb6c0643cbed1f5f9e15506ac237146c95333504d7805d89 AS victim
 WORKDIR /src
 COPY victim/ ./
 RUN go vet ./... && go test -count=1 ./... \

@@ -401,11 +401,21 @@ export interface KyvernoViolation {
   file: string;
 }
 
-/** Extension (ADR 0035): one failing kube-bench check, as kube-bench names it (scrubbed, capped by the API). */
+/** Extension (ADR 0035): one failing (or, since ADR 0025's 2026-10-10 amendment, warning) kube-bench check, as kube-bench names it (scrubbed, capped by the API). */
 export interface BenchCheck {
   id: string;
   title: string;
   remediation: string;
+}
+
+/**
+ * Extension (ADR 0025, amendment 2026-10-10): one check the benchmark configuration marks as not
+ * applicable to this cluster, with the configuration's reason. Neither passed nor failed.
+ */
+export interface BenchNA {
+  id: string;
+  title: string;
+  reason: string;
 }
 
 export interface Posture {
@@ -419,7 +429,19 @@ export interface Posture {
     violations_incomplete?: boolean;
   };
   trivy: PostureTrivy & { last_scan?: string };
-  kube_bench: { last_run: string | null; pass: number; fail: number; warn: number; info: number; failing?: BenchCheck[] };
+  kube_bench: {
+    last_run: string | null;
+    pass: number;
+    fail: number;
+    warn: number;
+    /** Older APIs count the not-applicable checks here too; newer ones count them in `not_applicable`. */
+    info: number;
+    failing?: BenchCheck[];
+    /** Extension (ADR 0025, amendment 2026-10-10): pass + fail + warn + info + not_applicable is every check. */
+    not_applicable?: number;
+    warning?: BenchCheck[];
+    not_applicable_checks?: BenchNA[];
+  };
   falco: { alerts_24h: number; counted_since?: string };
   talon: { actions_24h: number };
 }
@@ -961,6 +983,13 @@ export function parsePosture(v: unknown): Posture {
   const kb = v.kube_bench as Posture["kube_bench"] & Obj;
   const kube_bench: Posture["kube_bench"] = { last_run: kb.last_run, pass: kb.pass, fail: kb.fail, warn: kb.warn, info: kb.info };
   if (Array.isArray(kb.failing)) kube_bench.failing = kb.failing.slice(0, MAX_BENCH_CHECKS).map(parseBenchCheck).filter((c): c is BenchCheck => c !== null);
+  // The count and its list travel together: a malformed count drops both, so the page never shows
+  // reasons for checks it does not count, and falls back to what it drew before the extension.
+  if (isCount(kb.not_applicable)) {
+    kube_bench.not_applicable = kb.not_applicable;
+    if (Array.isArray(kb.not_applicable_checks)) kube_bench.not_applicable_checks = kb.not_applicable_checks.slice(0, MAX_BENCH_CHECKS).map(parseBenchNA).filter((c): c is BenchNA => c !== null);
+  }
+  if (Array.isArray(kb.warning)) kube_bench.warning = kb.warning.slice(0, MAX_BENCH_CHECKS).map(parseBenchCheck).filter((c): c is BenchCheck => c !== null);
   const f = v.falco as Posture["falco"] & Obj;
   const falco: Posture["falco"] = { alerts_24h: f.alerts_24h };
   if (isTime(f.counted_since)) falco.counted_since = f.counted_since;
@@ -990,6 +1019,11 @@ const BENCH_ID = /^[0-9]+(\.[0-9]+){1,3}$/;
 function parseBenchCheck(v: unknown): BenchCheck | null {
   if (!isObj(v) || !isStr(v.id) || !BENCH_ID.test(v.id) || !isStr(v.title)) return null;
   return { id: v.id, title: cap(v.title, 200), remediation: cap(v.remediation, 300) };
+}
+
+function parseBenchNA(v: unknown): BenchNA | null {
+  if (!isObj(v) || !isStr(v.id) || !BENCH_ID.test(v.id) || !isStr(v.title)) return null;
+  return { id: v.id, title: cap(v.title, 200), reason: cap(v.reason, 300) };
 }
 
 const OWN_IMAGE = (repo: "api" | "web") => new RegExp(`^ghcr\\.io/hubertmj/self-defending-portfolio/${repo}@sha256:[0-9a-f]{64}$`);

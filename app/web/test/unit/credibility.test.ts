@@ -126,6 +126,34 @@ describe("parsers of the ADR 0035 additions", () => {
     expect(parsed.falco.counted_since).toBe("2026-10-03T19:05:00Z");
   });
 
+  it("posture: not-applicable CIS checks keep their count and reason apart from INFO; older APIs have neither", () => {
+    const p = posture(0);
+    const na = { id: "1.2.26", title: "Ensure that the --etcd-cafile argument is set", reason: "There is no etcd." };
+    const parsed = parsePosture({
+      ...p,
+      kube_bench: {
+        ...p.kube_bench,
+        info: 0,
+        not_applicable: 3,
+        not_applicable_checks: [na, { ...na, id: "1.2.26; rm" }, { id: "1.1.9", title: "t".repeat(500), reason: "r".repeat(500), audit: "secret" }, { id: "1.1.10", title: "no reason" }],
+        warning: [{ id: "3.1.1", title: "Client certificate authentication should not be used for users", remediation: "Use OIDC." }, { id: 3, title: "x" }],
+      },
+    });
+    expect(parsed.kube_bench.not_applicable).toBe(3);
+    expect(parsed.kube_bench.not_applicable_checks?.map((c) => c.id)).toEqual(["1.2.26", "1.1.9", "1.1.10"]);
+    expect(parsed.kube_bench.not_applicable_checks?.[0]).toEqual(na);
+    expect(parsed.kube_bench.not_applicable_checks?.[1].reason.length).toBe(300);
+    expect(parsed.kube_bench.not_applicable_checks?.[2].reason).toBe("");
+    expect(parsed.kube_bench.warning?.map((c) => c.id)).toEqual(["3.1.1"]);
+    expect(JSON.stringify(parsed)).not.toContain("secret");
+    // A malformed count drops its list with it: the page never names checks it does not count.
+    const bad = parsePosture({ ...p, kube_bench: { ...p.kube_bench, not_applicable: "3", not_applicable_checks: [na] } });
+    expect(bad.kube_bench.not_applicable).toBeUndefined();
+    expect(bad.kube_bench.not_applicable_checks).toBeUndefined();
+    const old = parsePosture({ ...p, kube_bench: { last_run: null, pass: 59, fail: 3, warn: 12, info: 14 } });
+    expect(old.kube_bench).toEqual({ last_run: null, pass: 59, fail: 3, warn: 12, info: 14 });
+  });
+
   it("provenance: only own api/web images by digest; bad commit and run id become empty", () => {
     const api = `ghcr.io/hubertmj/self-defending-portfolio/api@sha256:${"a".repeat(64)}`;
     const p = parseProvenance({
@@ -452,6 +480,47 @@ describe("code review (REQUEST_CHANGES) fixes", () => {
     const p = withViolations([{ running: false, count: 7 }]);
     expect(admissionTone(p)).toBe("warning");
     expect(admissionTone({ ...p, kyverno: { ...p.kyverno, policies: p.kyverno.policies.map((x) => (x.fail ? { ...x, fail: 9 } : x)) } })).toBe("critical");
+  });
+
+  it("names the manual and not-applicable CIS checks, folded, with their remediation and reason; the bar counts them apart", () => {
+    const p = posture(T);
+    const kube_bench = {
+      ...p.kube_bench,
+      pass: 69,
+      fail: 0,
+      warn: 2,
+      info: 0,
+      failing: [],
+      not_applicable: 3,
+      not_applicable_checks: [
+        { id: "1.1.1", title: "API server pod specification file permissions", reason: "By default, K3s embeds the api server within the k3s process." },
+        { id: "1.1.12", title: "etcd data directory ownership", reason: "For K3s, etcd is embedded within the k3s process." },
+        { id: "1.2.26", title: "--etcd-cafile", reason: "There is no etcd." },
+      ],
+      warning: [
+        { id: "3.1.1", title: "Client certificate authentication should not be used for users", remediation: "Use OIDC." },
+        { id: "3.1.2", title: "Service account token authentication should not be used for users", remediation: "Use OIDC." },
+      ],
+    };
+    const el = renderPostureData({ ...p, kube_bench }, T);
+    const cis = [...el.querySelectorAll(".tile")][2];
+    expect(cis.querySelector(".tile__value")?.textContent).toBe("97% pass");
+    expect(cis.querySelector(".chip")?.textContent).toBe("✓No failures · 2 manual / warn");
+    const groups = [...cis.querySelectorAll("details.tile__group")] as HTMLDetailsElement[];
+    expect(groups.map((g) => g.querySelector("summary")?.textContent)).toEqual(["Manual / warn (2)", "Not applicable (3)"]);
+    expect(groups.every((g) => !g.open)).toBe(true);
+    expect(groups[0].querySelectorAll("li")).toHaveLength(2);
+    expect(groups[0].querySelector(".tile__remedy p")?.textContent).toBe("Use OIDC.");
+    const na = [...groups[1].querySelectorAll("li")];
+    expect(na.map((li) => li.querySelector("code")?.textContent)).toEqual(["1.1.1", "1.1.12", "1.2.26"]);
+    expect(na[2].querySelector(".tile__reason")?.textContent).toBe("There is no etcd.");
+    const legend = [...el.querySelectorAll(".stack-figure")].find((f) => f.textContent?.includes("CIS"));
+    expect([...(legend?.querySelectorAll(".legend li") ?? [])].map((li) => li.textContent)).toEqual(["Pass69", "Fail0", "Manual / warn2", "Info0", "Not applicable3"]);
+    expect(legend?.querySelector(".stack")?.getAttribute("aria-label")).toContain("3 Not applicable");
+    // An older API counts them in Info: no segment, no group.
+    const old = renderPostureData({ ...p, kube_bench: { last_run: null, pass: 59, fail: 3, warn: 12, info: 14 } }, T);
+    expect(old.textContent).not.toContain("Not applicable");
+    expect(old.querySelector("details.tile__group")).toBeNull();
   });
 
   it("tiles list five groups or checks, then point at the rest; the violations table scrolls in its box", () => {

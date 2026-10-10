@@ -255,3 +255,182 @@ Verified locally (Trivy 0.75.0, same DB; "before" is each image's current `main`
 `argocd version --client` reports v3.5.4+d6d5b24.dirty, go1.26.9. Upstream's test targets pass in
 every build; metrics-server also in a throwaway k3s v1.35.9+k3s1 (rollout, APIService Available,
 `kubectl top`), falcosidekick under the pod's constraints (`/ping`, an event, a malformed event).
+
+## Amendment 2026-10-10: the CIS benchmark - real paths, not applicable shown as such, the manual checks get real controls
+
+**Context.** The posture page showed kube-bench at 59 PASS / 3 FAIL / 12 WARN / 14 INFO. Of the
+three FAILs, 1.2.26 (`--etcd-cafile`) is the one this ADR already called "not a finding": there is
+no etcd. 1.1.9 and 1.1.10 were called the same above ("no host-local IPAM directory"), and that was
+wrong: they ask about the CNI files, and upstream's audit looks for them in
+`/var/lib/cni/networks`, which Cilium's own IPAM never creates - the files exist elsewhere. The 14
+INFO are upstream's own k3s skips ("Not Applicable.", e.g. no API server pod specification file),
+which the page lumped into a bare "Info". The 12 WARN are manual or unscored checks. Owner
+decisions, 2026-10-10: show what does not apply as not applicable, with the reason, honestly -
+never a PASS, never hidden, the counts adding up; drive every WARN that has a real control to a
+verified PASS; keep what has none as a visible, documented exception.
+
+**1. Where the benchmark is changed: a patch applied at build time.** `app/kube-bench/k3s-cis-1.9.patch`,
+applied by the Dockerfile with `git apply` to upstream's cfg/ at the pinned commit, before upstream's
+tests run. The image stays the one versioned unit the CronJob runs; a bump whose upstream text
+moved fails the build instead of running a stale copy; the change is one reviewable diff, and its
+header lists every check it touches and what each now checks. Rejected: a ConfigMap copy of the
+benchmark (what this ADR removed, for drift); kube-bench's `--skip` flag in the CronJob, which
+carries no reason - the reason would have had to live in the API as a second copy.
+
+**2. 1.1.9 and 1.1.10 check the real CNI files.** Measured on k3s01 (read-only, 2026-10-10):
+containerd's config has no CNI section, so it uses its defaults, `/etc/cni/net.d` and
+`/opt/cni/bin` (k3s sets its own CNI directories only for its bundled flannel); `/etc/cni/net.d` is
+0700 root:root and holds Cilium's `05-cilium.conflist`, **0600 root:root**; `/var/lib/cni/networks`
+does not exist (`/var/lib/cni` holds only containerd's `results`). The two audits now `find` in
+`/etc/cni/net.d`, and the CronJob mounts it read-only (`type: Directory`; ADR 0012, amendment). They
+pass on the node's real file - nothing is manufactured: an empty or unmounted directory, a 0644 file
+or a non-root owner each FAIL (checked below). Durability: Cilium 1.19.8's agent writes the conflist
+itself, atomically and with mode 0600 (`daemon/cmd/cni/config.go`, `renameio.WriteFile(dest,
+contents, 0600)`), and only when its content changes, so an agent restart cannot widen it; no Helm
+value or Ansible task is needed. The 0755 `/opt/cni/bin` binaries are not what these checks ask
+about (the benchmark's own remediation names the configuration files).
+
+**3. Not applicable.** 1.2.26 gets `type: skip`, with the reason as the remediation in upstream's
+own form for its k3s skips ("Not Applicable." and why: SQLite through kine on a unix socket, no
+etcd, no etcd CA). kube-bench reports any skipped check as INFO with `type: skip`. The posture API
+counts a skipped check as not applicable only when its remediation opens with exactly "Not
+Applicable." (that case, the full stop, then white space or the end) - the configuration's
+statement that it does not apply; a check skipped another way (kube-bench's `--skip` flag, a
+skipped group) keeps upstream's remediation and stays in INFO. Not-applicable
+checks are counted in `kube_bench.not_applicable` - taken out of `info`, so pass + fail + warn +
+info + not_applicable is every check that ran - and listed in `not_applicable_checks` (id, title,
+reason: the remediation after the opener, scrubbed and capped like the failing list's; the list
+never names more checks than the count). The reason has one source, the benchmark configuration;
+upstream's 14 are shown the same way with upstream's reasons. The reason must stay true:
+`make validate` runs `scripts/check-cis-na.sh`, which fails while the patch skips 1.2.26 and the k3s
+role or its inventory configure etcd (`cluster-init`, `datastore-endpoint`, any `etcd-*` argument,
+`--etcd-servers` included). The page
+draws not applicable as its own hatched segment and a folded "Not applicable (n)" list under the
+CIS tile; the percentage stays pass / (pass + fail + warn), which never counted INFO. The API also
+lists the WARN checks (`warning`, as `failing`) under a folded "Manual / warn (n)", and the tile's
+status says "No failures · n manual / warn" when there are some. Older API responses (no
+`not_applicable`) render as before.
+
+**4. The manual checks, with real controls** (Ansible, `ansible/roles/k3s`; each value and its
+reason is in the role's defaults). kube-bench reads each from the flags k3s logs at start-up, as the
+journal checks above, so removing a setting makes its check WARN again:
+
+| Check | Control | Note |
+|---|---|---|
+| 1.1.11 etcd data directory 700 | the check now stats `/var/lib/rancher/k3s/server/db` (kine's SQLite here, embedded etcd's `db/etcd` otherwise); the role keeps it 0700 | upstream stats the etcd default path, which does not exist on k3s. Rancher's k3s guide echoes `permissions=700` for a non-etcd cluster - a manufactured PASS, rejected. k3s creates the directory 0700 itself (checked) |
+| 1.2.3 DenyServiceExternalIPs | admission plugin | no Service sets `externalIPs` (none on 2026-10-10) |
+| 1.2.9 EventRateLimit | admission plugin + `/etc/rancher/k3s/admission-config.yaml` (0600): server 500 qps / burst 1000, per namespace 50 / 100 | the cluster records almost no events (none in the hour checked). The role refuses to run with EventRateLimit on and no limits (the API server would not start), or without NodeRestriction in the list |
+| 1.2.11 AlwaysPullImages | admission plugin | see the trade-off below |
+| 1.2.20 `--request-timeout` | `60s`, the default made explicit | |
+| 1.3.1 `--terminated-pod-gc-threshold` | 100 (default 12500) | finished pods here: 2; the API reads the newest kube-bench pod's log, which the CronJob's history keeps far below 100 |
+| 3.1.3 bootstrap tokens | `--enable-bootstrap-token-auth=false`; the check is automated: PASS only if the API server runs with it false | k3s enables it for `k3s token create` agent joins; this single node joins none and holds no bootstrap token Secret. Joining an agent with such a token needs `k3s_bootstrap_token_auth: true` first |
+| 3.2.2 audit policy covers key concerns | policy gaps closed (below); the check is automated | |
+| 4.2.12 kubelet cipher suites | `tls-cipher-suites` = the six ECDHE AEAD suites k3s already gives the API server | upstream's audit could never pass on k3s: k3s logs the kubelet's flags sorted inside `msg="..."`, `--tls-cipher-suites` comes last, and the closing quote was read as part of the last suite name. The patch drops that quote before the flags are read |
+| 4.2.13 `--pod-max-pids` | 4096; the check now also requires a value of at least 1 (upstream accepted -1, no limit) | far above any workload here; bounds a fork bomb in a sandbox pod to one pod's share |
+
+*AlwaysPullImages, the trade-off.* Every new pod's containers get `imagePullPolicy: Always`, so
+the kubelet asks the registry each time a container starts, also when it already holds the image.
+What runs does not change - every image is pinned by digest - but a pod start or a container restart
+now needs its registry (ghcr.io for this repository's images, and the other registries the pins
+name) to answer: during a registry outage a crashed container or a rebooted node does not come back
+until it does, and each sandbox run's pod start makes one more registry round trip. The control's
+purpose - a pod cannot use an image another tenant's credentials pulled - is about multi-tenancy,
+which this cluster does not have; the owner chose it for the benchmark with this cost written down.
+Pods created before the restart keep their policy until recreated, and pods created under the plugin
+keep `Always` after it is removed, until recreated; a label or annotation change on an existing pod
+(Talon's quarantine label) is still admitted (checked). Break-glass during a registry outage:
+docs/bootstrap.md 8.12.
+
+*3.2.2, the audit policy.* Against the CIS list: Secrets, `serviceaccounts/token` and the
+`authentication.k8s.io` group (TokenReviews) move into one Metadata rule at the top, ahead of the
+exclusions - so a node's or a controller's access to a Secret is now recorded (it was dropped), and
+TokenReviews still never reach a body-logging rule (ADR 0034's guarantee, kept); ConfigMaps keep
+their Metadata rule; `pods/proxy`, `services/proxy` and `nodes/proxy` get an explicit Metadata rule
+(the proxied traffic is not logged). Pod and Deployment changes were and are covered by the
+Metadata catch-all. More local audit log. More reaches siem01 too: its filter (ADR 0034, F2) ships
+every refused request (code >= 400), so a refused Secret read by a node or controller (403, 404),
+which the old policy dropped before the filter saw it, is now shipped - Metadata only, no body.
+Successful reads are not shipped (F2 ships no reads). The automated check is a set of JSONPath tests
+over the node's policy file; the patch header lists them exactly. kube-bench's JSONPath cannot
+print a whole rule (it fails on a YAML map), and a path over a missing key yields nothing, so a
+general "every exclusion drops only reads" cannot be expressed. Instead rules [0]-[6] are pinned
+whole, field by field: level, users, userGroups, verbs, namespaces, nonResourceURLs, omitStages,
+and every resources entry's group, resources and resourceNames - [0] Secrets,
+`serviceaccounts/token` and `authentication.k8s.io` at Metadata for everyone; [1]-[3] the three
+exclusions (the control-plane users' and the nodes' get/list/watch; events, endpoints,
+endpointslices and leases); [4] ConfigMaps at Metadata; [5] `pods/exec`, `pods/attach`,
+`pods/portforward` at RequestResponse; [6] the proxies at Metadata. Further: exactly three None
+rules; no Request or RequestResponse rule names Secrets or ConfigMaps; the last rule is an
+unconditional Metadata catch-all. Not checked: what sits between [6] and the last rule - it can only
+add logging, since Secrets, ConfigMaps and the exclusions are matched first;
+`tests/golden/audit-policy.sh` evaluates the policy first-match against 18 requests and is the
+review.
+
+**5. What stays WARN - visible, with the reason:**
+- **3.1.1 Client certificate authentication should not be used for users.** It is used: the owner
+  (and the automation acting for the owner) authenticates with k3s's `system:admin` client
+  certificate. The alternative the benchmark names, OIDC, needs an identity provider and the API
+  server's OIDC flags, and would not remove k3s's own client-certificate authentication, which its
+  components rely on. Not in reach in this change; a possible follow-up. Not N/A: the check applies.
+- **3.1.2 Service account token authentication should not be used for users.** True today - no
+  person uses a ServiceAccount token, and no long-lived token Secret exists (2026-10-10) - but
+  nothing on the node can verify it, and kube-bench's pod has no API access by design (ADR 0014). A
+  PASS here would be an attestation dressed as a measurement; it stays a manual check.
+
+**Result** (verified, below): 71 PASS / 0 FAIL / 2 WARN / 0 INFO / 15 not applicable = 88 checks,
+97% on the page.
+
+**Verified locally (2026-10-10),** nothing deployed:
+- the image builds with the patch (`git apply` clean, upstream's tests pass on the patched cfg/);
+- a throwaway k3s v1.35.9+k3s1 (Docker, `--privileged`) with k3s01's files rendered by Ansible from
+  this tree (config.yaml, admission-config.yaml, audit-policy.yaml; test-only: no node-ip,
+  protect-kernel-defaults off) starts and answers /readyz; its start-up log written into a journal by
+  systemd-journal-remote 257 (Debian 13, the node's systemd) and read by this image under the
+  CronJob's constraints (shared PID namespace, no network, read-only root, no capabilities,
+  no-new-privileges, every path read-only), with the role's 1.1.20 step applied and a copy of the
+  node's `05-cilium.conflist` (0600 root:root, in a 0700 directory) at `/etc/cni/net.d`: the result
+  above. The same with main's files: 1.2.3, 1.2.9, 1.2.11, 1.2.20, 1.3.1, 3.1.3, 3.2.2, 4.2.12 and
+  4.2.13 each WARN without their setting;
+- 1.1.9 / 1.1.10: the conflist 0600 root:root PASS / PASS; 0644 FAIL / PASS; owner 1000 PASS / FAIL;
+  an empty directory FAIL / FAIL; nothing mounted FAIL / FAIL. 4.2.13 with `pod-max-pids=-1`: WARN;
+- behaviour, new vs main's files: a Service with `externalIPs` is refused vs created; a pod asking
+  for IfNotPresent gets Always vs IfNotPresent; a fresh bootstrap token gets 401 vs 200 on `/api`;
+  400 events posted at once into one namespace: 120 created, 280 refused with 429 vs 400 created;
+- 3.2.2 against twenty-one mutations of the policy (Secrets behind the exclusions, or limited to a
+  namespace, or to named Secrets with `resourceNames`; `authentication.k8s.io` out of the first
+  rule; the first rule at RequestResponse; ConfigMaps with bodies; no `pods/exec`; `pods/attach`
+  dropped; no proxies, or the proxies' rule moved to just before the catch-all; pods
+  added to an exclusion; the events exclusion gaining a bare `group: ""` entry, i.e. the whole core
+  group; an exclusion dropping writes; a fourth None rule; the nodes' or the control-plane users'
+  exclusion dropping every verb; a ServiceAccount or a group added to an exclusion; the catch-all
+  limited to a namespace; no catch-all): each turns PASS into WARN;
+- `scripts/check-cis-na.sh` fails on `cluster-init`, `datastore-endpoint` or an `etcd-*` argument
+  (`etcd-servers` included) added to the role's config template, and on an etcd variable in the
+  inventory;
+- the API's parser on that run's log (`testdata/kube-bench-cis.log`) and on the live log before the
+  change; the page's parser and render; `tests/golden/audit-policy.sh` rebased onto this change, its
+  two mutations killed.
+
+**Consequences.** A kube-bench image rebuild (CI) and digest pin, and a k3s restart through the
+role in a window (docs/bootstrap.md 8.12). The patch is re-read on each kube-bench bump. Bootstrap
+token joins are off. Pod starts depend on the registries (above). The 3.1.1 and 3.1.2 WARNs stay on
+the page until OIDC (3.1.1) or an API-side check (3.1.2) is decided. The 2026-10-02 text above
+calling 1.1.9 and 1.1.10 "not a finding" is superseded by item 2.
+
+## Amendment 2026-10-10 (b): kube-bench's dependencies and packages
+
+Trivy 0.75.0's database of 2026-10-10 reports, in this build: 3 HIGH in Go 1.26.8's standard library
+(fixed in 1.26.9), 1 HIGH in golang.org/x/net v0.56.0 (CVE-2026-78669, fixed in v0.60.0), and 3 HIGH
+in Wolfi's kubectl-1.36 1.36.4-r8 (fixed in 1.36.5-r1, which Wolfi had not published that day). So
+the "no module changed" of the decision above ends: app/kube-bench/modules/ holds upstream's
+go.mod/go.sum with x/net raised to v0.60.0 (`go get golang.org/x/net@v0.60.0
+golang.org/x/crypto@v0.57.0` + `go mod tidy`; minimal version selection moved x/sync, x/sys,
+x/term, x/text; x/crypto is not in the build graph), the builder is golang:1.26.9, and kubectl moves
+to Wolfi's kubectl-1.37 1.37.1-r2 - kube-bench only runs `kubectl version`, which fails harmlessly
+without credentials, so the minor does not matter. Upstream's tests run against the raised modules in
+the build. Remaining, below the gate: MEDIUMs in Wolfi's glibc 2.44-r7 (fixed in r8), which comes with
+the pinned wolfi-base digest. app/api moves the same way (golang:1.26.9, x/net v0.60.0, which needs
+`go 1.26.0` in go.mod); its go.mod also says `godebug default=go1.25`, so the binary keeps the
+run-time defaults it had under `go 1.25.0` (`go version -m` shows the go1.25 DefaultGODEBUG set) and
+the language-version bump changes no behaviour (as the Cilium images' go.mod, ADR 0028). kube-bench's
+go.mod is upstream's `go 1.26.3`, unchanged.

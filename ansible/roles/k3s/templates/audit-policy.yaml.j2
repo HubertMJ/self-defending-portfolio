@@ -2,10 +2,22 @@
 ---
 apiVersion: audit.k8s.io/v1
 kind: Policy
-# The first matching rule wins, so the cheap exclusions come first.
+# The first matching rule wins: Secrets and tokens first, then the cheap exclusions.
 omitStages:
   - RequestReceived
 rules:
+  # Secrets, ServiceAccount tokens and the authentication API: who, what, when - never a body, and for
+  # everyone. This rule comes before the exclusions below, so a node's or a controller's read of a
+  # Secret is recorded too (CIS k3s 3.2.2; ADR 0025, amendment 2026-10-10). TokenReviews and
+  # TokenRequests carry bearer tokens in their request and response bodies (ADR 0034, siem contract
+  # F2), so they must never reach a RequestResponse rule.
+  - level: Metadata
+    resources:
+      - group: ""
+        resources: ["secrets", "serviceaccounts/token"]
+      - group: authentication.k8s.io
+        resources: ["*"]
+
   # High-volume, low-value reads performed constantly by controllers.
   - level: None
     users:
@@ -25,19 +37,24 @@ rules:
       - group: coordination.k8s.io
         resources: ["leases"]
 
-  # Never log Secret or ConfigMap bodies; metadata is enough to see who touched what.
+  # Never log ConfigMap bodies; metadata is enough to see who touched what.
   - level: Metadata
     resources:
       - group: ""
-        resources: ["secrets", "configmaps"]
-      - group: ""
-        resources: ["serviceaccounts/token"]
+        resources: ["configmaps"]
 
   # Interactive access to containers is the highest-value signal available.
   - level: RequestResponse
     resources:
       - group: ""
         resources: ["pods/exec", "pods/attach", "pods/portforward"]
+
+  # Proxied access through the API server (CIS k3s 3.2.2): recorded by name, without the proxied
+  # traffic, which may be anything the target serves.
+  - level: Metadata
+    resources:
+      - group: ""
+        resources: ["pods/proxy", "services/proxy", "nodes/proxy"]
 
 {% if k3s_audit_verbose_namespaces | length > 0 %}
   # Full bodies for workload changes in the namespaces under scrutiny.
@@ -52,14 +69,6 @@ rules:
       - group: batch
         resources: ["jobs", "cronjobs"]
 {% endif %}
-
-  # TokenReviews carry bearer tokens in their request and response bodies, so this group is
-  # logged without them: who asked, for what, and the decision is enough (ADR 0034, siem contract F2).
-  # It must stay ahead of the RequestResponse rule below - the first matching rule wins.
-  - level: Metadata
-    resources:
-      - group: authentication.k8s.io
-        resources: ["*"]
 
   # Authorization and admission decisions.
   - level: RequestResponse
