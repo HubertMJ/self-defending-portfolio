@@ -67,10 +67,11 @@ Run it twice if you like; the second run changes nothing.
 ### The Argo CD version lives in a URL
 
 `argocd/kustomization.yaml` pulls
-`https://raw.githubusercontent.com/argoproj/argo-cd/v3.5.4/manifests/install.yaml` as a kustomize
-resource. The version is in the path, not in a `stable` alias, so "which Argo CD is this cluster
-running" is answered by reading one line of a manifest, and upgrading is a one-line diff with a
-changelog to point at (ADR 0008).
+`https://raw.githubusercontent.com/argoproj/argo-cd/d6d5b248ce00e1a2c512068002a93d3319767087/manifests/install.yaml`
+(the commit tag v3.5.4 points at, named in the comment above it) as a kustomize resource. The
+release is in the path, not in a `stable` alias, and by commit rather than tag, so a moved tag
+cannot change what is applied; "which Argo CD is this cluster running" is answered by reading one
+line of a manifest, and upgrading is a one-line diff with a changelog to point at (ADR 0008).
 
 `kustomize build cluster/bootstrap/argocd` works with a stock kustomize — no KSOPS, no plugins. The
 bootstrap layer deliberately does not depend on the plugin it installs.

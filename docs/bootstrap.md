@@ -1264,7 +1264,11 @@ itself restarts.
    NetworkPolicy may appear in it:
 
    ```sh
-   kubectl diff -k cluster/bootstrap/argocd --server-side --force-conflicts | grep -E '^[-+] .*image:'
+   kubectl diff -k cluster/bootstrap/argocd --server-side --force-conflicts > /tmp/argocd-bootstrap.diff
+   grep -E '^[-+] +image:' /tmp/argocd-bootstrap.diff                  # the expected image lines
+   grep -E '^[-+]' /tmp/argocd-bootstrap.diff \
+     | grep -vE '^(---|\+\+\+) |^[-+] +(image|generation):' \
+     && echo 'UNEXPECTED DIFF - stop, do not apply' || echo 'image lines only'
    kubectl apply -k cluster/bootstrap/argocd --server-side --force-conflicts
    kubectl -n argocd rollout status deploy/argocd-redis
    kubectl -n argocd rollout status deploy/argocd-repo-server
@@ -1440,7 +1444,7 @@ in the bootstrap kustomization, so the last step is again a manual apply (ADR 00
    operator restarts, and one scenario end to end (`make scenario-test`: Falco -> Falcosidekick ->
    Talon, including the Cilium network-policy quarantine).
 
-3. **The bootstrap re-apply.** The install.yaml URL now names v3.5.4. Upstream's v3.5.3 -> v3.5.4
+3. **The bootstrap re-apply.** The install.yaml URL now names v3.5.4's commit. Upstream's v3.5.3 -> v3.5.4
    diff of `manifests/install.yaml` is the `quay.io/argoproj/argocd` tag and nothing else - no CRD,
    RBAC, ConfigMap or Service changes - and the `images:` entry replaces that image by digest, so
    the rendered bootstrap at an unchanged digest is byte-identical before and after the URL change.
@@ -1448,7 +1452,11 @@ in the bootstrap kustomization, so the last step is again a manual apply (ADR 00
    KSOPS init container, and nothing else:
 
    ```sh
-   kubectl diff -k cluster/bootstrap/argocd --server-side --force-conflicts | grep -E '^[-+] .*image:'
+   kubectl diff -k cluster/bootstrap/argocd --server-side --force-conflicts > /tmp/argocd-bootstrap.diff
+   grep -E '^[-+] +image:' /tmp/argocd-bootstrap.diff                  # the expected image lines
+   grep -E '^[-+]' /tmp/argocd-bootstrap.diff \
+     | grep -vE '^(---|\+\+\+) |^[-+] +(image|generation):' \
+     && echo 'UNEXPECTED DIFF - stop, do not apply' || echo 'image lines only'
    kubectl apply -k cluster/bootstrap/argocd --server-side --force-conflicts
    kubectl -n argocd rollout status deploy/argocd-redis
    kubectl -n argocd rollout status deploy/argocd-repo-server
@@ -1457,12 +1465,25 @@ in the bootstrap kustomization, so the last step is again a manual apply (ADR 00
    argocd version                     # server: v3.5.4+d6d5b24.dirty, Kustomize v5.8.1, Helm v4.2.1
    argocd app get falco --hard-refresh | grep -E 'Sync Status|Health Status'                 # helmCharts
    argocd app get cert-manager-issuers --hard-refresh | grep -E 'Sync Status|Health Status'  # KSOPS
+   argocd app get gateway-api-crds --hard-refresh | grep -E 'Sync Status|Health Status'      # remote resource
    argocd app list                    # every Application Synced/Healthy, no ComparisonError
    ```
 
+   New in v3.5.4 and the reason for the three hard refreshes: the repo-server runs every
+   `kustomize build` with a `git` and a `helm` wrapper of upstream's ahead of the real binaries on
+   its PATH (`/bin/sh` scripts it writes under `/tmp`; util/kustomize/gitwrapper.go and
+   helmwrapper.go, GHSA-9v9p-x54c-58gc and GHSA-fw5c-w8rc-j7fx). The git wrapper refuses any
+   `git fetch` shape it does not know, and the helm wrapper pins Helm's config and plugin
+   directories, so a chart render (falco), the KSOPS exec plugin (cert-manager-issuers) and the one
+   remote resource kustomize fetches itself (gateway-api-crds) are each checked once.
+
    As in 8.9, all of Argo CD restarts for a minute or two; managed workloads keep running.
 
-Rollback: revert the pin commit (and, for Argo CD, the v3.5.4 commit) and re-apply the bootstrap.
+Rollback: revert the pin commit and re-apply the bootstrap. That restores every previous digest at
+once, Argo CD's v3.5.3 build and the previous KSOPS included, and the install.yaml URL change does
+not matter for it (upstream's two install.yaml differ only in the image the digest replaces). Revert
+the v3.5.4 commit as well only to abandon v3.5.4 for good: it changes `app/argocd`, so the push
+rebuilds the image.
 
 ## 9. The SIEM host siem01 (ADR 0034)
 
