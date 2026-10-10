@@ -5,15 +5,25 @@
 # Why not the upstream image: aquasec/kube-bench:v0.16.0 (2026-08-05) is the newest release. It
 # carries 13 HIGH with Trivy 0.75.0 on 2026-10-02: 8 in the Go standard library the binary was
 # compiled with (1.26.5; fixed in 1.26.6), 2 in jq and 3 in OpenSSL (libcrypto3, libssl3, openssl;
-# Alpine packages), and none in kube-bench's own dependencies. So this build changes no module at
-# all: the same go.mod/go.sum, compiled with Go 1.26.8, on an Alpine base that carries only what the
-# k3s checks run.
+# Alpine packages), and none in kube-bench's own dependencies. So this build changed no module at
+# first: the same go.mod/go.sum, compiled with a current Go (1.26.9 since 2026-10-10), on a base that
+# carries only what the k3s checks run. Since 2026-10-10 one dependency has a HIGH with a fix
+# (golang.org/x/net v0.56.0, CVE-2026-78669, fixed in v0.60.0; Trivy 0.75.0), so modules/ raises it.
 #
 # What is built:
 #   * source: github.com/aquasecurity/kube-bench at KUBE_BENCH_COMMIT, the commit tag v0.16.0 points at
 #     (`git ls-remote https://github.com/aquasecurity/kube-bench refs/tags/v0.16.0`). Fetched by full
 #     commit hash and checked after the checkout, so a moved tag cannot change what is compiled.
-#     Upstream's Go source, go.mod and go.sum are not changed (`go mod verify`).
+#     Upstream's Go source is not changed.
+#   * dependencies: upstream's go.mod/go.sum with golang.org/x/net raised, and nothing else changed by
+#     hand. modules/ holds the result; it replaces upstream's two files before `go mod download`, and
+#     `go mod verify` checks every module against go.sum (and go.sum against the public checksum
+#     database). Produced with, in a checkout of KUBE_BENCH_COMMIT:
+#       go get golang.org/x/net@v0.60.0 golang.org/x/crypto@v0.57.0
+#       go mod tidy
+#     (as app/coredns and app/cilium). Minimal version selection moved x/sync, x/sys, x/term and
+#     x/text; x/crypto is not in the build graph and tidy leaves it out of go.mod. `diff` against
+#     upstream's go.mod shows the whole set. Drop modules/ once a release has caught up.
 #   * upstream's own tests (`make tests`: `go test -vet all -short -race -timeout 30s ./...`) run in
 #     the builder with --network=none: no tests, no image.
 #   * the binary as upstream's makefile builds it: CGO off, the same cmd.KubeBenchVersion variable,
@@ -46,7 +56,9 @@
 #         fails harmlessly here (no credentials, no network). Without it, kube-bench falls back to
 #         running the first executable named `kubelet` that `find /` turns up - and / in the CronJob
 #         includes the node's /var/lib/rancher/k3s/agent, i.e. containerd's unpacked image layers, as
-#         root. Keeping kubectl keeps upstream's path.
+#         root. Keeping kubectl keeps upstream's path. Which minor does not matter (only `version`
+#         runs, and fails); 1.37 since 2026-10-10, when Trivy found 3 HIGH with a fix in
+#         kubectl-1.36 1.36.4-r8 and Wolfi had published no fixed 1.36 build yet.
 #       - jq, openssl, bash, gcompat: dropped. They serve other benchmarks (EKS/GKE helper scripts,
 #         OpenShift's `oc`); no audit in k3s-cis-1.9 calls them. jq and openssl were three of the
 #         findings.
@@ -63,13 +75,15 @@
 #
 # Bumping: set KUBE_BENCH_COMMIT to the commit of a newer release tag, read its cfg/k3s-cis-1.9 diff
 # (the CronJob runs these audits as shipped, apart from k3s-cis-1.9.patch), regenerate the patch if it
-# no longer applies (its header says how) and read the new Dockerfile's package list against the one
-# below; push.
+# no longer applies (its header says how), regenerate modules/ from the new go.mod/go.sum with the
+# commands above (or delete it if the release has caught up) and read the new Dockerfile's package
+# list against the one below; push.
 #
 # Bases pinned by tag and digest (ADR 0008):
-#   golang:1.26.8      docker.io, the pin app/api, app/talon and app/ksops use
+#   golang:1.26.9      docker.io, the pin app/api and app/talon use (1.26.8's standard library has
+#                      fixed HIGH findings)
 #   wolfi-base:latest  cgr.dev/chainguard
-FROM docker.io/library/golang:1.26.8@sha256:0f063af2d465d8dcae54cce04278ada488b96f77b42449c8d071e47d016cc65a AS deps
+FROM docker.io/library/golang:1.26.9@sha256:d7722066f0b60ceccb6c0643cbed1f5f9e15506ac237146c95333504d7805d89 AS deps
 # aquasecurity/kube-bench tag v0.16.0.
 ARG KUBE_BENCH_COMMIT=5c6c22d51b926020e7414e1f1e051851d1a2feff
 WORKDIR /src
@@ -80,6 +94,7 @@ RUN git init -q . \
  && git fetch -q --depth 1 origin "$KUBE_BENCH_COMMIT" \
  && git checkout -q FETCH_HEAD \
  && test "$(git rev-parse HEAD)" = "$KUBE_BENCH_COMMIT"
+COPY modules/go.mod modules/go.sum ./
 RUN go mod download && go mod verify
 # This repository's change to the benchmark (see the header). After the module download, so a patch
 # change does not download again; before the test stage, so upstream's tests run on the patched cfg/.
@@ -109,8 +124,8 @@ RUN apk add --no-cache \
       systemd=261.3-r2 \
       procps=4.0.7-r1 \
       findutils=4.11.0-r2 \
-      kubectl-1.36=1.36.4-r8 \
-      kubectl-1.36-default=1.36.4-r8 \
+      kubectl-1.37=1.37.1-r2 \
+      kubectl-1.37-default=1.37.1-r2 \
  && apk del --no-network --purge wolfi-base apk-tools \
  && rm -rf /var/cache/apk /etc/apk/cache \
  && journalctl --version | head -n1 \

@@ -73,7 +73,7 @@ spec:
           containers:
             - name: kube-bench
               # This repository's build of kube-bench v0.16.0 (app/kube-bench, ADR 0025): upstream's
-              # release commit compiled with Go 1.26.8, upstream's cfg/ with this repository's patch,
+              # release commit compiled with Go 1.26.9, upstream's cfg/ with this repository's patch,
               # on Wolfi with only what the k3s checks run. Pinned by digest in kustomization.yaml
               # (`images:`).
               image: ghcr.io/hubertmj/self-defending-portfolio/kube-bench:main

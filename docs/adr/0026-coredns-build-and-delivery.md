@@ -341,3 +341,19 @@ the old configuration. Until then the zone is forwarded like any other name, whi
 command lands only after the live check has passed (siem contract P5: CoreDNS, then the probe from a
 sandbox pod, then the catalogue, on separate branches). Rollback: remove the catalogue command first and
 wait out the terminal's 300 s plus a kubelet sync, then revert the template and re-run the role.
+
+## Amendment 2026-10-10: Go 1.26.9, x/net 0.60 and x/crypto 0.57; vet's printf check off for upstream's tests
+
+Trivy 0.75.0's database of 2026-10-10 reports 3 HIGH in Go 1.26.8's standard library (fixed in
+1.26.9), 1 HIGH in golang.org/x/net v0.58.0 and MEDIUMs in x/crypto v0.55.0, so CI's HIGH gate would
+refuse the next CoreDNS build. The builder moves to golang:1.26.9 (as app/api, app/talon,
+app/cilium), and modules/ gets a second step, `go get golang.org/x/net@v0.60.0
+golang.org/x/crypto@v0.57.0` + `go mod tidy` (the Dockerfile header lists it). x/net 0.60 requires
+`go 1.26.0`, so go.mod's language version moves from 1.25.0 to 1.26.0 - and at that version vet's
+printf check reports `%q` applied to a non-rune integer. Upstream has three, all in test code (two
+test failure messages and one test helper print a number as a quoted character), which make
+`go vet` and go test's own vet pass fail. Checked: the same three with Go 1.26.8 and 1.26.9 once
+go.mod says 1.26.0, none with 1.25.0. The test stage now runs vet without the printf analyzer
+(`-printf=false`; go test with the default vet list minus printf); every other vet check and every
+test still runs, and the shipped binary is not affected. printf goes back on when upstream fixes the
+three. The image reaches the cluster only through the k3s role (`k3s_coredns_image`), as before.

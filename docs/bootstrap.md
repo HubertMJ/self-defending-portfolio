@@ -959,7 +959,7 @@ bundled `coredns.yaml`; the pin is `k3s_coredns_image` in `ansible/roles/k3s/def
    ```sh
    IMG=ghcr.io/hubertmj/self-defending-portfolio/coredns@sha256:<digest>
    scripts/verify-image.sh "$IMG"
-   docker run --rm "$IMG" -version          # CoreDNS-1.14.7 / linux/amd64, go1.26.8, 427fc80
+   docker run --rm "$IMG" -version          # CoreDNS-1.14.7 / linux/amd64, go1.26.9 (go1.26.8 before 2026-10-10), 427fc80
    printf '.:53 {\n  hosts {\n    10.4.1.20 k3s01\n  }\n}\n' > /tmp/Corefile
    docker run -d --name cdns --read-only --cap-drop ALL --cap-add NET_BIND_SERVICE \
      --security-opt no-new-privileges -v /tmp/Corefile:/Corefile:ro "$IMG" -conf /Corefile

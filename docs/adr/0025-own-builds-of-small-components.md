@@ -348,3 +348,17 @@ role in a window (docs/bootstrap.md 8.11). The patch is re-read on each kube-ben
 token joins are off. Pod starts depend on the registries (above). The 3.1.1 and 3.1.2 WARNs stay on
 the page until OIDC (3.1.1) or an API-side check (3.1.2) is decided. The 2026-10-02 text above
 calling 1.1.9 and 1.1.10 "not a finding" is superseded by item 2.
+
+## Amendment 2026-10-10 (b): kube-bench's dependencies and packages
+
+Trivy 0.75.0's database of 2026-10-10 reports, in this build: 3 HIGH in Go 1.26.8's standard library
+(fixed in 1.26.9), 1 HIGH in golang.org/x/net v0.56.0 (CVE-2026-78669, fixed in v0.60.0), and 3 HIGH
+in Wolfi's kubectl-1.36 1.36.4-r8 (fixed in 1.36.5-r1, which Wolfi had not published that day). So
+the "no module changed" of the decision above ends: app/kube-bench/modules/ holds upstream's
+go.mod/go.sum with x/net raised to v0.60.0 (`go get golang.org/x/net@v0.60.0
+golang.org/x/crypto@v0.57.0` + `go mod tidy`; minimal version selection moved x/sync, x/sys,
+x/term, x/text; x/crypto is not in the build graph), the builder is golang:1.26.9, and kubectl moves
+to Wolfi's kubectl-1.37 1.37.1-r2 - kube-bench only runs `kubectl version`, which fails harmlessly
+without credentials, so the minor does not matter. Upstream's tests run against the raised modules in
+the build. Remaining, below the gate: MEDIUMs in Wolfi's glibc 2.44-r7 (fixed in r8), which comes with
+the pinned wolfi-base digest.
