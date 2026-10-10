@@ -14,20 +14,28 @@
 #     it also carries the k8sevents namespace fix, 87dd820, which ADR 0013 waits for - the notifier
 #     stays off here until that is decided separately). Fetched by full commit hash and checked
 #     after the checkout, so a moved branch or tag cannot change what is compiled.
-#   * dependencies: upstream's go.mod/go.sum at that commit, with three modules raised to the first
-#     release that fixes the findings in the binary, and nothing else changed by hand. modules/ holds
-#     the result; it replaces upstream's two files before `go mod download`, and `go mod verify`
-#     checks every module against go.sum (and go.sum against the public checksum database, which the
-#     golang image enables by default). Produced with, in a checkout of TALON_COMMIT:
+#   * dependencies: upstream's go.mod/go.sum at that commit, with the modules that carry findings in
+#     the binary raised to the first release that fixes them, and nothing else changed by hand.
+#     modules/ holds the result; it replaces upstream's two files before `go mod download`, and `go mod
+#     verify` checks every module against go.sum (and go.sum against the public checksum database,
+#     which the golang image enables by default). Produced with, in a checkout of TALON_COMMIT:
 #       go get google.golang.org/grpc@v1.83.2 golang.org/x/crypto@v0.55.0 \
 #              github.com/cilium/cilium@v1.17.15
 #       go get google.golang.org/grpc/stats/opentelemetry@none   # the old split-out module; grpc
 #       go mod tidy                                               # now ships that package itself
-#     cilium v1.17.15 rather than 1.19: the smallest jump that fixes both Cilium advisories, so the
+#     and then, for the MEDIUM and LOW findings with a fix (2026-10-10), on top of that result:
+#       go get github.com/cilium/cilium@v1.17.17 github.com/gopacket/gopacket@v1.6.1 \
+#              go.opentelemetry.io/otel/sdk@v1.45.0 \
+#              go.opentelemetry.io/otel/exporters/otlp/otlptrace@v1.45.0 \
+#              go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc@v1.45.0 \
+#              golang.org/x/net@v0.60.0
+#       go mod tidy
+#     (x/net v0.60.0 requires x/crypto v0.57.0, which also fixes x/crypto's two MEDIUM findings.)
+#     cilium v1.17.17 rather than 1.19: the smallest jump that fixes all four Cilium advisories, so the
 #     cilium networkpolicy actionner compiles against an API closest to the one upstream tested.
 #     Minimal version selection and `go mod tidy` then raised further transitive modules (the
 #     cloud.google.com and opentelemetry families, k8s.io/kubectl, among others) to what those
-#     three require; `diff` against upstream's go.mod at TALON_COMMIT shows the whole set.
+#     require; `diff` against upstream's go.mod at TALON_COMMIT shows the whole set.
 #   * upstream's own test suite runs in the builder (`go vet` + `go test`) against the raised
 #     dependencies: no tests, no image (as app/api).
 #   * the binary as upstream builds it (.ko.yaml): CGO off, -trimpath, stripped, the same
@@ -38,11 +46,10 @@
 #     not change. ENTRYPOINT is the binary, as in the upstream image: the Deployment passes `server
 #     ...` and tests/scenarios/offline.sh passes `rules check ...`.
 #
-# Bases pinned by tag and digest (ADR 0008), resolved from the registries' index manifests; both are
-# the pins app/api already uses:
-#   golang:1.26.8                          docker.io
-#   distroless/static-debian13:nonroot     gcr.io
-FROM docker.io/library/golang:1.26.8@sha256:0f063af2d465d8dcae54cce04278ada488b96f77b42449c8d071e47d016cc65a AS deps
+# Bases pinned by tag and digest (ADR 0008), resolved from the registries' index manifests:
+#   golang:1.26.9                          docker.io   (1.26.8's standard library has fixed findings)
+#   distroless/static-debian13:nonroot     gcr.io      (as app/api)
+FROM docker.io/library/golang:1.26.9@sha256:d7722066f0b60ceccb6c0643cbed1f5f9e15506ac237146c95333504d7805d89 AS deps
 ARG TALON_COMMIT=d273e352f80e114954f40c9843fd0a1b71a30d57
 WORKDIR /src
 # Fetch exactly one commit by its hash (GitHub serves any reachable commit by id), then refuse to go
