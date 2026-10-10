@@ -1,11 +1,13 @@
 # cilium-envoy (DaemonSet `cilium-envoy` in kube-system, the Gateway API / L7 data plane, ADR 0010):
-# upstream's image at the exact digest Cilium 1.19.8 pins, with the base OS's OpenSSL raised to the
-# fixed Ubuntu security update (ADR 0028). Built, Trivy-gated, SBOM'd and signed by
+# upstream's image at the exact digest Cilium 1.19.8 pins, with the base OS's OpenSSL and perl-base
+# raised to the fixed Ubuntu security updates (ADR 0028). Built, Trivy-gated, SBOM'd and signed by
 # .github/workflows/build-images.yml like every image under app/ (ADR 0016).
 #
 # Why not the upstream image as is: quay.io/cilium/cilium-envoy:v1.37.6-1789133542-cbec91f6... has 2
 # HIGH with Trivy 0.75.0 on 2026-10-02, both CVE-2026-84782 in Ubuntu's libssl3t64/openssl
-# 3.0.13-0ubuntu3.15 (fixed in 3.0.13-0ubuntu3.16). Envoy itself is clean.
+# 3.0.13-0ubuntu3.15 (fixed in 3.0.13-0ubuntu3.16). Envoy itself is clean. Two MEDIUM since
+# (2026-10-10), CVE-2026-15534 and CVE-2026-19487 in perl-base 5.38.2-3.2ubuntu0.4 (fixed in
+# 5.38.2-3.2ubuntu0.6), the same Ubuntu base as the agent's cilium-runtime.
 #
 # Why not rebuild Envoy, and why not a newer upstream build:
 #   * Envoy does not use that OpenSSL. cilium-envoy is statically linked against BoringSSL
@@ -16,9 +18,10 @@
 #     has the fixed OpenSSL but adds a Go binary, /usr/bin/cilium-envoy-healthcheck, compiled with
 #     Go 1.24.6: 22 CRITICAL+HIGH. And it is an Envoy patch release Cilium 1.19.8 was not released
 #     with (the agent checks the Envoy version it was built for, requiredEnvoyVersionSHA=cbec91f6...).
-# So this is upstream's image, layer for layer, plus one layer that upgrades exactly two packages to
-# exactly the fixed version. cilium-envoy, cilium-envoy-starter, libcilium.so and every other file
-# outside those two packages are upstream's bytes (ADR 0028, "Verified").
+# So this is upstream's image, layer for layer, plus one layer that upgrades exactly three packages
+# to exactly the fixed versions. cilium-envoy, cilium-envoy-starter, libcilium.so and every other
+# file outside those packages are upstream's bytes (ADR 0028, "Verified"). The layer goes when a
+# newer envoy image upstream pins carries these versions (or newer).
 #
 # The package index is the Ubuntu snapshot service at a fixed date, so it cannot move under a
 # rebuild; apt still verifies the archive's signatures against the keyring already in the image.
@@ -35,11 +38,11 @@ RUN printf '%s\n' 'Types: deb' 'URIs: http://snapshot.ubuntu.com/ubuntu/20261002
  && apt-get -q -o Dir::Etc::SourceList=/tmp/snapshot.sources -o Dir::Etc::SourceParts=/dev/null update \
  && apt-get -q -y -o Dir::Etc::SourceList=/tmp/snapshot.sources -o Dir::Etc::SourceParts=/dev/null \
       install --no-install-recommends --only-upgrade \
-      libssl3t64=3.0.13-0ubuntu3.16 openssl=3.0.13-0ubuntu3.16 \
+      libssl3t64=3.0.13-0ubuntu3.16 openssl=3.0.13-0ubuntu3.16 perl-base=5.38.2-3.2ubuntu0.6 \
  && rm -rf /tmp/snapshot.sources /var/lib/apt/lists/* \
  && /usr/bin/cilium-envoy --version | grep -q '/1\.37\.6/Distribution/RELEASE/BoringSSL$'
 LABEL org.opencontainers.image.title="self-defending-portfolio cilium-envoy" \
-      org.opencontainers.image.description="cilium-envoy v1.37.6 (as pinned by Cilium 1.19.8) with the base OS OpenSSL security update" \
+      org.opencontainers.image.description="cilium-envoy v1.37.6 (as pinned by Cilium 1.19.8) with the base OS OpenSSL and perl-base security updates" \
       org.opencontainers.image.source="https://github.com/HubertMJ/self-defending-portfolio" \
       org.opencontainers.image.licenses="Apache-2.0" \
       org.opencontainers.image.version="v1.37.6-1789133542-cbec91f666af0bf742da986d43832932dbb26b82"

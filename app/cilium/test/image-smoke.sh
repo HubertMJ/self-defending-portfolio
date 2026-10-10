@@ -12,7 +12,7 @@ set -euo pipefail
 IMAGE=${1:?usage: $0 <image ref>}
 DOCKER=${DOCKER:-docker}
 NAME=cilium
-VERSION='1.19.8 5791d208 2026-09-15T18:23:52+00:00 go version go1.26.8 linux/amd64'
+VERSION='1.19.8 5791d208 2026-09-15T18:23:52+00:00 go version go1.26.9 linux/amd64'
 
 failures=0
 # Every failure is printed for the log and as a GitHub Actions `::error::` annotation, so the reason
@@ -48,7 +48,7 @@ check "cilium-dbg version (client)" "$(run cilium-dbg version | head -1)" "Clien
 # The CNI plugin prints its version on stderr (stdout is reserved for CNI results): merged inside
 # the container, never with docker's own output.
 check "cilium-cni --version" "$(run sh -c '/opt/cni/bin/cilium-cni --version 2>&1' | head -1)" "Cilium CNI plugin $VERSION"
-check "hubble version" "$(run hubble version)" "hubble v1.19.8@HEAD-5791d208 compiled with go1.26.8 on linux/amd64"
+check "hubble version" "$(run hubble version)" "hubble v1.19.8@HEAD-5791d208 compiled with go1.26.9 on linux/amd64"
 for bin in cilium-dbg cilium-health cilium-health-responder cilium-bugtool cilium-mount cilium-sysctlfix; do
   check "$bin --help exits 0" "$(run "$bin" --help >/dev/null; echo $?)" 0
 done
@@ -57,8 +57,12 @@ check "cilium-envoy (upstream binary)" "$(run cilium-envoy --version | grep -c '
 for tool in clang llc bpftool ip tc iptables ip6tables ipset; do
   check "runtime tool $tool present" "$(run sh -c "command -v $tool >/dev/null; echo \$?")" 0
 done
+# gops and the CNI loopback plugin: upstream's releases, compiled again with a newer Go (tools stage)
+check "CNI loopback plugin" "$(run sh -c '/cni/loopback --version 2>&1' | head -1)" "CNI loopback plugin v1.9.1"
+check "gops --help exits 0" "$(run gops --help >/dev/null; echo $?)" 0
 check "BPF sources present" "$(run sh -c 'test -f /var/lib/cilium/bpf/bpf_lxc.c; echo $?')" 0
 check "openssl is the fixed build" "$(run dpkg-query -W -f '${Version}' openssl)" "3.0.13-0ubuntu3.16"
+check "perl-base is the fixed build" "$(run dpkg-query -W -f '${Version}' perl-base)" "5.38.2-3.2ubuntu0.6"
 
 if [ "$failures" -ne 0 ]; then
   echo "image-smoke: $failures check(s) failed" >&2

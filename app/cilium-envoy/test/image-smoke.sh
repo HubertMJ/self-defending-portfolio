@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Smoke test of the built cilium-envoy image (ADR 0028): Envoy is upstream's build for Cilium 1.19.8
-# and starts with a minimal static configuration, and OpenSSL is the fixed Ubuntu build. Routing real
-# traffic is the staged rollout in docs/bootstrap.md, section 8.7.
+# and starts with a minimal static configuration, and OpenSSL and perl-base are the fixed Ubuntu
+# builds. Routing real traffic is the staged rollout in docs/bootstrap.md, section 8.7.
 #
 #   app/cilium-envoy/test/image-smoke.sh <image ref>
 #
@@ -48,6 +48,7 @@ check "cilium-envoy validates a config" "$(run cilium-envoy --mode validate --co
   '{admin: {address: {socket_address: {address: 127.0.0.1, port_value: 9901}}}}' >/dev/null; echo $?)" 0
 check "openssl is the fixed build" "$(run dpkg-query -W -f '${Version}' openssl)" "3.0.13-0ubuntu3.16"
 check "libssl3t64 is the fixed build" "$(run dpkg-query -W -f '${Version}' libssl3t64)" "3.0.13-0ubuntu3.16"
+check "perl-base is the fixed build" "$(run dpkg-query -W -f '${Version}' perl-base)" "5.38.2-3.2ubuntu0.6"
 
 if [ "$failures" -ne 0 ]; then
   echo "image-smoke: $failures check(s) failed" >&2

@@ -10,8 +10,9 @@
 # refuses a difference). The image is upstream's images/hubble-relay/Dockerfile `release` stage at
 # CILIUM_COMMIT with the one binary rebuilt: the same distroless static nonroot base by the same
 # digest (upstream names it gcr.io/distroless/static:nonroot; static-debian13:nonroot is the same
-# manifest, and the name app/api, app/talon and app/ksops use), gops taken from the upstream image
-# itself, the relay binary, LICENSE.all, /home/gops, uid 65532, `hubble-relay serve`.
+# manifest, and the name app/api, app/talon and app/ksops use), gops, the relay binary, LICENSE.all,
+# /home/gops, uid 65532, `hubble-relay serve`. gops is the release upstream's image carries, compiled
+# again with the Go below (the tools stage; until 2026-10-10 it was copied out of upstream's image).
 #
 # Tests: upstream's unit tests for the relay and what it is built from - ./hubble-relay/...,
 # ./pkg/hubble/relay/..., ./pkg/hubble/peer/... (unprivileged, --network=none).
@@ -19,12 +20,24 @@
 # Bumping: together with app/cilium (see there).
 #
 # Bases pinned by tag and digest (ADR 0008):
-#   golang:1.26.8                     docker.io  (the pin app/api, app/talon and app/ksops use)
+#   golang:1.26.9                     docker.io  (as app/talon; 1.26.8's standard library has fixed
+#                                                 findings, HIGH among them)
 #   distroless/static-debian13:nonroot gcr.io    (upstream's BASE_IMAGE digest at CILIUM_COMMIT)
-#   hubble-relay:v1.19.8              quay.io    (the chart's relay image at 1.19.8; source of gops only)
-FROM quay.io/cilium/hubble-relay:v1.19.8@sha256:f78768be216b5c00137c7d4da440724d0b49986805d361e7458cc8fe9ff976ff AS upstream
+FROM docker.io/library/golang:1.26.9@sha256:d7722066f0b60ceccb6c0643cbed1f5f9e15506ac237146c95333504d7805d89 AS tools
+# gops as upstream's images/runtime/build-gops.sh at CILIUM_COMMIT builds it - the same release,
+# `go build` with the same flags - but with this stage's Go instead of upstream's 1.26.8, fetched by
+# the commit the tag points at instead of a tag tarball (app/cilium/Dockerfile, the tools stage).
+# google/gops tag v0.3.29.
+ARG GOPS_COMMIT=a2d8f7790eac63a6668583a060cb45903410a91b
+WORKDIR /go/src/github.com/google/gops
+RUN git init -q . \
+ && git remote add origin https://github.com/google/gops.git \
+ && git fetch -q --depth 1 origin "$GOPS_COMMIT" \
+ && git checkout -q FETCH_HEAD \
+ && test "$(git rev-parse HEAD)" = "$GOPS_COMMIT" \
+ && CGO_ENABLED=0 go build -buildvcs=false -ldflags "-s -w" -o /out/usr/bin/gops github.com/google/gops
 
-FROM docker.io/library/golang:1.26.8@sha256:0f063af2d465d8dcae54cce04278ada488b96f77b42449c8d071e47d016cc65a AS deps
+FROM docker.io/library/golang:1.26.9@sha256:d7722066f0b60ceccb6c0643cbed1f5f9e15506ac237146c95333504d7805d89 AS deps
 # cilium/cilium tag v1.19.8 (annotated tag 9f826a3d..., commit below).
 ARG CILIUM_COMMIT=5791d208dda456da8d08e9389c3d22514dc2db77
 # Upstream's path: the Makefiles and a few tests derive paths from it.
@@ -63,11 +76,11 @@ RUN GIT_VERSION="$(git show -s --format='%h %aI' | sed 's/Z$/+00:00/')" \
  && make GIT_VERSION="$GIT_VERSION" GOARCH=amd64 DESTDIR=/out EXTRA_GO_BUILD_LDFLAGS="$SCANNER_VERSION_LDFLAG" \
       build-container-hubble-relay install-container-binary-hubble-relay licenses-all \
  && mv LICENSE.all /out/LICENSE.all \
- && /out/usr/bin/hubble-relay version | grep -qx 'Hubble-relay: 1\.19\.8 5791d208 2026-09-15T18:23:52+00:00 go version go1\.26\.8 linux/amd64'
+ && /out/usr/bin/hubble-relay version | grep -qx 'Hubble-relay: 1\.19\.8 5791d208 2026-09-15T18:23:52+00:00 go version go1\.26\.9 linux/amd64'
 
 FROM gcr.io/distroless/static-debian13:nonroot@sha256:e2e927ec666bae08560abb3c55d0659eceabb657f56b6782ab500a9fc7f555e3
 LABEL maintainer="maintainer@cilium.io"
-COPY --from=upstream /usr/bin/gops /usr/bin/gops
+COPY --from=tools /out/usr/bin/gops /usr/bin/gops
 COPY --from=build /out/usr/bin/hubble-relay /usr/bin/hubble-relay
 COPY --from=build /out/LICENSE.all /LICENSE.all
 # Configure gops to use a temporary directory, to prevent permission

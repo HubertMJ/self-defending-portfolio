@@ -43,7 +43,7 @@ fi
 run() { $DOCKER run --rm --pull=never --network=none --user 65532:65532 --read-only --cap-drop ALL "$IMAGE" "$@" 2>"$ERR"; }
 
 check "--version" "$(run "$BIN" --version)" \
-  "Cilium-Operator 1.19.8 5791d208 2026-09-15T18:23:52+00:00 go version go1.26.8 linux/amd64"
+  "Cilium-Operator 1.19.8 5791d208 2026-09-15T18:23:52+00:00 go version go1.26.9 linux/amd64"
 check "--help exits 0" "$(run "$BIN" --help >/dev/null; echo $?)" 0
 check "hive constructs" "$(run "$BIN" hive >/dev/null; echo $?)" 0
 check "gops present" "$(run /usr/bin/gops --help >/dev/null; echo $?)" 0

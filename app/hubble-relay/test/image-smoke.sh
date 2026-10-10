@@ -43,7 +43,9 @@ fi
 : >"$ERR"
 
 check "version" "$($DOCKER run --rm --pull=never --network=none "$IMAGE" version 2>"$ERR")" \
-  "Hubble-relay: 1.19.8 5791d208 2026-09-15T18:23:52+00:00 go version go1.26.8 linux/amd64"
+  "Hubble-relay: 1.19.8 5791d208 2026-09-15T18:23:52+00:00 go version go1.26.9 linux/amd64"
+
+check "gops present" "$($DOCKER run --rm --pull=never --network=none --entrypoint /usr/bin/gops "$IMAGE" --help >/dev/null 2>"$ERR"; echo $?)" 0
 
 $DOCKER run -d --pull=never --name "$name" --network=none --read-only --tmpfs /home/gops:uid=65532 --cap-drop ALL \
   --security-opt no-new-privileges "$IMAGE" serve --peer-service=unix:///var/run/cilium/hubble.sock \

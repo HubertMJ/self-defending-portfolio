@@ -8,9 +8,11 @@
 # Same source, same commit, same raised dependencies and same reasoning as app/cilium/Dockerfile,
 # which documents them; modules/ here is identical to app/cilium/modules (scripts/check-cilium-values.sh
 # refuses a difference). The image is upstream's images/operator/Dockerfile `release` stage at
-# CILIUM_COMMIT with the one binary rebuilt: scratch, the CA bundle and gops taken from the upstream
-# image itself (by digest, so they are byte-for-byte upstream's), the operator binary, LICENSE.all,
-# the world-writable /home/gops and GOPS_CONFIG_DIR. The chart sets the container's command
+# CILIUM_COMMIT with the one binary rebuilt: scratch, the CA bundle taken from the upstream image
+# itself (by digest, so it is byte-for-byte upstream's), gops, the operator binary, LICENSE.all, the
+# world-writable /home/gops and GOPS_CONFIG_DIR. gops is the release upstream's image carries,
+# compiled again with the Go below (the tools stage; until 2026-10-10 it was copied out of upstream's
+# image). The chart sets the container's command
 # (cilium-operator-generic) and its security context, so neither depends on this image's metadata.
 #
 # Tests: upstream's unit tests under ./operator/... (unprivileged, --network=none).
@@ -18,12 +20,27 @@
 # Bumping: together with app/cilium (see there).
 #
 # Bases pinned by tag and digest (ADR 0008):
-#   golang:1.26.8                     docker.io  (the pin app/api, app/talon and app/ksops use)
+#   golang:1.26.9                     docker.io  (as app/talon; 1.26.8's standard library has fixed
+#                                                 findings, HIGH among them)
 #   operator-generic:v1.19.8          quay.io    (the chart's operator image at 1.19.8; source of the
-#                                                 CA bundle and gops only)
+#                                                 CA bundle only)
 FROM quay.io/cilium/operator-generic:v1.19.8@sha256:786ec9bb1a9344435e3e3f994bc4ed3a4a85afa6a314e98681af241f8be79833 AS upstream
 
-FROM docker.io/library/golang:1.26.8@sha256:0f063af2d465d8dcae54cce04278ada488b96f77b42449c8d071e47d016cc65a AS deps
+FROM docker.io/library/golang:1.26.9@sha256:d7722066f0b60ceccb6c0643cbed1f5f9e15506ac237146c95333504d7805d89 AS tools
+# gops as upstream's images/runtime/build-gops.sh at CILIUM_COMMIT builds it - the same release,
+# `go build` with the same flags - but with this stage's Go instead of upstream's 1.26.8, fetched by
+# the commit the tag points at instead of a tag tarball (app/cilium/Dockerfile, the tools stage).
+# google/gops tag v0.3.29.
+ARG GOPS_COMMIT=a2d8f7790eac63a6668583a060cb45903410a91b
+WORKDIR /go/src/github.com/google/gops
+RUN git init -q . \
+ && git remote add origin https://github.com/google/gops.git \
+ && git fetch -q --depth 1 origin "$GOPS_COMMIT" \
+ && git checkout -q FETCH_HEAD \
+ && test "$(git rev-parse HEAD)" = "$GOPS_COMMIT" \
+ && CGO_ENABLED=0 go build -buildvcs=false -ldflags "-s -w" -o /out/usr/bin/gops github.com/google/gops
+
+FROM docker.io/library/golang:1.26.9@sha256:d7722066f0b60ceccb6c0643cbed1f5f9e15506ac237146c95333504d7805d89 AS deps
 # cilium/cilium tag v1.19.8 (annotated tag 9f826a3d..., commit below).
 ARG CILIUM_COMMIT=5791d208dda456da8d08e9389c3d22514dc2db77
 # Upstream's path: the Makefiles and a few tests derive paths from it.
@@ -61,12 +78,12 @@ RUN GIT_VERSION="$(git show -s --format='%h %aI' | sed 's/Z$/+00:00/')" \
  && make GIT_VERSION="$GIT_VERSION" GOARCH=amd64 DESTDIR=/out EXTRA_GO_BUILD_LDFLAGS="$SCANNER_VERSION_LDFLAG" \
       build-container-operator-generic install-container-binary-operator-generic licenses-all \
  && mv LICENSE.all /out/LICENSE.all \
- && /out/usr/bin/cilium-operator-generic --version | grep -qx 'Cilium-Operator 1\.19\.8 5791d208 2026-09-15T18:23:52+00:00 go version go1\.26\.8 linux/amd64'
+ && /out/usr/bin/cilium-operator-generic --version | grep -qx 'Cilium-Operator 1\.19\.8 5791d208 2026-09-15T18:23:52+00:00 go version go1\.26\.9 linux/amd64'
 
 FROM scratch
 LABEL maintainer="maintainer@cilium.io"
 COPY --from=upstream /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
-COPY --from=upstream /usr/bin/gops /usr/bin/gops
+COPY --from=tools /out/usr/bin/gops /usr/bin/gops
 COPY --from=build /out/usr/bin/cilium-operator-generic /usr/bin/cilium-operator-generic
 COPY --from=build /out/LICENSE.all /LICENSE.all
 WORKDIR /
