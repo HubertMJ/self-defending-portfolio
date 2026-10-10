@@ -36,4 +36,4 @@ resources:
 images:
   - name: ghcr.io/hubertmj/self-defending-portfolio/metrics-server
     newTag: main
-    digest: sha256:593c29577b75415016acb5f43fe1e0a8f9ef01c86a2f09512baad457f404ca3a
+    digest: sha256:370dd6e4bbd63b18b59944bb2b055bc4100c06ec6154d5b1972a696a14ec891c
