@@ -67,7 +67,7 @@ Run it twice if you like; the second run changes nothing.
 ### The Argo CD version lives in a URL
 
 `argocd/kustomization.yaml` pulls
-`https://raw.githubusercontent.com/argoproj/argo-cd/v3.5.3/manifests/install.yaml` as a kustomize
+`https://raw.githubusercontent.com/argoproj/argo-cd/v3.5.4/manifests/install.yaml` as a kustomize
 resource. The version is in the path, not in a `stable` alias, so "which Argo CD is this cluster
 running" is answered by reading one line of a manifest, and upgrading is a one-line diff with a
 changelog to point at (ADR 0008).
@@ -93,7 +93,7 @@ an `ApplicationSet` - `cluster/apps` is plain `Application` objects - so the App
 controller, with its ClusterRole, watched an empty kind. Nothing configures Argo CD notifications
 (no triggers or services in `argocd-notifications-cm`, no `notifications.argoproj.io/subscribe*`
 annotation), so the notifications controller evaluated nothing. Both ran the full argocd image.
-Kept: the `applicationsets.argoproj.io` CRD, because argocd-server v3.5.3 always runs an
+Kept: the `applicationsets.argoproj.io` CRD, because argocd-server v3.5.4 always runs an
 ApplicationSet informer and would otherwise fail its watch forever; and the empty
 `argocd-notifications-secret`, because deleting it would need a plaintext `kind: Secret` document in
 git. On an existing cluster the live objects are deleted once with
@@ -139,7 +139,7 @@ while Kyverno is down could never redeploy Kyverno (ADR 0024).
 
 Every Argo CD container (server, repo-server and `copyutil`, application controller, Redis's
 `secret-init`) runs `ghcr.io/hubertmj/self-defending-portfolio/argocd`, this repository's build of the
-v3.5.3 release that `install.yaml` names (`app/argocd`, ADR 0027), swapped in by one `images:` entry
+v3.5.4 release that `install.yaml` names (`app/argocd`, ADR 0027), swapped in by one `images:` entry
 in `argocd/kustomization.yaml`. It is upstream's Dockerfile rebuilt with fixed dependencies - same
 base, user 999, paths, tools and entrypoint - so nothing else in this directory changed for it. Like
 KSOPS, it is pulled from GHCR (the `self-defending-portfolio/argocd` package must be public before a

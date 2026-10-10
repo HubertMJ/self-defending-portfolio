@@ -117,7 +117,7 @@ flowchart TB
 
 - The **only** manual step after the host exists is [`cluster/bootstrap/bootstrap.sh`](../../cluster/bootstrap/bootstrap.sh):
   it creates the `argocd` namespace, the `sops-age` Secret from the operator's key file, and applies
-  [`cluster/bootstrap/argocd/`](../../cluster/bootstrap/argocd/) (Argo CD v3.5.3 + KSOPS patch + the
+  [`cluster/bootstrap/argocd/`](../../cluster/bootstrap/argocd/) (Argo CD v3.5.4 + KSOPS patch + the
   `root` Application). Its own README explains each choice: [`cluster/bootstrap/README.md`](../../cluster/bootstrap/README.md).
 - `root` points at [`cluster/apps/`](../../cluster/apps/), one file per component. Wave order and the
   list of Applications are in [`cluster/apps/kustomization.yaml`](../../cluster/apps/kustomization.yaml):

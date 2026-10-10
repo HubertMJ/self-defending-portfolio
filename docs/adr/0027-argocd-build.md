@@ -152,3 +152,13 @@ and it reaches the cluster only through `kubectl apply -k cluster/bootstrap/argo
   every other package here, before `bootstrap.sh` runs - otherwise Argo CD itself cannot start.
 - Rollback is the switch commit reverted and the bootstrap re-applied: upstream's image comes back
   with nothing else changed, because the paths, user and configuration are upstream's.
+
+## Amendment 2026-10-10: v3.5.4
+
+`app/argocd` builds upstream's v3.5.4 (`d6d5b248ce00e1a2c512068002a93d3319767087`, 2026-10-06), which
+fixes CVE-2026-55797 (HIGH) in Argo CD itself. Its go.mod, go.sum, `hack/tool-versions.sh` (helm
+4.2.1, kustomize 5.8.1, git-lfs 3.7.1) and Dockerfile are v3.5.3's, so `modules/` carries over
+unchanged, with the raises of ADR 0025's amendment of the same date. Upstream's v3.5.3 -> v3.5.4
+change to `manifests/install.yaml` is the argocd image tag alone - no CRD, RBAC or configuration
+change - and the bootstrap's install.yaml URL moves with the image (docs/bootstrap.md 8.11).
+`argocd version` reports v3.5.4+d6d5b24.dirty.

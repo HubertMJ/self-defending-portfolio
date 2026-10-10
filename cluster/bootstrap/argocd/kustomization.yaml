@@ -9,12 +9,12 @@ namespace: argocd
 
 resources:
   - namespace.yaml
-  # Argo CD v3.5.3 non-HA install. The URL carries the version; there is no "stable" alias here.
-  - https://raw.githubusercontent.com/argoproj/argo-cd/v3.5.3/manifests/install.yaml
+  # Argo CD v3.5.4 non-HA install. The URL carries the version; there is no "stable" alias here.
+  - https://raw.githubusercontent.com/argoproj/argo-cd/v3.5.4/manifests/install.yaml
   - root-application.yaml
 
 # Argo CD's Redis (a cache only: nothing in it survives a restart or needs to) one patch release ahead
-# of the 8.2.3-alpine that v3.5.3's install.yaml names, because v3.5.3 is still the newest Argo CD
+# of the 8.2.3-alpine that v3.5.4's install.yaml names, because v3.5.4 is still the newest Argo CD
 # 3.5 release and 8.2.3-alpine carries 11 CRITICAL+HIGH findings in the cluster (OpenSSL in the
 # Alpine base among them), all fixed in later 8.2 patches. Same 8.2 line, so the same protocol and
 # configuration; 8.2.10-alpine scans 0 CRITICAL/HIGH (ADR 0023). Pinned by tag and digest
@@ -38,8 +38,8 @@ images:
     digest: sha256:4946421eb86eecebab52a1bc151090c069b6221eb2503ad65a419b54019db542
   # Argo CD itself - argocd-server, the repo-server and its copyutil init container, the application
   # controller and Redis's secret-init init container all run install.yaml's
-  # quay.io/argoproj/argocd:v3.5.3 - replaced by this repository's build of the same release,
-  # app/argocd (ADR 0027): argo-cd at the v3.5.3 commit with the helm, kustomize and git-lfs releases
+  # quay.io/argoproj/argocd:v3.5.4 - replaced by this repository's build of the same release,
+  # app/argocd (ADR 0027): argo-cd at the v3.5.4 commit with the helm, kustomize and git-lfs releases
   # it ships, all with fixed dependencies, on upstream's own base, user and paths. This one entry
   # rewrites all five references, so no Deployment is patched for it. The image's ARGOCD_COMMIT and
   # the install.yaml URL above must name the same release: an Argo CD bump changes both together.

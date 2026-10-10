@@ -4,12 +4,12 @@
 # cluster has none (`kubectl get applicationsets -A`: no resources). The controller therefore watched
 # an empty kind - with a ClusterRole of its own and a Deployment running the full argocd image.
 #
-# How: kustomize `$patch: delete` on every object install.yaml (v3.5.3) creates for the controller,
+# How: kustomize `$patch: delete` on every object install.yaml (v3.5.4) creates for the controller,
 # matched by kind and name, exactly as argocd-dex-server-delete.yaml does for Dex. install.yaml has
 # no switch for the controller; deleting its objects is the kustomize-native way.
 #
 # Kept on purpose:
-#   * CRD applicationsets.argoproj.io. argocd-server v3.5.3 starts an ApplicationSet informer
+#   * CRD applicationsets.argoproj.io. argocd-server v3.5.4 starts an ApplicationSet informer
 #     unconditionally (server/server.go: appFactory...ApplicationSets().Informer(), run in Run()) and
 #     serves the ApplicationSet API and UI pages from it. Without the CRD that informer fails its
 #     list/watch forever (log noise every backoff, the UI's ApplicationSet view errors); with the CRD
