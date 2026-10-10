@@ -52,7 +52,7 @@ async function hasNoProvenance(page: Page) {
  * The page's sections in order (ADR 0035, amended 2026-10-05), as every build ships them: the console
  * is inside #attack.
  */
-const PAGE_ORDER = ["top", "attack", "correlation", "how", "about", "evidence", "posture", "verify", "skills", "projects"];
+const PAGE_ORDER = ["top", "attack", "correlation", "how", "evidence", "posture", "verify", "about", "skills", "projects"];
 
 /**
  * "All activity, last 24 h" chosen before the page loads (ADR 0035, amendment "this session first"):
@@ -153,7 +153,7 @@ test.describe("layout (ADR 0035, amended 2026-10-05; ?mock=1)", () => {
     expect(await page.evaluate(() => document.querySelector("#attack #console") !== null)).toBe(true);
     // The navigation follows the page; the one link to #verify is the footer's.
     // The SIEM's section is linked while it is shown (UX stage 1).
-    expect(await page.locator(".site-nav a").evaluateAll((as) => as.map((a) => a.getAttribute("href")))).toEqual(["#attack", "#correlation", "#how", "#about", "#posture"]);
+    expect(await page.locator(".site-nav a").evaluateAll((as) => as.map((a) => a.getAttribute("href")))).toEqual(["#attack", "#correlation", "#how", "#posture", "#about"]);
     await expect(page.locator('.site-nav a[href="#correlation"]')).toBeVisible();
     await expect(page.locator('a[href="#verify"]')).toHaveCount(1);
     await expect(page.locator('footer.site-footer a[href="#verify"]')).toHaveCount(1);
@@ -942,8 +942,8 @@ test.describe("credibility on the production bundle (ADR 0035; serve.mjs --termi
       expect(box.card - box.stats).toBeLessThan(80);
     }
     // The order the owner asked for (ADR 0035, amended 2026-10-05): the attack, its response and the
-    // correlation first; the evidence, the posture and the verify panel after How it works, above the
-    // skills.
+    // correlation first; the evidence, the posture and the verify panel after How it works, then About,
+    // above the skills.
     expect(await page.evaluate(() => [...document.querySelectorAll("main > section")].map((el) => el.id))).toEqual(PAGE_ORDER);
     // The one way to it is a footer link.
     await expect(page.locator('a[href="#verify"]')).toHaveCount(1);
@@ -1121,7 +1121,7 @@ test.describe("correlation (ADR 0036; serve.mjs --terminal-api --siem / --no-sie
     await expect(s).toBeVisible();
     expect(await page.evaluate(() => [...document.querySelectorAll("main > section")].map((el) => el.id))).toEqual(PAGE_ORDER);
     // "02 · Correlation", and How it works becomes 03.
-    expect((await numbered(page)).slice(0, 5)).toEqual(["attack", "correlation", "how", "about", "evidence"]);
+    expect((await numbered(page)).slice(0, 5)).toEqual(["attack", "correlation", "how", "evidence", "posture"]);
     await expect(s.locator(".section__head .eyebrow")).toHaveText("Correlation");
 
     // The SIEM scenario first (UX stage 1), then the board; the health line is folded, its summary all ok.
@@ -1275,7 +1275,7 @@ test.describe("correlation (ADR 0036; serve.mjs --terminal-api --siem / --no-sie
     await expect(page.locator("#verify-panel [data-image=\"api\"]")).toContainText("0448cff");
     await expect(section(page)).toBeHidden();
     await expect(section(page).locator(".incident, .tile")).toHaveCount(0);
-    expect((await numbered(page)).slice(0, 4)).toEqual(["attack", "how", "about", "evidence"]);
+    expect((await numbered(page)).slice(0, 4)).toEqual(["attack", "how", "evidence", "posture"]);
     await expect(page.locator("#verify-panel")).not.toContainText("/api/correlation");
     expect(problems).toEqual([]);
   });
@@ -1460,7 +1460,7 @@ test.describe("the visitor's run, told back (mock, ADR 0035 amendment: UX stage 
       await page.goto("/?mock=1&mock-speed=0.2");
       const nav = page.locator(".site-nav");
       await expect(nav).toBeVisible();
-      await expect(nav.locator("a:visible")).toHaveText(["Attack it", "SIEM", "How", "About", "Posture"], { useInnerText: true });
+      await expect(nav.locator("a:visible")).toHaveText(["Attack it", "SIEM", "How", "Posture", "About"], { useInnerText: true });
       await page.locator("#terminal").getByRole("button", { name: /Open the terminal/ }).click();
       await expect(page.locator("#term-input")).toBeEnabled({ timeout: 10_000 });
       for (const d of await page.locator("#console details.verify").all()) await d.evaluate((e) => ((e as HTMLDetailsElement).open = true));

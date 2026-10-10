@@ -93,12 +93,12 @@ describe("stripTodoContent on src/index.html (review 2, item 9)", () => {
     expect(out).not.toMatch(/todo-content/i);
     // Everything else stays: the sections, the skills list, the real project card, every other link.
     // ADR 0035, amended 2026-10-05: the attack, its response and the SIEM's correlation come right after
-    // the hero; About, the evidence, the posture and the verify panel follow How it works, above the
-    // skills; the one link to the verify panel is in the footer, not the hero.
-    expect(sectionIds(out)).toEqual(["top", "attack", "console", "correlation", "how", "about", "evidence", "posture", "verify", "skills", "projects"]);
+    // the hero; the evidence, the posture and the verify panel follow How it works, then About, above
+    // the skills; the one link to the verify panel is in the footer, not the hero.
+    expect(sectionIds(out)).toEqual(["top", "attack", "console", "correlation", "how", "evidence", "posture", "verify", "about", "skills", "projects"]);
     expect([...out.matchAll(/href="#verify"/g)]).toHaveLength(1);
     expect(out.slice(out.indexOf("<footer"))).toContain('<a href="#verify">Verify the running images</a>');
-    expect(navLinks(out)).toEqual(["attack", "correlation", "how", "about", "posture"]);
+    expect(navLinks(out)).toEqual(["attack", "correlation", "how", "posture", "about"]);
     expect(out).toContain("<li>Kubernetes (k3s)</li>");
     expect(out).toContain("self-defending-portfolio</a></h3>");
     expect(out).not.toContain("[TODO");
