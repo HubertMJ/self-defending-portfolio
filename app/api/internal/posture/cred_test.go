@@ -281,9 +281,9 @@ func TestKubeBenchNotApplicableLive(t *testing.T) {
 
 // After the change (ADR 0025, amendment 2026-10-10): this repository's kube-bench build run under the
 // CronJob's constraints against a throwaway k3s v1.35.9+k3s1 with k3s01's rendered configuration
-// (node name and address replaced). Nothing fails; the two manual checks that stay are listed; the
-// three checks this repository marks are not applicable with the configuration's reason, next to
-// upstream's fourteen; INFO is empty and the five counts add up to all 88 checks.
+// (node name and address replaced) and a copy of the node's CNI configuration. Nothing fails; the two
+// manual checks that stay are listed; 1.2.26 is not applicable with the configuration's reason, next
+// to upstream's fourteen; 1.1.9 and 1.1.10 pass; INFO is empty and the five counts add up to all 88.
 func TestKubeBenchAfterCISChange(t *testing.T) {
 	log, err := os.ReadFile("testdata/kube-bench-cis.log")
 	if err != nil {
@@ -293,7 +293,7 @@ func TestKubeBenchAfterCISChange(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if kb.Pass != 69 || kb.Fail != 0 || kb.Warn != 2 || kb.Info != 0 || kb.NotApplicable != 17 ||
+	if kb.Pass != 71 || kb.Fail != 0 || kb.Warn != 2 || kb.Info != 0 || kb.NotApplicable != 15 ||
 		kb.Pass+kb.Fail+kb.Warn+kb.Info+kb.NotApplicable != 88 {
 		t.Fatalf("totals = %d pass / %d fail / %d warn / %d info / %d n/a", kb.Pass, kb.Fail, kb.Warn, kb.Info, kb.NotApplicable)
 	}
@@ -304,12 +304,10 @@ func TestKubeBenchAfterCISChange(t *testing.T) {
 	for _, c := range kb.NotApplicableChecks {
 		reasons[c.ID] = c.Reason
 	}
-	if len(reasons) != 17 {
+	if len(reasons) != 15 || reasons["1.1.9"] != "" || reasons["1.1.10"] != "" {
 		t.Fatalf("not applicable = %+v", kb.NotApplicableChecks)
 	}
 	for id, want := range map[string]string{
-		"1.1.9":  "The CNI is Cilium with its own IPAM. There is no host-local IPAM directory /var/lib/cni/networks",
-		"1.1.10": "The CNI is Cilium with its own IPAM.",
 		"1.2.26": "This K3s keeps its datastore in SQLite through kine on a local unix socket (--etcd-servers=unix://kine.sock). There is no etcd",
 	} {
 		if !strings.HasPrefix(reasons[id], want) {
@@ -324,9 +322,11 @@ func TestKubeBenchAfterCISChange(t *testing.T) {
 	}
 }
 
-// Only a result kube-bench skipped (type "skip", status INFO) is not applicable; its reason is its
-// remediation without the "Not Applicable." opener, on one line, scrubbed and capped; INFO keeps the
-// rest; a log whose totals hold fewer INFO than skipped results never makes INFO negative.
+// Only a result kube-bench skipped (type "skip", status INFO) whose remediation opens with "Not
+// Applicable." is not applicable; its reason is the rest, on one line, scrubbed and capped. A check
+// skipped another way (--skip, a skipped group: upstream remediation, no opener) stays in INFO,
+// unlisted. A log whose totals hold fewer INFO than skipped results never makes INFO negative, and
+// the list never names more checks than the count.
 func TestKubeBenchNotApplicableRules(t *testing.T) {
 	doc := func(info int, results ...map[string]any) []byte {
 		rs := make([]any, len(results))
@@ -341,11 +341,13 @@ func TestKubeBenchNotApplicableRules(t *testing.T) {
 		return map[string]any{"test_number": id, "test_desc": "Check " + id, "remediation": remediation, "status": "INFO",
 			"type": "skip", "reason": "Test marked as skip", "audit": "cat /etc/x"}
 	}
-	kb, err := ParseKubeBench(doc(4,
+	kb, err := ParseKubeBench(doc(6,
 		skip("1.1.9", "Not Applicable.\nThe CNI is Cilium with its own IPAM.\n  No files at 192.0.2.10."),
 		skip("1.2.26", "not applicable no etcd here"),
-		skip("1.2.27", ""),
+		skip("1.2.27", "Not Applicable."),
 		skip("1; rm", "Not Applicable. bad id"),
+		skip("1.2.30", "Edit the K3s config file and set the flag."),
+		skip("1.2.31", ""),
 		map[string]any{"test_number": "1.2.28", "test_desc": "plain info", "status": "INFO"},
 		map[string]any{"test_number": "1.2.29", "test_desc": "skip that passed?", "status": "PASS", "type": "skip"},
 		map[string]any{"test_number": "3.1.1", "test_desc": "manual", "status": "WARN", "type": "manual", "remediation": "Use OIDC."},
@@ -353,7 +355,7 @@ func TestKubeBenchNotApplicableRules(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if kb.NotApplicable != 3 || kb.Info != 1 || kb.Pass != 1 || kb.Warn != 1 {
+	if kb.NotApplicable != 3 || kb.Info != 3 || kb.Pass != 1 || kb.Warn != 1 {
 		t.Fatalf("totals = %+v", kb)
 	}
 	want := []BenchNA{
@@ -371,8 +373,9 @@ func TestKubeBenchNotApplicableRules(t *testing.T) {
 	if kb, _ := ParseKubeBench(doc(1, long)); utf8.RuneCountInString(kb.NotApplicableChecks[0].Reason) > maxBenchRemedy {
 		t.Fatalf("reason not capped: %d runes", utf8.RuneCountInString(kb.NotApplicableChecks[0].Reason))
 	}
-	if kb, _ := ParseKubeBench(doc(1, skip("1.1.1", "x"), skip("1.1.2", "y"))); kb.Info != 0 || kb.NotApplicable != 1 {
-		t.Fatalf("inconsistent totals: info %d, n/a %d", kb.Info, kb.NotApplicable)
+	if kb, _ := ParseKubeBench(doc(1, skip("1.1.1", "Not Applicable. x"), skip("1.1.2", "Not Applicable. y"))); kb.Info != 0 || kb.NotApplicable != 1 ||
+		len(kb.NotApplicableChecks) != 1 || kb.NotApplicableChecks[0].ID != "1.1.1" {
+		t.Fatalf("inconsistent totals: info %d, n/a %d, listed %+v", kb.Info, kb.NotApplicable, kb.NotApplicableChecks)
 	}
 	kb, err = ParseKubeBench(doc(0, map[string]any{"test_number": "1.1.1", "status": "PASS"}))
 	if err != nil || kb.NotApplicableChecks == nil || kb.Warning == nil || len(kb.NotApplicableChecks)+len(kb.Warning) != 0 {

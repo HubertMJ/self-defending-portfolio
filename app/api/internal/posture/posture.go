@@ -179,8 +179,10 @@ type KubeBench struct {
 	// as INFO: pass + fail + warn + info + not_applicable is every check that ran.
 	Info int `json:"info"`
 	// NotApplicable counts the checks the benchmark configuration marks as not applicable to this
-	// cluster (kube-bench `type: skip`: upstream's own k3s skips and this repository's, ADR 0025
-	// amendment 2026-10-10). They are neither passed nor failed; the page shows them as such.
+	// cluster: kube-bench `type: skip` with a remediation that opens "Not Applicable." - upstream's
+	// own k3s skips and this repository's (ADR 0025 amendment 2026-10-10). A check skipped any other
+	// way (kube-bench's --skip flag, a skipped group) stays in Info. They are neither passed nor
+	// failed; the page shows them as such.
 	NotApplicable int `json:"not_applicable"`
 	// Failing names the FAIL checks (ADR 0035): id, title and kube-bench's own remediation text,
 	// scrubbed and capped, in benchmark order. Nothing else from a result is read - not the audit
@@ -901,7 +903,8 @@ func benchCut(s string, n int) string {
 	return string(r[:n-1]) + "…"
 }
 
-// naPrefix is how kube-bench's k3s configuration opens the remediation of a skipped check.
+// naPrefix is how kube-bench's k3s configuration opens the remediation of a check that does not
+// apply; only a skipped check that says so is counted as not applicable.
 var naPrefix = regexp.MustCompile(`(?i)^\s*not applicable\.?\s*`)
 
 // ErrNoBenchJSON is returned for a log without a kube-bench JSON document.
@@ -913,7 +916,9 @@ var ErrNoBenchJSON = errors.New("no kube-bench JSON document in the log")
 // totals of every document found are added up (from Totals, or summed over Controls). The FAIL
 // and WARN results are listed in Failing and Warning, in the order the benchmark gives them, capped
 // at maxFailing each. Skipped checks (type "skip", reported INFO) are counted in NotApplicable and
-// taken out of Info, and listed with their reason, capped the same way.
+// taken out of Info, and listed with their reason, capped the same way - but only when the
+// configuration says why: a skipped check whose remediation does not open with "Not Applicable."
+// (kube-bench's --skip flag and group skips mark checks skipped too) stays in Info, unlisted.
 func ParseKubeBench(log []byte) (KubeBench, error) { return parseKubeBench(log, "") }
 
 // parseKubeBench is ParseKubeBench for a run on the node called node: its name is replaced in the
@@ -967,7 +972,7 @@ func parseKubeBench(log []byte, node string) (KubeBench, error) {
 						continue
 					}
 					switch {
-					case r.Status == "INFO" && r.Type == "skip":
+					case r.Status == "INFO" && r.Type == "skip" && naPrefix.MatchString(r.Remediation):
 						kb.NotApplicable++
 						if len(kb.NotApplicableChecks) < maxFailing {
 							reason := strings.Join(strings.Fields(naPrefix.ReplaceAllString(r.Remediation, "")), " ")
@@ -995,8 +1000,12 @@ func parseKubeBench(log []byte, node string) (KubeBench, error) {
 		return KubeBench{}, ErrNoBenchJSON
 	}
 	// Every skipped result is one of kube-bench's INFO; a log whose totals say otherwise is
-	// malformed, and the INFO count is not driven below zero by it.
+	// malformed: the INFO count is not driven below zero by it, and the list never names more
+	// checks than the count says.
 	kb.NotApplicable = min(kb.NotApplicable, kb.Info)
 	kb.Info -= kb.NotApplicable
+	if len(kb.NotApplicableChecks) > kb.NotApplicable {
+		kb.NotApplicableChecks = kb.NotApplicableChecks[:kb.NotApplicable]
+	}
 	return kb, nil
 }
