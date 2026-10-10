@@ -20,8 +20,9 @@
 # Bumping: together with app/cilium (see there).
 #
 # Bases pinned by tag and digest (ADR 0008):
-#   golang:1.26.9                     docker.io  (as app/talon; 1.26.8's standard library has fixed
-#                                                 findings, HIGH among them)
+#   golang:1.26.9                     docker.io  (the same pin as the talon change in this rebuild;
+#                                                 1.26.8's standard library has fixed findings, HIGH
+#                                                 among them)
 #   operator-generic:v1.19.8          quay.io    (the chart's operator image at 1.19.8; source of the
 #                                                 CA bundle only)
 FROM quay.io/cilium/operator-generic:v1.19.8@sha256:786ec9bb1a9344435e3e3f994bc4ed3a4a85afa6a314e98681af241f8be79833 AS upstream
@@ -38,7 +39,9 @@ RUN git init -q . \
  && git fetch -q --depth 1 origin "$GOPS_COMMIT" \
  && git checkout -q FETCH_HEAD \
  && test "$(git rev-parse HEAD)" = "$GOPS_COMMIT" \
- && CGO_ENABLED=0 go build -buildvcs=false -ldflags "-s -w" -o /out/usr/bin/gops github.com/google/gops
+ && CGO_ENABLED=0 go build -buildvcs=false -ldflags "-s -w" -o /out/usr/bin/gops github.com/google/gops \
+ && go version -m /out/usr/bin/gops | grep -q 'GOARCH=amd64' \
+ && go version /out/usr/bin/gops | grep -q ': go1\.26\.9$'
 
 FROM docker.io/library/golang:1.26.9@sha256:d7722066f0b60ceccb6c0643cbed1f5f9e15506ac237146c95333504d7805d89 AS deps
 # cilium/cilium tag v1.19.8 (annotated tag 9f826a3d..., commit below).

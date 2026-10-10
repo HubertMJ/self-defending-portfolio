@@ -48,12 +48,18 @@
 #     family, go-control-plane/envoy 1.36 -> 1.37, among others). The second step (2026-10-10, the
 #     MEDIUM findings with a fix: gopacket, mongo-driver, cel-go) moved nothing else but
 #     antlr4-go/antlr 4.13.0 -> 4.13.1, and dropped stoewer/go-strcase, which cel-go 0.29 no longer
-#     needs. The third (the same day, as app/talon) moved the rest of golang.org/x (mod, sync, sys,
-#     term, text, tools, telemetry) and the go directive to 1.26.0, which x/net 0.60 requires.
+#     needs. The third (the same day, the same x/net and x/crypto as the talon change in this
+#     rebuild) moved the rest of golang.org/x (mod, sync, sys, term, text, tools, telemetry) and the
+#     go directive to 1.26.0, which x/net 0.60 requires. A go directive of 1.26 would also switch the
+#     binaries to Go 1.26's GODEBUG defaults (urlstrictcolons, tlssecpmlkem, cryptocustomrand among
+#     them) - behaviour upstream's go 1.25.0 build does not have - so go.mod carries
+#     `godebug default=go1.25` by hand right below it: the defaults stay those of upstream's build
+#     (`go version -m` on a binary shows DefaultGODEBUG). `go mod tidy` keeps the line.
 #     `diff` against upstream's go.mod at CILIUM_COMMIT shows the whole set. Upstream builds from
 #     vendor/ (-mod=vendor), so vendor/ is regenerated from the raised go.mod with `go mod vendor`
-#     after `go mod verify` has checked every downloaded module against go.sum (and go.sum against
-#     the public checksum database).
+#     after `go mod download` has checked every module against the hashes in go.sum and
+#     `go mod verify` has checked the extracted copies against them (the public checksum database is
+#     consulted only for a module go.sum does not list, and go.sum lists them all).
 #   * upstream's own unit tests for the packages the raised modules reach - the Envoy xDS server and
 #     its go-control-plane types, Hubble (observer, peer, relay, parser, the CEL flow filters), the
 #     monitor's packet decoding and the datapath probes (gopacket), cilium-health, the CNI
@@ -85,8 +91,9 @@
 # keep cilium_version / targetRevision in step (ADR 0008), push.
 #
 # Bases pinned by tag and digest (ADR 0008), resolved from the registries' index manifests:
-#   golang:1.26.9                     docker.io  (as app/talon; 1.26.8's standard library has fixed
-#                                                 findings, HIGH among them)
+#   golang:1.26.9                     docker.io  (the same pin as the talon change in this rebuild;
+#                                                 1.26.8's standard library has fixed findings, HIGH
+#                                                 among them)
 #   cilium-runtime:ccc1a8e2...        quay.io    (upstream's CILIUM_RUNTIME_IMAGE at CILIUM_COMMIT)
 #   cilium-envoy:v1.37.6-...          quay.io    (upstream's CILIUM_ENVOY_IMAGE at CILIUM_COMMIT, also
 #                                                 the chart's envoy.image)
@@ -107,7 +114,9 @@ RUN git init -q . \
  && git fetch -q --depth 1 origin "$GOPS_COMMIT" \
  && git checkout -q FETCH_HEAD \
  && test "$(git rev-parse HEAD)" = "$GOPS_COMMIT" \
- && CGO_ENABLED=0 go build -buildvcs=false -ldflags "-s -w" -o /out/usr/bin/gops github.com/google/gops
+ && CGO_ENABLED=0 go build -buildvcs=false -ldflags "-s -w" -o /out/usr/bin/gops github.com/google/gops \
+ && go version -m /out/usr/bin/gops | grep -q 'GOARCH=amd64' \
+ && go version /out/usr/bin/gops | grep -q ': go1\.26\.9$'
 WORKDIR /go/src/github.com/containernetworking/cni
 # containernetworking/plugins tag v1.9.1; built from its vendor/, as upstream's script does.
 RUN git init -q . \
@@ -118,6 +127,8 @@ RUN git init -q . \
  && CGO_ENABLED=0 go build -buildvcs=false -o /out/cni/loopback \
       -ldflags "-s -w -X github.com/containernetworking/plugins/pkg/utils/buildversion.BuildVersion=v1.9.1" \
       ./plugins/main/loopback \
+ && go version -m /out/cni/loopback | grep -q 'GOARCH=amd64' \
+ && go version /out/cni/loopback | grep -q ': go1\.26\.9$' \
  && /out/cni/loopback --version 2>&1 | grep -qx 'CNI loopback plugin v1\.9\.1'
 
 FROM docker.io/library/golang:1.26.9@sha256:d7722066f0b60ceccb6c0643cbed1f5f9e15506ac237146c95333504d7805d89 AS deps

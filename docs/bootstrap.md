@@ -1092,8 +1092,10 @@ the rollback rehearsed in your head before you start.
    ```
 
    **Each switch commit carries its real digests and is pushed alone**, on top of `main`, with the
-   checks of its step done before the next push. The digests pinned (built from `main` and signed
-   by build-images.yml; `scripts/verify-image.sh` each before the first push):
+   checks of its step done before the next push. The digests pinned by the first switch (built from
+   `main` and signed by build-images.yml; `scripts/verify-image.sh` each before the first push);
+   later rebuilds are pinned by `scripts/bump-image-digest.sh`, below, and `cluster/apps/cilium.yaml`
+   is what is current:
 
    | image | digest |
    |---|---|
@@ -1153,15 +1155,18 @@ the rollback rehearsed in your head before you start.
    image"). Last, and alone. What happens on one node: the agent pod is deleted, its BPF programs and
    maps stay pinned in the kernel, so established connections and Services keep working; for the
    30-90 s until the new agent is Ready, *new* pods cannot get an address (CNI ADD fails and the
-   kubelet retries). Pre-pull (the agent image is about 1 GB - pull it before, not during), push
-   the commit, then:
+   kubelet retries). Pre-pull (the agent image is about 1 GB - pull it before, not during), and
+   check that the agent image now running is still in the node's store, so a rollback needs no pull
+   (`ssh k3s01 sudo k3s crictl images --digests | grep cilium` lists its digest); push the commit,
+   then:
 
    ```sh
    kubectl -n kube-system rollout status ds/cilium --timeout=5m
    kubectl -n kube-system get ds cilium -o jsonpath='{range .spec.template.spec.initContainers[*]}{.image}{"\n"}{end}{.spec.template.spec.containers[0].image}{"\n"}'
    # seven lines, all ghcr.io/hubertmj/self-defending-portfolio/cilium:main@sha256:<digest>
    kubectl -n kube-system exec ds/cilium -c cilium-agent -- cilium-dbg status --brief   # OK
-   kubectl -n kube-system exec ds/cilium -c cilium-agent -- cilium-dbg version          # identical to the baseline
+   kubectl -n kube-system exec ds/cilium -c cilium-agent -- cilium-dbg version
+   # identical to the baseline, except the Go release (go1.26.9 after the 2026-10-10 rebuild)
    kubectl -n kube-system exec ds/cilium -c cilium-agent -- cilium-dbg status --verbose \
      | grep -E 'KubeProxyReplacement|Envoy|Hubble|Controller Status|Proxy Status|Cluster health'
    kubectl -n kube-system logs ds/cilium -c cilium-agent --since=10m | grep -E 'level=(error|fatal)'

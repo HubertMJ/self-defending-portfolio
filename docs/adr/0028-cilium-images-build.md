@@ -175,30 +175,37 @@ ADR 0024). The images are still signed, SBOM'd and Trivy-gated in CI, verifiable
 
 ## Amendment 2026-10-10: the MEDIUM and LOW findings with a fix, Go 1.26.9, gops and loopback rebuilt
 
-The owner's decision of 2026-10-10: fix every MEDIUM and LOW finding with a fixed release in the four
-images, as for the other own builds. Trivy Operator listed, for the running images: gopacket v1.5.0
-(CVE-2026-54332, CVE-2026-54345; agent, operator), mongo-driver v1.17.6 (CVE-2026-2303; agent,
-operator, relay), cel-go v0.26.1 (GHSA-gcjh-h69q-9w9g; agent) and Ubuntu's perl-base
+The owner's decision of 2026-10-10: fix every MEDIUM and LOW finding with a fixed release in the
+four images, as for the other own builds. Trivy Operator listed, for the running images: gopacket
+v1.5.0 (CVE-2026-54332, CVE-2026-54345; agent, operator), mongo-driver v1.17.6 (CVE-2026-2303;
+agent, operator, relay), cel-go v0.26.1 (GHSA-gcjh-h69q-9w9g; agent) and Ubuntu's perl-base
 5.38.2-3.2ubuntu0.4 (CVE-2026-15534, CVE-2026-19487; agent and cilium-envoy). Trivy 0.75.0 with the
 database of 2026-10-10 adds, in every Go binary of the three Cilium images: Go 1.26.8's standard
-library (CVE-2026-78667, CVE-2026-78669, CVE-2026-97031 HIGH; five MEDIUM, one LOW; fixed in 1.26.9),
-x/net v0.58.0 (CVE-2026-78669 HIGH, two MEDIUM) and x/crypto v0.55.0 (two MEDIUM). The HIGH ones would
-fail the CI gate on the next build of any of the three - including `gops` (agent, operator, relay)
-and `/cni/loopback` (agent), which came byte-for-byte from upstream's layers and were compiled by
-upstream with Go 1.26.8.
+library (CVE-2026-78667, CVE-2026-78669, CVE-2026-97031 HIGH; five MEDIUM, one LOW; fixed in
+1.26.9), x/net v0.58.0 (CVE-2026-78669 HIGH, two MEDIUM) and x/crypto v0.55.0 (two MEDIUM). The HIGH
+ones would fail the CI gate on the next build of any of the three - including `gops` (agent,
+operator, relay) and `/cni/loopback` (agent), which came byte-for-byte from upstream's layers and
+were compiled by upstream with Go 1.26.8.
 
 What changed, still with no line of Cilium's Go source touched:
 - modules/ (all three copies, identical): `go get github.com/gopacket/gopacket@v1.6.1
   go.mongodb.org/mongo-driver@v1.17.7 github.com/google/cel-go@v0.29.0`, `go mod tidy` (moved only
   antlr4-go/antlr 4.13.0 -> 4.13.1 and dropped stoewer/go-strcase), then `go get
   golang.org/x/net@v0.60.0 golang.org/x/crypto@v0.57.0`, `go mod tidy` (the rest of golang.org/x
-  moved, and the go directive to 1.26.0, which x/net 0.60 requires) - the x/net and x/crypto
-  releases app/talon raised to the same day. cel-go 0.29 is three minor releases on from what
-  Cilium 1.19.8 and Kubernetes 0.35 were released with; it compiles against both unchanged, all of
-  `./...` builds, and both Cilium's Hubble CEL filter tests (`pkg/hubble/filters`, its one direct
-  user) and k8s.io/apiserver's own `pkg/cel/...` tests pass against it.
-- golang:1.26.9 for the three builds (the pin app/talon moved to). The version strings now end in
-  `go1.26.9`; everything before the Go release is still byte-identical to upstream's.
+  moved, and the go directive to 1.26.0, which x/net 0.60 requires) - the same x/net and x/crypto
+  releases as the talon change in this rebuild. The go directive alone would have changed the
+  binaries' run-time behaviour: a main module at go 1.26 gets Go 1.26's GODEBUG defaults
+  (`urlstrictcolons`, `tlssecpmlkem`, `cryptocustomrand` among them), where upstream's go.mod (go
+  1.25.0) gives its build 1.25's. So go.mod also carries `godebug default=go1.25`, added by hand
+  right below the go line (in all three copies; `go mod tidy` keeps it): the rebuilt binaries keep
+  upstream's defaults, which `go version -m` shows as their `DefaultGODEBUG` build setting. cel-go
+  0.29 is three minor releases on from what Cilium 1.19.8 and Kubernetes 0.35 were released with; it
+  compiles against both unchanged, all of `./...` builds, and both Cilium's Hubble CEL filter tests
+  (`pkg/hubble/filters`, its one direct user) and k8s.io/apiserver's own `pkg/cel/...` tests pass
+  against it.
+- golang:1.26.9 for the three builds (the same pin as the talon change in this rebuild). The version
+  strings now end in `go1.26.9`; everything before the Go release is still byte-identical to
+  upstream's.
 - gops (v0.3.29) and the CNI loopback plugin (containernetworking/plugins v1.9.1): compiled in a
   `tools` stage exactly as upstream's `images/runtime/build-gops.sh` and `build-cni.sh` at
   CILIUM_COMMIT do it - same releases, same `go build` flags and version ldflag - with Go 1.26.9,
@@ -210,7 +217,13 @@ What changed, still with no line of Cilium's Go source touched:
   base upstream pins at a newer release carries the fixed versions.
 - Tests: the agent's test stage also runs `./pkg/monitor/...` and `./pkg/datapath/linux/probes/...`
   (the gopacket users outside Hubble); 65 packages pass (agent), 30 (operator), 7 (relay). The
-  smoke tests check perl-base, gops and the loopback plugin's version.
+  monitor's decoding is exercised; the probes' tests compile but skip without privileges
+  (`testutils.PrivilegedTest`), so they are no evidence for gopacket. What the probe uses - building
+  an Ethernet/IPv4/UDP packet with `gopacket.SerializeLayers` - is unchanged between gopacket 1.5.0
+  and 1.6.1: `writer.go`, `layers/ethernet.go`, `layers/ip4.go` and `layers/udp.go` have no diff;
+  the one changed file on that path, `layers/ports.go`, only adds ports to the decoder's
+  port-to-layer table. The smoke tests check perl-base, gops and the loopback plugin's version; the
+  tools stages also assert that gops and loopback were built for amd64 with go1.26.9.
 
 **Verified locally** (2026-10-10), Trivy 0.75.0, CRITICAL+HIGH+MEDIUM+LOW with `--ignore-unfixed`,
 running image -> rebuilt image (findings, counted per binary): agent 39 HIGH, 88 MEDIUM, 11 LOW ->
@@ -221,4 +234,6 @@ logs. Smoke tests pass for all four.
 
 Rollout: as any rebuild, `scripts/bump-image-digest.sh` per image and the three switch steps of
 `docs/bootstrap.md` 8.8 (operator + relay, then envoy, then the agent), each pre-pulled and checked;
-the rollback is reverting that bump commit, back to the previous own digests.
+the rollback is reverting that bump commit, back to the previous own digests. Before the agent step,
+`sudo k3s crictl images --digests | grep cilium` on the node must still list the previous agent
+digest, so that a rollback needs no pull.
