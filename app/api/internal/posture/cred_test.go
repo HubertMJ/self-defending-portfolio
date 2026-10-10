@@ -322,10 +322,10 @@ func TestKubeBenchAfterCISChange(t *testing.T) {
 	}
 }
 
-// Only a result kube-bench skipped (type "skip", status INFO) whose remediation opens with "Not
-// Applicable." is not applicable; its reason is the rest, on one line, scrubbed and capped. A check
-// skipped another way (--skip, a skipped group: upstream remediation, no opener) stays in INFO,
-// unlisted. A log whose totals hold fewer INFO than skipped results never makes INFO negative, and
+// Only a result kube-bench skipped (type "skip", status INFO) whose remediation opens with exactly
+// "Not Applicable." (case and full stop as written, then white space or the end) is not applicable;
+// its reason is the rest, on one line, scrubbed and capped. A check skipped another way (--skip, a
+// skipped group: upstream remediation, no opener) or with a looser opener stays in INFO, unlisted. A log whose totals hold fewer INFO than skipped results never makes INFO negative, and
 // the list never names more checks than the count.
 func TestKubeBenchNotApplicableRules(t *testing.T) {
 	doc := func(info int, results ...map[string]any) []byte {
@@ -341,10 +341,13 @@ func TestKubeBenchNotApplicableRules(t *testing.T) {
 		return map[string]any{"test_number": id, "test_desc": "Check " + id, "remediation": remediation, "status": "INFO",
 			"type": "skip", "reason": "Test marked as skip", "audit": "cat /etc/x"}
 	}
-	kb, err := ParseKubeBench(doc(6,
+	kb, err := ParseKubeBench(doc(9,
 		skip("1.1.9", "Not Applicable.\nThe CNI is Cilium with its own IPAM.\n  No files at 192.0.2.10."),
-		skip("1.2.26", "not applicable no etcd here"),
+		skip("1.2.26", "  Not Applicable. no etcd here"),
 		skip("1.2.27", "Not Applicable."),
+		skip("1.2.32", "not applicable no etcd here"),
+		skip("1.2.33", "Not Applicable no etcd here"),
+		skip("1.2.34", "Not Applicable.no etcd here"),
 		skip("1; rm", "Not Applicable. bad id"),
 		skip("1.2.30", "Edit the K3s config file and set the flag."),
 		skip("1.2.31", ""),
@@ -355,7 +358,7 @@ func TestKubeBenchNotApplicableRules(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if kb.NotApplicable != 3 || kb.Info != 3 || kb.Pass != 1 || kb.Warn != 1 {
+	if kb.NotApplicable != 3 || kb.Info != 6 || kb.Pass != 1 || kb.Warn != 1 {
 		t.Fatalf("totals = %+v", kb)
 	}
 	want := []BenchNA{

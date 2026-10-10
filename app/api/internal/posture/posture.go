@@ -904,8 +904,9 @@ func benchCut(s string, n int) string {
 }
 
 // naPrefix is how kube-bench's k3s configuration opens the remediation of a check that does not
-// apply; only a skipped check that says so is counted as not applicable.
-var naPrefix = regexp.MustCompile(`(?i)^\s*not applicable\.?\s*`)
+// apply - exactly "Not Applicable.", then white space or the end; only a skipped check that says so
+// is counted as not applicable.
+var naPrefix = regexp.MustCompile(`^\s*Not Applicable\.(\s+|$)`)
 
 // ErrNoBenchJSON is returned for a log without a kube-bench JSON document.
 var ErrNoBenchJSON = errors.New("no kube-bench JSON document in the log")
