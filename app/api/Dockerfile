@@ -9,6 +9,8 @@
 # Bases pinned by tag and digest (ADR 0008), resolved from the registries' index manifests:
 #   golang:1.26.9                          docker.io  (1.26.8's standard library has fixed HIGH
 #                                                     findings; as app/talon and app/cilium)
+# go.mod says `go 1.26.0` (x/net 0.60 requires it) and `godebug default=go1.25`: the binary keeps the
+# run-time defaults it had under `go 1.25.0` (ADR 0025, amendment 2026-10-10 (b)).
 #   distroless/static-debian13:nonroot     gcr.io
 FROM docker.io/library/golang:1.26.9@sha256:d7722066f0b60ceccb6c0643cbed1f5f9e15506ac237146c95333504d7805d89 AS deps
 WORKDIR /src

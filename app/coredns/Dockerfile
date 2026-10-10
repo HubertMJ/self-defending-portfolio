@@ -34,7 +34,9 @@
 #     then moved x/net, x/text and x/tools; `diff` against upstream's go.mod shows the whole set. The
 #     second step (2026-10-10, as app/cilium: a HIGH in x/net 0.58, MEDIUMs in x/crypto 0.55) also
 #     moved x/mod, x/sync, x/sys, x/term, x/text and the go directive to 1.26.0, which x/net 0.60
-#     requires.
+#     requires; `godebug default=go1.25` is then added below the go directive by hand (go mod tidy
+#     keeps it), so the binary keeps the run-time defaults it had under 1.25.0 (ADR 0026, amendment
+#     2026-10-10).
 #     miekg/dns, the Kubernetes client and every plugin's own dependencies are upstream's, untouched.
 #   * upstream's tests (`go vet` + `go test -race`, every package, grouped as upstream's CI does) run
 #     in the builder against the raised dependencies, with --network=none and as a non-root user: no
@@ -87,25 +89,34 @@ FROM deps AS test
 #     8.8.8.8 and needs its real answer; it is skipped by name, the only test skipped.
 #   * as a non-root user, as on upstream's CI runners: TestDefaultLoader checks that an unreadable
 #     Corefile is refused, and root can read anything.
-#   * vet's printf check off (`go vet -printf=false`, and go test's own vet pass without it): x/net
-#     0.60 requires `go 1.26.0` in go.mod, and with that language version vet's printf check reports
-#     %q applied to a non-rune integer. Upstream has three, all in test code - two test failure
-#     messages (plugin/dns64/dns64_test.go:510, plugin/file/secondary_test.go:95) and one test helper
+#   * vet's printf check off for three packages only: x/net 0.60 requires `go 1.26.0` in go.mod, and
+#     with that language version vet's printf check reports %q applied to a non-rune integer.
+#     Upstream has three, all in test code - two test failure messages
+#     (plugin/dns64/dns64_test.go:510, plugin/file/secondary_test.go:95) and one test helper
 #     (plugin/test/helpers.go:250) - which print a number as a quoted character; the shipped binary is
 #     not affected. Checked: the same three with Go 1.26.8 and 1.26.9 once go.mod says 1.26.0, none
-#     with 1.25.0. Every other vet check still runs. Turn printf back on once upstream fixes them.
+#     with 1.25.0. Those three packages are vetted and tested without printf (go test's default vet
+#     list minus printf); every other package with the full set. Turn printf back on for them once
+#     upstream fixes the three. (go.mod's `godebug default=go1.25` keeps the binary's run-time
+#     defaults where they were; the language version is what vet reads.)
 # Every module is already in the cache from `go mod download`. -race needs cgo, which the golang
 # image has; the shipped binary below does not use it.
 RUN chown -R 65532:65532 /src
 USER 65532:65532
 ENV HOME=/tmp GOCACHE=/tmp/go-build
-RUN --network=none CGO_ENABLED=1 go vet -printf=false -tags grpcnotrace ./... \
- && for dir in request core coremain plugin test; do \
+ARG NOPRINTF="github.com/coredns/coredns/plugin/dns64 github.com/coredns/coredns/plugin/file github.com/coredns/coredns/plugin/test"
+ARG VET_NOPRINTF=atomic,bool,buildtags,directive,errorsas,ifaceassert,nilfunc,slog,stringintconv,tests
+RUN --network=none set -e; \
+    except=$(printf -- '-e %s ' $NOPRINTF); \
+    CGO_ENABLED=1 go vet -tags grpcnotrace $(go list -tags grpcnotrace ./... | grep -vxF $except); \
+    CGO_ENABLED=1 go vet -printf=false -tags grpcnotrace $NOPRINTF; \
+    for dir in request core coremain plugin test; do \
+      pkgs=$(cd "$dir" && go list -tags grpcnotrace ./... | grep -vxF $except || true); \
       (cd "$dir" && CGO_ENABLED=1 go test -race -count=1 -tags grpcnotrace \
-        -vet=atomic,bool,buildtags,directive,errorsas,ifaceassert,nilfunc,stringintconv,tests \
-        -skip '^TestZoneExternalCNAMELookupWithProxy$' ./...) || exit 1; \
-    done \
- && touch /tmp/tested
+        -skip '^TestZoneExternalCNAMELookupWithProxy$' $pkgs) || exit 1; \
+    done; \
+    (cd plugin && CGO_ENABLED=1 go test -race -count=1 -tags grpcnotrace -vet="$VET_NOPRINTF" $NOPRINTF); \
+    touch /tmp/tested
 
 FROM deps AS build
 ARG COREDNS_VERSION=v1.14.7

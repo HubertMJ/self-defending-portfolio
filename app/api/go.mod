@@ -2,6 +2,8 @@ module github.com/hubertmj/self-defending-portfolio/app/api
 
 go 1.26.0
 
+godebug default=go1.25
+
 require (
 	k8s.io/api v0.35.9
 	k8s.io/apimachinery v0.35.9
