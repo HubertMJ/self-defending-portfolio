@@ -1556,6 +1556,10 @@ either order; the page reaches its final numbers when all three are live and kub
    curl -s https://hubertjablon.ski/api/posture | jq '.kube_bench | {pass, fail, warn, info, not_applicable}'
    ```
 
+   Leave the job in place: the API reads the newest completed kube-bench job, so deleting it puts the
+   panel back on the previous night's run until the next 03:17 UTC one. The CronJob's TTL (24 h)
+   removes it.
+
    Leave the Job; its TTL removes it after a day, like the CronJob's own.
 
 Rollback: revert the k3s commit and run the k3s role again (one more restart); the role then
