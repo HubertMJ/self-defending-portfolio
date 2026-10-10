@@ -233,14 +233,20 @@ Not taken as-is:
 - argocd: `/usr/bin/pebble`, which the Ubuntu 26.04 image ships outside any package and which is
   compiled with Go 1.26.7 (3 HIGH, 5 MEDIUM, 1 LOW), is deleted from the runtime image; nothing
   runs it.
+- helm's tests run its two `lint/rules` packages after the rest: one of their tests renames a file
+  in the testdata chart the `lint` packages' TestInvalidYaml reads, an upstream race between
+  packages that failed that test twice on this loaded host. Every test still runs.
 
-Left: Argo CD's own CVE-2026-55797 (HIGH, argo-cd v3.5.3, fixed in v3.5.4) is a release bump, not a
-dependency raise, and is a separate change (ADR 0027 "Bumping").
+Argo CD's own CVE-2026-55797 (HIGH, argo-cd v3.5.3) is a release bump, not a dependency raise: the
+image moves to upstream's v3.5.4 (`d6d5b248ce00e1a2c512068002a93d3319767087`, ADR 0027 "Bumping"),
+whose go.mod, go.sum, tool versions and Dockerfile are v3.5.3's, so every raise above still applies
+unchanged (`go mod tidy` at v3.5.4 changes nothing). The bootstrap's install.yaml URL moves with
+it; upstream's install.yaml differs only in the argocd image tag, which the `images:` entry
+replaces, so the rendered bootstrap is otherwise identical (docs/bootstrap.md 8.11).
 
 Verified locally (Trivy 0.75.0, same DB; "before" is each image's current `main` build): talon
 4 HIGH / 13 MEDIUM / 4 LOW -> 0, falcosidekick 4/12/5 -> 0, trivy-operator 4/11/4 -> 0, ksops
-4/10/2 -> 0, metrics-server 4/10/4 -> 0; argocd's four binaries 15/33/7 -> 0 besides
-CVE-2026-55797 (built from the build's test stage: a stale local BuildKit cache record broke the UI
-stage, so the full argocd image was first built by CI). Upstream's test targets pass in every build; metrics-server
-also in a throwaway k3s v1.35.9+k3s1 (rollout, APIService Available, `kubectl top`), falcosidekick
-under the pod's constraints (`/ping`, an event, a malformed event).
+4/10/2 -> 0, metrics-server 4/10/4 -> 0, argocd v3.5.4 (the full image) 19/38/8 -> 0, and
+`argocd version --client` reports v3.5.4+d6d5b24.dirty, go1.26.9. Upstream's test targets pass in
+every build; metrics-server also in a throwaway k3s v1.35.9+k3s1 (rollout, APIService Available,
+`kubectl top`), falcosidekick under the pod's constraints (`/ping`, an event, a malformed event).

@@ -1401,6 +1401,69 @@ kube-bench images); then revert 2a, and upstream's images come back with the sam
 metrics-server: revert the switch commit (Argo CD prunes its objects), then revert the Ansible change
 and run the k3s role again - k3s re-extracts its bundled manifests on start and deploys its own copy.
 
+### 8.11 MEDIUM and LOW fixes, Argo CD v3.5.4 (one push, one pin commit, a bootstrap re-apply)
+
+The six images built from pinned upstream commits take their MEDIUM and LOW findings with a fix as
+well (ADR 0025, amendment 2026-10-10), and `app/argocd` moves to upstream's v3.5.4 release (which
+fixes CVE-2026-55797 in Argo CD itself). Same stages as 8.3 and 8.9; the KSOPS and Argo CD pins live
+in the bootstrap kustomization, so the last step is again a manual apply (ADR 0005).
+
+1. **Stage 1: the images.** Push the `app/...` commits. The workflow builds `talon`,
+   `falcosidekick`, `trivy-operator`, `ksops`, `metrics-server` and `argocd` and prints a digest for
+   each; nothing in the cluster changes. For Argo CD, from a machine not logged in to GHCR:
+
+   ```sh
+   img=ghcr.io/hubertmj/self-defending-portfolio/argocd@sha256:<digest>
+   scripts/verify-image.sh "$img"
+   docker run --rm "$img" argocd version --client     # argocd: v3.5.4+d6d5b24.dirty, go1.26.9
+   docker run --rm "$img" sh -c 'test ! -e /usr/bin/pebble && helm version --short; kustomize version'
+   docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:0.75.0 image \
+     --severity CRITICAL,HIGH,MEDIUM,LOW --ignore-unfixed --quiet "$img"      # 0 everywhere
+   ```
+
+2. **Stage 2: the pins.** One commit with all six digests:
+
+   ```sh
+   scripts/bump-image-digest.sh talon sha256:<d>            # cluster/infra/falco-response/kustomization.yaml
+   scripts/bump-image-digest.sh falcosidekick sha256:<d>    # cluster/apps/falco-response.yaml
+   scripts/bump-image-digest.sh trivy-operator sha256:<d>   # cluster/apps/trivy-operator.yaml
+   scripts/bump-image-digest.sh metrics-server sha256:<d>   # cluster/infra/metrics-server/kustomization.yaml
+   scripts/bump-image-digest.sh ksops sha256:<d>            # cluster/bootstrap/argocd/kustomization.yaml
+   scripts/bump-image-digest.sh argocd sha256:<d>           # cluster/bootstrap/argocd/kustomization.yaml
+   SOPS_AGE_KEY_FILE=~/.config/sops/age/keys.txt make lint validate
+   git commit -am "images: pin the MEDIUM/LOW rebuilds and Argo CD v3.5.4" && git push
+   ```
+
+   Argo CD rolls Talon, Falcosidekick, the Trivy Operator and metrics-server itself. Check them:
+   `kubectl -n argocd get applications` (Synced/Healthy), `kubectl top nodes`,
+   `kubectl get apiservice v1beta1.metrics.k8s.io` (Available), new VulnerabilityReports after the
+   operator restarts, and one scenario end to end (`make scenario-test`: Falco -> Falcosidekick ->
+   Talon, including the Cilium network-policy quarantine).
+
+3. **The bootstrap re-apply.** The install.yaml URL now names v3.5.4. Upstream's v3.5.3 -> v3.5.4
+   diff of `manifests/install.yaml` is the `quay.io/argoproj/argocd` tag and nothing else - no CRD,
+   RBAC, ConfigMap or Service changes - and the `images:` entry replaces that image by digest, so
+   the rendered bootstrap at an unchanged digest is byte-identical before and after the URL change.
+   The diff must therefore be the images of the five Argo CD containers (8.9) and the repo-server's
+   KSOPS init container, and nothing else:
+
+   ```sh
+   kubectl diff -k cluster/bootstrap/argocd --server-side --force-conflicts | grep -E '^[-+] .*image:'
+   kubectl apply -k cluster/bootstrap/argocd --server-side --force-conflicts
+   kubectl -n argocd rollout status deploy/argocd-redis
+   kubectl -n argocd rollout status deploy/argocd-repo-server
+   kubectl -n argocd rollout status deploy/argocd-server
+   kubectl -n argocd rollout status statefulset/argocd-application-controller
+   argocd version                     # server: v3.5.4+d6d5b24.dirty, Kustomize v5.8.1, Helm v4.2.1
+   argocd app get falco --hard-refresh | grep -E 'Sync Status|Health Status'                 # helmCharts
+   argocd app get cert-manager-issuers --hard-refresh | grep -E 'Sync Status|Health Status'  # KSOPS
+   argocd app list                    # every Application Synced/Healthy, no ComparisonError
+   ```
+
+   As in 8.9, all of Argo CD restarts for a minute or two; managed workloads keep running.
+
+Rollback: revert the pin commit (and, for Argo CD, the v3.5.4 commit) and re-apply the bootstrap.
+
 ## 9. The SIEM host siem01 (ADR 0034)
 
 OpenSearch 3.9.0 with Security Analytics, single node, on its own VM in its own VLAN and firewall zone.
