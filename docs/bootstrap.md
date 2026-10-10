@@ -533,9 +533,9 @@ repository's patch (ADR 0025 and its 2026-10-10 amendment; until ADR 0025 from
 that FAILs or WARNs with an empty actual value means the journal no longer holds the last start's
 lines: `journalctl -u k3s | grep -c 'Running kube-apiserver'` on the node.
 
-Expected since 8.11: 69 PASS / 0 FAIL / 2 WARN / 17 INFO in kube-bench's own totals. The 17 INFO
-are the checks the benchmark marks not applicable (`type: skip`) - the posture page shows them as
-"not applicable" with their reason, not as INFO. The 2 WARN are 3.1.1 and 3.1.2, documented
+Expected since 8.11: 71 PASS / 0 FAIL / 2 WARN / 15 INFO in kube-bench's own totals. The 15 INFO
+are the checks the benchmark marks not applicable (`type: skip`, remediation "Not Applicable. ...") -
+the posture page shows them as "not applicable" with their reason, not as INFO. The 2 WARN are 3.1.1 and 3.1.2, documented
 exceptions (ADR 0025, amendment).
 
 ```sh
@@ -1430,8 +1430,10 @@ either order; the page reaches its final numbers when all three are live and kub
    kubectl -n argocd get application kube-bench portfolio-api hello   # Synced, Healthy
    ```
 
-   From here the page lists not-applicable checks (upstream's 14 now; 17 after the next kube-bench
-   run) and the WARN checks, and 1.1.9, 1.1.10 and 1.2.26 leave the FAIL count.
+   From here the page lists not-applicable checks (upstream's 14 now; 15 after the next kube-bench
+   run, with 1.2.26) and the WARN checks. The next kube-bench run also mounts `/etc/cni/net.d`:
+   1.1.9 and 1.1.10 read Cilium's conflist there (0600 root:root on 2026-10-10) and pass, and
+   1.2.26 leaves the FAIL count.
 
 2. **The k3s role, in a maintenance window** (one k3s restart, as in 8.2). It writes
    `/etc/rancher/k3s/admission-config.yaml`, adds the admission plugins and flags to config.yaml,
@@ -1457,18 +1459,32 @@ either order; the page reaches its final numbers when all three are live and kub
    ```sh
    kubectl -n kube-bench create job --from=cronjob/kube-bench kube-bench-cis-check
    kubectl -n kube-bench wait --for=condition=complete job/kube-bench-cis-check --timeout=300s
-   kubectl -n kube-bench logs job/kube-bench-cis-check | jq '.Totals'   # 69 pass, 0 fail, 2 warn, 17 info
+   kubectl -n kube-bench logs job/kube-bench-cis-check | jq '.Totals'   # 71 pass, 0 fail, 2 warn, 15 info
    curl -s https://hubertjablon.ski/api/posture | jq '.kube_bench | {pass, fail, warn, info, not_applicable}'
    ```
 
    Leave the Job; its TTL removes it after a day, like the CronJob's own.
 
-Rollback: the role first - set `k3s_admission_plugins: [NodeRestriction]`, drop the other CIS
-arguments (or revert the commit; `admission-config.yaml` may stay, nothing reads it once the flag is
-gone) and run the k3s role again: one more restart. A bootstrap-token join needs only
+Rollback: revert the k3s commit and run the k3s role again (one more restart); the role then
+writes the old config.yaml and audit policy (`admission-config.yaml` stays, unread once the flag is
+gone). Pods created while AlwaysPullImages was on keep `imagePullPolicy: Always` until they are
+recreated (`kubectl rollout restart` per workload). A bootstrap-token join needs only
 `k3s_bootstrap_token_auth: true`. Then revert the digest pins if the images are the problem; the
 previous web renders the new API's response as before (it ignores the new fields), and the previous
-API reads the new kube-bench log with the 17 skips in INFO.
+API reads the new kube-bench log with the 15 skips in INFO.
+
+Break-glass, a registry outage with pods that will not start (AlwaysPullImages): run the role
+without the plugin, then recreate what is stuck, so its containers start from the images on the
+node again.
+
+```sh
+cd ansible
+ansible-playbook playbooks/cluster.yml --tags k3s \
+  -e '{"k3s_admission_plugins": ["NodeRestriction", "DenyServiceExternalIPs", "EventRateLimit"]}'
+cd .. && kubectl -n <ns> rollout restart deploy/<name>   # each workload stuck in ImagePullBackOff
+```
+
+kube-bench reports 1.2.11 WARN until the role runs again with the default list.
 
 ## 9. The SIEM host siem01 (ADR 0034)
 

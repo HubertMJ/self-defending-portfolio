@@ -153,3 +153,10 @@ journalctl. No control is relaxed further: `restricted-kube-bench` already allow
 for this namespace, and `make validate` still fails on any writable kube-bench hostPath
 (`check_hostpath_readonly.py`). The journal holds every unit's log, not only k3s's; the pod still has
 no network, no service account token and no capability, and what leaves it is kube-bench's JSON.
+
+## Amendment 2026-10-10: the CNI configuration directory for kube-bench (ADR 0025, amendment 2026-10-10)
+The kube-bench CronJob also mounts `/etc/cni/net.d` read-only (`type: Directory`), so CIS 1.1.9 and
+1.1.10 can check the mode and owner of Cilium's CNI configuration where containerd really reads it.
+It holds one file, `05-cilium.conflist` (0600 root:root): the plugin name and a log path, no
+credentials. No control is relaxed further; `make validate` still fails on any writable kube-bench
+hostPath.
