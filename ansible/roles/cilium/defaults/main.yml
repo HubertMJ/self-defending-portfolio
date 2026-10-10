@@ -56,7 +56,7 @@ cilium_values:
   # The agent, and its six init containers, from this repository (ADR 0028, as operator.image below).
   image:
     # yamllint disable-line rule:line-length
-    override: ghcr.io/hubertmj/self-defending-portfolio/cilium:main@sha256:5c5dcd9b1a13a333194166dfc94051cd7793ab7b65e9a653bd0d831e0d984e29
+    override: ghcr.io/hubertmj/self-defending-portfolio/cilium:main@sha256:c070e76703f447d3b912b7cf12d2b7fc0c1d6a54d1a8d8bfa6fa016c706bb518
   # eBPF replaces kube-proxy entirely; k3s is started with disable-kube-proxy.
   kubeProxyReplacement: true
   k8sServiceHost: "{{ cilium_k8s_service_host }}"
