@@ -45,11 +45,24 @@
 #       then       go mod tidy   (GOWORK=off for kustomize)
 #     The grpc, x/crypto, x/net and x/text releases app/talon and app/ksops raised to. Minimal version
 #     selection then moved what those require (x/sys, x/sync, genproto, the opentelemetry and
-#     cloud.google.com families, among others); `diff` against upstream's go.mod at each commit
-#     shows the whole set. The Kubernetes libraries, gitops-engine (in-tree, `replace`d) and every
-#     replace directive upstream has are untouched.
-#   * Go 1.26.8 for all four, the golang image app/api, app/talon and app/ksops use (upstream: 1.26.4
-#     for argocd and helm; the vendors' 1.24.0 and 1.25.3 for kustomize and git-lfs).
+#     cloud.google.com families, among others). Then, for the MEDIUM and LOW findings with a fix
+#     (2026-10-10), on top of that result:
+#       argocd:    go get github.com/slack-go/slack@v0.23.1 golang.org/x/net@v0.60.0 \
+#                         go.opentelemetry.io/otel/sdk@v1.45.0 \
+#                         go.opentelemetry.io/otel/exporters/otlp/otlptrace@v1.45.0 \
+#                         go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc@v1.45.0
+#       helm:      go get golang.org/x/net@v0.60.0
+#       git-lfs:   go get golang.org/x/net@v0.60.0
+#       then       go mod tidy
+#     x/net v0.60.0 requires x/crypto v0.57.0, which also fixes x/crypto's two MEDIUM findings.
+#     slack-go is notifications-engine's; v0.23.1 is the release Argo CD 3.6 (v3.6.0-rc2) requires.
+#     Argo CD's notification packages pass their tests against it; notifications-engine's own slack
+#     tests pass but for two that expect an empty `blocks=[]` form field, which slack-go v0.23.1
+#     leaves out when there are no blocks. No notifications controller runs here (ADR 0024).
+#     `diff` against upstream's go.mod at each commit shows the whole set. The Kubernetes libraries,
+#     gitops-engine (in-tree, `replace`d) and every replace directive upstream has are untouched.
+#   * Go 1.26.9 for all four, the golang image app/talon and app/ksops use (upstream: 1.26.4 for
+#     argocd and helm; the vendors' 1.24.0 and 1.25.3 for kustomize and git-lfs).
 #   * upstream's own unit tests run in the builder against the raised dependencies, with
 #     --network=none and as an unprivileged user (as upstream's CI; several argocd tests check that a
 #     file mode is enforced, which root bypasses): no tests, no image (as app/api, app/talon,
@@ -66,8 +79,11 @@
 #     --system` - so install.yaml's Deployments, their volume mounts and this repository's KSOPS
 #     init container and plugin mount (cluster/bootstrap/argocd/argocd-repo-server-ksops.yaml) work
 #     unchanged. `apt-get dist-upgrade` as upstream, so a rebuild picks up Ubuntu's security fixes;
-#     the base digest is newer than upstream's, which is what removes upstream's OpenSSL and pebble
-#     findings.
+#     the base digest is newer than upstream's, which is what removes upstream's OpenSSL findings.
+#     One difference: /usr/bin/pebble is deleted. The Ubuntu image ships Canonical's service manager
+#     there, outside any package (`dpkg -S` finds no owner, so dist-upgrade cannot fix it); nothing
+#     here runs it (the entrypoint is tini), and it is compiled with a Go whose standard library has
+#     fixed findings (Go 1.26.7 in the 26.04 image of 2026-10-10).
 #
 # Version strings: argocd reports v3.5.3+c9c369e.dirty, not v3.5.3, because its build variables say
 # what was compiled - upstream's tree at the release commit with two files (go.mod, go.sum)
@@ -81,10 +97,10 @@
 # back), and take the node image pin from upstream's Dockerfile at that commit.
 #
 # Bases pinned by tag and digest (ADR 0008), resolved from the registries' index manifests:
-#   golang:1.26.8      docker.io   (as app/api, app/talon, app/ksops)
+#   golang:1.26.9      docker.io   (as app/talon, app/ksops)
 #   node:24.14.1       docker.io   (upstream's argocd-ui stage, same tag and digest)
 #   ubuntu:26.04       docker.io   (upstream's BASE_IMAGE, a newer digest of the same tag)
-ARG GOLANG_IMAGE=docker.io/library/golang:1.26.8@sha256:0f063af2d465d8dcae54cce04278ada488b96f77b42449c8d071e47d016cc65a
+ARG GOLANG_IMAGE=docker.io/library/golang:1.26.9@sha256:d7722066f0b60ceccb6c0643cbed1f5f9e15506ac237146c95333504d7805d89
 
 ####################################################################################################
 # Sources: each fetched by one full commit hash, checked, then its dependencies swapped and verified.
@@ -188,7 +204,12 @@ ARG GIT_LFS_COMMIT=b84b33847fe6458f36ef521534dc0eac953cb379
 RUN chown -R 1000:1000 /src
 USER 1000:1000
 ENV HOME=/tmp/home GOCACHE=/tmp/gocache GOFLAGS=-buildvcs=false
-RUN --network=none go test -count=1 ./...
+# go test's own vet checks, less printf: x/net v0.60.0 needs `go 1.26.0` in go.mod (upstream: 1.23.0),
+# and at that language version vet's printf check flags a line upstream has always had
+# (commands/lockverifier.go passes a *git.Ref to %q in a translated message). Every other check of
+# go test's default list (cmd/go/internal/test, Go 1.26.9) still runs.
+RUN --network=none go test -count=1 \
+      -vet=atomic,bool,buildtags,directive,errorsas,ifaceassert,nilfunc,slog,stringintconv,tests ./...
 # git-lfs's Makefile: -trimpath, -s -w, Vendor "GitHub" and the short commit (as its release build).
 RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w \
       -X 'github.com/git-lfs/git-lfs/v3/config.Vendor=GitHub' \
@@ -219,7 +240,8 @@ USER 1000:1000
 ENV HOME=/tmp/home GOCACHE=/tmp/gocache GOFLAGS=-buildvcs=false
 # The packages that import the raised modules (oras-go: util/helm, util/oci; go-git and x/crypto:
 # util/git, util/cert, util/crypto, util/password; x/net: util/grpc, util/proxy; grpc: the
-# repo-server, CMP and commit-server clients and servers, util/askpass) plus the wrappers around
+# repo-server, CMP and commit-server clients and servers, util/askpass; slack-go, through
+# notifications-engine: util/notification, server/notification) plus the wrappers around
 # helm, kustomize, git and gpg the repo-server renders and verifies with (util/kustomize,
 # util/sourceintegrity). As upstream's Makefile: hack/ on PATH for gpg-wrapper.sh and
 # git-verify-wrapper.sh, and a git identity for the tests that commit. gpg is in the golang image.
@@ -240,6 +262,7 @@ RUN --network=none export PATH="$PATH:/src/hack" \
       ./util/helm/... ./util/oci/... ./util/kustomize/... ./util/git/... ./util/sourceintegrity/... \
       ./util/cert/... ./util/crypto/... ./util/password/... ./util/grpc/... ./util/proxy/... \
       ./util/askpass/... ./reposerver/apiclient/... ./cmpserver/... ./commitserver/... \
+      ./util/notification/... ./server/notification/... \
  && touch /tmp/tested
 
 FROM argocd-src AS argocd-build
@@ -279,7 +302,8 @@ RUN groupadd -g $ARGOCD_USER_ID argocd && \
     apt-get install --no-install-recommends -y \
     git tini ca-certificates gpg gpg-agent tzdata connect-proxy openssh-client && \
     apt-get clean && \
-    rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/* /usr/share/doc/*
+    rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/* /usr/share/doc/* && \
+    rm -f /usr/bin/pebble
 
 COPY --from=argocd-src \
     /src/hack/gpg-wrapper.sh \
