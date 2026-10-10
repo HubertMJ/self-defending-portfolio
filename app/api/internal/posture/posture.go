@@ -9,7 +9,9 @@
 //	           three), the same totals split into this project's own images and third-party ones,
 //	           and a per-image breakdown
 //	kube_bench the newest successful kube-bench Job's log, which is the benchmark's JSON (ADR 0014):
-//	           the totals, and the failing checks by id, title and remediation (ADR 0035)
+//	           the totals, the failing and warning checks by id, title and remediation (ADR 0035),
+//	           and the checks the benchmark configuration marks not applicable, with its reason,
+//	           counted apart from INFO (ADR 0025, amendment 2026-10-10)
 //	falco      alerts Falcosidekick delivered in the last 24 h  } counted by this API as the webhooks
 //	talon      actions Talon reported in the last 24 h         } arrive, in the persisted hourly
 //	                                                             window of internal/stats (ADR 0035)
@@ -173,11 +175,23 @@ type KubeBench struct {
 	Pass    int        `json:"pass"`
 	Fail    int        `json:"fail"`
 	Warn    int        `json:"warn"`
-	Info    int        `json:"info"`
+	// Info is kube-bench's INFO count less the not-applicable checks, which kube-bench also reports
+	// as INFO: pass + fail + warn + info + not_applicable is every check that ran.
+	Info int `json:"info"`
+	// NotApplicable counts the checks the benchmark configuration marks as not applicable to this
+	// cluster (kube-bench `type: skip`: upstream's own k3s skips and this repository's, ADR 0025
+	// amendment 2026-10-10). They are neither passed nor failed; the page shows them as such.
+	NotApplicable int `json:"not_applicable"`
 	// Failing names the FAIL checks (ADR 0035): id, title and kube-bench's own remediation text,
 	// scrubbed and capped, in benchmark order. Nothing else from a result is read - not the audit
 	// command, its output, the expected value or the reason, which describe this node.
 	Failing []BenchCheck `json:"failing"`
+	// Warning names the WARN checks the same way: manual checks, and unscored ones that did not pass.
+	Warning []BenchCheck `json:"warning"`
+	// NotApplicableChecks names the not-applicable checks with the reason the configuration gives,
+	// which is the check's remediation text ("Not Applicable." and why; the prefix is dropped). The
+	// reason has one source, the benchmark configuration (app/kube-bench/k3s-cis-1.9.patch).
+	NotApplicableChecks []BenchNA `json:"not_applicable_checks"`
 }
 
 // BenchCheck is one failing CIS check. Remediation may name k3s's default file paths; those describe
@@ -186,6 +200,13 @@ type BenchCheck struct {
 	ID          string `json:"id"`
 	Title       string `json:"title"`
 	Remediation string `json:"remediation"`
+}
+
+// BenchNA is one check the benchmark configuration marks as not applicable, and why.
+type BenchNA struct {
+	ID     string `json:"id"`
+	Title  string `json:"title"`
+	Reason string `json:"reason"`
 }
 
 // Falco's Alerts24h keeps its name, but counts the hourly window (ADR 0035): between 23 and 24 h,
@@ -247,7 +268,7 @@ func New(cfg Config) *Aggregator {
 	return &Aggregator{cfg: cfg, cached: Snapshot{
 		Kyverno:   Kyverno{Policies: []PolicyCount{}, Violations: []Violation{}},
 		Trivy:     Trivy{ByImage: []ImageVulns{}},
-		KubeBench: KubeBench{Failing: []BenchCheck{}},
+		KubeBench: KubeBench{Failing: []BenchCheck{}, Warning: []BenchCheck{}, NotApplicableChecks: []BenchNA{}},
 		Deployed:  Deployed{API: []string{}, Web: []string{}},
 	}}
 }
@@ -823,7 +844,7 @@ type benchTotals struct {
 	Info int `json:"total_info"`
 }
 
-// benchControl is one control section: its totals, and of its results only the four fields read.
+// benchControl is one control section: its totals, and of its results only the five fields read.
 type benchControl struct {
 	benchTotals
 	Tests []struct {
@@ -836,6 +857,7 @@ type benchResult struct {
 	TestDesc    string `json:"test_desc"`
 	Remediation string `json:"remediation"`
 	Status      string `json:"status"`
+	Type        string `json:"type"`
 }
 
 type benchDoc struct {
@@ -846,7 +868,7 @@ type benchDoc struct {
 // benchID is a CIS check number (1.1.9, 1.2.26); a result with anything else is dropped.
 var benchID = regexp.MustCompile(`^[0-9]+(\.[0-9]+){1,3}$`)
 
-// Caps on the failing list: rows, and runes of each text (ADR 0035).
+// Caps on the failing, warning and not-applicable lists: rows, and runes of each text (ADR 0035).
 const (
 	maxFailing     = 50
 	maxBenchTitle  = 200
@@ -879,6 +901,9 @@ func benchCut(s string, n int) string {
 	return string(r[:n-1]) + "…"
 }
 
+// naPrefix is how kube-bench's k3s configuration opens the remediation of a skipped check.
+var naPrefix = regexp.MustCompile(`(?i)^\s*not applicable\.?\s*`)
+
 // ErrNoBenchJSON is returned for a log without a kube-bench JSON document.
 var ErrNoBenchJSON = errors.New("no kube-bench JSON document in the log")
 
@@ -886,7 +911,9 @@ var ErrNoBenchJSON = errors.New("no kube-bench JSON document in the log")
 // (glog warnings) around the document, and kube-bench versions differ between one document with
 // Totals and one document per target, so every line that starts a JSON object is tried, and the
 // totals of every document found are added up (from Totals, or summed over Controls). The FAIL
-// results are listed in Failing, in the order the benchmark gives them, capped at maxFailing.
+// and WARN results are listed in Failing and Warning, in the order the benchmark gives them, capped
+// at maxFailing each. Skipped checks (type "skip", reported INFO) are counted in NotApplicable and
+// taken out of Info, and listed with their reason, capped the same way.
 func ParseKubeBench(log []byte) (KubeBench, error) { return parseKubeBench(log, "") }
 
 // parseKubeBench is ParseKubeBench for a run on the node called node: its name is replaced in the
@@ -900,7 +927,7 @@ func parseKubeBench(log []byte, node string) (KubeBench, error) {
 		}
 		return benchCut(s, n)
 	}
-	kb := KubeBench{Failing: []BenchCheck{}}
+	kb := KubeBench{Failing: []BenchCheck{}, Warning: []BenchCheck{}, NotApplicableChecks: []BenchNA{}}
 	found := false
 	sc := bufio.NewScanner(bytes.NewReader(log))
 	sc.Buffer(make([]byte, 0, 64<<10), maxBenchLog)
@@ -936,11 +963,24 @@ func parseKubeBench(log []byte, node string) (KubeBench, error) {
 		for _, c := range doc.Controls {
 			for _, t := range c.Tests {
 				for _, r := range t.Results {
-					if r.Status != "FAIL" || !benchID.MatchString(r.TestNumber) || len(kb.Failing) >= maxFailing {
+					if !benchID.MatchString(r.TestNumber) {
 						continue
 					}
-					kb.Failing = append(kb.Failing, BenchCheck{ID: r.TestNumber,
-						Title: text(r.TestDesc, maxBenchTitle), Remediation: text(r.Remediation, maxBenchRemedy)})
+					switch {
+					case r.Status == "INFO" && r.Type == "skip":
+						kb.NotApplicable++
+						if len(kb.NotApplicableChecks) < maxFailing {
+							reason := strings.Join(strings.Fields(naPrefix.ReplaceAllString(r.Remediation, "")), " ")
+							kb.NotApplicableChecks = append(kb.NotApplicableChecks, BenchNA{ID: r.TestNumber,
+								Title: text(r.TestDesc, maxBenchTitle), Reason: text(reason, maxBenchRemedy)})
+						}
+					case r.Status == "FAIL" && len(kb.Failing) < maxFailing:
+						kb.Failing = append(kb.Failing, BenchCheck{ID: r.TestNumber,
+							Title: text(r.TestDesc, maxBenchTitle), Remediation: text(r.Remediation, maxBenchRemedy)})
+					case r.Status == "WARN" && len(kb.Warning) < maxFailing:
+						kb.Warning = append(kb.Warning, BenchCheck{ID: r.TestNumber,
+							Title: text(r.TestDesc, maxBenchTitle), Remediation: text(r.Remediation, maxBenchRemedy)})
+					}
 				}
 			}
 		}
@@ -954,5 +994,9 @@ func parseKubeBench(log []byte, node string) (KubeBench, error) {
 	if !found {
 		return KubeBench{}, ErrNoBenchJSON
 	}
+	// Every skipped result is one of kube-bench's INFO; a log whose totals say otherwise is
+	// malformed, and the INFO count is not driven below zero by it.
+	kb.NotApplicable = min(kb.NotApplicable, kb.Info)
+	kb.Info -= kb.NotApplicable
 	return kb, nil
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"reflect"
 	"strings"
@@ -178,8 +179,10 @@ func TestKubeBenchFailingLive(t *testing.T) {
 	if !strings.HasPrefix(kb.Failing[0].Title, "Ensure that the Container Network Interface file permissions") {
 		t.Fatalf("title = %q", kb.Failing[0].Title)
 	}
+	// kube-bench's own "reason" (why a check failed here, which quotes the audit and its output) is
+	// never published; the not-applicable list's "reason" is the configuration's text, not this one.
 	b, _ := json.Marshal(kb)
-	for _, leak := range []string{"node-fixture", `"audit"`, `"actual_value"`, `"expected_result"`, `"reason"`, `"AuditEnv"`, `"AuditConfig"`, "journalctl", "192.0.2.10"} {
+	for _, leak := range []string{"node-fixture", `"audit"`, `"actual_value"`, `"expected_result"`, "failed to run", "Test marked as", `"AuditEnv"`, `"AuditConfig"`, "journalctl", "192.0.2.10"} {
 		if strings.Contains(string(b), leak) {
 			t.Errorf("published %q", leak)
 		}
@@ -230,6 +233,150 @@ func TestKubeBenchFailingRules(t *testing.T) {
 	kb, err = ParseKubeBench(doc(map[string]any{"test_number": "1.1.1", "status": "PASS"}))
 	if err != nil || kb.Failing == nil || len(kb.Failing) != 0 {
 		t.Fatalf("no failures: %#v %v", kb.Failing, err)
+	}
+}
+
+// The live log, before this repository marked its own three checks (ADR 0025, amendment
+// 2026-10-10): upstream's fourteen k3s skips are not applicable, with upstream's reason, and are
+// taken out of INFO; the twelve WARN checks are listed; the counts still add up to every check.
+func TestKubeBenchNotApplicableLive(t *testing.T) {
+	log, err := os.ReadFile("testdata/kube-bench-live.log")
+	if err != nil {
+		t.Fatal(err)
+	}
+	kb, err := ParseKubeBench(log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if kb.Pass != 59 || kb.Fail != 3 || kb.Warn != 12 || kb.Info != 0 || kb.NotApplicable != 14 {
+		t.Fatalf("totals = %d pass / %d fail / %d warn / %d info / %d n/a", kb.Pass, kb.Fail, kb.Warn, kb.Info, kb.NotApplicable)
+	}
+	var ids []string
+	for _, c := range kb.NotApplicableChecks {
+		ids = append(ids, c.ID)
+		if c.Title == "" || c.Reason == "" || strings.HasPrefix(strings.ToLower(c.Reason), "not applicable") {
+			t.Errorf("%s: title %q, reason %q", c.ID, c.Title, c.Reason)
+		}
+	}
+	if got := strings.Join(ids, ","); got != "1.1.1,1.1.2,1.1.3,1.1.4,1.1.5,1.1.6,1.1.7,1.1.8,1.1.12,4.1.1,4.1.2,4.1.9,4.1.10,4.2.7" {
+		t.Fatalf("not applicable = %s", got)
+	}
+	if got := kb.NotApplicableChecks[0].Reason; got != "By default, K3s embeds the api server within the k3s process. There is no API server pod specification file." {
+		t.Fatalf("1.1.1 reason = %q", got)
+	}
+	ids = nil
+	for _, c := range kb.Warning {
+		ids = append(ids, c.ID)
+	}
+	if got := strings.Join(ids, ","); got != "1.1.11,1.2.3,1.2.9,1.2.11,1.2.20,1.3.1,3.1.1,3.1.2,3.1.3,3.2.2,4.2.12,4.2.13" {
+		t.Fatalf("warning = %s", got)
+	}
+	b, _ := json.Marshal(kb)
+	for _, leak := range []string{"node-fixture", `"audit"`, `"actual_value"`, `"expected_result"`, `"type"`, "journalctl", "192.0.2.10", "Test marked as"} {
+		if strings.Contains(string(b), leak) {
+			t.Errorf("published %q", leak)
+		}
+	}
+}
+
+// After the change (ADR 0025, amendment 2026-10-10): this repository's kube-bench build run under the
+// CronJob's constraints against a throwaway k3s v1.35.9+k3s1 with k3s01's rendered configuration
+// (node name and address replaced). Nothing fails; the two manual checks that stay are listed; the
+// three checks this repository marks are not applicable with the configuration's reason, next to
+// upstream's fourteen; INFO is empty and the five counts add up to all 88 checks.
+func TestKubeBenchAfterCISChange(t *testing.T) {
+	log, err := os.ReadFile("testdata/kube-bench-cis.log")
+	if err != nil {
+		t.Fatal(err)
+	}
+	kb, err := parseKubeBench(log, "node-fixture")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if kb.Pass != 69 || kb.Fail != 0 || kb.Warn != 2 || kb.Info != 0 || kb.NotApplicable != 17 ||
+		kb.Pass+kb.Fail+kb.Warn+kb.Info+kb.NotApplicable != 88 {
+		t.Fatalf("totals = %d pass / %d fail / %d warn / %d info / %d n/a", kb.Pass, kb.Fail, kb.Warn, kb.Info, kb.NotApplicable)
+	}
+	if len(kb.Failing) != 0 || len(kb.Warning) != 2 || kb.Warning[0].ID != "3.1.1" || kb.Warning[1].ID != "3.1.2" {
+		t.Fatalf("failing = %+v, warning = %+v", kb.Failing, kb.Warning)
+	}
+	reasons := map[string]string{}
+	for _, c := range kb.NotApplicableChecks {
+		reasons[c.ID] = c.Reason
+	}
+	if len(reasons) != 17 {
+		t.Fatalf("not applicable = %+v", kb.NotApplicableChecks)
+	}
+	for id, want := range map[string]string{
+		"1.1.9":  "The CNI is Cilium with its own IPAM. There is no host-local IPAM directory /var/lib/cni/networks",
+		"1.1.10": "The CNI is Cilium with its own IPAM.",
+		"1.2.26": "This K3s keeps its datastore in SQLite through kine on a local unix socket (--etcd-servers=unix://kine.sock). There is no etcd",
+	} {
+		if !strings.HasPrefix(reasons[id], want) {
+			t.Errorf("%s reason = %q", id, reasons[id])
+		}
+	}
+	b, _ := json.Marshal(kb)
+	for _, leak := range []string{"node-fixture", "192.0.2.10", "journalctl", "Test marked as", `"actual_value"`} {
+		if strings.Contains(string(b), leak) {
+			t.Errorf("published %q", leak)
+		}
+	}
+}
+
+// Only a result kube-bench skipped (type "skip", status INFO) is not applicable; its reason is its
+// remediation without the "Not Applicable." opener, on one line, scrubbed and capped; INFO keeps the
+// rest; a log whose totals hold fewer INFO than skipped results never makes INFO negative.
+func TestKubeBenchNotApplicableRules(t *testing.T) {
+	doc := func(info int, results ...map[string]any) []byte {
+		rs := make([]any, len(results))
+		for i, r := range results {
+			rs[i] = r
+		}
+		b, _ := json.Marshal(map[string]any{"Controls": []any{map[string]any{"tests": []any{map[string]any{"results": rs}}}},
+			"Totals": map[string]any{"total_pass": 1, "total_warn": 1, "total_info": info}})
+		return b
+	}
+	skip := func(id, remediation string) map[string]any {
+		return map[string]any{"test_number": id, "test_desc": "Check " + id, "remediation": remediation, "status": "INFO",
+			"type": "skip", "reason": "Test marked as skip", "audit": "cat /etc/x"}
+	}
+	kb, err := ParseKubeBench(doc(4,
+		skip("1.1.9", "Not Applicable.\nThe CNI is Cilium with its own IPAM.\n  No files at 192.0.2.10."),
+		skip("1.2.26", "not applicable no etcd here"),
+		skip("1.2.27", ""),
+		skip("1; rm", "Not Applicable. bad id"),
+		map[string]any{"test_number": "1.2.28", "test_desc": "plain info", "status": "INFO"},
+		map[string]any{"test_number": "1.2.29", "test_desc": "skip that passed?", "status": "PASS", "type": "skip"},
+		map[string]any{"test_number": "3.1.1", "test_desc": "manual", "status": "WARN", "type": "manual", "remediation": "Use OIDC."},
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if kb.NotApplicable != 3 || kb.Info != 1 || kb.Pass != 1 || kb.Warn != 1 {
+		t.Fatalf("totals = %+v", kb)
+	}
+	want := []BenchNA{
+		{ID: "1.1.9", Title: "Check 1.1.9", Reason: "The CNI is Cilium with its own IPAM. No files at [ip]."},
+		{ID: "1.2.26", Title: "Check 1.2.26", Reason: "no etcd here"},
+		{ID: "1.2.27", Title: "Check 1.2.27", Reason: ""},
+	}
+	if fmt.Sprint(kb.NotApplicableChecks) != fmt.Sprint(want) {
+		t.Fatalf("not applicable = %+v", kb.NotApplicableChecks)
+	}
+	if len(kb.Warning) != 1 || kb.Warning[0] != (BenchCheck{ID: "3.1.1", Title: "manual", Remediation: "Use OIDC."}) {
+		t.Fatalf("warning = %+v", kb.Warning)
+	}
+	long := skip("1.1.1", "Not Applicable. "+strings.Repeat("word ", 100))
+	if kb, _ := ParseKubeBench(doc(1, long)); utf8.RuneCountInString(kb.NotApplicableChecks[0].Reason) > maxBenchRemedy {
+		t.Fatalf("reason not capped: %d runes", utf8.RuneCountInString(kb.NotApplicableChecks[0].Reason))
+	}
+	if kb, _ := ParseKubeBench(doc(1, skip("1.1.1", "x"), skip("1.1.2", "y"))); kb.Info != 0 || kb.NotApplicable != 1 {
+		t.Fatalf("inconsistent totals: info %d, n/a %d", kb.Info, kb.NotApplicable)
+	}
+	kb, err = ParseKubeBench(doc(0, map[string]any{"test_number": "1.1.1", "status": "PASS"}))
+	if err != nil || kb.NotApplicableChecks == nil || kb.Warning == nil || len(kb.NotApplicableChecks)+len(kb.Warning) != 0 {
+		t.Fatalf("empty lists: %#v %#v %v", kb.NotApplicableChecks, kb.Warning, err)
 	}
 }
 
