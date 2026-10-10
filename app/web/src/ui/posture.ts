@@ -2,7 +2,7 @@
 // say about the cluster right now, from GET /api/posture (cached server-side for 60 s).
 
 import type { ApiClient, Result } from "../lib/api";
-import type { BenchCheck, ImageVulns, KyvernoPolicy, KyvernoViolation, Posture, PostureTrivy } from "../lib/contract";
+import type { BenchCheck, BenchNA, ImageVulns, KyvernoPolicy, KyvernoViolation, Posture, PostureTrivy } from "../lib/contract";
 import { h, replace, timeEl, when } from "../lib/dom";
 import { extLink, offlinePanel, sourceUrl } from "./common";
 
@@ -90,11 +90,12 @@ function violationList(vs: KyvernoViolation[], truncated: boolean, commit: strin
   );
 }
 
-function benchList(checks: BenchCheck[]): HTMLElement {
+/** `rows`: how many are listed in full; the rest are named by id. */
+function benchList(checks: BenchCheck[], rows = TILE_ROWS): HTMLElement {
   return h(
     "ul",
     { class: "tile__list tile__list--bench" },
-    checks.slice(0, TILE_ROWS).map((c) =>
+    checks.slice(0, rows).map((c) =>
       h(
         "li",
         {},
@@ -104,8 +105,33 @@ function benchList(checks: BenchCheck[]): HTMLElement {
         c.remediation ? h("details", { class: "tile__remedy", open: true }, h("summary", {}, "Remediation"), h("p", {}, c.remediation)) : null,
       ),
     ),
-    checks.length > TILE_ROWS ? h("li", { class: "tile__more" }, `${checks.length - TILE_ROWS} more: `, checks.slice(TILE_ROWS).flatMap((c, i) => [i ? ", " : "", h("code", {}, c.id)])) : null,
+    checks.length > rows ? h("li", { class: "tile__more" }, `${checks.length - rows} more: `, checks.slice(rows).flatMap((c, i) => [i ? ", " : "", h("code", {}, c.id)])) : null,
   );
+}
+
+/** The checks the benchmark configuration marks as not applicable, each with its reason. */
+function naList(checks: BenchNA[]): HTMLElement {
+  return h(
+    "ul",
+    { class: "tile__list tile__list--na" },
+    checks.map((c) => h("li", {}, h("code", {}, c.id), " ", c.title, c.reason ? h("p", { class: "tile__reason" }, c.reason) : null)),
+  );
+}
+
+/**
+ * Under the CIS tile: the failing checks, open; then, folded, the manual / warn checks with their
+ * remediation and the not-applicable ones with their reason (ADR 0025, amendment 2026-10-10) - every
+ * check the benchmark did not pass is named, none is hidden or counted as a pass.
+ */
+function benchMore(kb: Posture["kube_bench"]): HTMLElement | null {
+  const parts = [
+    kb.failing?.length ? benchList(kb.failing) : null,
+    kb.warning?.length ? h("details", { class: "tile__group" }, h("summary", {}, `Manual / warn (${kb.warn})`), benchList(kb.warning, kb.warning.length)) : null,
+    kb.not_applicable && kb.not_applicable_checks?.length
+      ? h("details", { class: "tile__group" }, h("summary", {}, `Not applicable (${kb.not_applicable})`), naList(kb.not_applicable_checks))
+      : null,
+  ].filter((x): x is HTMLElement => x !== null);
+  return parts.length ? h("div", { class: "tile__bench" }, parts) : null;
 }
 
 interface Segment {
@@ -289,7 +315,7 @@ export function renderPostureData(p: Posture, now: number = Date.now(), commit =
       tone: kb.fail > 0 ? "warning" : kbScored ? "good" : "neutral",
       status: kb.fail > 0 ? `${kb.fail} failing` : kbScored ? "No failures" : "Not run yet",
       foot: kb.last_run ? ["kube-bench, last run ", timeEl(kb.last_run, when(kb.last_run, now))] : ["kube-bench, last run never"],
-      more: kb.failing?.length ? benchList(kb.failing) : null,
+      more: benchMore(kb),
     }),
     // The API's window covers the current hour and the 23 before it, and only since it started
     // counting: it is labelled by the time it counts from, never as a bare "24 h" (ADR 0035).
@@ -319,6 +345,8 @@ export function renderPostureData(p: Posture, now: number = Date.now(), commit =
       { key: "fail", label: "Fail", value: kb.fail },
       { key: "warn", label: "Manual / warn", value: kb.warn },
       { key: "info", label: "Info", value: kb.info },
+      // Older APIs count these in Info; then there is no such segment.
+      ...(kb.not_applicable !== undefined ? [{ key: "na", label: "Not applicable", value: kb.not_applicable }] : []),
     ]),
     imageBreakdown(tr),
     kyvernoTable(p.kyverno.policies),

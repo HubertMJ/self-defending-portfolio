@@ -169,7 +169,7 @@ export function posture(now: number = Date.now()): Posture {
         { image: "ghcr.io/hubertmj/self-defending-portfolio/web:main", own: true, critical: 0, high: 0, fixable: 0 },
       ],
     },
-    kube_bench: { last_run: new Date(now - 5 * 3600_000).toISOString(), pass: 98, fail: 4, warn: 21, info: 2 },
+    kube_bench: { last_run: new Date(now - 5 * 3600_000).toISOString(), pass: 98, fail: 4, warn: 21, info: 2, not_applicable: 17 },
     falco: { alerts_24h: 17 },
     talon: { actions_24h: 9 },
   };

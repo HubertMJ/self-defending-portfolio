@@ -1061,6 +1061,11 @@ html[data-folded~="projects"] #projects
   background: var(--good);
 }
 
+/* Not applicable (ADR 0025, amendment 2026-10-10): hatched, so it never reads as a pass or a finding. */
+.stack__seg--na {
+  background: repeating-linear-gradient(135deg, var(--neutral) 0 2px, transparent 2px 5px);
+}
+
 .legend {
   display: flex;
   flex-wrap: wrap;
@@ -4305,6 +4310,19 @@ html[data-terminal="off"] .needs-terminal {
 }
 
 .tile__remedy p {
+  margin: 0.2rem 0 0;
+}
+
+.tile__group {
+  margin-top: 0.6rem;
+  font-size: 0.82rem;
+}
+
+.tile__group summary {
+  cursor: pointer;
+}
+
+.tile__reason {
   margin: 0.2rem 0 0;
 }
 
