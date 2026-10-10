@@ -19,15 +19,18 @@ commentary, which `git apply` ignores.
   3.1.3                   automated: PASS only if the API server runs with
                           --enable-bootstrap-token-auth=false (ansible/roles/k3s).
   3.2.2                   automated: JSONPath tests over the node's audit policy
-                          (ansible/roles/k3s/templates/audit-policy.yaml.j2). They check: the first
-                          rule is an unconditional Metadata rule naming Secrets and
-                          authentication.k8s.io; there are exactly three None rules, at positions
-                          1-3, each pinned (the control-plane users' and the nodes' reads; events,
-                          endpoints, endpointslices, leases); no Request or RequestResponse rule
-                          names Secrets or ConfigMaps; pods/exec and pods/portforward are named by a
-                          RequestResponse rule, pods/proxy and services/proxy by a Metadata rule; the
-                          last rule is an unconditional Metadata catch-all. They do not evaluate
-                          first-match order between the other rules: tests/golden/audit-policy.sh does.
+                          (ansible/roles/k3s/templates/audit-policy.yaml.j2). kube-bench's JSONPath
+                          cannot print a whole rule, so rules [0]-[6] are pinned whole field by
+                          field: level, users, userGroups, verbs, namespaces, nonResourceURLs,
+                          omitStages, and every resources entry's group, resources and resourceNames
+                          ([0] Secrets, serviceaccounts/token and authentication.k8s.io at Metadata;
+                          [1]-[3] the three exclusions; [4] ConfigMaps at Metadata; [5] pods/exec,
+                          attach and portforward at RequestResponse; [6] the proxies at Metadata).
+                          Further: exactly three None rules; no Request or RequestResponse rule
+                          names Secrets or ConfigMaps; the last rule is an unconditional Metadata
+                          catch-all. Not checked: what sits between [6] and the last rule (it can
+                          only add logging: Secrets, ConfigMaps and the exclusions are matched
+                          first); tests/golden/audit-policy.sh evaluates the policy first-match.
   4.2.12                  the closing quote of k3s's log line is dropped before the flags are read:
                           k3s logs the kubelet's flags sorted inside msg="...", --tls-cipher-suites
                           comes last, and upstream's audit read the quote as part of the last suite
@@ -38,7 +41,7 @@ Regenerate: check out upstream at KUBE_BENCH_COMMIT, edit cfg/k3s-cis-1.9, `git 
 header.
 
 diff --git a/cfg/k3s-cis-1.9/controlplane.yaml b/cfg/k3s-cis-1.9/controlplane.yaml
-index c748b60..03c0a40 100644
+index c748b60..684bbc4 100644
 --- a/cfg/k3s-cis-1.9/controlplane.yaml
 +++ b/cfg/k3s-cis-1.9/controlplane.yaml
 @@ -26,10 +26,20 @@ groups:
@@ -64,68 +67,62 @@ index c748b60..03c0a40 100644
          scored: false
  
    - id: 3.2
-@@ -48,7 +58,97 @@ groups:
+@@ -48,7 +58,74 @@ groups:
  
        - id: 3.2.2
          text: "Ensure that the audit policy covers key security concerns (Manual)"
 -        type: "manual"
 +        audit_config: "cat /etc/rancher/k3s/audit-policy.yaml"
-+        # The node's audit policy, read as YAML (this repository's ansible/roles/k3s template). The
-+        # rule order is fixed: [0] Secrets/tokens, [1]-[3] the only None rules, then the rest. Every
-+        # test below is a JSONPath over the policy; a path whose key is missing yields nothing, so the
-+        # exclusions are pinned rule by rule and counted, not described in general.
++        # The node's audit policy, read as YAML (this repository's ansible/roles/k3s template), checked
++        # with JSONPath. kube-bench's JSONPath cannot print a whole rule (a YAML map), and a path over a
++        # missing key yields nothing, so rules [0]-[6] are pinned whole by printing every field a
++        # PolicyRule has, and every resources entry with its group, resources and resourceNames: any
++        # added, removed or changed field or entry changes the string. Then: exactly three None rules
++        # (all pinned above), no Request or RequestResponse rule naming Secrets or ConfigMaps, and an
++        # unconditional Metadata catch-all last.
 +        tests:
 +          bin_op: and
 +          test_items:
-+            # [0]: Secrets and the authentication API (TokenReviews) at Metadata, for every user -
-+            # no users, userGroups, verbs or namespaces narrow it.
-+            - path: "{.rules[0].level}"
++            # [0]: Secrets, serviceaccounts/token and the authentication API (TokenReviews) at Metadata, for
++            # every user, verb and name.
++            - path: '{.rules[0].level}|users={.rules[0].users[*]}|groups={.rules[0].userGroups[*]}|verbs={.rules[0].verbs[*]}|ns={.rules[0].namespaces[*]}|urls={.rules[0].nonResourceURLs[*]}|omit={.rules[0].omitStages[*]}|res={range .rules[0].resources[*]}[{.group}:{.resources[*]}:{.resourceNames[*]}]{end}'
 +              compare:
 +                op: eq
-+                value: "Metadata"
-+            - path: "{.rules[0].resources[*].resources[*]}"
++                value: 'Metadata|users=|groups=|verbs=|ns=|urls=|omit=|res=[:secrets serviceaccounts/token:][authentication.k8s.io:*:]'
++            # [1]: the control-plane users' reads.
++            - path: '{.rules[1].level}|users={.rules[1].users[*]}|groups={.rules[1].userGroups[*]}|verbs={.rules[1].verbs[*]}|ns={.rules[1].namespaces[*]}|urls={.rules[1].nonResourceURLs[*]}|omit={.rules[1].omitStages[*]}|res={range .rules[1].resources[*]}[{.group}:{.resources[*]}:{.resourceNames[*]}]{end}'
 +              compare:
-+                op: regex
-+                value: '(^| )secrets( |$)'
-+            - path: "{.rules[0].resources[*].group}"
++                op: eq
++                value: 'None|users=system:kube-scheduler system:kube-controller-manager system:apiserver|groups=|verbs=get list watch|ns=|urls=|omit=|res='
++            # [2]: the nodes' reads.
++            - path: '{.rules[2].level}|users={.rules[2].users[*]}|groups={.rules[2].userGroups[*]}|verbs={.rules[2].verbs[*]}|ns={.rules[2].namespaces[*]}|urls={.rules[2].nonResourceURLs[*]}|omit={.rules[2].omitStages[*]}|res={range .rules[2].resources[*]}[{.group}:{.resources[*]}:{.resourceNames[*]}]{end}'
 +              compare:
-+                op: regex
-+                value: '(^| )authentication\.k8s\.io( |$)'
-+            - path: "{.rules[0].users}{.rules[0].userGroups}{.rules[0].verbs}{.rules[0].namespaces}"
-+              set: false
-+            # The exclusions: exactly three None rules, at [1], [2] and [3], each pinned. [1] and [2]
-+            # drop only reads, by the control-plane users and the nodes; [3] drops events, endpoints,
-+            # endpointslices and leases (every verb, for every user).
++                op: eq
++                value: 'None|users=|groups=system:nodes|verbs=get list watch|ns=|urls=|omit=|res='
++            # [3]: events, endpoints, endpointslices and leases, every verb.
++            - path: '{.rules[3].level}|users={.rules[3].users[*]}|groups={.rules[3].userGroups[*]}|verbs={.rules[3].verbs[*]}|ns={.rules[3].namespaces[*]}|urls={.rules[3].nonResourceURLs[*]}|omit={.rules[3].omitStages[*]}|res={range .rules[3].resources[*]}[{.group}:{.resources[*]}:{.resourceNames[*]}]{end}'
++              compare:
++                op: eq
++                value: 'None|users=|groups=|verbs=|ns=|urls=|omit=|res=[:events endpoints:][discovery.k8s.io:endpointslices:][coordination.k8s.io:leases:]'
++            # [4]: ConfigMaps at Metadata (no body).
++            - path: '{.rules[4].level}|users={.rules[4].users[*]}|groups={.rules[4].userGroups[*]}|verbs={.rules[4].verbs[*]}|ns={.rules[4].namespaces[*]}|urls={.rules[4].nonResourceURLs[*]}|omit={.rules[4].omitStages[*]}|res={range .rules[4].resources[*]}[{.group}:{.resources[*]}:{.resourceNames[*]}]{end}'
++              compare:
++                op: eq
++                value: 'Metadata|users=|groups=|verbs=|ns=|urls=|omit=|res=[:configmaps:]'
++            # [5]: pods/exec, pods/attach and pods/portforward with their bodies.
++            - path: '{.rules[5].level}|users={.rules[5].users[*]}|groups={.rules[5].userGroups[*]}|verbs={.rules[5].verbs[*]}|ns={.rules[5].namespaces[*]}|urls={.rules[5].nonResourceURLs[*]}|omit={.rules[5].omitStages[*]}|res={range .rules[5].resources[*]}[{.group}:{.resources[*]}:{.resourceNames[*]}]{end}'
++              compare:
++                op: eq
++                value: 'RequestResponse|users=|groups=|verbs=|ns=|urls=|omit=|res=[:pods/exec pods/attach pods/portforward:]'
++            # [6]: the API server proxies at Metadata.
++            - path: '{.rules[6].level}|users={.rules[6].users[*]}|groups={.rules[6].userGroups[*]}|verbs={.rules[6].verbs[*]}|ns={.rules[6].namespaces[*]}|urls={.rules[6].nonResourceURLs[*]}|omit={.rules[6].omitStages[*]}|res={range .rules[6].resources[*]}[{.group}:{.resources[*]}:{.resourceNames[*]}]{end}'
++              compare:
++                op: eq
++                value: 'Metadata|users=|groups=|verbs=|ns=|urls=|omit=|res=[:pods/proxy services/proxy nodes/proxy:]'
 +            - path: '{.rules[?(@.level=="None")].level}'
 +              compare:
 +                op: eq
 +                value: "None None None"
-+            - path: "{.rules[1].level} {.rules[2].level} {.rules[3].level}"
-+              compare:
-+                op: eq
-+                value: "None None None"
-+            - path: "{.rules[1].users[*]}"
-+              compare:
-+                op: eq
-+                value: "system:kube-scheduler system:kube-controller-manager system:apiserver"
-+            - path: "{.rules[1].verbs[*]}"
-+              compare:
-+                op: eq
-+                value: "get list watch"
-+            - path: "{.rules[1].userGroups}{.rules[2].users}"
-+              set: false
-+            - path: "{.rules[2].userGroups[*]}"
-+              compare:
-+                op: eq
-+                value: "system:nodes"
-+            - path: "{.rules[2].verbs[*]}"
-+              compare:
-+                op: eq
-+                value: "get list watch"
-+            - path: "{.rules[3].resources[*].resources[*]}"
-+              compare:
-+                op: eq
-+                value: "events endpoints endpointslices leases"
 +            # ConfigMaps and Secrets are never logged with a request or response body.
 +            - path: '{.rules[?(@.level=="Request")].resources[*].resources[*]} {.rules[?(@.level=="RequestResponse")].resources[*].resources[*]}'
 +              compare:
@@ -135,23 +132,6 @@ index c748b60..03c0a40 100644
 +              compare:
 +                op: nothave
 +                value: "configmaps"
-+            # pods/exec and pods/portforward with their bodies; pods/proxy and services/proxy at Metadata.
-+            - path: '{.rules[?(@.level=="RequestResponse")].resources[*].resources[*]}'
-+              compare:
-+                op: regex
-+                value: '(^| )pods/exec( |$)'
-+            - path: '{.rules[?(@.level=="RequestResponse")].resources[*].resources[*]}'
-+              compare:
-+                op: regex
-+                value: '(^| )pods/portforward( |$)'
-+            - path: '{.rules[?(@.level=="Metadata")].resources[*].resources[*]}'
-+              compare:
-+                op: regex
-+                value: '(^| )pods/proxy( |$)'
-+            - path: '{.rules[?(@.level=="Metadata")].resources[*].resources[*]}'
-+              compare:
-+                op: regex
-+                value: '(^| )services/proxy( |$)'
 +            # The last rule records everything else, Pod and Deployment changes included, at Metadata,
 +            # with nothing narrowing it.
 +            - path: "{.rules[-1:].level}"
