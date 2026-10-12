@@ -20,8 +20,8 @@ export async function countArgoApps() {
   return files.filter((f) => f.endsWith(".yaml") && f !== "kustomization.yaml").length;
 }
 
-const { renderDocsSvg, validateModel } = await loadDiagram();
-const problems = validateModel();
+const { renderDocsSvg, validateModel, FULL_MODEL } = await loadDiagram();
+const problems = [...validateModel(), ...validateModel(FULL_MODEL)];
 if (problems.length) {
   console.error(problems.join("\n"));
   process.exit(1);

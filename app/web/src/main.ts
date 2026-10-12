@@ -5,7 +5,7 @@ import { ApiClient } from "./lib/api";
 import { Backfill } from "./lib/backfill";
 import { byId, h, prefersReducedMotion, replace } from "./lib/dom";
 import { installMock } from "./lib/mock-hook";
-import { isRunId } from "./lib/contract";
+import { type CorrelationIncident, isRunId } from "./lib/contract";
 import { type ConnectionState, type EventSourceFactory, EventStream } from "./lib/sse";
 import type { TimelineView } from "./lib/timeline";
 import { CONNECTION_WORD } from "./ui/common";
@@ -169,6 +169,14 @@ function main(): void {
     timeline.setQuiet(quietRuns, startingTerminal);
     evidence.setQuiet(quietRuns, startingTerminal);
   };
+  // The hero's live architecture diagram (site redesign 2026-10-12): the SVG is in the static HTML;
+  // this lights the path of the newest run and answers clicks on its nodes. Mounted here, before the
+  // correlation whose data feeds it; the tour below is the same.
+  const diagram = mountDiagram(byId("diagram"), { caption: byId("diagram-caption"), status: byId("diagram-status") });
+  let tourIncidents: readonly CorrelationIncident[] = [];
+  /** Re-derive the tour's progress and light the diagram; a no-op until the tour and the titles exist. */
+  let refreshTour: () => void = () => {};
+
   // The SIEM's section (ADR 0036): shown only while GET /api/correlation says available.
   const siemNav = document.querySelector<HTMLElement>(".site-nav__siem");
   const correlation = mountCorrelation(
@@ -213,10 +221,6 @@ function main(): void {
   );
   const defenceMap = mountDefenceMap(byId("defence-map"), api);
 
-  // The hero's live architecture diagram (site redesign 2026-10-12): the SVG is in the static HTML;
-  // this lights the path of the newest run and answers clicks on its nodes.
-  const diagram = mountDiagram(byId("diagram"), { caption: byId("diagram-caption"), status: byId("diagram-status") });
-
   // The guided tour at the top of #attack: steps ticked from the visitor's own runs and the SIEM's
   // incidents for them, each step's button picking a command or launching the twin.
   const tour = mountTour(byId("tour"), {
@@ -227,9 +231,7 @@ function main(): void {
       byId(id).scrollIntoView({ behavior: prefersReducedMotion() ? "auto" : "smooth", block: "start" });
     },
   });
-  /** Re-derive the tour's progress and light the diagram from the newest view and the incidents. */
-  let tourIncidents: readonly import("./lib/contract").CorrelationIncident[] = [];
-  const refreshTour = () => {
+  refreshTour = () => {
     const own = new Set(ownIds);
     const mine = latestView.runs.filter((r) => own.has(r.runId));
     tour.update(mine, tourIncidents, own);
@@ -436,4 +438,12 @@ function main(): void {
   });
 }
 
-main();
+// Should anything above throw before the sections' buttons exist, theme.ts's pre-paint folds must not
+// leave the page with hidden sections and no way to open them: the stand-in is cleared and the
+// static page shows whole, as without JavaScript.
+try {
+  main();
+} catch (e) {
+  delete document.documentElement.dataset.folded;
+  throw e;
+}

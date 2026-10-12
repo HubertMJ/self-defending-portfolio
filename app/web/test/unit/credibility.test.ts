@@ -351,6 +351,7 @@ describe("the evidence card, the ticker and the hero's last run (B4)", () => {
   it("the hero's numbers line names the counters' window and never the last run (its time is under the diagram)", () => {
     const el = renderStats({ ...stats(T), last_run_at: "2026-10-03T12:01:57Z" }, TERMINAL_OBJECTIVES, undefined, T);
     expect(el.textContent).not.toContain("last run");
+    expect(el.querySelector(".herostats__num")?.textContent).toBe("1287 attacks since 28 Aug");
     expect(el.querySelector(".herostats__num")?.getAttribute("title")).toMatch(/since 2026-08-28 20:01:57 CEST \(\d+ days ago\)/);
   });
 });

@@ -105,7 +105,7 @@ flowchart TB
         ROOT["Application root<br/>path cluster/apps"]
         RS["repo-server<br/>+ KSOPS init container"]
         AGE[("Secret sops-age<br/>age private key")]
-        APPS["16 child Applications<br/>sync waves -2 .. 6"]
+        APPS["19 child Applications<br/>sync waves -2 .. 6"]
     end
     GH -- "poll (3 min) on main" --> RS
     AGE -. "mounted 0440" .-> RS

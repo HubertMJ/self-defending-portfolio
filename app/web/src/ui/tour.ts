@@ -25,7 +25,7 @@ export interface TourStep {
 }
 
 export const STEPS: readonly TourStep[] = [
-  { id: "look", title: "Look around", hint: "Open the terminal and run id — plain recon raises no alarm.", command: "whoami", done: "You looked around: a non-root user in a hardened pod." },
+  { id: "look", title: "Look around", hint: "Open the terminal and run id (or any look-around command) — plain recon raises no alarm.", command: "whoami", done: "You looked around: a non-root user in a hardened pod." },
   { id: "tamper", title: "Break something", hint: "Deface the shop, then read the run's flag. Both are allowed — detection is not prevention.", command: "deface", done: "You defaced the shop and read the flag; nothing stopped you." },
   { id: "hide", title: "Hide it in DNS", hint: "Smuggle the flag out in a DNS name. Falco has no rule for name lookups.", command: SIEM_COMMAND, done: "You sent the flag out in a DNS query; Falco saw nothing." },
   { id: "caught", title: "Get caught", hint: "Open a shell with sh -i. Falco detects it and Talon deletes the pod — watch the diagram.", command: "shell", done: "Falco caught the shell and Talon deleted the pod, in milliseconds." },
@@ -70,10 +70,13 @@ export function deriveProgress(runs: readonly RunView[], incidents: readonly Cor
   const ran = (cmd: string) => runs.some((r) => r.commands.some((c) => c.id === cmd && c.endedAt !== undefined));
   const reached = (cmd: string) => runs.some((r) => r.commands.some((c) => c.id === cmd && c.achieved));
   if (ran("whoami") || ran("hostname") || ran("ps") || ran("ls-shop") || ran("caps")) done.add("look");
-  if (reached("deface") || reached("read-flag")) done.add("tamper");
+  // Both: the shop defaced and the flag read (the step's done line says so).
+  if (reached("deface") && reached("read-flag")) done.add("tamper");
   if (reached(SIEM_COMMAND)) done.add("hide");
-  // Caught: a run of the visitor's that Talon terminated (the shell, or any detected command).
-  if (runs.some((r) => r.detail === "killed" || r.talon.some((t) => t.arm !== "unguarded" && /terminate/i.test(`${t.actionner ?? ""} ${t.action}`)))) done.add("caught");
+  // Caught: a terminal session of the visitor's in which the shell ran and the pod was then
+  // terminated — not any one-click run the cluster killed.
+  const terminated = (r: RunView) => r.detail === "killed" || r.talon.some((t) => t.arm !== "unguarded" && /terminate/i.test(`${t.actionner ?? ""} ${t.action}`));
+  if (runs.some((r) => r.scenario === "terminal" && r.commands.some((c) => c.id === "shell") && terminated(r))) done.add("caught");
   // Compared: a side-by-side run of the visitor's (two pods).
   if (runs.some((r) => r.armPods !== undefined)) done.add("compare");
   // Filed: a SIEM incident of the DNS exfil kind for one of the visitor's runs.
@@ -141,7 +144,7 @@ export function mountTour(
           : null;
       return h(
         "li",
-        { class: "tour__step", "data-done": String(isDone), "data-current": String(isCurrent), "aria-current": isCurrent ? "step" : undefined },
+        { class: "tour__step", "data-id": s.id, "data-done": String(isDone), "data-current": String(isCurrent), "aria-current": isCurrent ? "step" : undefined },
         h("span", { class: "tour__mark", "aria-hidden": "true" }, isDone ? "✓" : String(i + 1)),
         h(
           "div",
@@ -160,7 +163,7 @@ export function mountTour(
         h(
           "div",
           { class: "tour__head" },
-          h("p", { class: "tour__count" }, doneN === total ? "Tour complete" : `Step ${Math.min(doneN + 1, total)} of ${total}`),
+          h("p", { class: "tour__count" }, doneN === total ? "Tour complete" : `Step ${Math.min(doneN + 1, total)} of ${total}`, h("span", { class: "tour__cost" }, " · uses two of your runs")),
           button("Skip the tour", () => {
             setSkipped(true);
             shown = true;

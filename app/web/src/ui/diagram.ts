@@ -26,21 +26,23 @@ export interface DiagramHandle {
 }
 
 /** The nodes a run's events light, in the order the packet travels. */
-export function pathOf(run: RunView | undefined): { nodes: Map<string, NodeState>; edges: string[]; summary: string } {
+export type EdgeTone = "attack" | "detect" | "respond";
+
+export function pathOf(run: RunView | undefined): { nodes: Map<string, NodeState>; edges: Map<string, EdgeTone>; summary: string } {
   const nodes = new Map<string, NodeState>();
-  const edges: string[] = [];
+  const edges = new Map<string, EdgeTone>();
   if (!run) return { nodes, edges, summary: "" };
   // The attack: the visitor's request came in through the edge to the API, which started the pod.
   for (const id of ["visitor", "cloudflare", "cloudflared", "gateway", "site", "kube-apiserver", "pod"]) nodes.set(id, "attack");
-  edges.push("visitor-cloudflare", "cloudflare-cloudflared", "cloudflared-gateway", "gateway-site", "site-kube-apiserver");
+  for (const id of ["visitor-cloudflare", "cloudflare-cloudflared", "cloudflared-gateway", "gateway-site", "site-kube-apiserver"]) edges.set(id, "attack");
   const guardedFalco = run.falco.filter((f) => f.arm !== "unguarded");
   const twinFalco = run.falco.some((f) => f.arm === "unguarded");
   if (run.armPods) nodes.set("twin", twinFalco ? "detect" : "attack");
-  if (twinFalco) edges.push("twin-falco");
+  if (twinFalco) edges.set("twin-falco", "detect");
   let summary = run.active ? "attack in progress" : "no detection: nothing this run did matched a rule";
   if (guardedFalco.length || run.states.detected !== undefined) {
     nodes.set("falco", "detect");
-    edges.push("pod-falco");
+    edges.set("pod-falco", "detect");
     summary = run.active ? "detected, waiting for the answer" : "detected, not answered";
   }
   const answered = run.talon.some((t) => t.arm !== "unguarded") || run.states.responded !== undefined;
@@ -48,11 +50,26 @@ export function pathOf(run: RunView | undefined): { nodes: Map<string, NodeState
     nodes.set("talon", "respond");
     nodes.set("kube-apiserver", "respond");
     nodes.set("pod", "respond");
-    edges.push("falco-talon", "talon-kube-apiserver", "kube-apiserver-pod");
+    for (const id of ["falco-talon", "talon-kube-apiserver", "kube-apiserver-pod"]) edges.set(id, "respond");
     const ms = run.timings.respondMs;
     summary = ms !== undefined ? `answered in ${formatDuration(ms)}` : "answered";
   }
   return { nodes, edges, summary };
+}
+
+const STATE_WORD: Record<NodeState, string> = { idle: "", attack: "attack path", detect: "detected", respond: "answered", prevented: "prevented" };
+
+/** The lit nodes in words, so colour is never the only carrier: "attack path: Visitor, …; detected: Falco; answered: …". */
+export function describeStates(nodes: Map<string, NodeState>): string {
+  const by = new Map<NodeState, string[]>();
+  for (const [id, state] of nodes) {
+    const label = MODEL.nodes.find((n) => n.id === id)?.label ?? id;
+    by.set(state, [...(by.get(state) ?? []), label]);
+  }
+  return (["attack", "detect", "respond"] as NodeState[])
+    .filter((st) => by.has(st))
+    .map((st) => `${STATE_WORD[st]}: ${(by.get(st) as string[]).join(", ")}`)
+    .join("; ");
 }
 
 function nodeMeta(id: string): DiagramNode | undefined {
@@ -120,14 +137,33 @@ export function mountDiagram(figure: HTMLElement, opts: { caption: HTMLElement; 
     });
   }
 
+  // The SIEM's state is the diagram's own (set by setSiem), kept across every setRun.
+  let siemFiled = false;
+  const applySiem = () => {
+    for (const el of nodeEls("siem")) el.dataset.state = siemFiled ? "detect" : "idle";
+    for (const el of allEdges) {
+      if (el.dataset.edge !== "kube-apiserver-siem") continue;
+      el.dataset.lit = String(siemFiled);
+      el.dataset.tone = "detect";
+    }
+  };
+
   let lastKey = "";
   const setRun = (run: RunView | undefined, title?: string) => {
     const { nodes, edges, summary } = pathOf(run);
-    const key = `${run?.runId ?? ""}|${[...nodes.entries()].join(",")}|${edges.join(",")}|${summary}`;
+    const key = `${run?.runId ?? ""}|${[...nodes.entries()].join(",")}|${[...edges.entries()].join(",")}|${summary}`;
     if (key === lastKey) return;
     lastKey = key;
-    for (const el of allNodes) el.dataset.state = nodes.get(el.dataset.node ?? "") ?? "idle";
-    for (const el of allEdges) el.dataset.lit = String(edges.includes(el.dataset.edge ?? ""));
+    for (const el of allNodes) if (el.dataset.node !== "siem") el.dataset.state = nodes.get(el.dataset.node ?? "") ?? "idle";
+    for (const el of allEdges) {
+      const id = el.dataset.edge ?? "";
+      if (id === "kube-apiserver-siem") continue;
+      const tone = edges.get(id);
+      el.dataset.lit = String(tone !== undefined);
+      if (tone) el.dataset.tone = tone;
+      else delete el.dataset.tone;
+    }
+    applySiem();
     figure.dataset.run = run ? (run.active ? "active" : "over") : "none";
     if (!run) {
       replace(opts.status, "No attack yet since this page loaded. ", h("a", { href: "#attack" }, "Attack this cluster"), " and watch the path light up.");
@@ -135,20 +171,22 @@ export function mountDiagram(figure: HTMLElement, opts: { caption: HTMLElement; 
     }
     const at = run.talon.find((t) => t.arm !== "unguarded")?.at;
     const when = at ? Date.parse(at) : (run.states.responded ?? run.states.detected ?? run.states.started);
+    const states = describeStates(nodes);
     replace(
       opts.status,
       h("span", { class: "dg-status__what" }, title ? `${title}: ` : "Last run: "),
       summary,
       when !== undefined && !Number.isNaN(when) ? [", ", timeEl(when, plClock(when, Date.now()))] : null,
       ".",
+      states ? h("span", { class: "dg-status__states" }, ` Lit — ${states}.`) : null,
     );
   };
 
   return {
     setRun,
     setSiem(filed) {
-      for (const el of nodeEls("siem")) el.dataset.state = filed ? "detect" : "idle";
-      for (const el of allEdges) if (el.dataset.edge === "kube-apiserver-siem") el.dataset.lit = String(filed);
+      siemFiled = filed;
+      applySiem();
     },
     show,
   };

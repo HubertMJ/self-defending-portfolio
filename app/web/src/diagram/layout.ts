@@ -38,7 +38,7 @@ const right = (b: Box) => b.x + b.w;
 const bottom = (b: Box) => b.y + b.h;
 
 export interface LayoutOptions {
-  /** Prefix for element ids (two diagrams on one page must not share ids). */
+  /** Prefix for element ids (two diagrams on one page must not share ids). The SVG is role="group" when interactive (its nodes are buttons), role="img" in the docs file. */
   idPrefix?: string;
   /** Interactive nodes (focusable, role=button) — the page; off for the docs file. */
   interactive?: boolean;
@@ -175,7 +175,7 @@ function layoutGrid(view: "hero" | "full", opts: LayoutOptions, model: DiagramMo
   const descId = `${prefix}-desc`;
   return t(
     "svg",
-    { xmlns: "http://www.w3.org/2000/svg", viewBox: `0 0 ${width} ${height}`, class: `dg dg--${view}`, role: "img", "aria-labelledby": `${titleId} ${descId}` },
+    { xmlns: "http://www.w3.org/2000/svg", viewBox: `0 0 ${width} ${height}`, class: `dg dg--${view}`, role: opts.interactive ? "group" : "img", "aria-labelledby": `${titleId} ${descId}` },
     t("title", { id: titleId }, opts.title ?? "Architecture: how an attack on this site is detected and answered"),
     t("desc", { id: descId }, opts.desc ?? describe(nodes, edges)),
     defs(prefix),
@@ -245,7 +245,7 @@ function layoutNarrow(opts: LayoutOptions, model: DiagramModel): Tree {
   const descId = `${prefix}-desc`;
   return t(
     "svg",
-    { xmlns: "http://www.w3.org/2000/svg", viewBox: `0 0 ${width} ${height}`, class: "dg dg--narrow", role: "img", "aria-labelledby": `${titleId} ${descId}` },
+    { xmlns: "http://www.w3.org/2000/svg", viewBox: `0 0 ${width} ${height}`, class: "dg dg--narrow", role: opts.interactive ? "group" : "img", "aria-labelledby": `${titleId} ${descId}` },
     t("title", { id: titleId }, opts.title ?? "Architecture: how an attack on this site is detected and answered"),
     t("desc", { id: descId }, opts.desc ?? describe(nodes, edges)),
     defs(prefix),

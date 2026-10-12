@@ -379,7 +379,7 @@ describe("hero tiles say what their numbers count (final review, item 4)", () =>
     expect(num?.getAttribute("title")).toBe("11 ran out of time with a detection unanswered");
     expect(el.textContent).not.toContain("went unanswered");
     expect(el.textContent).toContain("last detection to response");
-    expect(el.textContent).toContain("attacks so far");
+    expect(el.textContent).toMatch(/attacks since \d{1,2} [A-Z][a-z]{2}/);
   });
 });
 

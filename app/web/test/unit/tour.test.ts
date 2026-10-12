@@ -34,24 +34,32 @@ describe("tour progress is derived from real events", () => {
     for (const s of STEPS) expect(s.done.length).toBeGreaterThan(5);
   });
 
-  it("ticks 'look around' from a recon command, 'break something' from the flag", () => {
-    const run = runOf({ id: "whoami", achieved: false }, { id: "read-flag", achieved: true });
-    const p = deriveProgress([run], [], new Set([RUN]));
+  it("ticks 'look around' from a recon command; 'break something' needs both the deface and the flag", () => {
+    const flagOnly = runOf({ id: "whoami", achieved: false }, { id: "read-flag", achieved: true });
+    let p = deriveProgress([flagOnly], [], new Set([RUN]));
     expect(p.done.has("look")).toBe(true);
+    expect(p.done.has("tamper")).toBe(false);
+    expect(p.current?.id).toBe("tamper");
+    const both = runOf({ id: "whoami" }, { id: "deface", achieved: true }, { id: "read-flag", achieved: true });
+    p = deriveProgress([both], [], new Set([RUN]));
     expect(p.done.has("tamper")).toBe(true);
-    expect(p.done.has("hide")).toBe(false);
     expect(p.current?.id).toBe("hide");
   });
 
-  it("ticks 'get caught' when a run of the visitor's was terminated", () => {
-    const evs: StreamEvent[] = [
-      { type: "run", data: { run_id: RUN, scenario: "terminal", state: "started", at: "2026-10-03T18:00:00Z", pod: "p" } },
+  it("ticks 'get caught' only for a terminal session where the shell ran and the pod was terminated", () => {
+    const killed = (scenario: string, withShell: boolean): StreamEvent[] => [
+      { type: "run", data: { run_id: RUN, scenario, state: "started", at: "2026-10-03T18:00:00Z", pod: "p" } },
+      ...(withShell ? [{ type: "command", data: { run_id: RUN, seq: 1, id: "shell", state: "started", at: "2026-10-03T18:00:04Z" } } as StreamEvent] : []),
       { type: "falco", data: { at: "2026-10-03T18:00:05Z", rule: "Terminal shell in container", priority: "Critical", namespace: "sandbox", pod: "p", output: "x" } },
       { type: "talon", data: { at: "2026-10-03T18:00:05.5Z", action: "Terminate Pod", actionner: "kubernetes:terminate", namespace: "sandbox", pod: "p", status: "success" } },
-      { type: "run", data: { run_id: RUN, scenario: "terminal", state: "finished", at: "2026-10-03T18:00:06Z", detail: "killed" } },
+      { type: "run", data: { run_id: RUN, scenario, state: "finished", at: "2026-10-03T18:00:06Z", detail: "killed" } },
     ];
-    const run = buildTimeline(evs, Date.parse("2026-10-03T18:00:30Z")).runs[0];
-    expect(deriveProgress([run], [], new Set([RUN])).done.has("caught")).toBe(true);
+    const at = Date.parse("2026-10-03T18:00:30Z");
+    expect(deriveProgress([buildTimeline(killed("terminal", true), at).runs[0]], [], new Set([RUN])).done.has("caught")).toBe(true);
+    // A one-click run the cluster killed is not the visitor getting caught in the terminal.
+    expect(deriveProgress([buildTimeline(killed("shell-in-container", false), at).runs[0]], [], new Set([RUN])).done.has("caught")).toBe(false);
+    // A terminal session killed without the shell having run is not step 4 either.
+    expect(deriveProgress([buildTimeline(killed("terminal", false), at).runs[0]], [], new Set([RUN])).done.has("caught")).toBe(false);
   });
 
   it("ticks 'see it in the SIEM' only for an incident of the visitor's own run", () => {

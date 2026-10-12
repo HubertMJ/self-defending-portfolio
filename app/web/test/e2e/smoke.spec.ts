@@ -213,6 +213,96 @@ test.describe("layout (ADR 0035, amended 2026-10-05; ?mock=1)", () => {
     await noHorizontalScroll(page);
   });
 
+  test("page-height budgets on a first visit (mock build): desktop 1440 at most 5000 px, phone 390 at most 9000 px", async ({ page }) => {
+    // ADR 0035 amendment 2026-10-12. Measured with the mock banner in place (the live page has none).
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto("/?mock=1");
+    await expect(page.locator("#hero-stats .herostats__num")).toHaveCount(3);
+    await expect(page.locator("#terminal .term-start__btn")).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollHeight), "desktop").toBeLessThanOrEqual(5000);
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto("/?mock=1");
+    await expect(page.locator("#terminal .term-start__btn")).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollHeight), "phone").toBeLessThanOrEqual(9000);
+  });
+
+  test("the diagram's nodes are reached by keyboard: Tab to one, Enter or Space opens its caption, Escape closes; aria-expanded follows", async ({ page, isMobile }) => {
+    const problems = guardConsole(page);
+    await page.goto("/?mock=1");
+    const svg = page.locator(isMobile ? ".dg-narrow svg" : ".dg-wide svg");
+    await expect(svg).toHaveAttribute("role", "group");
+    await expect(svg).toHaveAttribute("aria-labelledby", /title .*desc/);
+    // Tab from the primary button reaches the first node (the secondary button is in between).
+    await page.locator("#hero-cta").focus();
+    await page.keyboard.press("Tab");
+    await page.keyboard.press("Tab");
+    const first = svg.locator(".dg-node").first();
+    await expect(first).toBeFocused();
+    await expect(first).toHaveAttribute("role", "button");
+    await expect(first).toHaveAttribute("aria-expanded", "false");
+    await page.keyboard.press("Enter");
+    const caption = page.locator("#diagram-caption");
+    await expect(caption).toBeVisible();
+    await expect(first).toHaveAttribute("aria-expanded", "true");
+    await expect(caption.locator(".dg-caption__title")).toContainText("Visitor");
+    await page.keyboard.press("Escape");
+    await expect(caption).toBeHidden();
+    await expect(first).toHaveAttribute("aria-expanded", "false");
+    // Space on another node opens its caption, with a link into the repository.
+    const falco = svg.locator('.dg-node[data-node="falco"]');
+    await falco.focus();
+    await page.keyboard.press("Space");
+    await expect(caption).toContainText("Falco watches every syscall over eBPF");
+    await expect(caption.locator('a[href*="/tree/main/cluster/infra/falco"]')).toHaveCount(1);
+    await expect(falco).toHaveAttribute("aria-expanded", "true");
+    await caption.locator(".dg-caption__close").click();
+    await expect(caption).toBeHidden();
+    expect(problems).toEqual([]);
+  });
+
+  test("the tour advances through its steps from what the visitor really did (mock)", async ({ page }) => {
+    const problems = guardConsole(page);
+    await page.goto("/?mock=1&mock-speed=0.3");
+    const tour = page.locator("#tour .tour");
+    await expect(tour.locator(".tour__step")).toHaveCount(6);
+    await expect(tour.locator(".tour__count")).toContainText("Step 1 of 6");
+    await expect(tour.locator(".tour__count")).toContainText("uses two of your runs");
+    await expect(tour.locator('.tour__step[data-current="true"] .tour__title')).toHaveText("Look around");
+    // Step 1's button opens the terminal with `id` picked; Enter runs it and the step ticks.
+    await tour.locator('.tour__step[data-current="true"] .tour__btn').click();
+    const term = page.locator("#terminal");
+    await expect(term.locator("#term-input")).toHaveValue("id");
+    await term.locator("#term-input").press("Enter");
+    await expect(term.locator(".term__out")).toContainText("uid=10001");
+    await expect(tour.locator('.tour__step[data-done="true"]')).toHaveCount(1);
+    await expect(tour.locator(".tour__count")).toContainText("Step 2 of 6");
+    // Step 2 needs both the deface and the flag.
+    await term.getByRole("button", { name: /^echo pwned>/ }).click();
+    await expect(term.locator(".term__shop .browser")).toHaveAttribute("data-status", "defaced");
+    await expect(tour.locator('.tour__step[data-done="true"]')).toHaveCount(1);
+    await term.getByRole("button", { name: "cat /srv/shop/.flag" }).click();
+    await expect(term.locator(".term__out")).toContainText(/SDP\{[0-9a-f]{16}\}/);
+    await expect(tour.locator('.tour__step[data-done="true"]')).toHaveCount(2);
+    await expect(tour.locator('.tour__step[data-current="true"] .tour__title')).toHaveText("Hide it in DNS");
+    // Step 4 (getting caught) ticks from the shell being killed, out of order; step 3 stays current.
+    await term.getByRole("button", { name: "sh -i", exact: true }).click();
+    await expect(term.locator(".term__summary")).toBeVisible({ timeout: 15_000 });
+    await expect(tour.locator('.tour__step[data-id="caught"]')).toHaveAttribute("data-done", "true");
+    await expect(tour.locator('.tour__step[data-done="true"]')).toHaveCount(3);
+    await expect(tour.locator('.tour__step[data-current="true"] .tour__title')).toHaveText("Hide it in DNS");
+    // The diagram lit the answer and says so in words.
+    await expect(page.locator("#diagram-status")).toContainText(/answered/);
+    await expect(page.locator("#diagram-status")).toContainText("detected: Falco");
+    // Skipping hides the tour and is remembered; showing it brings the progress back (derived, not stored).
+    await tour.locator(".tour__head .tour__btn").click();
+    await expect(page.locator("#tour .tour--skipped")).toBeVisible();
+    await page.reload();
+    await expect(page.locator("#tour .tour--skipped")).toBeVisible();
+    await page.locator("#tour .tour--skipped .tour__btn").click();
+    await expect(page.locator("#tour .tour__step")).toHaveCount(6);
+    expect(problems).toEqual([]);
+  });
+
   test("on a first visit everything below the attack folds; the attack and the hero diagram stay open", async ({ page }) => {
     // Site redesign 2026-10-12 (ADR 0035 amendment): a first-time visitor (no stored choices) sees a
     // short page — the hero diagram and the attack, the rest folded.
@@ -714,7 +804,7 @@ test.describe("defence map and live stats (mock, ADR 0033)", () => {
     // Site redesign 2026-10-12: the hero carries one line of three figures; no tiles, no last run, no objectives.
     await expect(hero.locator(".herostats__num")).toHaveCount(3);
     await expect(hero.locator(".herostats__tile")).toHaveCount(0);
-    await expect(hero).toContainText("attacks so far");
+    await expect(hero).toContainText(/attacks since \d{1,2} [A-Z][a-z]{2}\b/);
     await expect(hero).toContainText("detected runs answered");
     await expect(hero).toContainText("last detection to response");
     await expect(hero).not.toContainText("last run");

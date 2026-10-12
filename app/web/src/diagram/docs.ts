@@ -4,6 +4,7 @@
 // one on the page.
 
 import { layout } from "./layout";
+import { FULL_MODEL } from "./model-docs";
 import { type Tree, escape, serialise } from "./tree";
 
 /** The file's stylesheet: the same classes the page colours from styles.css, in GitHub's palette. */
@@ -54,7 +55,7 @@ export function renderDocsSvg(opts: DocsOptions): string {
     notes: { argocd: `${opts.argoApps} Applications` },
     title,
     desc: "The network path from the visitor through Cloudflare and an outbound-only tunnel to the Cilium Gateway and the page with its API; GitOps from a push through CI and Argo CD; the supply chain from the build workflow through Trivy, keyless cosign signing and GHCR to Kyverno admission; detection and response from a sandbox pod through Falco, Falcosidekick and Falco Talon back to kube-apiserver, and from everything to the SIEM on its own VM.",
-  });
+  }, FULL_MODEL);
   const [, , w, h] = String(tree.attrs.viewBox).split(" ").map(Number);
   const descNode = tree.children.find((c): c is Tree => typeof c !== "string" && c.tag === "desc");
   const desc = descNode ? String(descNode.children[0] ?? "") : "";

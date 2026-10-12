@@ -7,7 +7,7 @@
 
 import type { ApiClient } from "../lib/api";
 import type { Objective, Stats } from "../lib/contract";
-import { h, replace, when } from "../lib/dom";
+import { TIME_ZONE, h, replace, when } from "../lib/dom";
 import { humanSpeed } from "./console";
 
 const REPO_ISSUES = "https://github.com/HubertMJ/self-defending-portfolio/issues";
@@ -31,7 +31,8 @@ export function renderStats(s: Stats, _objectives: Objective[] = [], _last?: Las
   const num = (value: string, words: string, title?: string) => h("span", { class: "herostats__num", ...(title ? { title } : {}) }, h("strong", {}, value), ` ${words}`);
   const sep = () => h("span", { class: "herostats__sep", "aria-hidden": "true" }, " · ");
   const figures = [
-    num(String(s.runs), "attacks so far", s.since ? `since ${when(s.since, now)}` : undefined),
+    // The window is in the words ("since 6 Sep"); the exact time is the title.
+    num(String(s.runs), s.since ? `attacks since ${shortDay(s.since)}` : "attacks so far", s.since ? `since ${when(s.since, now)}` : undefined),
     // Both counts are runs: of the runs Falco detected, how many Talon answered at least once.
     num(`${responded} of ${detected}`, "detected runs answered", `${s.unanswered} ran out of time with a detection unanswered`),
     s.response_ms.last > 0 ? num(`${s.response_ms.last} ms`, "last detection to response", humanSpeed(s.response_ms.last)) : null,
@@ -39,6 +40,14 @@ export function renderStats(s: Stats, _objectives: Objective[] = [], _last?: Las
   const line = h("p", { class: "herostats__line" }, h("span", { class: "herostats__label" }, "Live, all visitors — not only yours"), " ");
   figures.forEach((f, i) => line.append(i ? sep() : "", f));
   return h("div", { class: "herostats", "data-count": figures.length }, line);
+}
+
+/** "6 Sep": the day a window opened, in Polish time. */
+export function shortDay(iso: string): string {
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return iso;
+  // en-GB spells "Sept"; three letters for every month.
+  return new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", timeZone: TIME_ZONE }).format(t).replace(/^(\d+ [A-Z][a-z]{2})[a-z]*$/, "$1");
 }
 
 /** The objectives, in the catalogue's order, with how many runs reached each; the never-reached say so. */

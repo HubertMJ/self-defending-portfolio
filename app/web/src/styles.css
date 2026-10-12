@@ -542,7 +542,7 @@ main {
   position: relative;
   /* The evidence card has to stay above a 720 px fold whatever fonts the visitor has (ADR 0035):
      the top padding is kept modest, the name below is sized to its column. */
-  padding-block: clamp(1.25rem, 3vw, 2.25rem) clamp(1.25rem, 3vw, 2rem);
+  padding-block: clamp(1.25rem, 3vw, 2rem) clamp(1rem, 2.5vw, 1.5rem);
   background-image:
     linear-gradient(var(--bg-grid) 1px, transparent 1px),
     linear-gradient(90deg, var(--bg-grid) 1px, transparent 1px);
@@ -5092,21 +5092,14 @@ html[data-terminal="off"] .needs-terminal {
    ====================================================================== */
 
 /* ---------- hero statement ---------- */
+/* One column: the numbers line sits under the buttons at full width, so it stays one line. */
 .hero__statement {
   display: grid;
-  gap: 0.75rem clamp(1.25rem, 3vw, 2rem);
-  align-items: end;
-}
-
-@media (min-width: 900px) {
-  .hero__statement {
-    grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
-  }
+  gap: 0.6rem;
 }
 
 .hero__numbers:not([hidden]) {
   display: block;
-  align-self: end;
 }
 
 /* The numbers line in the hero: one line, three figures, mono; the last run's time is under the
@@ -5327,20 +5320,30 @@ html[data-tech="on"] .dg-sub {
   fill: color-mix(in srgb, var(--respond) 13%, var(--surface-2));
 }
 
-.dg-edge[data-lit="true"] .dg-line {
-  stroke: var(--respond);
-}
-
-.dg-edge--attack[data-lit="true"] .dg-line {
+/* A lit edge wears the stage of what travelled it: the attack in, the detection, the answer back. */
+.dg-edge[data-lit="true"] .dg-line,
+.dg-edge[data-lit="true"][data-tone="attack"] .dg-line {
   stroke: var(--attack);
 }
 
-.dg-edge--response[data-lit="true"] .dg-line,
+.dg-edge[data-lit="true"][data-tone="detect"] .dg-line {
+  stroke: var(--detect);
+}
+
+.dg-edge[data-lit="true"][data-tone="respond"] .dg-line,
 .dg-edge--response .dg-line {
   stroke: var(--respond);
 }
 
 .dg-edge[data-lit="true"] .dg-head {
+  fill: var(--attack);
+}
+
+.dg-edge[data-lit="true"][data-tone="detect"] .dg-head {
+  fill: var(--detect);
+}
+
+.dg-edge[data-lit="true"][data-tone="respond"] .dg-head {
   fill: var(--respond);
 }
 
@@ -5352,7 +5355,10 @@ html[data-tech="on"] .dg-sub {
     stroke-dasharray: 16 400;
     animation: dg-flow 0.9s ease-out 1;
   }
-  html:not(.reduced-motion) .dg-edge--response[data-lit="true"] .dg-packet {
+  html:not(.reduced-motion) .dg-edge[data-lit="true"][data-tone="detect"] .dg-packet {
+    stroke: var(--detect);
+  }
+  html:not(.reduced-motion) .dg-edge[data-lit="true"][data-tone="respond"] .dg-packet {
     stroke: var(--respond);
   }
 }
@@ -5379,6 +5385,18 @@ html[data-tech="on"] .dg-sub {
 .dg-status__what {
   color: var(--text);
   font-weight: 600;
+}
+
+.dg-status__states {
+  color: var(--text-faint);
+  font-size: 0.82rem;
+}
+
+.tour__cost {
+  color: var(--text-faint);
+  letter-spacing: 0;
+  text-transform: none;
+  font-weight: 500;
 }
 
 .dg-caption {
@@ -5428,7 +5446,7 @@ html:not(.js) .needs-js {
 
 /* ---------- the guided tour ---------- */
 .tour-wrap {
-  margin-bottom: 1.5rem;
+  margin-bottom: 1.25rem;
 }
 
 .tour {

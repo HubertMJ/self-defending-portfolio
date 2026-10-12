@@ -511,7 +511,7 @@ reload, the empty state's prompt and one example, another visitor's live run lab
 when it ends, the evidence line expanding, and no sideways scroll at 320 px. The tests of the whole
 board and history choose "All activity" first.
 
-## Amendment 2026-10-12: the hero is a live diagram, the evidence card moves to #evidence, sections fold on a first visit
+## Amendment 2026-10-12: the hero is a live diagram, the evidence card moves to #evidence, sections fold by default
 
 The owner's verdict on the live page: "the visitor gets a wall of text on arrival and gets lost; it does
 not truly show what we want to show." Measured on 2026-10-12 the page was 14 315 px on a 1440 px desktop
@@ -539,32 +539,43 @@ hero carries no provenance (the rule of 2026-10-04 stands): no commit, digest, c
 `#verify` link in `#top`.
 
 **The guided tour.** `#attack` opens with a six-step tour (sections revealed in order, never an overlay):
-look around (`id`), break something (`deface`, then read the flag), hide it in DNS (`dns-exfil`), get
-caught (`sh -i` → Falco → Talon, watched on the diagram), see what the answer is worth (the one-click
+look around (`id` or any look-around command), break something (both the `deface` and the flag read),
+hide it in DNS (`dns-exfil`), get caught (a terminal session in which `sh -i` ran and Talon then
+terminated the pod — a one-click run the cluster killed does not count), see what the answer is worth (the one-click
 side-by-side run against the unguarded twin), and see it in the SIEM (the `dns-exfil` incident the SIEM
 files a minute or two later, which opens `#correlation`). Progress is derived from the visitor's own runs
 and the SIEM's incidents for them — not a stored counter — so a reload re-derives it and nothing is
 ticked that did not happen; only "skip" is stored. The tour costs two runs of the per-visitor limit, and
 says so; it degrades to nothing without the terminal.
 
-**Sections fold on a first visit.** Everything below `#attack` (`#correlation`, `#how`, `#evidence`,
-`#posture`, `#verify`, `#about`, `#skills`, `#projects`) starts folded on a first visit
-(`app/web/src/lib/folds.ts`), so the page is short and the one path is clear; a visitor's own choice,
+**Sections fold by default.** Everything below `#attack` (`#correlation`, `#how`, `#evidence`,
+`#posture`, `#verify`, `#about`, `#skills`, `#projects`) starts folded for any visitor without a stored
+choice for that section — a first visit, and every later one until they open it
+(`app/web/src/lib/folds.ts`) — so the page is short and the one path is clear; a visitor's own choice,
 stored per section as "1" (folded) or "0" (open), always wins, and `theme.ts` applies the defaults and
-the choices before first paint so nothing jumps. Without JavaScript nothing folds and everything shows,
-as before. The objectives list moves out of the hero into a fold in `#attack`; a short About bar (an
+the choices before first paint so nothing jumps. Should the module throw before the sections' buttons
+exist, `main.ts` clears that pre-paint stand-in, so a page never shows folded sections with nothing to
+open them. Without JavaScript nothing folds and everything shows, as before. The objectives list moves out of the hero into a fold in `#attack`; a short About bar (an
 `<aside>`, the first sentence of the About text verbatim) sits after the attack, the full About folded
 below. The amendment of 2026-10-05 ("the attack first; every section below the hero folds") is widened:
 the sections do not merely fold on request, they start folded.
 
-**Measured after.** The desktop page is about 5 000 px on first load (from 14 315), the phone about
-7 900 px (from 23 405); the page order is unchanged, and `#top` still carries no provenance.
+**Measured after.** The desktop page is under 5 000 px on first load (from 14 315), the phone under
+8 000 px (from 23 405); the page order is unchanged, and `#top` still carries no provenance. The page's
+diagram model names namespaces and components but no port, VLAN or address (ADR 0021); the docs file
+is drawn from a fuller model that only the build script and the docs renderer import.
 
-**Tests.** The unit suite gains the diagram model's consistency, the layout's tree (a node per element,
-no HTML sink, escaping), the hero path lit from a run's events, the committed `overview.svg` equalling
-the generated one, the tour's progress derived from events, and the fold defaults. The hero-stats tests
-split (counters in the hero, objectives in `#attack`), and the section-fold tests move to the new
-defaults. The end-to-end suite asserts the above-the-fold shape (one primary button, the live diagram,
-no evidence card and no provenance in `#top`), the page-height budgets at 1440 and 390 px, the diagram's
-nodes reachable by keyboard with their captions, the tour advancing through its steps, and the sections
-folded on a first visit — in light and dark, with no horizontal scroll at 360 px.
+**Tests.** The unit suite covers the diagram models' consistency (the page's, with no port, VLAN or
+address, and the docs'), the layout's tree (a node per element, `role="group"` for the interactive SVG
+and `role="img"` for the docs file, no HTML sink), the hero path lit from a run's events with each edge's
+stage and the lit nodes in words, `mountDiagram`'s caption by click, Enter, Space and Escape with
+`aria-expanded`, the SIEM state kept across `setRun`, the committed `overview.svg` equalling the
+generated one, the tour's progress derived from events (both tamper commands; a terminal shell session
+for "caught"), and the fold defaults. The hero-stats tests cover the one-line figures. The end-to-end
+suite (mock build) asserts: the above-the-fold shape at 1280x720 and 1440x900 (one primary button, the
+whole diagram and its caption, no evidence card and no provenance in `#top`) and the first nodes with
+the buttons on one row at 390x844; the page-height budgets on a first visit (desktop 1440 ≤ 5 000 px,
+phone 390 ≤ 9 000 px); the diagram's nodes reached by Tab, opened with Enter or Space, closed with
+Escape, `aria-expanded` following; the tour advancing through its steps from real commands in the
+mock terminal, its skip remembered, its progress re-derived; the sections folded by default and a stored
+choice kept over a reload; and no horizontal scroll at 360 and 320 px.
