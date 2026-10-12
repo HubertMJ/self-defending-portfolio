@@ -10,6 +10,7 @@
 import type { CommandOutcome, DefenceLayer, Posture } from "../lib/contract";
 import { DEFENCE_LAYERS } from "../lib/contract";
 import { h, replace } from "../lib/dom";
+import { LAYER_BLURBS } from "../diagram/model";
 import type { ApiClient, Result } from "../lib/api";
 import { breakable } from "./common";
 
@@ -36,14 +37,14 @@ export const LAYERS: LayerMeta[] = [
   {
     id: "edge",
     title: "Edge",
-    blurb: "Cloudflare Tunnel: the cluster opens no inbound port. TLS, HSTS and a WAF terminate at the edge.",
+    blurb: LAYER_BLURBS.edge,
     controls: ["Cloudflare Tunnel", "no inbound ports", "WAF · TLS · HSTS"],
     reach: "outside",
   },
   {
     id: "host",
     title: "Host",
-    blurb: "A Debian VM hardened by Ansible: SSH lockdown, an nftables default-deny firewall, sysctl, auditd.",
+    blurb: LAYER_BLURBS.host,
     controls: ["nftables default-deny", "SSH lockdown", "auditd"],
     reach: "outside",
     evidence: (p) => `CIS benchmark ${pct(p)}% passing (kube-bench)`,
@@ -51,14 +52,14 @@ export const LAYERS: LayerMeta[] = [
   {
     id: "network",
     title: "Network",
-    blurb: "Cilium is the CNI: default-deny between pods, and a quarantine policy can cut a pod off entirely, both ways.",
+    blurb: LAYER_BLURBS.network,
     controls: ["default-deny NetworkPolicies", "Cilium quarantine"],
     reach: "pod",
   },
   {
     id: "supply-chain",
     title: "Supply chain",
-    blurb: "Images are built in CI, Trivy-gated, SBOM-attested and cosign keyless-signed. Anything unsigned is refused.",
+    blurb: LAYER_BLURBS["supply-chain"],
     controls: ["Trivy gate", "cosign signatures", "SBOM"],
     reach: "outside",
     evidence: (p) => `${p.trivy.images} running images scanned${p.trivy.own ? `; this project's own: ${p.trivy.own.critical + p.trivy.own.high} critical+high` : ""}`,
@@ -66,7 +67,7 @@ export const LAYERS: LayerMeta[] = [
   {
     id: "admission",
     title: "Admission",
-    blurb: "Kyverno at admission: Pod Security restricted, pinned digests, no :latest, mandatory resource limits, signed images only.",
+    blurb: LAYER_BLURBS.admission,
     controls: ["Pod Security restricted", "verify-portfolio-images", "require-pod-resources"],
     reach: "outside",
     evidence: (p) => {
@@ -77,14 +78,14 @@ export const LAYERS: LayerMeta[] = [
   {
     id: "pod-security",
     title: "Pod security",
-    blurb: "What the pod is allowed to be: non-root, a read-only root filesystem, every Linux capability dropped, no service-account token, seccomp on.",
+    blurb: LAYER_BLURBS["pod-security"],
     controls: ["non-root", "read-only rootfs", "no capabilities", "no token"],
     reach: "pod",
   },
   {
     id: "runtime",
     title: "Runtime",
-    blurb: "Falco watches syscalls over eBPF; Falcosidekick fans the alerts out; Falco Talon terminates or quarantines the pod.",
+    blurb: LAYER_BLURBS.runtime,
     controls: ["Falco (eBPF)", "Falco Talon"],
     reach: "pod",
   },

@@ -16,6 +16,7 @@ import { cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { stripTodoContent } from "./strip-todo-content.mjs";
+import { loadDiagram } from "./diagram-lib.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const arg = (name) => {
@@ -41,6 +42,20 @@ function stripMockBanner(html) {
   return stripped;
 }
 
+/**
+ * The hero's architecture diagram, drawn from src/diagram at build time into the static HTML (so it
+ * is there before any script, and without one): the wide layout and the phone's vertical one.
+ */
+async function heroDiagrams() {
+  const { layout, serialise, validateModel } = await loadDiagram();
+  const problems = validateModel();
+  if (problems.length) throw new Error(`diagram model: ${problems.join("; ")}`);
+  return {
+    "diagram.hero": serialise(layout("hero", { idPrefix: "dg", interactive: true }), "    "),
+    "diagram.narrow": serialise(layout("narrow", { idPrefix: "dgn", interactive: true }), "    "),
+  };
+}
+
 /** Rewrites {{name.ext}} placeholders in index.html to the hashed file esbuild produced. */
 const htmlPlugin = {
   name: "html",
@@ -54,6 +69,7 @@ const htmlPlugin = {
         const entry = basename(meta.entryPoint).replace(/\.(ts|css)$/, "");
         names[`${entry}.${ext}`] = basename(file);
       }
+      Object.assign(names, await heroDiagrams());
       const template = await readFile(join(root, "src/index.html"), "utf8");
       const substituted = template.replace(/\{\{([\w.-]+)\}\}/g, (_, key) => {
         if (!names[key]) throw new Error(`index.html references {{${key}}} but no such entry was built`);

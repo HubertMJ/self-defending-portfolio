@@ -1,13 +1,12 @@
-// Every section below the hero folds away under its heading (ADR 0035, amended 2026-10-05). The static
-// HTML carries each section's content in a .section__body; without this script nothing folds and
-// everything shows. With it, the h2's text moves into a real <button> (the disclosure pattern:
-// aria-expanded, aria-controls naming the body), every section starts open, and a visitor's choice is
-// kept per section in localStorage. A link to anything inside a folded section opens it first.
+// Every section below the hero folds away under its heading (ADR 0035, amended 2026-10-05 and
+// 2026-10-12). The static HTML carries each section's content in a .section__body; without this script
+// nothing folds and everything shows. With it, the h2's text moves into a real <button> (the
+// disclosure pattern: aria-expanded, aria-controls naming the body), every section below the attack
+// starts folded (lib/folds.ts), and a visitor's choice is kept per section in localStorage. A link to
+// anything inside a folded section opens it first.
 
 import { h, replace } from "../lib/dom";
-
-// theme.ts reads the same keys before first paint (html[data-folded]).
-const KEY = "sdp:collapsed:";
+import { FOLD_KEY as KEY, startsFolded } from "../lib/folds";
 
 interface Fold {
   section: HTMLElement;
@@ -18,17 +17,18 @@ interface Fold {
 // Storage can be missing or throw (a privacy mode, a full quota, a sandboxed frame): the choice then
 // holds only for this page view.
 function stored(id: string): boolean {
+  let v: string | null = null;
   try {
-    return localStorage.getItem(KEY + id) === "1";
+    v = localStorage.getItem(KEY + id);
   } catch {
-    return false;
+    // Unremembered: the default.
   }
+  return startsFolded(id, v);
 }
 
 function store(id: string, expanded: boolean): void {
   try {
-    if (expanded) localStorage.removeItem(KEY + id);
-    else localStorage.setItem(KEY + id, "1");
+    localStorage.setItem(KEY + id, expanded ? "0" : "1");
   } catch {
     // Not persisted.
   }
@@ -44,7 +44,12 @@ export function sectionTitle(heading: HTMLElement): HTMLElement {
  * `onChange(id, expanded)`: each change of a section's state, including a folded one restored at
  * mount, so its live panels can stop redrawing while nobody can see them.
  */
-export function mountSections(onChange?: (id: string, expanded: boolean) => void): void {
+export interface SectionsHandle {
+  /** Opens a section (a tour step's reveal); the choice is kept like a click's. */
+  open(id: string): void;
+}
+
+export function mountSections(onChange?: (id: string, expanded: boolean) => void): SectionsHandle {
   const folds = new Map<string, Fold>();
   const isOpen = (f: Fold) => f.btn.getAttribute("aria-expanded") === "true";
 
@@ -134,4 +139,11 @@ export function mountSections(onChange?: (id: string, expanded: boolean) => void
     for (const ev of events) addEventListener(ev, stop, { passive: true });
     setTimeout(stop, 10_000);
   }
+
+  return {
+    open(id) {
+      const f = folds.get(id);
+      if (f && !isOpen(f)) set(f, true, true);
+    },
+  };
 }

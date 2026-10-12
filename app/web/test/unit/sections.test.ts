@@ -52,13 +52,17 @@ describe("mountSections", () => {
     mountSections();
     const btn = toggle("posture");
     expect(btn.type).toBe("button");
-    expect(btn.getAttribute("aria-expanded")).toBe("true");
     expect(btn.getAttribute("aria-controls")).toBe("posture-body");
     expect(btn.querySelector(".section__chevron")?.getAttribute("aria-hidden")).toBe("true");
     // The heading keeps its id (the section's aria-labelledby) and its text, now the button's name.
     expect(document.getElementById("posture-title")?.textContent).toBe("Live security posture");
     expect(sectionTitle(document.getElementById("posture-title") as HTMLElement).textContent).toBe("Live security posture");
-    expect(body("posture").hidden).toBe(false);
+    // Site redesign 2026-10-12: the attack section stays open; everything below it folds on a first visit.
+    expect(toggle("attack").getAttribute("aria-expanded")).toBe("true");
+    expect(body("attack").hidden).toBe(false);
+    expect(btn.getAttribute("aria-expanded")).toBe("false");
+    expect(body("posture").hidden).toBe(true);
+    expect(toggle("verify").getAttribute("aria-expanded")).toBe("false");
     expect(document.querySelectorAll(".section__toggle")).toHaveLength(3);
     expect(document.querySelector("#top button")).toBeNull();
   });
@@ -66,27 +70,33 @@ describe("mountSections", () => {
   it("a click folds the body, flips aria-expanded, reports the change and keeps the choice per section", () => {
     const changes: [string, boolean][] = [];
     mountSections((id, open) => changes.push([id, open]));
-    toggle("posture").click();
-    expect(toggle("posture").getAttribute("aria-expanded")).toBe("false");
-    expect(body("posture").hidden).toBe(true);
-    expect(document.getElementById("posture")?.classList.contains("section--collapsed")).toBe(true);
+    // The attack section is open by default; folding it stores "1", opening it again stores "0".
     expect(body("attack").hidden).toBe(false);
-    expect(localStorage.getItem("sdp:collapsed:posture")).toBe("1");
-    toggle("posture").click();
-    expect(body("posture").hidden).toBe(false);
-    expect(localStorage.getItem("sdp:collapsed:posture")).toBeNull();
+    toggle("attack").click();
+    expect(toggle("attack").getAttribute("aria-expanded")).toBe("false");
+    expect(body("attack").hidden).toBe(true);
+    expect(document.getElementById("attack")?.classList.contains("section--collapsed")).toBe(true);
+    expect(localStorage.getItem("sdp:collapsed:attack")).toBe("1");
+    toggle("attack").click();
+    expect(body("attack").hidden).toBe(false);
+    expect(localStorage.getItem("sdp:collapsed:attack")).toBe("0");
+    // posture and verify folded at mount report their restored state once each.
     expect(changes).toEqual([
       ["posture", false],
-      ["posture", true],
+      ["verify", false],
+      ["attack", false],
+      ["attack", true],
     ]);
   });
 
-  it("a folded section stays folded on the next visit, and its panels are told at mount", () => {
+  it("a folded section stays folded, an explicitly opened one stays open, and panels are told at mount", () => {
     localStorage.setItem("sdp:collapsed:verify", "1");
+    localStorage.setItem("sdp:collapsed:posture", "0");
     const changes: [string, boolean][] = [];
     mountSections((id, open) => changes.push([id, open]));
     expect(toggle("verify").getAttribute("aria-expanded")).toBe("false");
     expect(body("verify").hidden).toBe(true);
+    // posture was opened by the visitor before (stored "0"): it stays open against the default.
     expect(body("posture").hidden).toBe(false);
     expect(changes).toEqual([["verify", false]]);
   });
@@ -110,7 +120,7 @@ describe("mountSections", () => {
     (document.getElementById("to-panel") as HTMLAnchorElement).click();
     expect(body("verify").hidden).toBe(false);
     expect(toggle("verify").getAttribute("aria-expanded")).toBe("true");
-    expect(localStorage.getItem("sdp:collapsed:verify")).toBeNull();
+    expect(localStorage.getItem("sdp:collapsed:verify")).toBe("0");
     (document.getElementById("to-posture") as HTMLAnchorElement).click();
     expect(body("posture").hidden).toBe(false);
   });
@@ -144,6 +154,7 @@ describe("mountSections", () => {
 
   it("on a reload the browser's own scroll position stands: no jump to the hash unless a folded section was opened", () => {
     localStorage.setItem("sdp:collapsed:attack", "1");
+    localStorage.setItem("sdp:collapsed:verify", "0");
     history.replaceState(null, "", "/#verify-panel");
     vi.spyOn(performance, "getEntriesByType").mockReturnValue([{ type: "reload" } as unknown as PerformanceEntry]);
     mountSections();
@@ -175,26 +186,31 @@ describe("folded at first paint (theme.ts, styles.css)", () => {
     delete document.documentElement.dataset.folded;
   });
 
-  it("theme.ts names the stored folded sections in html[data-folded], and nothing else", async () => {
-    localStorage.setItem("sdp:collapsed:posture", "1");
-    localStorage.setItem("sdp:collapsed:verify", "1");
+  it("theme.ts folds the defaults and the stored folds before first paint, an opened one excepted", async () => {
+    // Site redesign 2026-10-12: every section below the attack folds on a first visit (lib/folds.ts),
+    // so data-folded carries the defaults; a section the visitor opened (stored "0") is left out.
+    localStorage.clear();
     localStorage.setItem("sdp:collapsed:how", "0");
     localStorage.setItem("sdp:collapsed:Bad Id", "1");
     localStorage.setItem("collapsed:skills", "1");
     vi.resetModules();
     await import("../../src/theme");
-    expect((document.documentElement.dataset.folded ?? "").split(" ").sort()).toEqual(["posture", "verify"]);
+    expect((document.documentElement.dataset.folded ?? "").split(" ").sort()).toEqual(["about", "correlation", "evidence", "posture", "projects", "skills", "verify"]);
   });
 
-  it("sets nothing with no section folded, and survives storage that throws", async () => {
+  it("with no stored choice it folds the defaults; it folds them too when storage throws", async () => {
+    localStorage.clear();
+    const defaults = ["correlation", "how", "evidence", "posture", "verify", "about", "skills", "projects"].sort();
     vi.resetModules();
     await import("../../src/theme");
-    expect(document.documentElement.dataset.folded).toBeUndefined();
+    expect((document.documentElement.dataset.folded ?? "").split(" ").sort()).toEqual(defaults);
+    delete document.documentElement.dataset.folded;
     vi.spyOn(Storage.prototype, "key").mockImplementation(() => {
       throw new Error("SecurityError");
     });
     vi.resetModules();
     await expect(import("../../src/theme")).resolves.toBeDefined();
+    expect((document.documentElement.dataset.folded ?? "").split(" ").sort()).toEqual(defaults);
     vi.restoreAllMocks();
   });
 

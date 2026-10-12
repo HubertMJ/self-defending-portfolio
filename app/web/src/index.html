@@ -52,37 +52,37 @@
 <main id="main" tabindex="-1">
 
   <section class="hero" id="top" aria-labelledby="hero-title">
-    <div class="wrap hero__grid">
+    <div class="wrap hero__statement">
       <div class="hero__copy">
         <p class="eyebrow">DevOps · Platform security · Kubernetes</p>
         <h1 id="hero-title">Hubert Jabłoński</h1>
         <p class="hero__lead">
-          This page runs on a hardened single-node k3s cluster that watches itself.
-          <a href="#attack">Launch a real attack</a> against a sandboxed pod and watch
-          <strong>Falco</strong> detect it and <strong>Falco Talon</strong> shut it down, live.
-          The cluster's security posture and the full record of every attack follow further down.
+          This site runs on a Kubernetes cluster that defends itself.
+          Attack it and watch it fight back, live.
         </p>
         <p class="hero__lead hero__lead--sub todo-content" data-todo-content="hero-intro">
           <!-- TODO-CONTENT: one or two sentences in your own words: who you are, what you work on, what you are looking for. -->
           [TODO-CONTENT: short personal introduction]
         </p>
         <p class="hero__actions">
-          <a class="btn btn--primary" id="hero-cta" href="#attack">Open the terminal</a>
+          <a class="btn btn--primary" id="hero-cta" href="#attack">Attack this cluster</a>
           <a class="btn btn--ghost" href="https://github.com/HubertMJ/self-defending-portfolio" rel="noopener noreferrer">Read the source</a>
         </p>
-        <div class="herostats-wrap" id="hero-stats" hidden></div>
       </div>
-      <div class="evcard-wrap" id="evidence-card">
-      <figure class="loop" aria-label="Attack, detect, respond loop">
-        <ol class="loop__steps">
-          <li class="loop__step loop__step--attack"><span class="loop__k">01</span><span class="loop__t">Attack</span><span class="loop__d">a scenario pod misbehaves in <code>sandbox</code></span></li>
-          <li class="loop__step loop__step--detect"><span class="loop__k">02</span><span class="loop__t">Detect</span><span class="loop__d">Falco sees the syscalls via eBPF</span></li>
-          <li class="loop__step loop__step--respond"><span class="loop__k">03</span><span class="loop__t">Respond</span><span class="loop__d">Talon kills or quarantines the pod</span></li>
-        </ol>
-        <figcaption>Every step is streamed to this page as it happens.</figcaption>
-      </figure>
-      </div>
+      <div class="hero__numbers" id="hero-stats" hidden></div>
     </div>
+    <figure class="wrap dg-wrap" id="diagram" aria-label="Architecture, live" data-run="none">
+      <div class="dg-wide">
+{{diagram.hero}}
+      </div>
+      <div class="dg-narrow">
+{{diagram.narrow}}
+      </div>
+      <figcaption class="dg-foot">
+        <p class="dg-status" id="diagram-status" aria-live="polite">The path a request takes in, and the path the answer takes back. <span class="needs-js">Pick a part to read what it is.</span></p>
+        <div class="dg-caption" id="diagram-caption" hidden></div>
+      </figcaption>
+    </figure>
   </section>
 
   <section class="section section--attack" id="attack" aria-labelledby="attack-title">
@@ -91,13 +91,12 @@
         <p class="eyebrow">Attack it</p>
         <h2 id="attack-title">Your hands on the pod</h2>
         <p class="section__lead" id="attack-lead">
-          A throwaway pod in an isolated <code>sandbox</code> namespace (no service-account token,
-          default-deny network, tight quotas, read-only root filesystem) with a little shop running inside it.
-          Type commands into it and read the real output; the shop window changes beside you, and the cluster
-          ends your session when it has seen enough. One run at a time, a few per visitor.
+          A throwaway pod in an isolated <code>sandbox</code> namespace with a little shop inside it.
+          Type real commands and read the real output; the cluster ends your session when it has seen enough.
         </p>
       </header>
       <div class="section__body" id="attack-body">
+        <div class="tour-wrap" id="tour"></div>
         <div class="terminal-wrap">
           <div id="terminal" class="panel panel--flush" data-state="loading">
             <p class="loading">Loading the terminal…</p>
@@ -105,10 +104,15 @@
           </div>
         </div>
 
+        <details class="fold objectives-fold" id="objectives-fold" hidden>
+          <summary class="fold__summary">Objectives, and who has reached them</summary>
+          <div class="objectives-wrap" id="objectives"></div>
+        </details>
+
         <div class="launcher">
           <header class="section__head launcher__head">
             <h3 id="justshowme-title">Just show me</h3>
-            <p class="section__lead">Prefer one click? Each of these starts the same kind of pod and runs one fixed attack, then plays the detection and response out below. Or run one <strong>with and without the response</strong> to see the difference the cluster makes.</p>
+            <p class="section__lead">One click runs a fixed attack and plays the detection and the response out below.</p>
           </header>
           <p class="launch-status" id="launch-status" role="status" aria-live="polite"></p>
           <div class="panel panel--flush" id="scenario-panel" aria-busy="true" data-state="loading">
@@ -133,12 +137,19 @@
     </div>
   </section>
 
+  <aside class="aboutbar" id="aboutbar" aria-label="About the author">
+    <div class="wrap aboutbar__inner">
+      <p class="aboutbar__text">I have been a Cyber Security Engineer at SecureVisio in Rzeszów, Poland, since March 2020.</p>
+      <p class="aboutbar__links"><a href="https://github.com/HubertMJ" rel="noopener noreferrer">GitHub</a> · <a href="#about">More about me</a></p>
+    </div>
+  </aside>
+
   <section class="section section--correlation" id="correlation" aria-labelledby="correlation-title" hidden>
     <div class="wrap">
       <header class="section__head">
         <p class="eyebrow">Correlation</p>
         <h2 id="correlation-title">What the SIEM made of it</h2>
-        <p class="section__lead">Every Falco alert, Talon action, audited API call, network flow and terminal command is also shipped to a SIEM on its own VM, which the cluster can append to but not rewrite. Sigma rules from this repository run there, and the API joins their findings into incidents, one to three minutes after the event. Every time below is the SIEM's record.</p>
+        <p class="section__lead">Everything the cluster records is also shipped to a SIEM on its own VM, which the cluster can append to but not rewrite; Sigma rules from this repository run there, one to three minutes behind.</p>
       </header>
       <div class="section__body" id="correlation-body">
         <div class="corr-scenario-wrap" id="correlation-scenario"></div>
@@ -155,7 +166,7 @@
       <header class="section__head">
         <p class="eyebrow">How it works</p>
         <h2 id="how-title">Defence in layers, all from git</h2>
-        <p class="section__lead">Seven layers an attack has to pass. Nothing here was clicked together: every layer is a reviewed commit, reconciled by Argo CD.<span class="needs-terminal"> In the terminal above, each command lights the layer that answered it.</span></p>
+        <p class="section__lead">Seven layers an attack has to pass, every one a reviewed commit.<span class="needs-terminal"> In the terminal above, each command lights the layer that answered it.</span></p>
       </header>
       <div class="section__body" id="how-body">
         <div id="defence-map" class="defence-map-wrap">
@@ -181,9 +192,10 @@
       <header class="section__head">
         <p class="eyebrow">Evidence</p>
         <h2 id="evidence-title">What the cluster recorded</h2>
-        <p class="section__lead">The latest events as the API published them, newest first, with absolute times in Polish time (CET/CEST). Nothing here is generated in your browser: when nothing happens, it says since when.</p>
+        <p class="section__lead">The latest run and the latest events, as the API published them, in Polish time (CET/CEST). Nothing here is generated in your browser.</p>
       </header>
       <div class="section__body" id="evidence-body">
+        <div class="evcard-wrap" id="evidence-card"></div>
         <p class="liveness" id="liveness"></p>
         <p class="visually-hidden" id="ticker-live" role="status"></p>
         <div class="ticker-wrap" id="ticker">

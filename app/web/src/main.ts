@@ -12,6 +12,7 @@ import { CONNECTION_WORD } from "./ui/common";
 import { mountConsole } from "./ui/console";
 import { mountCorrelation } from "./ui/correlation";
 import { mountDefenceMap } from "./ui/defencemap";
+import { mountDiagram } from "./ui/diagram";
 import { mountEvidence } from "./ui/evidence";
 import { mountPosture } from "./ui/posture";
 import { mountRunStatus } from "./ui/runstatus";
@@ -21,6 +22,7 @@ import { SHOW_ALL_ATTR, mountScope } from "./ui/scope";
 import { type Focus, OWN_RUNS_MAX, loadOwnRuns, saveOwnRuns } from "./lib/scope";
 import { mountSections, sectionTitle } from "./ui/sections";
 import { mountStats } from "./ui/stats";
+import { mountTour } from "./ui/tour";
 import { mountTerminal } from "./ui/terminal";
 import { mountLimits, setupTechMode } from "./ui/tech";
 import { mountTimeline } from "./ui/timeline";
@@ -179,7 +181,12 @@ function main(): void {
       if (siemNav) siemNav.hidden = !available;
     },
     {
-      onData: (c) => runStatus.setCorrelation(c !== null, c?.incidents ?? []),
+      onData: (c) => {
+        runStatus.setCorrelation(c !== null, c?.incidents ?? []);
+        tourIncidents = c?.incidents ?? [];
+        refreshTour();
+        diagram.setSiem((c?.incidents ?? []).some((i) => i.kind === "dns-exfil" && ownIds.includes(i.run_id)));
+      },
       onScenario: () => terminal.suggest(SIEM_COMMAND),
       ...(mock?.eagerPollMs !== undefined ? { eagerMs: mock.eagerPollMs } : {}),
     },
@@ -202,8 +209,33 @@ function main(): void {
       if (s.last_run_at) evidence.setLastRunAt(s.last_run_at);
     },
     mock?.statsLabel,
+    byId("objectives"),
   );
   const defenceMap = mountDefenceMap(byId("defence-map"), api);
+
+  // The hero's live architecture diagram (site redesign 2026-10-12): the SVG is in the static HTML;
+  // this lights the path of the newest run and answers clicks on its nodes.
+  const diagram = mountDiagram(byId("diagram"), { caption: byId("diagram-caption"), status: byId("diagram-status") });
+
+  // The guided tour at the top of #attack: steps ticked from the visitor's own runs and the SIEM's
+  // incidents for them, each step's button picking a command or launching the twin.
+  const tour = mountTour(byId("tour"), {
+    onCommand: (id) => terminal.suggest(id),
+    onScenario: (id) => launcher.launch(id),
+    onReveal: (id) => {
+      sections.open(id);
+      byId(id).scrollIntoView({ behavior: prefersReducedMotion() ? "auto" : "smooth", block: "start" });
+    },
+  });
+  /** Re-derive the tour's progress and light the diagram from the newest view and the incidents. */
+  let tourIncidents: readonly import("./lib/contract").CorrelationIncident[] = [];
+  const refreshTour = () => {
+    const own = new Set(ownIds);
+    const mine = latestView.runs.filter((r) => own.has(r.runId));
+    tour.update(mine, tourIncidents, own);
+    const newest = latestView.runs[0];
+    diagram.setRun(newest, newest ? (titles.get(newest.scenario) ?? newest.scenario) : undefined);
+  };
 
   const limits = mountLimits(byId("limits-panel"), api);
   setupTechMode(byId("tech-toggle"), (on) => limits.setEnabled(on));
@@ -245,6 +277,10 @@ function main(): void {
     onAvailable: (available, objectives, timeoutSeconds, commands, idleSeconds) => {
       if (available) stats.setObjectives(objectives);
       else degradeToOneClick();
+      // The guided tour drives the terminal; without one it has nothing to do, so it is removed (not
+      // merely hidden: its text must not linger in the DOM where a count would still find it).
+      tour.setEnabled(available);
+      byId("tour").hidden = !available;
       correlation.setTerminal(available);
       if (timeoutSeconds !== undefined) timeline.setScenarioTimeout("terminal", timeoutSeconds);
       limitsOf.set("terminal", { timeout: timeoutSeconds, idle: idleSeconds });
@@ -326,6 +362,7 @@ function main(): void {
       }
       if (wasActive && !activeId) limits.refresh();
       backfill.view(view);
+      refreshTour();
     },
     () => stream?.retryNow(),
     (runId) => {
@@ -376,7 +413,7 @@ function main(): void {
   // Each section below the hero folds under its heading; a folded one's panels stop redrawing (the
   // posture is still fetched for the liveness line, the correlation still polled for shown/hidden).
   // The attack section's terminal, launcher, console and history keep running folded or not.
-  mountSections((id, open) => {
+  const sections = mountSections((id, open) => {
     if (id === "evidence") evidence.setActive(open);
     else if (id === "posture") posture.setActive(open);
     else if (id === "correlation") correlation.setActive(open);

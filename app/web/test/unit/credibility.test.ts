@@ -350,8 +350,8 @@ describe("the evidence card, the ticker and the hero's last run (B4)", () => {
 
   it("the hero's last-run tile falls back to the API's last_run_at", () => {
     const el = renderStats({ ...stats(T), last_run_at: "2026-10-03T12:01:57Z" }, TERMINAL_OBJECTIVES, undefined, T);
-    const tile = el.querySelector(".herostats__tile") as HTMLElement;
-    expect(tile.querySelector(".herostats__name")?.textContent).toBe("last run");
+    // The last-run tile is last on the band now (the counters lead); it still falls back to last_run_at.
+    const tile = [...el.querySelectorAll(".herostats__tile")].find((t) => t.querySelector(".herostats__name")?.textContent === "last run") as HTMLElement;
     expect(tile.querySelector(".herostats__value")?.textContent).toBe("14:01:57 CEST");
     expect(tile.querySelector(".herostats__foot")?.textContent).toBe("6 hours ago");
     expect(el.textContent).toMatch(/since 2026-08-28 20:01:57 CEST \(\d+ days ago\)/);

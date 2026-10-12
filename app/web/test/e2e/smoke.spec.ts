@@ -62,6 +62,26 @@ async function allActivity(page: Page) {
   await page.addInitScript(() => localStorage.setItem("sdp:scope", "all"));
 }
 
+/**
+ * Site redesign 2026-10-12: every section below the attack folds on a first visit. A test that reads a
+ * panel's content (not the fold defaults themselves) opens them all first, as a returning visitor who
+ * expanded them would — the stored "0" wins over the default (lib/folds.ts).
+ */
+const FOLDABLE = ["correlation", "how", "evidence", "posture", "verify", "about", "skills", "projects"];
+async function openSections(page: Page) {
+  // Only on a first load (no stored choice yet): a fold the test makes afterwards survives a reload,
+  // so this does not fight the fold-mechanics tests.
+  await page.addInitScript((ids) => {
+    for (const id of ids) {
+      try {
+        if (localStorage.getItem("sdp:collapsed:" + id) === null) localStorage.setItem("sdp:collapsed:" + id, "0");
+      } catch {
+        /* storage blocked */
+      }
+    }
+  }, FOLDABLE);
+}
+
 async function noHorizontalScroll(page: Page) {
   const [scroll, client] = await page.evaluate(() => [document.documentElement.scrollWidth, document.documentElement.clientWidth]);
   expect(scroll, "page must not scroll horizontally").toBeLessThanOrEqual(client);
@@ -113,6 +133,7 @@ test.describe("security headers", () => {
 
 test.describe("production build has no placeholder copy (FIX 2)", () => {
   test("no TODO-CONTENT marker or dashed placeholder ships, real content stays", async ({ page, request }) => {
+    await openSections(page);
     const html = await (await request.get("/")).text();
     expect(html).not.toContain("TODO-CONTENT");
     expect(html).not.toContain("data-todo-content");
@@ -131,6 +152,7 @@ test.describe("production build has no placeholder copy (FIX 2)", () => {
 
 test.describe("API offline (nothing behind /api)", () => {
   test("the portfolio renders and every live panel shows an offline state", async ({ page }) => {
+    await openSections(page);
     const problems = guardConsole(page);
     await page.goto("/");
     await expect(page.getByRole("heading", { level: 1, name: "Hubert Jabłoński" })).toBeVisible();
@@ -159,7 +181,26 @@ test.describe("layout (ADR 0035, amended 2026-10-05; ?mock=1)", () => {
     await expect(page.locator('footer.site-footer a[href="#verify"]')).toHaveCount(1);
   });
 
+  test("on a first visit everything below the attack folds; the attack and the hero diagram stay open", async ({ page }) => {
+    // Site redesign 2026-10-12 (ADR 0035 amendment): a first-time visitor (no stored choices) sees a
+    // short page — the hero diagram and the attack, the rest folded.
+    await page.goto("/?mock=1");
+    await expect(page.locator("#diagram")).toBeVisible();
+    await expect(page.locator("#attack-body")).toBeVisible();
+    for (const id of ["correlation", "how", "evidence", "posture", "verify", "about", "skills", "projects"]) {
+      await expect(page.locator(`#${id}-title > button.section__toggle`), id).toHaveAttribute("aria-expanded", "false");
+      await expect(page.locator(`#${id}-body`), id).toBeHidden();
+    }
+    // Opening one and reloading keeps it open (the stored choice wins over the default).
+    await page.locator("#posture-title > button").click();
+    await expect(page.locator("#posture-body")).toBeVisible();
+    await page.reload();
+    await expect(page.locator("#posture-body")).toBeVisible();
+    await expect(page.locator("#how-body")).toBeHidden();
+  });
+
   test("a section's heading folds it: the body hides, aria-expanded flips, the choice survives a reload; by keyboard too", async ({ page }) => {
+    await openSections(page);
     const problems = guardConsole(page);
     await page.goto("/?mock=1");
     const btn = page.locator("#posture-title > button.section__toggle");
@@ -196,6 +237,7 @@ test.describe("layout (ADR 0035, amended 2026-10-05; ?mock=1)", () => {
   });
 
   test("a link to a folded section opens it: the footer's #verify, the hero's #attack, a typed hash, a page opened at one", async ({ page }) => {
+    await openSections(page);
     const problems = guardConsole(page);
     await page.goto("/?mock=1");
     for (const id of ["verify", "attack", "evidence", "posture"]) await page.locator(`#${id}-title > button`).click();
@@ -221,6 +263,7 @@ test.describe("layout (ADR 0035, amended 2026-10-05; ?mock=1)", () => {
   });
 
   test("folded at first paint: with the module script held back, theme.ts and the stylesheet fold a folded section alone", async ({ page }) => {
+    await openSections(page);
     await page.goto("/?mock=1");
     await page.locator("#posture-title > button").click();
     await page.route(/\/assets\/main-[^/]*\.js$/, (route) => route.abort());
@@ -233,6 +276,7 @@ test.describe("layout (ADR 0035, amended 2026-10-05; ?mock=1)", () => {
   });
 
   test("a reload keeps the visitor's scroll position: no jump to the hash because a section above it is folded", async ({ page }) => {
+    await openSections(page);
     await page.goto("/?mock=1#posture");
     await expect(page.locator("#correlation .corr-matrix")).toBeVisible();
     await page.locator("#evidence-title > button").click();
@@ -258,6 +302,7 @@ test.describe("layout (ADR 0035, amended 2026-10-05; ?mock=1)", () => {
     const fonts = wide ? " (a wide font forced in)" : "";
 
     test(`the section toggles fit 360 and 320 px, open and folded${fonts}`, async ({ page }) => {
+    await openSections(page);
       if (wide) await wideFonts(page);
       const past = () =>
         page.evaluate(() =>
@@ -299,6 +344,7 @@ test.describe("mock mode", () => {
   });
 
   test("posture, scenarios and history render from fixtures", async ({ page }) => {
+    await openSections(page);
     const problems = guardConsole(page);
     await page.goto("/?mock=1");
     await expect(page.locator("#mock-banner")).toBeVisible();
@@ -482,6 +528,7 @@ test.describe("live run console (mock)", () => {
 
 test.describe("attacker's terminal (mock, ADR 0033)", () => {
   test("type, read real output, change the shop, reach an objective, then get killed", async ({ page }) => {
+    await openSections(page);
     const problems = guardConsole(page);
     await page.goto("/?mock=1&mock-speed=0.3");
     const term = page.locator("#terminal");
@@ -619,6 +666,7 @@ test.describe("attacker's terminal (mock, ADR 0033)", () => {
 
 test.describe("defence map and live stats (mock, ADR 0033)", () => {
   test("the How-it-works section is a seven-layer map with live posture evidence", async ({ page }) => {
+    await openSections(page);
     const problems = guardConsole(page);
     await page.goto("/?mock=1");
     await expect(page.locator("#defence-map .deflayer")).toHaveCount(7);
@@ -627,21 +675,26 @@ test.describe("defence map and live stats (mock, ADR 0033)", () => {
     expect(problems).toEqual([]);
   });
 
-  test("the hero shows live counters and objectives, including ones never reached", async ({ page }) => {
+  test("the hero shows live counters; the objectives, with the never-reached ones, live in the attack fold", async ({ page }) => {
     await page.goto("/?mock=1");
     const hero = page.locator("#hero-stats");
     await expect(hero).toBeVisible();
+    // Site redesign 2026-10-12: the hero carries the counters only (one line); no objectives, no Open an issue.
     await expect(hero.locator(".herostats__tile")).toHaveCount(4);
     await expect(hero).toContainText("attacks");
     await expect(hero).toContainText("detected runs answered");
-    await expect(hero.locator('.herostats__obj[data-never="true"]').first()).toContainText("not reached yet");
-    await expect(hero.locator("a", { hasText: "Open an issue" })).toHaveAttribute("href", /\/issues$/);
-    // No escapes/"got out" counter (review item 18).
+    await expect(hero.locator(".herostats__obj")).toHaveCount(0);
     await expect(hero).not.toContainText(/got out|call-home/i);
+    // The objectives moved to a fold in the attack section; it opens to the never-reached ones.
+    const obj = page.locator("#objectives");
+    await page.locator("#objectives-fold > summary").click();
+    await expect(obj.locator('.herostats__obj[data-never="true"]').first()).toContainText("not reached yet");
+    await expect(obj.locator("a", { hasText: "Open an issue" })).toHaveAttribute("href", /\/issues$/);
+    await expect(obj).not.toContainText(/got out|call-home/i);
     // The never-reached count is readable in both themes: 4.5:1 against its row at least.
     for (const scheme of ["light", "dark"] as const) {
       await page.emulateMedia({ colorScheme: scheme });
-      const ratio = await hero.locator('.herostats__obj[data-never="true"] .herostats__objcount').first().evaluate((el) => {
+      const ratio = await obj.locator('.herostats__obj[data-never="true"] .herostats__objcount').first().evaluate((el) => {
         const rgb = (c: string) => {
           const n = (c.match(/[\d.]+/g) ?? []).map(Number);
           return c.startsWith("color(") ? n.slice(0, 3).map((x) => x * 255) : n.slice(0, 3);
@@ -669,7 +722,8 @@ test.describe("unguarded twin (mock, ADR 0033)", () => {
     // The main button runs both pods; the card says so, and offers the guarded pod alone beside it.
     await expect(card.locator(".btn--attack")).toHaveText(/Launch side by side/);
     await expect(card.locator(".scenario__alt")).toHaveText("Guarded pod only");
-    await expect(card.locator(".scenario__launchnote")).toContainText("an unguarded twin where Falco sees it and nothing answers");
+    // The explainer is said once above the cards now (site redesign 2026-10-12), not on each card.
+    await expect(page.locator(".launcher__note")).toContainText("an unguarded twin where Falco sees it and nothing answers");
     await card.locator(".btn--attack").click();
     const twin = page.locator("#console .twin");
     await expect(twin).toBeVisible({ timeout: 8_000 });
@@ -728,6 +782,10 @@ test.describe("technical mode", () => {
 
 test.describe("against the API deployed today (serve.mjs --live-api: JSON 404 on the new endpoints)", () => {
   test("the one-click scenarios are the attack section: no terminal, no twin, no stats, nothing sent", async ({ page }) => {
+    // #how is opened so its lead is rendered: with the layer explanation visible, the hidden
+    // needs-terminal span is correctly excluded from innerText (a folded element's innerText would
+    // still carry it). What matters is that nothing a visitor can read mentions a terminal.
+    await openSections(page);
     test.setTimeout(40_000);
     const problems = guardConsole(page);
     const requests: string[] = [];
@@ -745,7 +803,7 @@ test.describe("against the API deployed today (serve.mjs --live-api: JSON 404 on
     await expect(page.locator("#how .section__lead")).not.toContainText("terminal", { useInnerText: true });
     // That API ignores ?compare=1 and would start an ordinary run: the one plain button, no twin.
     await expect(page.locator(".scenario__alt")).toHaveCount(0);
-    await expect(page.locator(".scenario__launchnote")).toHaveCount(0);
+    await expect(page.locator(".launcher__note")).toHaveCount(0);
     await expect(page.locator(".scenario .btn--attack")).toHaveCount(4);
     await expect(page.locator(".scenario .btn--attack").first()).toHaveText(/Launch attack/);
     await expect(page.locator("#hero-stats")).toBeHidden();
@@ -915,47 +973,44 @@ test.describe("accessibility basics", () => {
 test.describe("credibility on the production bundle (ADR 0035; serve.mjs --terminal-api, not ?mock)", () => {
   const CRED = "http://127.0.0.1:4176/";
 
-  test("above the fold: the evidence card, no provenance data and no link to #verify in the hero, the panel far down and linked from the footer; on a phone the card follows the counters", async ({ page, isMobile }) => {
+  test("above the fold: the live diagram and counters, no evidence card or provenance in the hero; the record and the verify panel are below", async ({ page, isMobile }) => {
     const problems = guardConsole(page);
     if (!isMobile) await page.setViewportSize({ width: 1280, height: 720 });
     await page.goto(CRED);
-    const card = page.locator("#evidence-card .evcard");
-    // The provenance has arrived (the panel names the api's commit), and none of it is in the hero.
-    await expect(page.locator('#verify-panel [data-image="api"]')).toContainText("0448cff");
-    await expect(card).toBeVisible();
-    await hasNoProvenance(page);
-    await expect(card.locator(".evlist__item").first()).toContainText(/\d\d:\d\d:\d\d\.\d{3} CES?T/);
+    // The hero is the live diagram now (site redesign 2026-10-12, ADR 0035 amendment): it is above the
+    // fold, and it carries no provenance and no evidence card.
+    const diagram = page.locator("#diagram");
+    await expect(diagram).toBeVisible();
     await expect(page.locator("#hero-stats")).toBeVisible();
-    // The card is never folded away.
-    expect(await card.evaluate((el) => el.closest("details:not([open])") === null)).toBe(true);
+    await hasNoProvenance(page);
+    await expect(page.locator("#top .evcard")).toHaveCount(0);
     const box = await page.evaluate(() => {
       const r = (s: string) => (document.querySelector(s) as HTMLElement).getBoundingClientRect();
-      return { scrollY: window.scrollY, card: r("#evidence-card").top, stats: r("#hero-stats").bottom, next: (document.querySelector("#hero-stats")?.parentElement?.nextElementSibling as HTMLElement | null)?.id };
+      return { scrollY: window.scrollY, diagram: r("#diagram").top };
     });
     expect(box.scrollY).toBe(0);
-    if (!isMobile) {
-      expect(box.card).toBeLessThan(720);
-    } else {
-      // Stacked: the card comes right after the copy, whose last child is #hero-stats.
-      expect(box.next).toBe("evidence-card");
-      expect(box.card).toBeGreaterThanOrEqual(box.stats);
-      expect(box.card - box.stats).toBeLessThan(80);
-    }
-    // The order the owner asked for (ADR 0035, amended 2026-10-05): the attack, its response and the
-    // correlation first; the evidence, the posture and the verify panel after How it works, then About,
-    // above the skills.
+    if (!isMobile) expect(box.diagram).toBeLessThan(720);
+    // The diagram's status line reports the last real run (its path lit on load), not a JSON dump.
+    await expect(page.locator("#diagram-status")).toContainText(/answered|detected|no detection|attack in progress/);
+    // The page order is unchanged, and the full evidence record lives in #evidence (folded on a first visit).
     expect(await page.evaluate(() => [...document.querySelectorAll("main > section")].map((el) => el.id))).toEqual(PAGE_ORDER);
-    // The one way to it is a footer link.
+    await page.locator("#evidence-title > button").click();
+    const card = page.locator("#evidence-card .evcard");
+    await expect(card).toBeVisible();
+    await expect(card.locator(".evlist__item").first()).toContainText(/\d\d:\d\d:\d\d\.\d{3} CES?T/);
+    // The verify panel is reached by the one footer link; its provenance is there, never in the hero.
     await expect(page.locator('a[href="#verify"]')).toHaveCount(1);
     const link = page.locator('footer.site-footer a[href="#verify"]');
     await expect(link).toHaveText("Verify the running images");
     await expect(page.locator("#verify-title")).not.toBeInViewport();
     await link.click();
     await expect(page.locator("#verify-title")).toBeInViewport();
+    await expect(page.locator('#verify-panel [data-image="api"]')).toContainText("0448cff");
     expect(problems).toEqual([]);
   });
 
   test("the server time follows the ticks; loading the page sends nothing but GETs", async ({ page }) => {
+    await openSections(page);
     await allActivity(page);
     test.setTimeout(40_000);
     const problems = guardConsole(page);
@@ -986,6 +1041,7 @@ test.describe("credibility on the production bundle (ADR 0035; serve.mjs --termi
   });
 
   test("ticks without new events change no element of the ticker (nothing re-announced, focus kept)", async ({ page }) => {
+    await openSections(page);
     test.setTimeout(40_000);
     await page.goto(CRED);
     await expect(page.locator("#liveness .liveness__server")).toBeVisible();
@@ -1011,6 +1067,7 @@ test.describe("credibility on the production bundle (ADR 0035; serve.mjs --termi
     const fonts = wide ? " (a wide font forced in)" : "";
 
     test(`no horizontal scroll at 360 and 320 px with the live policy names${fonts}`, async ({ page }) => {
+    await openSections(page);
       await allActivity(page);
       if (wide) await wideFonts(page);
       for (const width of [360, 320]) {
@@ -1024,22 +1081,22 @@ test.describe("credibility on the production bundle (ADR 0035; serve.mjs --termi
       }
     });
 
-    test(`the evidence card is above the fold at 1280x720, the hero carries no provenance${fonts}`, async ({ page, isMobile }) => {
+    test(`the live diagram is above the fold at 1280x720, the hero's name is one line and carries no provenance${fonts}`, async ({ page, isMobile }) => {
       test.skip(isMobile, "a desktop viewport");
       if (wide) await wideFonts(page);
       await page.setViewportSize({ width: 1280, height: 720 });
       await page.goto(CRED);
       if (wide) expect(await page.evaluate(() => getComputedStyle(document.body).fontFamily)).toContain("DejaVu Sans");
-      await expect(page.locator('#verify-panel [data-image="api"]')).toContainText("0448cff");
-      await expect(page.locator("#evidence-card .evcard")).toBeVisible();
+      await expect(page.locator("#diagram")).toBeVisible();
       await hasNoProvenance(page);
+      await expect(page.locator("#top .evcard")).toHaveCount(0);
       const m = await page.evaluate(() => ({
         scrollY: window.scrollY,
-        card: (document.getElementById("evidence-card") as HTMLElement).getBoundingClientRect().top,
+        diagram: (document.getElementById("diagram") as HTMLElement).getBoundingClientRect().top,
         titleLines: Math.round((document.getElementById("hero-title") as HTMLElement).getBoundingClientRect().height / parseFloat(getComputedStyle(document.getElementById("hero-title") as HTMLElement).lineHeight)),
       }));
       expect(m.scrollY).toBe(0);
-      expect(m.card).toBeLessThan(720);
+      expect(m.diagram).toBeLessThan(720);
       expect(m.titleLines, "the name stays on one line").toBe(1);
     });
   }
@@ -1054,6 +1111,7 @@ test.describe("credibility on the production bundle (ADR 0035; serve.mjs --termi
 
   for (const [label, base] of [["the interactive API before ADR 0035 (--terminal-api --no-cred)", "http://127.0.0.1:4178/"], ["the API deployed before the terminal (--live-api)", "http://127.0.0.1:4175/"]]) {
     test(`degrades on ${label}: provenance unavailable, liveness without server time, posture as before`, async ({ page }) => {
+    await openSections(page);
       const problems = guardConsole(page);
       await page.goto(base);
       await expect(page.locator("#verify-panel")).toContainText("API provenance unavailable");
@@ -1072,6 +1130,7 @@ test.describe("credibility on the production bundle (ADR 0035; serve.mjs --termi
 
 test.describe("a side-by-side run, contained with the twin still held (serve.mjs --terminal-api --twin)", () => {
   test("the card says contained, names the guarded pod and labels each event by pod; the history and the console name the pod", async ({ page }) => {
+    await openSections(page);
     await allActivity(page);
     const problems = guardConsole(page);
     await page.goto("http://127.0.0.1:4179/");
@@ -1109,6 +1168,7 @@ test.describe("correlation (ADR 0036; serve.mjs --terminal-api --siem / --no-sie
     page.evaluate(() => [...document.querySelectorAll("main > .section > .wrap > .section__head > .eyebrow")].filter((e) => e.getClientRects().length > 0).map((e) => e.closest("section")?.id));
 
   test("the section after the attack: health, SOC metrics, the incident board with its evidence timeline, the rule library; GETs only", async ({ page }) => {
+    await openSections(page);
     await allActivity(page);
     test.setTimeout(45_000);
     const problems = guardConsole(page);
@@ -1224,20 +1284,21 @@ test.describe("correlation (ADR 0036; serve.mjs --terminal-api --siem / --no-sie
   for (const wide of [false, true]) {
     const fonts = wide ? " (a wide font forced in)" : "";
 
-    test(`with the section shown, the evidence card stays above the fold at 1280x720${fonts}`, async ({ page, isMobile }) => {
+    test(`with the SIEM section shown, the live diagram stays above the fold at 1280x720${fonts}`, async ({ page, isMobile }) => {
       test.skip(isMobile, "a desktop viewport");
       if (wide) await wideFonts(page);
       await page.setViewportSize({ width: 1280, height: 720 });
       await page.goto(SIEM);
       await expect(section(page)).toBeVisible();
-      await expect(page.locator("#evidence-card .evcard")).toBeVisible();
+      await expect(page.locator("#diagram")).toBeVisible();
       await hasNoProvenance(page);
-      const m = await page.evaluate(() => ({ scrollY: window.scrollY, card: (document.getElementById("evidence-card") as HTMLElement).getBoundingClientRect().top }));
+      const m = await page.evaluate(() => ({ scrollY: window.scrollY, diagram: (document.getElementById("diagram") as HTMLElement).getBoundingClientRect().top }));
       expect(m.scrollY).toBe(0);
-      expect(m.card).toBeLessThan(720);
+      expect(m.diagram).toBeLessThan(720);
     });
 
     test(`no horizontal scroll at 360 and 320 px with the section open${fonts}`, async ({ page }) => {
+    await openSections(page);
       await allActivity(page);
       if (wide) await wideFonts(page);
       for (const width of [360, 320]) {
@@ -1265,6 +1326,7 @@ test.describe("correlation (ADR 0036; serve.mjs --terminal-api --siem / --no-sie
   }
 
   test("hidden while the SIEM says available:false; nothing else is shown, the numbering has no gap", async ({ page }) => {
+    await openSections(page);
     const problems = guardConsole(page);
     const asked: string[] = [];
     page.on("response", (r) => {
@@ -1281,6 +1343,7 @@ test.describe("correlation (ADR 0036; serve.mjs --terminal-api --siem / --no-sie
   });
 
   test("hidden on an API without the endpoint (a JSON 404)", async ({ page }) => {
+    await openSections(page);
     const problems = guardConsole(page);
     const asked = page.waitForResponse((r) => r.url().endsWith("/api/correlation"));
     await page.goto("http://127.0.0.1:4176/");
@@ -1297,6 +1360,7 @@ test.describe("correlation (ADR 0036; serve.mjs --terminal-api --siem / --no-sie
     ["truncated JSON", '{"available": true, "incidents": [', "application/json"],
   ] as const) {
     test(`hidden on a malformed answer (${label})`, async ({ page }) => {
+      await openSections(page);
       const problems = guardConsole(page);
       await page.route(/\/api\/correlation$/, (route) => route.fulfill({ status: 200, contentType: type, body }));
       const asked = page.waitForResponse((r) => r.url().endsWith("/api/correlation"));
@@ -1309,6 +1373,7 @@ test.describe("correlation (ADR 0036; serve.mjs --terminal-api --siem / --no-sie
   }
 
   test("?mock=1: the section from the fixtures, hidden with &mock-siem=0", async ({ page }) => {
+    await openSections(page);
     await page.goto("/?mock=1");
     await expect(section(page).locator(".incident").first()).toBeVisible();
     expect(await mockCalls(page)).toContain("GET /api/correlation/rules");
@@ -1324,6 +1389,7 @@ test.describe("the visitor's run, told back (mock, ADR 0035 amendment: UX stage 
   const URL = "/?mock=1&mock-speed=0.3&mock-siem-delay=3000";
 
   test("the strip says each step: ready, waiting for the SIEM, Talon's delete, then the SIEM's catch; Open it pulses the card", async ({ page, isMobile }) => {
+    await openSections(page);
     test.setTimeout(60_000);
     const problems = guardConsole(page);
     await page.goto(URL);
@@ -1398,6 +1464,7 @@ test.describe("the visitor's run, told back (mock, ADR 0035 amendment: UX stage 
   });
 
   test("the SIEM scenario's button opens the terminal with the DNS exfil picked; Enter runs it and the chip follows to 'found it'", async ({ page }) => {
+    await openSections(page);
     test.setTimeout(45_000);
     await page.goto(URL);
     const scenario = page.locator("#correlation .corr-scenario");
@@ -1421,6 +1488,7 @@ test.describe("the visitor's run, told back (mock, ADR 0035 amendment: UX stage 
   });
 
   test("layout: beside the terminal only this run, never taller than the terminal; the palette full width with its legend; on a phone one card above the input", async ({ page, isMobile }) => {
+    await openSections(page);
     await page.goto(URL);
     const term = page.locator("#terminal");
     await term.getByRole("button", { name: /Open the terminal/ }).click();
@@ -1454,6 +1522,7 @@ test.describe("the visitor's run, told back (mock, ADR 0035 amendment: UX stage 
   });
 
   test("on a phone the header carries a jump bar; nothing scrolls sideways at 360 and 320 px with a session and the verify details open", async ({ page }) => {
+    await openSections(page);
     await allActivity(page);
     for (const width of [360, 320]) {
       await page.setViewportSize({ width, height: 760 });
@@ -1475,6 +1544,7 @@ test.describe("the visitor's run, told back (mock, ADR 0035 amendment: UX stage 
   });
 
   test("reduced motion: the pulse is a steady outline, no animation", async ({ page }) => {
+    await openSections(page);
     await page.emulateMedia({ reducedMotion: "reduce" });
     await page.goto("/?mock=1");
     await expect(page.locator("#correlation .incident").first()).toBeVisible();
@@ -1489,6 +1559,7 @@ test.describe("the visitor's run, told back (mock, ADR 0035 amendment: UX stage 
   });
 
   test("opened at #correlation or #attack, the page lands there once the live parts have rendered", async ({ page }) => {
+    await openSections(page);
     await page.goto("/?mock=1#correlation");
     await expect(page.locator("#correlation-title")).toBeInViewport({ timeout: 10_000 });
     await page.waitForTimeout(1500);
@@ -1506,6 +1577,7 @@ test.describe("this session first (mock, ADR 0035 amendment 2026-10-06)", () => 
   const board = (page: Page) => page.locator("#correlation-board");
 
   test("by default: the prompt and one labelled example in each list; the visitor's own run once launched", async ({ page }) => {
+    await openSections(page);
     const problems = guardConsole(page);
     await page.goto("/?mock=1&mock-speed=0.2");
     await expect(page.locator('.scope__opt[data-scope="session"][aria-pressed="true"]')).toHaveCount(3);
@@ -1558,6 +1630,7 @@ test.describe("this session first (mock, ADR 0035 amendment 2026-10-06)", () => 
   });
 
   test("All activity, last 24 h: every copy of the control moves, the history is back, and the choice is kept over a reload", async ({ page }) => {
+    await openSections(page);
     await page.goto("/?mock=1");
     await expect(hist(page).locator('.run[data-who="example"]')).toHaveCount(1);
     await page.locator('#correlation .scope__opt[data-scope="all"]').click();
@@ -1585,6 +1658,7 @@ test.describe("this session first (mock, ADR 0035 amendment 2026-10-06)", () => 
   });
 
   test("another visitor's live run shows labelled, then drops out of the default view when it ends", async ({ page }) => {
+    await openSections(page);
     test.setTimeout(60_000);
     await page.goto("/?mock=1&mock-visitor=500&mock-speed=0.3");
     const live = hist(page).locator('.run[data-who="live"]');
@@ -1608,6 +1682,7 @@ test.describe("this session first (mock, ADR 0035 amendment 2026-10-06)", () => 
   });
 
   test("after the visitor's terminal session the live run panel points to the terminal, not 'no run of yours'", async ({ page }) => {
+    await openSections(page);
     await page.goto("/?mock=1&mock-speed=0.2");
     await expect(page.locator("#console .empty")).toContainText("No run of yours yet");
     await page.locator("#terminal").getByRole("button", { name: /Open the terminal/ }).click();
@@ -1618,6 +1693,7 @@ test.describe("this session first (mock, ADR 0035 amendment 2026-10-06)", () => 
   });
 
   test("'show all activity' in a hidden-count line makes the choice and focuses that section's control", async ({ page }) => {
+    await openSections(page);
     await page.goto("/?mock=1");
     const btn = board(page).locator('.scope-hidden button[data-scope-set="all"]');
     await expect(btn).toHaveText("show all activity, last 24 h");
@@ -1629,6 +1705,7 @@ test.describe("this session first (mock, ADR 0035 amendment 2026-10-06)", () => 
   });
 
   test("on a phone the history's connection line is a dot and 'live', on one line", async ({ page }) => {
+    await openSections(page);
     await page.setViewportSize({ width: 360, height: 760 });
     await page.goto("/?mock=1");
     const conn = page.locator("#timeline-conn");
@@ -1639,6 +1716,7 @@ test.describe("this session first (mock, ADR 0035 amendment 2026-10-06)", () => 
   });
 
     test("a reload keeps the tab's own runs: their incidents under the own tier, no example; a bad id is ignored", async ({ page }) => {
+    await openSections(page);
     await page.addInitScript(() => sessionStorage.setItem("sdp:own-runs", JSON.stringify(["7e57000000000001", "<img src=x>", 42])));
     await page.goto("/?mock=1");
     await expect(board(page).locator(".corr-tier--own .corr-tier__title")).toHaveText("From your run on this page");
@@ -1651,6 +1729,7 @@ test.describe("this session first (mock, ADR 0035 amendment 2026-10-06)", () => 
 
   for (const width of [360, 320]) {
     test(`the SIEM evidence is one line of counts, its ids folded as chips; nothing scrolls sideways at ${width} px`, async ({ page }) => {
+    await openSections(page);
       await page.setViewportSize({ width, height: 760 });
       await page.goto("/?mock=1");
       const ev = board(page).locator(`.incident[data-incident="${EXAMPLE}"] details.incident__evidence`);

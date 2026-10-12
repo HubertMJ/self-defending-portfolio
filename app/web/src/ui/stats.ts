@@ -1,8 +1,9 @@
-// Stats and objectives (ADR 0033, E+F). A compact band in the hero: the last real run, the counters
-// across every visitor's runs (with the window they cover), how fast the last response was, and how
-// many runs reached each objective — including, honestly, the ones no one has. Numbers come from
-// GET /api/stats; objective titles from the terminal catalogue; the last run from the live feed. If
-// stats are unavailable the band hides and the static hero reads as it always did.
+// Stats and objectives (ADR 0033, E+F; site redesign 2026-10-12). One line of numbers in the hero: the
+// counters across every visitor's runs (with the window they cover) and how fast the last response
+// was; and, in the attack section, how many runs reached each objective — including, honestly, the
+// ones no one has. Numbers come from GET /api/stats; objective titles from the terminal catalogue; the
+// last run from the live feed names what ran. If stats are unavailable both hide and the static page
+// reads as it always did.
 
 import type { ApiClient } from "../lib/api";
 import type { Objective, Stats } from "../lib/contract";
@@ -21,7 +22,6 @@ const own = (o: Record<string, { attempts: number; achieved: number }>, id: stri
   Object.prototype.hasOwnProperty.call(o, id) ? o[id] : { attempts: 0, achieved: 0 };
 
 export function renderStats(s: Stats, objectives: Objective[], last?: LastRun, now: number = Date.now()): HTMLElement {
-  const title = (id: string) => objectives.find((o) => o.id === id)?.title ?? id;
   const detected = Object.values(s.by_scenario).reduce((a, x) => a + x.detected, 0);
   const responded = Object.values(s.by_scenario).reduce((a, x) => a + x.responded, 0);
 
@@ -29,20 +29,29 @@ export function renderStats(s: Stats, objectives: Objective[], last?: LastRun, n
   const lastAt = last ? last.at : s.last_run_at ? Date.parse(s.last_run_at) : undefined;
   const ago = (t: number) => relativeTime(new Date(t).toISOString(), now);
   const list = [
-    // The last run names what ran; how fast the answer came is the API's one figure, the tile below.
-    // The absolute time (Polish) first, how long ago beside it.
-    lastAt !== undefined ? statTile(timeEl(lastAt, plClock(lastAt, now)), "last run", last ? `${ago(lastAt)} · ${last.title}` : ago(lastAt)) : null,
     statTile(String(s.runs), "attacks, all visitors", s.since ? `since ${when(s.since, now)}` : ""),
     // Both counts are runs: of the runs Falco detected, how many Talon answered at least once; and how
     // many ran out of time with a detection still unanswered (a terminal run can be both).
     statTile(`${responded} of ${detected}`, "detected runs answered", `${s.unanswered} ran out of time with a detection unanswered`),
     s.response_ms.last > 0 ? statTile(`${s.response_ms.last} ms`, "last detection to response", humanSpeed(s.response_ms.last)) : null,
+    // The last run names what ran; how fast the answer came is the API's one figure, the tile above.
+    lastAt !== undefined ? statTile(timeEl(lastAt, plClock(lastAt, now)), "last run", last ? `${ago(lastAt)} · ${last.title}` : ago(lastAt)) : null,
   ].filter((x): x is HTMLElement => x !== null);
-  // The stylesheet lays the tiles out by their count, so none is ever left alone on a row.
   const tiles = h("div", { class: "herostats__tiles", "data-count": list.length }, list);
+  return h(
+    "div",
+    { class: "herostats", "data-objectives": String(objectives.length > 0 || Object.keys(s.objectives).length > 0) },
+    // Not the visitor's own numbers: every visitor's runs, each tile with its window (ADR 0035, "this session first").
+    h("p", { class: "herostats__label" }, "Live, all visitors — not only yours"),
+    tiles,
+  );
+}
 
-  // Objectives, in the catalogue's order, with how many runs reached each; the never-reached say so.
+/** The objectives, in the catalogue's order, with how many runs reached each; the never-reached say so. */
+export function renderObjectives(s: Stats, objectives: Objective[]): HTMLElement | null {
+  const title = (id: string) => objectives.find((o) => o.id === id)?.title ?? id;
   const order = objectives.length ? objectives.map((o) => o.id) : Object.keys(s.objectives);
+  if (!order.length) return null;
   const objEls = order.map((id) => {
     const o = own(s.objectives, id);
     const never = o.achieved === 0;
@@ -54,33 +63,22 @@ export function renderStats(s: Stats, objectives: Objective[], last?: LastRun, n
       h("span", { class: "herostats__objcount" }, never ? `not reached yet — tried in ${o.attempts} run${o.attempts === 1 ? "" : "s"}` : `reached in ${o.achieved} of ${o.attempts} run${o.attempts === 1 ? "" : "s"} that tried`),
     );
   });
-
   return h(
     "div",
-    { class: "herostats" },
-    // Not the visitor's own numbers: every visitor's runs, each tile with its window (ADR 0035, "this session first").
-    h("p", { class: "herostats__label" }, "Live, all visitors — not only yours"),
-    tiles,
-    objectives.length || Object.keys(s.objectives).length
-      ? h(
-          "div",
-          { class: "herostats__objectives" },
-          h("p", { class: "herostats__objhead" }, "Objectives, and who has reached them"),
-          h("ul", { class: "herostats__objlist", role: "list" }, objEls),
-          // What "reached" means on the API side: the objective's command exited 0. A credential read
-          // and a dropped binary finish before the kill lands, so they count — detection is not
-          // prevention — and the line says how long the attacker then kept the pod.
-          h(
-            "p",
-            { class: "small herostats__reached" },
-            "Reached means the command for it exited 0. Detection is not prevention: ",
-            h("code", {}, "cat /etc/shadow"),
-            " and a dropped binary finish before the kill lands, so they count",
-            s.terminal.median_survival_s > 0 ? ` — and the attacker kept the pod a median ${s.terminal.median_survival_s} s per session.` : ".",
-          ),
-          h("p", { class: "small" }, "Think you can get further than this says is possible? ", h("a", { href: REPO_ISSUES, rel: "noopener noreferrer", target: "_blank" }, "Open an issue"), "."),
-        )
-      : null,
+    { class: "herostats__objectives" },
+    h("ul", { class: "herostats__objlist", role: "list" }, objEls),
+    // What "reached" means on the API side: the objective's command exited 0. A credential read
+    // and a dropped binary finish before the kill lands, so they count — detection is not
+    // prevention — and the line says how long the attacker then kept the pod.
+    h(
+      "p",
+      { class: "small herostats__reached" },
+      "Reached means the command for it exited 0. Detection is not prevention: ",
+      h("code", {}, "cat /etc/shadow"),
+      " and a dropped binary finish before the kill lands, so they count",
+      s.terminal.median_survival_s > 0 ? ` — and the attacker kept the pod a median ${s.terminal.median_survival_s} s per session.` : ".",
+    ),
+    h("p", { class: "small" }, "Think you can get further than this says is possible? ", h("a", { href: REPO_ISSUES, rel: "noopener noreferrer", target: "_blank" }, "Open an issue"), "."),
   );
 }
 
@@ -96,10 +94,12 @@ export interface StatsHandle {
 }
 
 /**
- * `onData`: every fresh snapshot (the evidence card reads its last_run_at). `label`: replaces "Live,
- * all visitors — not only yours" (the mock's, from lib/mock-hook.ts: mock data must not claim to be live).
+ * `root`: the hero's numbers; `objectivesRoot`: the attack section's objectives fold (its <details>
+ * parent is shown once there is something to list). `onData`: every fresh snapshot (the evidence card
+ * reads its last_run_at). `label`: replaces "Live, all visitors — not only yours" (the mock's, from
+ * lib/mock-hook.ts: mock data must not claim to be live).
  */
-export function mountStats(root: HTMLElement, api: ApiClient, onData?: (s: Stats) => void, label?: string): StatsHandle {
+export function mountStats(root: HTMLElement, api: ApiClient, onData?: (s: Stats) => void, label?: string, objectivesRoot?: HTMLElement): StatsHandle {
   let timer: ReturnType<typeof setTimeout> | undefined;
   let objectives: Objective[] = [];
   let snapshot: Stats | undefined;
@@ -114,6 +114,12 @@ export function mountStats(root: HTMLElement, api: ApiClient, onData?: (s: Stats
       if (heading) heading.textContent = label;
     }
     replace(root, el);
+    if (objectivesRoot) {
+      const obj = renderObjectives(snapshot, objectives);
+      replace(objectivesRoot, obj);
+      const fold = objectivesRoot.closest<HTMLElement>("details");
+      if (fold) fold.hidden = obj === null;
+    }
   };
 
   // After a failure: an API without /api/stats (a 404) is not asked again; anything else is retried

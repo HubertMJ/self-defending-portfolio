@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { humanSpeed } from "../../src/ui/console";
 import { LAYERS, litFromCommands, renderDefenceMap } from "../../src/ui/defencemap";
-import { renderStats } from "../../src/ui/stats";
+import { renderObjectives, renderStats } from "../../src/ui/stats";
 import { stats, TERMINAL_COMMANDS, TERMINAL_OBJECTIVES } from "../../src/lib/fixtures";
 import { isCommandEvent, parseStats, parseStreamEvent } from "../../src/lib/contract";
 import { buildTimeline } from "../../src/lib/timeline";
@@ -135,8 +135,8 @@ describe("parseStats", () => {
   });
 
   it("an objective the catalogue has and the stats lack reads 0, even one named like a prototype key", () => {
-    const el = renderStats(parseStats({ objectives: {} }), [{ id: "constructor", title: "Odd id" }]);
-    expect(el.querySelector(".herostats__objcount")?.textContent).toBe("not reached yet — tried in 0 runs");
+    const el = renderObjectives(parseStats({ objectives: {} }), [{ id: "constructor", title: "Odd id" }]);
+    expect(el?.querySelector(".herostats__objcount")?.textContent).toBe("not reached yet — tried in 0 runs");
   });
 });
 
@@ -199,15 +199,18 @@ describe("defence map (ADR 0033, D)", () => {
 });
 
 describe("hero stats (ADR 0033, E+F)", () => {
-  it("shows counters and objectives, naming the never-reached ones, with no escapes counter", () => {
+  it("shows counters, and objectives naming the never-reached ones, with no escapes counter", () => {
     const el = renderStats(stats(), TERMINAL_OBJECTIVES);
     expect(el.textContent).toContain("attacks");
     expect(el.textContent).toContain("detected runs answered");
-    const never = [...el.querySelectorAll('.herostats__obj[data-never="true"]')];
-    expect(never.length).toBeGreaterThan(0);
-    expect(never.some((n) => /not reached yet/.test(n.textContent ?? ""))).toBe(true);
     // The contract rules out an escapes/"got out" counter (review item 18).
     expect(el.textContent).not.toMatch(/got out|call-home|escap/i);
+    // Objectives moved out of the hero into the attack section (site redesign 2026-10-12).
+    const obj = renderObjectives(stats(), TERMINAL_OBJECTIVES) as HTMLElement;
+    const never = [...obj.querySelectorAll('.herostats__obj[data-never="true"]')];
+    expect(never.length).toBeGreaterThan(0);
+    expect(never.some((n) => /not reached yet/.test(n.textContent ?? ""))).toBe(true);
+    expect(obj.textContent).not.toMatch(/got out|call-home|escap/i);
   });
 
   it("shows the last real run when one is given", () => {
@@ -328,7 +331,7 @@ describe("degrading against today's API (review 2, items 8 and 13)", () => {
     const today = await press(old, ".scenario .btn--attack");
     expect(today.posts).toEqual(["/api/attack/network-tool"]);
     expect(today.root.querySelector(".scenario__alt")).toBeNull();
-    expect(today.root.querySelector(".scenario__launchnote")).toBeNull();
+    expect(today.root.querySelector(".launcher__note")).toBeNull();
     expect(today.label).toBe("▶Launch attack");
     // The interactive API: the main button runs both pods, the small one the guarded pod alone…
     const both = old.map((s) => ({ ...s, interactive: false }));
@@ -336,8 +339,8 @@ describe("degrading against today's API (review 2, items 8 and 13)", () => {
     expect(main.posts).toEqual(["/api/attack/network-tool?compare=1"]);
     expect(main.label).toBe("▶Launch side by side");
     expect((await press(both, ".scenario__alt")).posts).toEqual(["/api/attack/network-tool"]);
-    // …and the card says what each does, tied to both buttons for a screen reader.
-    const note = main.root.querySelector(".scenario__launchnote") as HTMLElement;
+    // …and one explainer above the cards says what each does, tied to both buttons for a screen reader.
+    const note = main.root.querySelector(".launcher__note") as HTMLElement;
     expect(note.textContent).toBe("Side by side runs it in two pods at once: one the cluster defends, and an unguarded twin where Falco sees it and nothing answers. Guarded pod only runs the defended pod alone.");
     expect(main.root.querySelector(".scenario .btn--attack")?.getAttribute("aria-describedby")?.split(" ")).toContain(note.id);
     expect(main.root.querySelector(".scenario__alt")?.getAttribute("aria-describedby")).toBe(note.id);
@@ -357,7 +360,7 @@ describe("hero stats wording and tiles (review 2, item 13 and the cross-side poi
   });
 
   it("counts objectives in runs, and says what 'reached' means next to how long the pod was kept", () => {
-    const el = renderStats(stats(), TERMINAL_OBJECTIVES);
+    const el = renderObjectives(stats(), TERMINAL_OBJECTIVES) as HTMLElement;
     const counts = [...el.querySelectorAll(".herostats__objcount")].map((c) => c.textContent ?? "");
     expect(counts.every((c) => /runs?\b/.test(c) && !/tries/.test(c))).toBe(true);
     expect(counts[2]).toBe("reached in 30 of 30 runs that tried"); // credentials: `cat /etc/shadow` exits 0

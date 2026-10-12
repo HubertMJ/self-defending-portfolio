@@ -21,6 +21,8 @@ export interface LauncherState {
 export interface Launcher {
   setActiveRun(run: LauncherState["activeRun"]): void;
   reload(): Promise<void>;
+  /** Starts a scenario as its card's main button would (the tour's step): side by side when the API can. */
+  launch(scenarioId: string): void;
 }
 
 const RESPONSE_LABEL: Record<string, string> = {
@@ -137,29 +139,30 @@ export function mountScenarios(
   let compare = false;
   const launchLabel = () => (compare ? "Launch side by side" : "Launch attack");
 
+  // Said once above the cards, not on each (site redesign 2026-10-12): what the two buttons do.
+  const NOTE_ID = "launcher-note";
+  const howTo = () =>
+    h(
+      "p",
+      { class: "launcher__note", id: NOTE_ID },
+      h("strong", {}, "Side by side"),
+      " runs it in two pods at once: one the cluster defends, and an unguarded twin where Falco sees it and nothing answers. ",
+      h("strong", {}, "Guarded pod only"),
+      " runs the defended pod alone.",
+    );
+
   const card = (s: Scenario): HTMLElement => {
     const url = attackUrl(s.technique);
-    const note = `scn-${s.id}-launch`;
     const btn = h(
       "button",
-      { type: "button", class: "btn btn--attack", "aria-describedby": compare ? `scn-${s.id}-summary ${note}` : `scn-${s.id}-summary` },
+      { type: "button", class: "btn btn--attack", "aria-describedby": compare ? `scn-${s.id}-summary ${NOTE_ID}` : `scn-${s.id}-summary` },
       h("span", { class: "btn__icon", "aria-hidden": "true" }, "▶"),
       h("span", { class: "btn__label" }, launchLabel()),
     );
     btn.addEventListener("click", () => void launch(s, { compare }));
     buttons.set(s.id, btn);
-    const alt = compare ? h("button", { type: "button", class: "btn btn--ghost btn--small scenario__alt", "aria-describedby": note }, "Guarded pod only") : null;
+    const alt = compare ? h("button", { type: "button", class: "btn btn--ghost btn--small scenario__alt", "aria-describedby": NOTE_ID }, "Guarded pod only") : null;
     alt?.addEventListener("click", () => void launch(s));
-    const howTo = compare
-      ? h(
-          "p",
-          { class: "scenario__launchnote", id: note },
-          h("strong", {}, "Side by side"),
-          " runs it in two pods at once: one the cluster defends, and an unguarded twin where Falco sees it and nothing answers. ",
-          h("strong", {}, "Guarded pod only"),
-          " runs the defended pod alone.",
-        )
-      : null;
     const response = RESPONSE_LABEL[s.response] ?? s.response;
     return h(
       "li",
@@ -179,7 +182,7 @@ export function mountScenarios(
         h("div", {}, h("dt", {}, "Detected by"), h("dd", {}, h("code", {}, s.detection))),
         h("div", {}, h("dt", {}, "Response"), h("dd", { class: `response response--${s.response}` }, response)),
       ),
-      h("div", { class: "scenario__actions" }, btn, alt, howTo),
+      h("div", { class: "scenario__actions" }, btn, alt),
     );
   };
 
@@ -211,7 +214,7 @@ export function mountScenarios(
     replace(
       root,
       cards.length
-        ? h("ul", { class: "scenarios", role: "list" }, cards.map(card))
+        ? [compare ? howTo() : null, h("ul", { class: "scenarios", role: "list" }, cards.map(card))]
         : h("p", { class: "empty" }, "No scenarios are configured on the server."),
     );
     sync();
@@ -227,5 +230,9 @@ export function mountScenarios(
       sync();
     },
     reload,
+    launch(id) {
+      const s = scenarios.find((x) => x.id === id);
+      if (s) void launch(s, { compare });
+    },
   };
 }
