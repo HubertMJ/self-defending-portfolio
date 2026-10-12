@@ -24,6 +24,7 @@ Contents:
 4. [Detection and response loop](#4-detection-and-response-loop)
 5. [Posture reporting](#5-posture-reporting)
 6. [Namespaces at a glance](#6-namespaces-at-a-glance)
+7. [SIEM and correlation](#7-siem-and-correlation)
 
 ---
 
@@ -289,9 +290,58 @@ it is summarised), [`cluster/infra/portfolio-api/rbac.yaml`](../../cluster/infra
 | `falco` | privileged (audit restricted) | default-deny + CNP | Falco DaemonSet only | [`cluster/infra/falco/`](../../cluster/infra/falco/) |
 | `falco-response` | restricted | default-deny + CNPs | Falcosidekick, Talon | [`cluster/infra/falco-response/`](../../cluster/infra/falco-response/) |
 | `sandbox` | restricted | default-deny + DNS only + quarantine CCNP | short-lived victims / scenario pods (ResourceQuota + LimitRange) | [`cluster/infra/sandbox/`](../../cluster/infra/sandbox/) |
+| `sandbox-unguarded` | restricted | default-deny + DNS only (no quarantine CCNP) | the unguarded twin's pods: Falco detects, Talon's rules do not match | [`cluster/infra/sandbox-unguarded/`](../../cluster/infra/sandbox-unguarded/) |
 | `portfolio-api` | restricted | default-deny + CNP | the API, scenario catalogue ConfigMap | [`cluster/infra/portfolio-api/`](../../cluster/infra/portfolio-api/), [`cluster/infra/sandbox/scenarios/`](../../cluster/infra/sandbox/scenarios/) |
 
 Host level (outside Kubernetes): Debian 13 VM `k3s01` on Proxmox, hardened by the roles in
 [`ansible/roles/`](../../ansible/roles/) (SSH key-only from two admin VLANs, nftables input
 default-deny, sysctl, auditd, unattended upgrades) and running k3s with secrets encryption, an audit
 policy and no flannel/kube-proxy ([`ansible/roles/k3s/templates/config.yaml.j2`](../../ansible/roles/k3s/templates/config.yaml.j2)).
+
+---
+
+## 7. SIEM and correlation
+
+Everything the cluster records — Falco alerts, Talon actions, Kubernetes audit lines, Hubble network
+flows and the terminal's own commands — is also shipped off the cluster to a SIEM on its own VM, so a
+record survives an attacker who takes the cluster, and so one view ties together what no single tool
+sees. The SIEM is OpenSearch with Security Analytics, on `siem01` (a Proxmox VM on VLAN 42,
+`10.4.2.10`), reached only over mTLS; the cluster can append but cannot rewrite or delete
+([ADR 0034](../adr/0034-siem-opensearch-security-analytics.md)).
+
+```mermaid
+flowchart LR
+    subgraph K3S["k3s01 (VLAN 41)"]
+        FALCO["Falco / Talon"]
+        AUDIT["k3s audit log"]
+        HUBBLE["Hubble flows"]
+        API["portfolio-api<br/>terminal commands"]
+        FB["Fluent Bit (host)<br/>HMAC, allow-lists"]
+        FALCO --> FB
+        AUDIT --> FB
+        HUBBLE --> FB
+        API --> FB
+    end
+    subgraph SIEM["siem01 (VLAN 42, 10.4.2.10)"]
+        OS["OpenSearch<br/>sdp-* indices, append-only"]
+        SA["Security Analytics<br/>Sigma detectors + correlations"]
+        FB -. "mTLS, client cert signed on siem01" .-> OS
+        OS --> SA
+    end
+    SA -. "read-only" .-> APIQ["portfolio-api<br/>GET /api/correlation"]
+    APIQ --> BROWSER["the page: What the SIEM made of it"]
+```
+
+What this claims, and where it is written down:
+
+| Claim | Source |
+|-------|--------|
+| The SIEM is on its own VM on its own VLAN, reached only over mTLS; the cluster's identity may write `sdp-*` and nothing else | [ADR 0034](../adr/0034-siem-opensearch-security-analytics.md), [`ansible/roles/opensearch/`](../../ansible/roles/opensearch/), [`ansible/roles/siem_sync/`](../../ansible/roles/siem_sync/) |
+| Fluent Bit on the host ships alerts, actions, audit lines, flows and terminal commands, HMAC-stamped and allow-listed before they leave | [`ansible/roles/fluent_bit/`](../../ansible/roles/fluent_bit/) |
+| Sigma detectors and correlation rules come from this repository and are synced to the SIEM | [`siem/rules/`](../../siem/rules/), [`siem/correlations/`](../../siem/correlations/), [`siem/detectors/`](../../siem/detectors/) |
+| The API reads the SIEM read-only and joins findings into incidents it publishes at `/api/correlation`; nothing that would describe the infrastructure leaves | [ADR 0036](../adr/0036-correlation-api-incident-model.md), [`app/api/`](../../app/api/) |
+| A DNS exfiltration that Falco has no rule for is caught here: Hubble records the query, a Sigma rule matches it, the correlation ties it to the run | [`siem/rules/`](../../siem/rules/), [ADR 0036](../adr/0036-correlation-api-incident-model.md) |
+
+The page shows this under **What the SIEM made of it** (`#correlation`): the SIEM's health, the SOC
+figures, the incident board with each incident's evidence timeline, and the Sigma rule library — every
+time the SIEM's own, one to three minutes behind the event.
