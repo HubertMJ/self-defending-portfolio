@@ -510,3 +510,61 @@ end-to-end suite (mock) covers the default view, the filter revealing the histor
 reload, the empty state's prompt and one example, another visitor's live run labelled and dropping out
 when it ends, the evidence line expanding, and no sideways scroll at 320 px. The tests of the whole
 board and history choose "All activity" first.
+
+## Amendment 2026-10-12: the hero is a live diagram, the evidence card moves to #evidence, sections fold on a first visit
+
+The owner's verdict on the live page: "the visitor gets a wall of text on arrival and gets lost; it does
+not truly show what we want to show." Measured on 2026-10-12 the page was 14 315 px on a 1440 px desktop
+and 23 405 px on a 390 px phone, ten sections one under another, and above the fold the hero carried a
+four-sentence lead, two buttons, four stat tiles, an objectives list and — in its right column — the
+"evidence card": another visitor's raw run with a pod UID, an image digest, a container id and raw
+Falco/Talon lines. Nothing was false, but it explained nothing to a newcomer and buried the one thing
+the project is: a cluster that answers an attack, live.
+
+**The hero is the diagram, and the diagram is the evidence.** Above the fold now: the name, one sentence,
+one primary button ("Attack this cluster"), one line of live counters, and a live architecture diagram
+that fills the width. The diagram is drawn from one model (`app/web/src/diagram/model.ts`) by a pure
+layout module; the same model generates `docs/architecture/overview.svg` (`npm run diagram`, checked by a
+unit test), so the drawing on GitHub and the one on the page never drift. On load the diagram lights the
+path of the newest real run the page knows — the request in, Falco's detection, Talon's answer back to
+the pod — with the real detection-to-response time in its status line; this is the evidence, shown as a
+mechanism rather than a JSON dump. It does not loop: a path lights from a run's events and stays, the
+packet animation plays once per change and not at all under `prefers-reduced-motion`. Every node is a
+button (keyboard-reachable) that opens a caption: one or two sentences and a link to the file in the
+repository, the same blurbs the "How it works" defence map uses.
+
+**The evidence card leaves the hero.** The detailed record — pod UID, image digest, Falco fields, the
+command list — stays, but only in `#evidence`, where a visitor who wants the raw material finds it. The
+hero carries no provenance (the rule of 2026-10-04 stands): no commit, digest, cosign, Rekor or
+`#verify` link in `#top`.
+
+**The guided tour.** `#attack` opens with a six-step tour (sections revealed in order, never an overlay):
+look around (`id`), break something (`deface`, then read the flag), hide it in DNS (`dns-exfil`), get
+caught (`sh -i` → Falco → Talon, watched on the diagram), see what the answer is worth (the one-click
+side-by-side run against the unguarded twin), and see it in the SIEM (the `dns-exfil` incident the SIEM
+files a minute or two later, which opens `#correlation`). Progress is derived from the visitor's own runs
+and the SIEM's incidents for them — not a stored counter — so a reload re-derives it and nothing is
+ticked that did not happen; only "skip" is stored. The tour costs two runs of the per-visitor limit, and
+says so; it degrades to nothing without the terminal.
+
+**Sections fold on a first visit.** Everything below `#attack` (`#correlation`, `#how`, `#evidence`,
+`#posture`, `#verify`, `#about`, `#skills`, `#projects`) starts folded on a first visit
+(`app/web/src/lib/folds.ts`), so the page is short and the one path is clear; a visitor's own choice,
+stored per section as "1" (folded) or "0" (open), always wins, and `theme.ts` applies the defaults and
+the choices before first paint so nothing jumps. Without JavaScript nothing folds and everything shows,
+as before. The objectives list moves out of the hero into a fold in `#attack`; a short About bar (an
+`<aside>`, the first sentence of the About text verbatim) sits after the attack, the full About folded
+below. The amendment of 2026-10-05 ("the attack first; every section below the hero folds") is widened:
+the sections do not merely fold on request, they start folded.
+
+**Measured after.** The desktop page is about 5 000 px on first load (from 14 315), the phone about
+7 900 px (from 23 405); the page order is unchanged, and `#top` still carries no provenance.
+
+**Tests.** The unit suite gains the diagram model's consistency, the layout's tree (a node per element,
+no HTML sink, escaping), the hero path lit from a run's events, the committed `overview.svg` equalling
+the generated one, the tour's progress derived from events, and the fold defaults. The hero-stats tests
+split (counters in the hero, objectives in `#attack`), and the section-fold tests move to the new
+defaults. The end-to-end suite asserts the above-the-fold shape (one primary button, the live diagram,
+no evidence card and no provenance in `#top`), the page-height budgets at 1440 and 390 px, the diagram's
+nodes reachable by keyboard with their captions, the tour advancing through its steps, and the sections
+folded on a first visit — in light and dark, with no horizontal scroll at 360 px.

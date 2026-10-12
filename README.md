@@ -2,18 +2,21 @@
 
 A DevOps/security portfolio that is also the thing it describes: a single-node Kubernetes cluster
 in a homelab that serves its own website, refuses software it did not build and sign, watches every
-process it runs, and kills or isolates a compromised pod on its own. A visitor can press a button,
-launch one of four controlled attacks (shell in a container, download tool, read of `/etc/shadow`,
-drop-and-run a new binary) in a sandbox, and watch detection and response happen live, next to the
-cluster's security posture.
+process it runs, and kills or isolates a compromised pod on its own. A visitor can open a real shell
+in a throwaway sandbox pod and attack it by hand — or press a button for one of the fixed attacks
+(shell in a container, download tool, read of `/etc/shadow`, drop-and-run a new binary) — run it with
+and without the automatic response side by side, and watch Falco detect and Falco Talon answer live,
+with a SIEM on its own VM catching even what Falco has no rule for, next to the cluster's security
+posture.
 
 **Live:** [hubertjablon.ski](https://hubertjablon.ski)
 <!-- TODO-CONTENT: confirm what the live site serves today and update this line when the phase 5/6 demo goes live. -->
 
-**Status:** phases 0-4 are built and running (hardened host, GitOps, public site behind a tunnel,
-signed images enforced at admission, runtime detection and response, posture scanning). Phases 5-6
-(the portfolio API, the four attack scenarios and the new site) are merged and awaiting acceptance on
-the live cluster; they reach it in two steps, images first ([`docs/bootstrap.md`](docs/bootstrap.md)
+**Status:** phases 0-6 are built and running — a hardened host, GitOps, a public site behind a
+tunnel, signed images enforced at admission, runtime detection and response, posture scanning, the
+portfolio API with its interactive attacker terminal and one-click scenarios, the unguarded twin, and
+a SIEM (OpenSearch Security Analytics on its own VM) that correlates what the cluster ships it. A new
+web image reaches the cluster in two steps, image first ([`docs/bootstrap.md`](docs/bootstrap.md)
 §7). See [phases](#phases-and-definition-of-done) and [limitations](#limitations-and-not-done-yet).
 
 ---
@@ -29,10 +32,12 @@ the live cluster; they reach it in two steps, images first ([`docs/bootstrap.md`
    signature at admission and rejects anything else.
 4. **Running containers are watched.** Falco sees every process start in the cluster. A shell in a
    sandbox pod gets that pod deleted within seconds; a network tool gets it cut off from the network.
-   No human in the loop.
-5. **The attack button is fenced in.** A visitor can only pick one of four fixed scenarios, one run
-   at a time, a few per visitor and hour; each runs as a hardened, signed, resource-capped pod in the
-   sandbox, and the page streams Falco's alert and Talon's response as they happen.
+   No human in the loop — and everything is also shipped to a SIEM on its own VM that catches even a
+   DNS exfiltration Falco has no rule for.
+5. **The attack button is fenced in.** A visitor opens a real shell in a throwaway sandbox pod, or
+   picks one of the fixed scenarios (and can run it with and without the response, side by side); one
+   run at a time, a few per visitor and hour; each runs as a hardened, signed, resource-capped pod in
+   the sandbox, and the page streams Falco's alert and Talon's response as they happen.
 6. **Every claim has a test.** Each control below links to the code that implements it and to the
    command that proves it.
 
@@ -51,7 +56,8 @@ the live cluster; they reach it in two steps, images first ([`docs/bootstrap.md`
 | Signed, scanned, described images | One matrix workflow for every image (site, API, scenario target): Trivy gate, SPDX SBOM attestation, cosign keyless signing bound to that workflow on `main` | [`.github/workflows/build-images.yml`](.github/workflows/build-images.yml) | [0011](docs/adr/0011-supply-chain.md), [0016](docs/adr/0016-one-image-workflow.md) |
 | Admission control | Kyverno: signature + SBOM required, own registry only, no `:latest`, Pod Security `restricted`, resource limits | [`cluster/infra/kyverno-policies/`](cluster/infra/kyverno-policies/) | [0011](docs/adr/0011-supply-chain.md), [0012](docs/adr/0012-pod-security-and-resource-policy.md) |
 | Runtime detection and response | Falco (eBPF, 4 capabilities, read-only host mounts, no API token) → Falcosidekick → Falco Talon (kill / quarantine, `sandbox` only) | [`cluster/infra/falco/`](cluster/infra/falco/), [`cluster/infra/falco-response/`](cluster/infra/falco-response/), [`cluster/infra/sandbox/`](cluster/infra/sandbox/) | [0013](docs/adr/0013-runtime-detection-and-response.md) |
-| A visitor-triggered attack that stays controlled | Four fixed scenarios as restricted, signed, quota-bound pods in `sandbox`; the API is rate-limited, same-origin only, holds RBAC for `sandbox` pods and report reads only, and its webhook port admits Falcosidekick and Talon alone | [`app/api/`](app/api/), [`cluster/infra/portfolio-api/`](cluster/infra/portfolio-api/), [`cluster/infra/sandbox/scenarios/`](cluster/infra/sandbox/scenarios/scenarios.yaml) | [0015](docs/adr/0015-portfolio-api.md), [0017](docs/adr/0017-attack-scenario-safety-model.md), [0018](docs/adr/0018-scenario-detection-and-response-mapping.md) |
+| A visitor-triggered attack that stays controlled | Four fixed scenarios and an interactive attacker terminal (catalogue commands only) as restricted, signed, quota-bound pods in `sandbox`, with an unguarded twin in `sandbox-unguarded`; the API is rate-limited, same-origin only, holds RBAC for `sandbox` pods and report reads only, and its webhook port admits Falcosidekick and Talon alone | [`app/api/`](app/api/), [`cluster/infra/portfolio-api/`](cluster/infra/portfolio-api/), [`cluster/infra/sandbox/scenarios/`](cluster/infra/sandbox/scenarios/scenarios.yaml), [`cluster/infra/sandbox-unguarded/`](cluster/infra/sandbox-unguarded/) | [0015](docs/adr/0015-portfolio-api.md), [0017](docs/adr/0017-attack-scenario-safety-model.md), [0031](docs/adr/0031-unguarded-twin-namespace.md), [0033](docs/adr/0033-interactive-terminal-defence-map-twin.md) |
+| Off-cluster SIEM and correlation | OpenSearch Security Analytics on its own VM (VLAN 42), append-only to the cluster; Fluent Bit ships Falco/Talon, the k3s audit log, Hubble flows and terminal commands over mTLS; Sigma rules and correlations from this repo catch what Falco has no rule for (e.g. DNS exfiltration), read back by the API at `/api/correlation` | [`ansible/roles/opensearch/`](ansible/roles/opensearch/), [`ansible/roles/fluent_bit/`](ansible/roles/fluent_bit/), [`siem/`](siem/), [`app/api/`](app/api/) | [0034](docs/adr/0034-siem-opensearch-security-analytics.md), [0036](docs/adr/0036-correlation-api-incident-model.md) |
 | Posture scanning | Trivy Operator (images, config, RBAC, secrets), daily CIS benchmark (kube-bench), Policy Reporter | [`cluster/apps/trivy-operator.yaml`](cluster/apps/trivy-operator.yaml), [`cluster/infra/kube-bench/`](cluster/infra/kube-bench/) | [0014](docs/adr/0014-posture-scanning.md) |
 | Host hardening | SSH key-only from admin VLANs, sysctl, auditd, unattended upgrades, k3s audit log and secrets encryption | [`ansible/roles/`](ansible/roles/) | [0001](docs/adr/0001-dedicated-vm-for-the-cluster.md), [0007](docs/adr/0007-cloud-init-and-ansible-bootstrap.md) |
 
@@ -92,9 +98,12 @@ k3s01: Proxmox VM, Debian 13, hardened by Ansible
 ```
 
 The attack button: a Go API in its own namespace behind `/api` (ADR 0015) runs one of four fixed
-scenarios as a pod in `sandbox` and streams Falco's and Talon's events to the browser (SSE). Limits:
-3 attacks per 10 minutes per visitor, 30 per hour in total, one at a time, pods end after at most
-120 s, and the sandbox quota caps everything at 3 pods, half a CPU and 512 MiB. Each scenario is
+scenarios — or an interactive attacker terminal where the visitor types catalogue commands into a
+real pod (ADR 0033) — as a pod in `sandbox`, and streams Falco's and Talon's events to the browser
+(SSE). A scenario can be launched against an unguarded twin in `sandbox-unguarded` at the same time,
+where Falco detects but nothing answers, to show what the response is worth. Limits: 3 attacks per 10
+minutes per visitor, 30 per hour in total, one at a time; a pod ends after at most 300 s, or 90 s
+idle, and the sandbox quota caps everything at 3 pods, half a CPU and 512 MiB. Each scenario is
 mapped to a Falco rule and a Talon response (ADR 0017, ADR 0018):
 
 | Scenario | Technique | Detected by | Response |
