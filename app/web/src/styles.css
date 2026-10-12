@@ -542,7 +542,7 @@ main {
   position: relative;
   /* The evidence card has to stay above a 720 px fold whatever fonts the visitor has (ADR 0035):
      the top padding is kept modest, the name below is sized to its column. */
-  padding-block: clamp(2rem, 4.5vw, 3.5rem) clamp(1.75rem, 4vw, 3rem);
+  padding-block: clamp(1.25rem, 3vw, 2.25rem) clamp(1.25rem, 3vw, 2rem);
   background-image:
     linear-gradient(var(--bg-grid) 1px, transparent 1px),
     linear-gradient(90deg, var(--bg-grid) 1px, transparent 1px);
@@ -576,10 +576,10 @@ main {
 .hero h1 {
   font-size: clamp(2.2rem, 8vw, 4.5rem);
   font-size: clamp(2rem, 10cqi, 4.5rem);
-  line-height: 1.1;
+  line-height: 1.05;
   font-weight: 750;
   letter-spacing: -0.035em;
-  margin-bottom: 1.25rem;
+  margin-bottom: 0.75rem;
 }
 
 .hero__lead {
@@ -602,7 +602,7 @@ main {
   display: flex;
   flex-wrap: wrap;
   gap: 0.75rem;
-  margin-top: 1.75rem;
+  margin-top: 1.1rem;
 }
 
 .loop {
@@ -5094,7 +5094,7 @@ html[data-terminal="off"] .needs-terminal {
 /* ---------- hero statement ---------- */
 .hero__statement {
   display: grid;
-  gap: clamp(1.25rem, 3vw, 2rem);
+  gap: 0.75rem clamp(1.25rem, 3vw, 2rem);
   align-items: end;
 }
 
@@ -5109,39 +5109,71 @@ html[data-terminal="off"] .needs-terminal {
   align-self: end;
 }
 
-/* The numbers line in the hero: one row of small tiles, the objectives live in the attack section. */
+/* The numbers line in the hero: one line, three figures, mono; the last run's time is under the
+   diagram. On a phone it wraps figure by figure, never mid-figure. */
+.hero__numbers .herostats__line {
+  margin: 0;
+  font: 0.8rem/1.6 var(--font-mono);
+  color: var(--text-muted);
+}
+
 .hero__numbers .herostats__label {
-  font: 600 0.68rem/1.4 var(--font-mono);
+  display: block;
+  font: 600 0.66rem/1.5 var(--font-mono);
   letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--text-faint);
-  margin: 0 0 0.5rem;
 }
 
-.hero__numbers .herostats__tiles {
-  display: grid;
-  gap: 0.6rem;
-  /* One column on a narrow phone so a nowrap "17:44:57 CEST" never pushes the page wide; two from
-     22rem of column width, all four in a row once there is room. */
-  grid-template-columns: minmax(0, 1fr);
+.hero__numbers .herostats__num {
+  white-space: nowrap;
 }
 
-@container (min-width: 22rem) {
-  .hero__numbers .herostats__tiles {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+.hero__numbers .herostats__num strong {
+  color: var(--text);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.hero__numbers .herostats__sep {
+  color: var(--text-faint);
+}
+
+/* On a phone the line wraps figure by figure: the dot leads the next figure instead of dangling. */
+@media (max-width: 599px) {
+  .hero__numbers .herostats__sep {
+    display: none;
+  }
+  .hero__numbers .herostats__num + .herostats__num::before,
+  .hero__numbers .herostats__sep + .herostats__num::before {
+    content: "· ";
+    color: var(--text-faint);
+  }
+  .hero__numbers .herostats__num {
+    display: inline-block;
   }
 }
 
-@container (min-width: 44rem) {
-  .hero__numbers .herostats__tiles[data-count="3"],
-  .hero__numbers .herostats__tiles[data-count="4"] {
-    grid-template-columns: repeat(var(--cols, 4), minmax(0, 1fr));
+/* Both buttons on one row on a phone: the secondary one becomes a plain link beside the primary. */
+@media (max-width: 599px) {
+  .hero__actions {
+    flex-wrap: nowrap;
+    align-items: center;
+    gap: 1rem;
+  }
+  .hero__secondary {
+    border: 0;
+    background: none;
+    padding: 0.5rem 0;
+    text-decoration: underline;
+    text-underline-offset: 0.2em;
+    white-space: nowrap;
   }
 }
 
 /* ---------- the live diagram ---------- */
 .dg-wrap {
-  margin-top: clamp(1rem, 2.5vw, 1.75rem);
+  margin-top: clamp(0.75rem, 2vw, 1.25rem);
   padding: 0;
 }
 
@@ -5335,7 +5367,7 @@ html[data-tech="on"] .dg-sub {
 }
 
 .dg-foot {
-  margin-top: 1rem;
+  margin-top: 0.6rem;
 }
 
 .dg-status {

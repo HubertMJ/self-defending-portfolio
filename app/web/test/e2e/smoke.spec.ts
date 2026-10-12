@@ -181,6 +181,38 @@ test.describe("layout (ADR 0035, amended 2026-10-05; ?mock=1)", () => {
     await expect(page.locator('footer.site-footer a[href="#verify"]')).toHaveCount(1);
   });
 
+  test("above the fold: at 1440x900 the whole hero diagram and its caption fit; at 390x844 the first nodes show, the two buttons share a row", async ({ page }) => {
+    // Measured with the mock banner in the header (the live page has none, so it only has more room).
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto("/?mock=1");
+    await expect(page.locator("#hero-stats .herostats__num")).toHaveCount(3);
+    const desk = await page.evaluate(() => ({
+      scrollY: window.scrollY,
+      figureBottom: (document.getElementById("diagram") as HTMLElement).getBoundingClientRect().bottom,
+      statusBottom: (document.getElementById("diagram-status") as HTMLElement).getBoundingClientRect().bottom,
+    }));
+    expect(desk.scrollY).toBe(0);
+    expect(desk.statusBottom, "the diagram's caption line is above the fold").toBeLessThanOrEqual(900);
+    expect(desk.figureBottom).toBeLessThanOrEqual(900);
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto("/?mock=1");
+    await expect(page.locator("#hero-stats .herostats__num")).toHaveCount(3);
+    const phone = await page.evaluate(() => {
+      const nodes = [...document.querySelectorAll(".dg-narrow .dg-node")].map((n) => n.getBoundingClientRect());
+      const a = document.querySelector("#hero-cta") as HTMLElement;
+      const b = document.querySelector(".hero__secondary") as HTMLElement;
+      return {
+        diagramTop: (document.getElementById("diagram") as HTMLElement).getBoundingClientRect().top,
+        nodesInView: nodes.filter((r) => r.bottom <= 844 && r.height > 0).length,
+        sameRow: Math.abs(a.getBoundingClientRect().top - b.getBoundingClientRect().top) < 4,
+      };
+    });
+    expect(phone.diagramTop, "the diagram starts above the fold").toBeLessThan(844);
+    expect(phone.nodesInView, "at least two nodes are visible without scrolling").toBeGreaterThanOrEqual(2);
+    expect(phone.sameRow, "the primary button and Read the source share a row").toBe(true);
+    await noHorizontalScroll(page);
+  });
+
   test("on a first visit everything below the attack folds; the attack and the hero diagram stay open", async ({ page }) => {
     // Site redesign 2026-10-12 (ADR 0035 amendment): a first-time visitor (no stored choices) sees a
     // short page — the hero diagram and the attack, the rest folded.
@@ -245,7 +277,7 @@ test.describe("layout (ADR 0035, amended 2026-10-05; ?mock=1)", () => {
     for (const id of ["verify", "attack", "evidence", "posture"]) await expect(page.locator(`#${id}-body`)).toBeHidden();
     // The page has its full height first: a smooth scroll does not follow the correlation appearing above it.
     await expect(page.locator("#correlation .corr-matrix")).toBeVisible();
-    await expect(page.locator("#hero-stats .herostats__tile").first()).toBeVisible();
+    await expect(page.locator("#hero-stats .herostats__num").first()).toBeVisible();
     await page.locator('footer.site-footer a[href="#verify"]').click();
     await expect(page.locator("#verify-title > button")).toHaveAttribute("aria-expanded", "true");
     await expect(page.locator("#verify-panel")).toBeVisible();
@@ -679,10 +711,13 @@ test.describe("defence map and live stats (mock, ADR 0033)", () => {
     await page.goto("/?mock=1");
     const hero = page.locator("#hero-stats");
     await expect(hero).toBeVisible();
-    // Site redesign 2026-10-12: the hero carries the counters only (one line); no objectives, no Open an issue.
-    await expect(hero.locator(".herostats__tile")).toHaveCount(4);
-    await expect(hero).toContainText("attacks");
+    // Site redesign 2026-10-12: the hero carries one line of three figures; no tiles, no last run, no objectives.
+    await expect(hero.locator(".herostats__num")).toHaveCount(3);
+    await expect(hero.locator(".herostats__tile")).toHaveCount(0);
+    await expect(hero).toContainText("attacks so far");
     await expect(hero).toContainText("detected runs answered");
+    await expect(hero).toContainText("last detection to response");
+    await expect(hero).not.toContainText("last run");
     await expect(hero.locator(".herostats__obj")).toHaveCount(0);
     await expect(hero).not.toContainText(/got out|call-home/i);
     // The objectives moved to a fold in the attack section; it opens to the never-reached ones.

@@ -7,7 +7,7 @@
 
 import type { ApiClient } from "../lib/api";
 import type { Objective, Stats } from "../lib/contract";
-import { h, relativeTime, replace, timeEl, plClock, when } from "../lib/dom";
+import { h, replace, when } from "../lib/dom";
 import { humanSpeed } from "./console";
 
 const REPO_ISSUES = "https://github.com/HubertMJ/self-defending-portfolio/issues";
@@ -21,30 +21,24 @@ export interface LastRun {
 const own = (o: Record<string, { attempts: number; achieved: number }>, id: string) =>
   Object.prototype.hasOwnProperty.call(o, id) ? o[id] : { attempts: 0, achieved: 0 };
 
-export function renderStats(s: Stats, objectives: Objective[], last?: LastRun, now: number = Date.now()): HTMLElement {
+/**
+ * The hero's numbers: one line, three figures, nothing else (site redesign 2026-10-12). The last run's
+ * time is under the diagram, not here. `last` is accepted for the handle's sake and not drawn.
+ */
+export function renderStats(s: Stats, _objectives: Objective[] = [], _last?: LastRun, now: number = Date.now()): HTMLElement {
   const detected = Object.values(s.by_scenario).reduce((a, x) => a + x.detected, 0);
   const responded = Object.values(s.by_scenario).reduce((a, x) => a + x.responded, 0);
-
-  // The newest run the feed showed; without one, the API's persisted time of the last run (ADR 0035).
-  const lastAt = last ? last.at : s.last_run_at ? Date.parse(s.last_run_at) : undefined;
-  const ago = (t: number) => relativeTime(new Date(t).toISOString(), now);
-  const list = [
-    statTile(String(s.runs), "attacks, all visitors", s.since ? `since ${when(s.since, now)}` : ""),
-    // Both counts are runs: of the runs Falco detected, how many Talon answered at least once; and how
-    // many ran out of time with a detection still unanswered (a terminal run can be both).
-    statTile(`${responded} of ${detected}`, "detected runs answered", `${s.unanswered} ran out of time with a detection unanswered`),
-    s.response_ms.last > 0 ? statTile(`${s.response_ms.last} ms`, "last detection to response", humanSpeed(s.response_ms.last)) : null,
-    // The last run names what ran; how fast the answer came is the API's one figure, the tile above.
-    lastAt !== undefined ? statTile(timeEl(lastAt, plClock(lastAt, now)), "last run", last ? `${ago(lastAt)} · ${last.title}` : ago(lastAt)) : null,
+  const num = (value: string, words: string, title?: string) => h("span", { class: "herostats__num", ...(title ? { title } : {}) }, h("strong", {}, value), ` ${words}`);
+  const sep = () => h("span", { class: "herostats__sep", "aria-hidden": "true" }, " · ");
+  const figures = [
+    num(String(s.runs), "attacks so far", s.since ? `since ${when(s.since, now)}` : undefined),
+    // Both counts are runs: of the runs Falco detected, how many Talon answered at least once.
+    num(`${responded} of ${detected}`, "detected runs answered", `${s.unanswered} ran out of time with a detection unanswered`),
+    s.response_ms.last > 0 ? num(`${s.response_ms.last} ms`, "last detection to response", humanSpeed(s.response_ms.last)) : null,
   ].filter((x): x is HTMLElement => x !== null);
-  const tiles = h("div", { class: "herostats__tiles", "data-count": list.length }, list);
-  return h(
-    "div",
-    { class: "herostats", "data-objectives": String(objectives.length > 0 || Object.keys(s.objectives).length > 0) },
-    // Not the visitor's own numbers: every visitor's runs, each tile with its window (ADR 0035, "this session first").
-    h("p", { class: "herostats__label" }, "Live, all visitors — not only yours"),
-    tiles,
-  );
+  const line = h("p", { class: "herostats__line" }, h("span", { class: "herostats__label" }, "Live, all visitors — not only yours"), " ");
+  figures.forEach((f, i) => line.append(i ? sep() : "", f));
+  return h("div", { class: "herostats", "data-count": figures.length }, line);
 }
 
 /** The objectives, in the catalogue's order, with how many runs reached each; the never-reached say so. */
@@ -80,10 +74,6 @@ export function renderObjectives(s: Stats, objectives: Objective[]): HTMLElement
     ),
     h("p", { class: "small" }, "Think you can get further than this says is possible? ", h("a", { href: REPO_ISSUES, rel: "noopener noreferrer", target: "_blank" }, "Open an issue"), "."),
   );
-}
-
-function statTile(value: string | Node, label: string, foot: string): HTMLElement {
-  return h("div", { class: "herostats__tile" }, h("span", { class: "herostats__value" }, value), h("span", { class: "herostats__name" }, label), foot ? h("span", { class: "herostats__foot" }, foot) : null);
 }
 
 export interface StatsHandle {

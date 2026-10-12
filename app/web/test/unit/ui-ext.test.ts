@@ -213,12 +213,10 @@ describe("hero stats (ADR 0033, E+F)", () => {
     expect(obj.textContent).not.toMatch(/got out|call-home|escap/i);
   });
 
-  it("shows the last real run when one is given", () => {
+  it("does not draw the last run: its time is under the diagram, not on the numbers line", () => {
     const el = renderStats(stats(), TERMINAL_OBJECTIVES, { title: "Download tool in a container", at: Date.now() - 5000 });
-    expect(el.textContent).toContain("last run");
-    expect(el.textContent).toContain("Download tool in a container");
-    // One definition of response time on the band: the API's, on its own tile; none on the last run.
-    expect(el.querySelector(".herostats__tile")?.textContent).not.toMatch(/\bms\b|answered in/);
+    expect(el.textContent).not.toContain("last run");
+    expect(el.textContent).not.toContain("Download tool in a container");
   });
 });
 
@@ -348,15 +346,17 @@ describe("degrading against today's API (review 2, items 8 and 13)", () => {
 });
 
 describe("hero stats wording and tiles (review 2, item 13 and the cross-side point)", () => {
-  it("without a last run, no tile repeats another; the grid knows how many tiles it has", () => {
+  it("is one line of three figures, no two alike, with or without a last run (site redesign 2026-10-12)", () => {
     const el = renderStats(stats(), TERMINAL_OBJECTIVES);
-    const tiles = [...el.querySelectorAll(".herostats__tile")];
-    expect(tiles).toHaveLength(3);
-    const values = tiles.map((t) => t.querySelector(".herostats__value")?.textContent);
+    expect(el.querySelectorAll(".herostats__line")).toHaveLength(1);
+    const nums = [...el.querySelectorAll(".herostats__num")];
+    expect(nums).toHaveLength(3);
+    const values = nums.map((t) => t.querySelector("strong")?.textContent);
     expect(new Set(values).size).toBe(values.length);
-    expect(el.querySelector(".herostats__tiles")?.getAttribute("data-count")).toBe("3");
+    expect(el.getAttribute("data-count")).toBe("3");
     const withLast = renderStats(stats(), TERMINAL_OBJECTIVES, { title: "x", at: Date.now() });
-    expect(withLast.querySelector(".herostats__tiles")?.getAttribute("data-count")).toBe("4");
+    expect(withLast.querySelectorAll(".herostats__num")).toHaveLength(3);
+    expect(el.querySelector(".herostats__tile")).toBeNull();
   });
 
   it("counts objectives in runs, and says what 'reached' means next to how long the pod was kept", () => {
@@ -372,13 +372,14 @@ describe("hero stats wording and tiles (review 2, item 13 and the cross-side poi
 });
 
 describe("hero tiles say what their numbers count (final review, item 4)", () => {
-  it("runs answered of runs detected, next to runs that ran out of time unanswered", () => {
+  it("runs answered of runs detected, the unanswered count in the figure's title", () => {
     const el = renderStats(stats(), TERMINAL_OBJECTIVES);
-    const tile = [...el.querySelectorAll(".herostats__tile")].find((t) => t.textContent?.includes("1266 of 1279"));
-    expect(tile?.querySelector(".herostats__name")?.textContent).toBe("detected runs answered");
-    expect(tile?.querySelector(".herostats__foot")?.textContent).toBe("11 ran out of time with a detection unanswered");
+    const num = [...el.querySelectorAll(".herostats__num")].find((t) => t.textContent?.includes("1266 of 1279"));
+    expect(num?.textContent).toBe("1266 of 1279 detected runs answered");
+    expect(num?.getAttribute("title")).toBe("11 ran out of time with a detection unanswered");
     expect(el.textContent).not.toContain("went unanswered");
     expect(el.textContent).toContain("last detection to response");
+    expect(el.textContent).toContain("attacks so far");
   });
 });
 
