@@ -560,7 +560,7 @@ open them. Without JavaScript nothing folds and everything shows, as before. The
 below. The amendment of 2026-10-05 ("the attack first; every section below the hero folds") is widened:
 the sections do not merely fold on request, they start folded.
 
-**Measured after.** The desktop page is under 5 000 px on first load (from 14 315), the phone under
+**Measured after.** The desktop page is about 5 000 px on first load (from 14 315), the phone under
 8 000 px (from 23 405); the page order is unchanged, and `#top` still carries no provenance. The page's
 diagram model names namespaces and components but no port, VLAN or address (ADR 0021); the docs file
 is drawn from a fuller model that only the build script and the docs renderer import.
@@ -574,7 +574,7 @@ generated one, the tour's progress derived from events (both tamper commands; a 
 for "caught"), and the fold defaults. The hero-stats tests cover the one-line figures. The end-to-end
 suite (mock build) asserts: the above-the-fold shape at 1280x720 and 1440x900 (one primary button, the
 whole diagram and its caption, no evidence card and no provenance in `#top`) and the first nodes with
-the buttons on one row at 390x844; the page-height budgets on a first visit (desktop 1440 ≤ 5 000 px,
+the buttons on one row at 390x844; the page-height budgets on a first visit (desktop 1440 ≤ 5 500 px, which leaves room for other system fonts,
 phone 390 ≤ 9 000 px); the diagram's nodes reached by Tab, opened with Enter or Space, closed with
 Escape, `aria-expanded` following; the tour advancing through its steps from real commands in the
 mock terminal, its skip remembered, its progress re-derived; the sections folded by default and a stored

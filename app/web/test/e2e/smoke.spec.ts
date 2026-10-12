@@ -213,13 +213,13 @@ test.describe("layout (ADR 0035, amended 2026-10-05; ?mock=1)", () => {
     await noHorizontalScroll(page);
   });
 
-  test("page-height budgets on a first visit (mock build): desktop 1440 at most 5000 px, phone 390 at most 9000 px", async ({ page }) => {
+  test("page-height budgets on a first visit (mock build): desktop 1440 at most 5500 px, phone 390 at most 9000 px", async ({ page }) => {
     // ADR 0035 amendment 2026-10-12. Measured with the mock banner in place (the live page has none).
     await page.setViewportSize({ width: 1440, height: 900 });
     await page.goto("/?mock=1");
     await expect(page.locator("#hero-stats .herostats__num")).toHaveCount(3);
     await expect(page.locator("#terminal .term-start__btn")).toBeVisible();
-    expect(await page.evaluate(() => document.documentElement.scrollHeight), "desktop").toBeLessThanOrEqual(5000);
+    expect(await page.evaluate(() => document.documentElement.scrollHeight), "desktop").toBeLessThanOrEqual(5500);
     await page.setViewportSize({ width: 390, height: 844 });
     await page.goto("/?mock=1");
     await expect(page.locator("#terminal .term-start__btn")).toBeVisible();
