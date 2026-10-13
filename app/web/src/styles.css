@@ -6173,39 +6173,6 @@ body:has(.run-toast:not([hidden])) .tour-toast[data-pos="bottom"] {
   font-weight: 600;
 }
 
-/* ---------- the About bar ---------- */
-.aboutbar {
-  border-bottom: 1px solid var(--border);
-  background: var(--surface);
-}
-
-.aboutbar__inner {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 0.5rem 1.5rem;
-  padding-block: clamp(1rem, 2.5vw, 1.5rem);
-}
-
-.aboutbar__text {
-  margin: 0;
-  max-width: 48rem;
-  color: var(--text);
-}
-
-/* The second line of the bar, under the first, on its own line (2026-10-13). */
-.aboutbar__text--more {
-  flex-basis: 100%;
-  color: var(--text-muted);
-}
-
-.aboutbar__links {
-  margin: 0;
-  font-size: 0.92rem;
-  white-space: nowrap;
-}
-
 /* ---------- objectives fold, generic fold ---------- */
 .fold {
   border: 1px solid var(--border);
