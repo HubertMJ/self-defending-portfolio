@@ -47,6 +47,8 @@ export interface TourProgress {
   done: Set<string>;
   /** The first not-done step, or undefined when all are done. */
   current?: TourStep;
+  /** The run that completed a step with somewhere to go back to: the session caught, the side-by-side run. */
+  runs: { caught?: string; compare?: string };
 }
 
 /** One notice in the panel: what happened to the visitor's run, when, and where to see it. */
@@ -118,13 +120,15 @@ export function deriveProgress(runs: readonly RunView[], incidents: readonly Cor
   // Caught: a terminal session of the visitor's in which the shell ran and the pod was then
   // terminated — not any one-click run the cluster killed.
   const terminated = (r: RunView) => r.detail === "killed" || r.talon.some((t) => t.arm !== "unguarded" && /terminate/i.test(`${t.actionner ?? ""} ${t.action}`));
-  if (runs.some((r) => r.scenario === "terminal" && r.commands.some((c) => c.id === "shell") && terminated(r))) done.add("caught");
+  const caught = runs.find((r) => r.scenario === "terminal" && r.commands.some((c) => c.id === "shell") && terminated(r));
+  if (caught) done.add("caught");
   // Compared: a side-by-side run of the visitor's (two pods).
-  if (runs.some((r) => r.armPods !== undefined)) done.add("compare");
+  const compare = runs.find((r) => r.armPods !== undefined);
+  if (compare) done.add("compare");
   // Filed: a SIEM incident of the DNS exfil kind for one of the visitor's runs.
   if (incidents.some((i) => i.kind === SIEM_COMMAND && ownRunIds.has(i.run_id))) done.add("siem");
   const current = STEPS.find((s) => !done.has(s.id));
-  return { done, current };
+  return { done, current, runs: { caught: caught?.runId, compare: compare?.runId } };
 }
 
 /**
@@ -172,12 +176,16 @@ export interface TourHandle {
 }
 
 export interface TourHooks {
-  /** A step's button: the command to pick in the terminal. */
+  /** A step's button: the command to pick in the terminal (the visitor asked to go there). */
   onCommand(commandId: string): void;
   /** A step's button: the scenario to launch. */
   onScenario(scenarioId: string): void;
-  /** The "caught" step's done button: show the kill timeline (the visitor asked to go there). */
+  /** The "caught" step's done button: show this session's kill timeline (the visitor asked to go there). */
   onTimeline(): void;
+  /** Whether the terminal shows that run now, so its kill timeline is there to watch. */
+  showsRun?(runId: string): boolean;
+  /** The "compare" step's done button: put that run in the live-run console and go there. */
+  onShowRun(runId: string): void;
   /** Where the phone toast lives; document.body in the page. */
   toastParent?: HTMLElement;
   /** Below the terminal: where the phone's opened steps and notices go, so nothing above it grows. */
@@ -194,7 +202,7 @@ export interface TourHooks {
  */
 export function mountTour(root: HTMLElement, hooks: TourHooks): TourHandle {
   const now = hooks.now ?? Date.now;
-  let progress: TourProgress = { done: new Set(), current: STEPS[0] };
+  let progress: TourProgress = { done: new Set(), current: STEPS[0], runs: {} };
   let notices: TourNotice[] = [];
   let shown = skipped();
   let enabled = true;
@@ -330,11 +338,17 @@ export function mountTour(root: HTMLElement, hooks: TourHooks): TourHandle {
     return null;
   };
 
-  /** A done step's way to where it happened: offered, never taken for the visitor. */
+  /**
+   * A done step's way to where it happened: offered, never taken for the visitor, and only where
+   * the target is there to see. The kill timeline is in "This run" beside the terminal, for the
+   * session the terminal shows now (a new session, or a reload, has its own); the side-by-side run
+   * is in the live-run console, as long as the page's feed still holds it (it ticked the step, so it does).
+   */
   const doneAction = (s: TourStep): Child => {
     const key = `step:${s.id}`;
-    if (s.id === "caught") return button("Watch the kill timeline", () => hooks.onTimeline(), key);
-    if (s.id === "compare") return link({ href: "#console", label: "Show the live run" }, key);
+    const { caught, compare } = progress.runs;
+    if (s.id === "caught") return caught && (hooks.showsRun?.(caught) ?? true) ? button("Watch the kill timeline", () => hooks.onTimeline(), key) : null;
+    if (s.id === "compare") return compare ? button("Show the live run", () => hooks.onShowRun(compare), key) : null;
     if (s.id === "siem") {
       const inc = notices.find((n) => n.kind === "siem");
       return link({ href: inc?.link?.href ?? "#correlation", label: "Show in SIEM" }, key);

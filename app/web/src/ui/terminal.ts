@@ -24,6 +24,8 @@ export interface TerminalHandle {
   historyTruncated(runId: string): void;
   /** The "This run" panel's SIEM row (lib/runstatus.ts siemRow). */
   setSiem(row: SiemRow): void;
+  /** The run the terminal shows now (this session's, or one watched), whose timeline "This run" holds. */
+  shownRun(): string | undefined;
   /** Takes the visitor to the terminal with a command picked: opens a session if idle (one run), highlights its chip and fills it in once the pod is ready. */
   /** Picks a command (the chip, the input); `scroll` only for a navigation button's press. */
   suggest(commandId: string, opts?: { scroll?: boolean }): void;
@@ -74,6 +76,8 @@ export function mountTerminal(
   api: ApiClient,
   hooks: {
     onStarted?: (runId: string) => void;
+    /** Back on the start panel: nothing is shown any more (the tour drops its "watch the timeline"). */
+    onIdle?: () => void;
     blocked?: () => string | null;
     cooldownSeconds?: () => number;
     onRateLimited?: (seconds: number) => void;
@@ -227,6 +231,7 @@ export function mountTerminal(
   const renderIdle = () => {
     if (!catalogue) return;
     mode = "idle";
+    hooks.onIdle?.();
     clearInterval(clockTimer);
     clockTimer = undefined;
     const label = h("span", { class: "btn__label" }, "Open the terminal");
@@ -1203,6 +1208,7 @@ export function mountTerminal(
   return {
     update,
     historyTruncated,
+    shownRun: () => (mode === "session" ? (session?.runId ?? watching) : undefined),
     setSiem(row) {
       siem = row;
       renderSiem();

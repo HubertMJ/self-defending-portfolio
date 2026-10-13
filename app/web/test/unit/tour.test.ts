@@ -99,6 +99,30 @@ function caughtRun(): ReturnType<typeof runOf> {
   return buildTimeline(evs, Date.parse("2026-10-03T18:00:30Z")).runs[0];
 }
 
+describe("a done step's button goes to its run (2026-10-13)", () => {
+  it("names the caught session and the side-by-side run; 'Show the live run' puts that run in the console", () => {
+    const compare: StreamEvent[] = [
+      { type: "run", data: { run_id: "bb22cc33dd44ee55", scenario: "shell-in-container", state: "started", at: "2026-10-03T18:10:00Z", pod: "g", pods: { guarded: "g", unguarded: "u" } } },
+      { type: "run", data: { run_id: "bb22cc33dd44ee55", scenario: "shell-in-container", state: "finished", at: "2026-10-03T18:10:09Z", detail: "killed" } },
+    ];
+    const runs = [caughtRun(), buildTimeline(compare, Date.parse("2026-10-03T18:11:00Z")).runs[0]];
+    const p = deriveProgress(runs, [], new Set([RUN, "bb22cc33dd44ee55"]));
+    expect(p.runs.caught).toBe(RUN);
+    expect(p.runs.compare).toBe("bb22cc33dd44ee55");
+    expect(p.done.has("compare")).toBe(true);
+    const root = document.createElement("div");
+    document.body.append(root);
+    const onShowRun = vi.fn();
+    const t = mountTour(root, { onCommand: vi.fn(), onScenario: vi.fn(), onTimeline: vi.fn(), onShowRun, matchMedia: ((q: string) => ({ matches: q === WIDE_QUERY, addEventListener() {} }) as unknown as MediaQueryList) });
+    t.update(runs, [], new Set([RUN, "bb22cc33dd44ee55"]));
+    const btn = root.querySelector<HTMLButtonElement>('.tour__step[data-id="compare"] button');
+    expect(btn?.textContent).toBe("Show the live run");
+    btn?.click();
+    expect(onShowRun).toHaveBeenCalledWith("bb22cc33dd44ee55");
+    document.body.replaceChildren();
+  });
+});
+
 describe("the notices are derived from the same evidence (amendment 2026-10-13)", () => {
   const now = Date.parse("2026-10-03T18:05:00Z");
 
@@ -131,7 +155,8 @@ describe("the tour panel never moves the page (amendment 2026-10-13)", () => {
   const scrolls: string[] = [];
   let clock = Date.parse("2026-10-03T18:05:00Z");
   const mm = (wide: boolean) => ((q: string) => ({ matches: q === WIDE_QUERY && wide, addEventListener() {} }) as unknown as MediaQueryList);
-  const hooks = (wide: boolean, below?: HTMLElement) => ({ onCommand: vi.fn(), onScenario: vi.fn(), onTimeline: vi.fn(), toastParent: document.body, matchMedia: mm(wide), below, now: () => clock });
+  const shows = new Set<string>();
+  const hooks = (wide: boolean, below?: HTMLElement) => ({ onCommand: vi.fn(), onScenario: vi.fn(), onTimeline: vi.fn(), onShowRun: vi.fn(), showsRun: (id: string) => shows.has(id), toastParent: document.body, matchMedia: mm(wide), below, now: () => clock });
 
   afterEach(() => {
     document.body.replaceChildren();
@@ -169,9 +194,14 @@ describe("the tour panel never moves the page (amendment 2026-10-13)", () => {
     expect(root.querySelector(".tour__notices")).toBe(list);
     expect([...list.querySelectorAll(".tour__notice")].map((el) => (el as HTMLElement).dataset.kind)).toEqual(["siem", "talon", "falco"]);
     expect(list.querySelector('.tour__notice--siem a[href="#incident-0123456789abcdef"]')?.textContent).toBe("Show in SIEM");
-    // A done step offers its way there; nothing was scrolled or focused.
+    // A done step offers its way there - where there is somewhere to go: the kill timeline only while
+    // the terminal shows that session; nothing was scrolled or focused.
     expect(root.querySelector('.tour__step[data-id="siem"] a[href="#incident-0123456789abcdef"]')).not.toBeNull();
+    expect(root.querySelector('.tour__step[data-id="caught"] button')).toBeNull();
+    shows.add(RUN);
+    t.update([caughtRun()], [INCIDENT], new Set([RUN]));
     expect(root.querySelector('.tour__step[data-id="caught"] button')?.textContent).toBe("Watch the kill timeline");
+    shows.clear();
     expect(scrolls).toEqual([]);
     expect(document.activeElement).toBe(input);
     // No toast on a wide screen.
