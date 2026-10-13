@@ -692,3 +692,69 @@ the SIEM's card), and the kill-timeline button goes once the session is left; at
 as wide as the stage, the output no taller than "This run", the panel whole (top under the header or
 with its row, nothing scrolled away inside); the ambient dots run on screen, pause off screen, are not
 drawn under reduced motion; the mark reads `>_` in `--respond` in both themes. The height budgets stand.
+
+## Amendment 2026-10-13 (b): a calmer diagram, a terminal that keeps its height, and a short default view
+
+The owner looked at the live site and found the diagram's lines ugly, its motion unnoticeable, the
+tour's panel scrolling inside, "This run" floating on its own, the terminal growing down the page and
+"Do this step" leaving nothing to see where it led. He chose the radical cut: the default view shows
+the story, Technical Mode the rest.
+
+**The diagram.** Every edge stops 7 units short of the boxes it joins, with one 8-unit arrowhead per
+direction (the tunnel one at each end) in its line's colour (`context-stroke`). A lit edge is
+recoloured whole and a little heavier: the short "packet" overlay, which stayed at rest as a thick
+stub beside each node, is gone. Labels sit above their line on a knock-out of the page's background;
+a node's label is centred in its box (with its sub label, as one block, in Technical Mode and on the
+phone). Zones have one 10-unit radius, nodes 8, lines 1.5 px in a muted colour. `overview.svg` is
+redrawn from the same layout.
+
+**The ambient traffic** is now a small glowing dot (radius 3, the accent colour, a soft
+`drop-shadow`) that runs the request path, the visitor to the page, every 6 s, and the detect-and-
+respond loop every 18 s; the edge under it brightens as it passes. It moves by `offset-path`, a
+transform: the route and the timing are drawn by `src/diagram/layout.ts` into a stylesheet the build
+bundles with `styles.css` (`@import "diagram-traffic.css"`; the CSP allows no style attribute). It
+passes behind each box and out the other side, is not drawn under reduced motion or while a run
+lights the path, and pauses off screen and in a hidden tab as before.
+
+**The terminal** has one fixed height (the output `min(50vh, 28rem)`, 45vh on a phone) and scrolls
+its output inside, following new lines only while the visitor is at its bottom; the page never grows
+with it and never scrolls for it. Each command's explanation is one "why?" line, opened on a press.
+**"This run"** goes with the page: no longer sticky or capped, so only the tour's rail stays put.
+
+**The tour's rail never scrolls inside.** Compact rows; only the current step open; a done step is one
+line with its way there as a small link ("Timeline", "Live run", "SIEM", each with its full name for a
+screen reader); "Skip the tour" a small link on the head's line; the newest two notices, the rest
+behind "Earlier notices (n)", opened in place. Where the panel would still be taller than the screen
+under the header it lets go of sticky and goes with the page rather than be cut; the "New notice ↑"
+chip and the fade at its foot are gone with the inner scroll.
+
+**A step's press is marked until it is done.** What "Do this step" (now the step's command as a chip)
+picked - the input it filled and the command's chip, or the one-click card - wears an accent ring, a
+soft glow and a "Step n" tag (the words carry it, not the colour) until the command has run, the step
+is done or another step's button is pressed; three slow pulses where motion is welcome, the static
+ring otherwise.
+
+**The default view** (Technical Mode off): the hero is the name, one sentence, "Attack this cluster",
+the one-line numbers and the diagram; the attack section is the terminal and the tour's rail (on a
+phone the bar above and the steps below), each step offering its one command as a chip and step 5 its
+side-by-side button. "This run", the command palette, the objectives, "Just show me", the live-run
+console, the run history, the limits and the raw fields are in Technical Mode, as are the buttons that
+lead to them ("Watch the kill timeline", the tour's "Timeline" and "Live run"); the notices stay in
+the rail. Below the attack: the SIEM, How it works and About; Evidence, Posture and Verify are one
+folded card, "Evidence for the curious", each still its own fold inside it, and a link or a `#hash`
+to any of them opens the card and the section. The navigation is Attack it, SIEM, How it works and
+About, with Evidence in Technical Mode, whose switch says what it reveals ("Show the raw run data, the
+command palette, posture and verification"). The default view is hidden only where scripts run
+(`theme.ts` adds `.js` before the first paint): without JavaScript everything shows. Height budgets
+for a first visit in the default view: desktop 1440 at most 3200 px (measured 2796), phone 390 at
+most 5200 px (measured 3433).
+
+**Tests.** Unit: the layout's edges stop short of the boxes with one head per direction; the page
+carries two dots and a glow per lane edge, the docs file none, and the generated stylesheet an
+offset-path per dot; the rail's notices fold past two. End to end: the dot moves, pauses off screen,
+is not drawn under reduced motion; the rail never scrolls inside at 1440x900 and 1920x1080 with all
+six steps in view and with four notices; "This run" keeps its place in the document while the page
+scrolls; the terminal's box keeps its height through six commands and the page does not move; the
+step's mark is there after 5 s and goes when the step is done; the default view hides what it should
+and Technical Mode shows it; `#posture` opens the card and the section. Most tests run in Technical
+Mode (stored before load); the default view's own tests are tagged `@default`.
