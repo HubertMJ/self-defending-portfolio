@@ -620,7 +620,8 @@ export function mountTerminal(
       resolvePending();
       return; // output arrives over the event stream
     }
-    syncControls();
+    // Not sent: the controls are free again, and a pick held during the POST is filled in now.
+    resolvePending();
     const why =
       r.kind === "conflict"
         ? "the pod is not ready, the session is over, or a command is still running"
@@ -1225,6 +1226,8 @@ export function mountTerminal(
     if (session && !watching && !over()) return; // a live session is not thrown away by a stray press
     session = null;
     endedShown = false;
+    // A pick held in the session just left does not carry into the next one.
+    suggested = undefined;
     if (watching) return;
     renderIdle();
     idle?.btn.focus({ preventScroll: true });
@@ -1244,18 +1247,18 @@ export function mountTerminal(
       applySuggestion(myRun());
     },
     suggest(commandId, opts = {}) {
+      // The last session is over: the pick starts the next one, as from the start panel (set after
+      // again(), which drops the old session's pick).
+      const next = session && !watching && over();
+      if (next) again();
       suggested = commandId;
       suggestedStep = opts.step;
       // Only a navigation button's press ("Run it in the terminal ↑", a tour step) moves the page
       // here: to what the terminal shows (its mount has no box of its own on a wide screen, where
       // its parts are the stage's grid items).
       if (opts.scroll) (root.querySelector<HTMLElement>(":scope > *:not([hidden])") ?? root).scrollIntoView({ behavior: reduced ? "auto" : "smooth", block: "start" });
-      if (mode === "idle") void start();
-      else if (session && !watching && over()) {
-        // The last session is over: the pick starts the next one, as from the start panel.
-        again();
-        void start();
-      } else {
+      if (mode === "idle" || next) void start();
+      else {
         applySuggestion(myRun());
         // Held until the current command ends: the hint says so, and the input is filled then.
         const cmd = catalogue?.commands.find((c) => c.id === suggested);

@@ -502,6 +502,43 @@ describe("one command at a time (review 2, items 7 and 12)", () => {
     expect(chips(t.root).every((b) => !b.disabled)).toBe(true);
   });
 
+  const input = (root: HTMLElement) => root.querySelector("#term-input") as HTMLInputElement;
+  const inputOf = (id: string) => terminalDetails().commands!.find((c) => c.id === id)!.input;
+
+  it("a pick held while a POST is in flight is filled in when that POST fails, and the hint said it would be", async () => {
+    let status = 202;
+    const t = await harness({ commandStatus: () => [status, status === 202 ? { seq: 1 } : { error: "a command is already running" }] });
+    t.show(new Feed().open());
+    status = 409;
+    chips(t.root)[0].click(); // POST sent, its answer still on the way…
+    const picked = chips(t.root)[1].dataset.id!;
+    t.term.suggest(picked); // …when a tour step picks the next command
+    expect(input(t.root).value).toBe("");
+    expect(text(t.root.querySelector("#term-hint"))).toContain("it fills in once the current command finishes");
+    await flush(); // the POST is refused
+    expect(text(t.root.querySelector(".term__out"))).toContain("sh: not run");
+    expect(input(t.root).value).toBe(inputOf(picked));
+    expect(send(t.root).disabled).toBe(false);
+  });
+
+  it("a pick held when the session ends does not fill the next session's input", async () => {
+    const runs = [RUN, "5a6b7c8d9e0f1a2b"];
+    const t = await harness({ attackStatus: () => [202, { run_id: runs.shift(), scenario: "terminal", state: "queued", token: TOKEN }] });
+    const f = new Feed().open();
+    t.show(f);
+    chips(t.root)[0].click();
+    t.term.suggest(chips(t.root)[1].dataset.id!); // held behind the first command…
+    killedBy(f, 1, 3000); // …which ends the session
+    t.show(f);
+    await flush();
+    t.term.again();
+    (t.root.querySelector(".term-start__btn") as HTMLButtonElement).click();
+    await flush();
+    t.show(new Feed("5a6b7c8d9e0f1a2b", "terminal-5a6b7c8d9e").open());
+    expect(input(t.root).disabled).toBe(false);
+    expect(input(t.root).value).toBe("");
+  });
+
   it("a second tap before the 202 sends nothing", async () => {
     const t = await harness();
     t.show(new Feed().open());
