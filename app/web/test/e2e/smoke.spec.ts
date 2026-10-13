@@ -470,6 +470,24 @@ test.describe("layout (ADR 0035, amended 2026-10-05; ?mock=1)", () => {
     expect(problems).toEqual([]);
   });
 
+  test("the header's mark is the prompt in the brand's green", async ({ page }) => {
+    await page.goto("/?mock=1");
+    const mark = page.locator(".site-header .brand__mark");
+    await expect(mark).toHaveText(">_");
+    await expect(mark).toHaveAttribute("aria-hidden", "true");
+    for (const theme of ["dark", "light"]) {
+      await page.evaluate((t) => (document.documentElement.dataset.theme = t), theme);
+      const m = await mark.evaluate((el) => {
+        const cs = getComputedStyle(el);
+        return { color: cs.color, respond: getComputedStyle(document.documentElement).getPropertyValue("--respond").trim(), weight: cs.fontWeight, family: cs.fontFamily };
+      });
+      const hex = (h: string) => `rgb(${parseInt(h.slice(1, 3), 16)}, ${parseInt(h.slice(3, 5), 16)}, ${parseInt(h.slice(5, 7), 16)})`;
+      expect(m.color).toBe(hex(m.respond));
+      expect(Number(m.weight)).toBeGreaterThanOrEqual(700);
+      expect(m.family).toMatch(/mono/i);
+    }
+  });
+
   test("the hero diagram's ambient traffic: a dot per hop that runs while the diagram is on screen, pauses off screen, and is still under reduced motion", async ({ page, isMobile }) => {
     await page.goto("/?mock=1");
     const svg = isMobile ? "#diagram .dg-narrow svg" : "#diagram .dg-wide svg";

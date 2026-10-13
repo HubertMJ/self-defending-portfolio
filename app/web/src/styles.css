@@ -280,12 +280,12 @@ main {
   white-space: nowrap;
 }
 
+/* The prompt: the shell's ">_", in the brand's green, as big as the name (2026-10-13). */
 .brand__mark {
   flex: none;
-  width: 0.9rem;
-  height: 0.9rem;
-  border-radius: 3px;
-  background: conic-gradient(from 210deg, var(--attack) 0 33%, var(--detect) 0 66%, var(--respond) 0);
+  color: var(--respond);
+  font: 700 1em/1 var(--font-mono);
+  letter-spacing: -0.05em;
 }
 
 .brand__name {
