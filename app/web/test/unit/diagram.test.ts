@@ -6,7 +6,7 @@ import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { buildTimeline } from "../../src/lib/timeline";
-import { MODEL, nodesOf, validateModel } from "../../src/diagram/model";
+import { MODEL, ROLE_LEGEND, nodesOf, validateModel } from "../../src/diagram/model";
 import { FULL_MODEL } from "../../src/diagram/model-docs";
 import { TRAFFIC, layout, trafficCss } from "../../src/diagram/layout";
 import { serialise } from "../../src/diagram/tree";
@@ -42,6 +42,18 @@ describe("diagram model", () => {
     expect(narrow.length).toBe(new Set(narrow).size);
     expect(narrow[0]).toBe("visitor");
     expect(narrow).toContain("siem");
+  });
+
+  it("every node has a role, drawn as its class; the roles are the owner's (2026-10-13), the legend in index.html names each one", () => {
+    const roles = ["entry", "attack", "detect", "respond", "record", "neutral"];
+    for (const n of FULL_MODEL.nodes) expect(roles).toContain(n.role);
+    const of = (id: string) => MODEL.nodes.find((n) => n.id === id)?.role;
+    for (const id of ["visitor", "cloudflare", "cloudflared", "gateway", "site"]) expect(of(id)).toBe("entry");
+    expect([of("pod"), of("falco"), of("talon"), of("kube-apiserver"), of("siem"), of("twin")]).toEqual(["attack", "detect", "respond", "respond", "record", "neutral"]);
+    const hero = serialise(layout("hero", { interactive: true }));
+    for (const n of MODEL.nodes) expect(hero).toMatch(new RegExp(`class="dg-node dg-node--\\w+ dg-role--${n.role}"[^>]*data-node="${n.id}"`));
+    const html = readFileSync(join(process.cwd(), "src", "index.html"), "utf8");
+    for (const { role, word } of ROLE_LEGEND) expect(html).toMatch(new RegExp(`dg-legend__item dg-role--${role}"[^>]*>(?:<[^>]+>)*${word}<`));
   });
 
   it("every node names at least a blurb, and its sources are repo paths", () => {

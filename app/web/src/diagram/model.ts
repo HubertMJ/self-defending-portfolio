@@ -12,6 +12,21 @@
 import type { DefenceLayer } from "../lib/contract";
 
 export type Tone = "plain" | "control" | "attack" | "detect" | "respond";
+/**
+ * The fixed colour of a node at rest (owner, 2026-10-13): the request path, the attacked pod, what
+ * detects, what responds, what records; the unguarded twin stays neutral. styles.css and the docs
+ * file's own <style> colour `.dg-role--<role>`; the legend under the diagram names them.
+ */
+export type Role = "entry" | "attack" | "detect" | "respond" | "record" | "neutral";
+
+/** The legend's words, in its order (the neutral twin has no swatch: its label says what it is). */
+export const ROLE_LEGEND: { role: Exclude<Role, "neutral">; word: string }[] = [
+  { role: "entry", word: "request path" },
+  { role: "attack", word: "attacked pod" },
+  { role: "detect", word: "detects" },
+  { role: "respond", word: "responds" },
+  { role: "record", word: "records" },
+];
 export type Detail = "hero" | "full";
 export type View = "hero" | "narrow" | "full";
 
@@ -24,6 +39,8 @@ export interface DiagramNode {
   detail: Detail;
   /** A control point of the defence (drawn stronger) or a plain component. */
   tone: "plain" | "control";
+  /** The node's colour at rest. */
+  role: Role;
   /** The defence layer this node is the main part of, if any (links the diagram to the defence map). */
   layer?: DefenceLayer;
   /** One or two sentences for the caption panel. */
@@ -89,18 +106,18 @@ export const MODEL: DiagramModel = {
   ],
   nodes: [
     // ---- the path in ----
-    { id: "visitor", label: "Visitor", sub: "browser", zone: "internet", detail: "hero", tone: "plain", blurb: "You. Every request to this page, and every attack you launch, comes in the same way: over HTTPS to Cloudflare.", sources: [], at: { hero: [0, 1], full: [0, 0] } },
-    { id: "cloudflare", label: "Cloudflare edge", sub: "TLS · WAF · HSTS", zone: "internet", detail: "hero", tone: "control", layer: "edge", blurb: LAYER_BLURBS.edge, sources: ["docs/adr/0003-cloudflare-tunnel-exposure.md"], at: { hero: [0, 0], full: [1, 0] } },
-    { id: "cloudflared", label: "cloudflared ×2", sub: "cloudflared · dials out", zone: "k3s01", detail: "hero", tone: "control", blurb: "The tunnel is dialled from inside the VM; nothing listens for the internet. Cloudflare's requests ride back along it. Two replicas, so a rolling update never takes the site down.", sources: ["cluster/infra/cloudflared/"], at: { hero: [1, 0], full: [2, 0] } },
-    { id: "gateway", label: "Cilium Gateway", sub: "gateway · TLS from Let's Encrypt", zone: "k3s01", detail: "hero", tone: "control", layer: "network", blurb: "Cilium's Envoy terminates TLS again inside the cluster and adds the security headers. Default-deny network policies hold everywhere behind it.", sources: ["cluster/infra/gateway/", "cluster/infra/hello/httproute.yaml"], at: { hero: [2, 0], full: [3, 0] } },
-    { id: "site", label: "This page + its API", sub: "hello · portfolio-api", zone: "k3s01", detail: "hero", tone: "plain", blurb: "A static page from a signed nginx image, and a small Go API that starts the attacks, watches the pods and streams every event back to your browser as it happens.", sources: ["app/web/", "app/api/"], at: { hero: [3, 0], full: [4, 0] } },
-    { id: "kube-apiserver", label: "kube-apiserver", sub: "RBAC: sandbox pods only", zone: "k3s01", detail: "hero", tone: "control", layer: "admission", blurb: "The API creates the sandbox pod through it, and Talon's answer goes through it too. Kyverno admits only signed images in the restricted profile; the audit log of every call ships to the SIEM.", sources: ["cluster/infra/kyverno-policies/", "cluster/infra/portfolio-api/"], at: { hero: [4, 1], full: [4, 4] } },
+    { id: "visitor", label: "Visitor", sub: "browser", zone: "internet", detail: "hero", tone: "plain", role: "entry", blurb: "You. Every request to this page, and every attack you launch, comes in the same way: over HTTPS to Cloudflare.", sources: [], at: { hero: [0, 1], full: [0, 0] } },
+    { id: "cloudflare", label: "Cloudflare edge", sub: "TLS · WAF · HSTS", zone: "internet", detail: "hero", tone: "control", role: "entry", layer: "edge", blurb: LAYER_BLURBS.edge, sources: ["docs/adr/0003-cloudflare-tunnel-exposure.md"], at: { hero: [0, 0], full: [1, 0] } },
+    { id: "cloudflared", label: "cloudflared ×2", sub: "cloudflared · dials out", zone: "k3s01", detail: "hero", tone: "control", role: "entry", blurb: "The tunnel is dialled from inside the VM; nothing listens for the internet. Cloudflare's requests ride back along it. Two replicas, so a rolling update never takes the site down.", sources: ["cluster/infra/cloudflared/"], at: { hero: [1, 0], full: [2, 0] } },
+    { id: "gateway", label: "Cilium Gateway", sub: "gateway · TLS from Let's Encrypt", zone: "k3s01", detail: "hero", tone: "control", role: "entry", layer: "network", blurb: "Cilium's Envoy terminates TLS again inside the cluster and adds the security headers. Default-deny network policies hold everywhere behind it.", sources: ["cluster/infra/gateway/", "cluster/infra/hello/httproute.yaml"], at: { hero: [2, 0], full: [3, 0] } },
+    { id: "site", label: "This page + its API", sub: "hello · portfolio-api", zone: "k3s01", detail: "hero", tone: "plain", role: "entry", blurb: "A static page from a signed nginx image, and a small Go API that starts the attacks, watches the pods and streams every event back to your browser as it happens.", sources: ["app/web/", "app/api/"], at: { hero: [3, 0], full: [4, 0] } },
+    { id: "kube-apiserver", label: "kube-apiserver", sub: "RBAC: sandbox pods only", zone: "k3s01", detail: "hero", tone: "control", role: "respond", layer: "admission", blurb: "The API creates the sandbox pod through it, and Talon's answer goes through it too. Kyverno admits only signed images in the restricted profile; the audit log of every call ships to the SIEM.", sources: ["cluster/infra/kyverno-policies/", "cluster/infra/portfolio-api/"], at: { hero: [4, 1], full: [4, 4] } },
     // ---- the attack and the answer ----
-    { id: "pod", label: "Sandbox pod", sub: "sandbox · non-root · no token", zone: "k3s01", detail: "hero", tone: "plain", layer: "pod-security", blurb: LAYER_BLURBS["pod-security"], sources: ["cluster/infra/sandbox/", "cluster/infra/sandbox/scenarios/"], at: { hero: [1, 1], full: [0, 4] } },
-    { id: "twin", label: "Unguarded twin", sub: "sandbox-unguarded", zone: "k3s01", detail: "hero", tone: "plain", blurb: "The same pod, the same policies, the same attack, in a namespace Talon's rules do not match: Falco still sees it, nothing answers. The difference between the two is what the response is worth.", sources: ["cluster/infra/sandbox-unguarded/", "docs/adr/0031-unguarded-twin-namespace.md"], at: { hero: [1, 2.2], full: [0, 5.2] } },
-    { id: "falco", label: "Falco", sub: "modern eBPF · falco", zone: "k3s01", detail: "hero", tone: "control", layer: "runtime", blurb: "Falco watches every syscall over eBPF. A shell with a terminal, a sensitive file read, a network tool, a binary run from the shop volume: each matches a rule within milliseconds.", sources: ["cluster/infra/falco/"], at: { hero: [2, 1], full: [1, 4] } },
-    { id: "talon", label: "Falco Talon", sub: "falco-response", zone: "k3s01", detail: "hero", tone: "control", layer: "runtime", blurb: "Falcosidekick hands each alert to Talon, whose rules match only the sandbox namespace: terminate the pod, or label it so Cilium cuts it off both ways.", sources: ["cluster/infra/falco-response/"], at: { hero: [3, 1], full: [3, 4] } },
-    { id: "siem", label: "OpenSearch SIEM", sub: "Sigma rules · correlation", zone: "siem01", detail: "hero", tone: "control", blurb: "Fluent Bit ships every alert, action, flow, audit line and terminal command to a SIEM on its own VM that the cluster can append to but not rewrite. Sigma rules from this repository run there; the API joins their findings into incidents.", sources: ["siem/", "ansible/roles/fluent_bit/", "docs/adr/0034-siem-opensearch-security-analytics.md"], at: { hero: [5, 1.9], full: [5, 4] } },
+    { id: "pod", label: "Sandbox pod", sub: "sandbox · non-root · no token", zone: "k3s01", detail: "hero", tone: "plain", role: "attack", layer: "pod-security", blurb: LAYER_BLURBS["pod-security"], sources: ["cluster/infra/sandbox/", "cluster/infra/sandbox/scenarios/"], at: { hero: [1, 1], full: [0, 4] } },
+    { id: "twin", label: "Unguarded twin", sub: "sandbox-unguarded", zone: "k3s01", detail: "hero", tone: "plain", role: "neutral", blurb: "The same pod, the same policies, the same attack, in a namespace Talon's rules do not match: Falco still sees it, nothing answers. The difference between the two is what the response is worth.", sources: ["cluster/infra/sandbox-unguarded/", "docs/adr/0031-unguarded-twin-namespace.md"], at: { hero: [1, 2.2], full: [0, 5.2] } },
+    { id: "falco", label: "Falco", sub: "modern eBPF · falco", zone: "k3s01", detail: "hero", tone: "control", role: "detect", layer: "runtime", blurb: "Falco watches every syscall over eBPF. A shell with a terminal, a sensitive file read, a network tool, a binary run from the shop volume: each matches a rule within milliseconds.", sources: ["cluster/infra/falco/"], at: { hero: [2, 1], full: [1, 4] } },
+    { id: "talon", label: "Falco Talon", sub: "falco-response", zone: "k3s01", detail: "hero", tone: "control", role: "respond", layer: "runtime", blurb: "Falcosidekick hands each alert to Talon, whose rules match only the sandbox namespace: terminate the pod, or label it so Cilium cuts it off both ways.", sources: ["cluster/infra/falco-response/"], at: { hero: [3, 1], full: [3, 4] } },
+    { id: "siem", label: "OpenSearch SIEM", sub: "Sigma rules · correlation", zone: "siem01", detail: "hero", tone: "control", role: "record", blurb: "Fluent Bit ships every alert, action, flow, audit line and terminal command to a SIEM on its own VM that the cluster can append to but not rewrite. Sigma rules from this repository run there; the API joins their findings into incidents.", sources: ["siem/", "ansible/roles/fluent_bit/", "docs/adr/0034-siem-opensearch-security-analytics.md"], at: { hero: [5, 1.9], full: [5, 4] } },
   ],
   edges: [
     { from: "visitor", to: "cloudflare", kind: "flow", label: "HTTPS", detail: "hero" },
@@ -141,6 +158,7 @@ export function validateModel(model: DiagramModel = MODEL): string[] {
     if (n.detail === "hero" && !n.at.hero) out.push(`node ${n.id}: hero node without a hero cell`);
     if (!n.at.full && n.detail === "full") out.push(`node ${n.id}: full node without a full cell`);
     if (!n.blurb) out.push(`node ${n.id}: no blurb`);
+    if (!["entry", "attack", "detect", "respond", "record", "neutral"].includes(n.role)) out.push(`node ${n.id}: no role`);
   }
   for (const e of model.edges) {
     for (const end of [e.from, e.to]) if (!ids.has(end)) out.push(`edge ${e.from}->${e.to}: unknown node ${end}`);

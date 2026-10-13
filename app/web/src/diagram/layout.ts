@@ -63,7 +63,7 @@ const GAP = 7;
  */
 function nodeTree(n: DiagramNode, b: Box, opts: LayoutOptions): Tree {
   const id = `${opts.idPrefix ?? "dg"}-${n.id}`;
-  const attrs: Record<string, string | number> = { class: `dg-node dg-node--${n.tone}`, id, "data-node": n.id, "data-state": "idle", transform: `translate(${b.x} ${b.y})` };
+  const attrs: Record<string, string | number> = { class: `dg-node dg-node--${n.tone} dg-role--${n.role}`, id, "data-node": n.id, "data-state": "idle", transform: `translate(${b.x} ${b.y})` };
   if (opts.interactive) {
     attrs.tabindex = 0;
     attrs.role = "button";

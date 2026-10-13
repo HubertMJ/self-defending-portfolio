@@ -26,6 +26,9 @@
   --attack: #ff7657;
   --detect: #f4bf4f;
   --respond: #5ee0a4;
+  --role-entry: #6cb6ff;
+  --role-record: #b392f0;
+  --role-tint: 13%;
   --good: #3fcf6b;
   --warning: #f4bf4f;
   --serious: #ef8a5f;
@@ -62,6 +65,9 @@
     --attack: #c2410c;
     --detect: #9a6700;
     --respond: #047a52;
+    --role-entry: #0969da;
+    --role-record: #8250df;
+    --role-tint: 9%;
     --good: #12823b;
     --warning: #9a6700;
     --serious: #b9531f;
@@ -92,6 +98,9 @@
   --attack: #c2410c;
   --detect: #9a6700;
   --respond: #047a52;
+  --role-entry: #0969da;
+  --role-record: #8250df;
+  --role-tint: 9%;
   --good: #12823b;
   --warning: #9a6700;
   --serious: #b9531f;
@@ -5320,14 +5329,37 @@ html[data-terminal="off"] .needs-terminal {
   fill: var(--text-faint);
 }
 
-.dg-box {
-  fill: var(--surface-2);
-  stroke: var(--border-strong);
-  stroke-width: 1.5;
+/* Every node wears its role's colour at rest (owner, 2026-10-13; the role is in src/diagram/model.ts):
+   the request path, the attacked pod, what detects, what responds, what records. The legend under the
+   diagram names them, so the colour is a key, never the only word. */
+.dg-role--entry {
+  --role: var(--role-entry);
 }
 
-.dg-node--control .dg-box {
-  stroke: color-mix(in srgb, var(--accent) 50%, var(--border-strong));
+.dg-role--attack {
+  --role: var(--attack);
+}
+
+.dg-role--detect {
+  --role: var(--detect);
+}
+
+.dg-role--respond {
+  --role: var(--respond);
+}
+
+.dg-role--record {
+  --role: var(--role-record);
+}
+
+.dg-role--neutral {
+  --role: var(--neutral);
+}
+
+.dg-box {
+  fill: color-mix(in srgb, var(--role, var(--neutral)) var(--role-tint), var(--surface));
+  stroke: var(--role, var(--border-strong));
+  stroke-width: 1.6;
 }
 
 .dg-label {
@@ -5335,9 +5367,10 @@ html[data-terminal="off"] .needs-terminal {
   fill: var(--text);
 }
 
+/* Muted, not faint: the tinted boxes need the stronger grey for AA; on a lit box, the text colour. */
 .dg-sub {
   font: 0.64rem var(--font-mono);
-  fill: var(--text-faint);
+  fill: var(--text-muted);
 }
 
 /* Node sublabels (ports, namespaces) only in Technical Mode, like the console's raw fields; the label
@@ -5406,8 +5439,11 @@ html[data-tech="on"] .dg-label {
 
 .dg-node[role="button"]:hover .dg-box,
 .dg-node[role="button"]:focus-visible .dg-box {
-  stroke: var(--accent);
-  stroke-width: 2;
+  stroke-width: 2.4;
+}
+
+.dg-node[role="button"]:focus-visible .dg-box {
+  stroke-dasharray: 5 3;
 }
 
 .dg-node[role="button"]:focus {
@@ -5415,25 +5451,34 @@ html[data-tech="on"] .dg-label {
 }
 
 .dg-node[aria-expanded="true"] .dg-box {
-  stroke: var(--accent);
-  stroke-width: 2;
+  stroke: var(--text);
+  stroke-width: 2.4;
 }
 
-/* Lit states: one of the three stage colours, on the box and its arrowhead. The word is in the
-   caption and the status line, never carried by colour alone. */
-.dg-node[data-state="attack"] .dg-box {
-  stroke: var(--attack);
-  fill: color-mix(in srgb, var(--attack) 12%, var(--surface-2));
+/* Lit states: one of the three stage colours, on the box and its arrowhead, clearly more than the
+   role's rest colour: a heavier line, a glow and a stronger fill. The word is in the caption and the
+   status line, never carried by colour alone. */
+.dg-node[data-state="attack"] {
+  --lit: var(--attack);
 }
 
-.dg-node[data-state="detect"] .dg-box {
-  stroke: var(--detect);
-  fill: color-mix(in srgb, var(--detect) 13%, var(--surface-2));
+.dg-node[data-state="detect"] {
+  --lit: var(--detect);
 }
 
-.dg-node[data-state="respond"] .dg-box {
-  stroke: var(--respond);
-  fill: color-mix(in srgb, var(--respond) 13%, var(--surface-2));
+.dg-node[data-state="respond"] {
+  --lit: var(--respond);
+}
+
+.dg-node:is([data-state="attack"], [data-state="detect"], [data-state="respond"]) .dg-box {
+  stroke: var(--lit);
+  stroke-width: 2.8;
+  fill: color-mix(in srgb, var(--lit) calc(var(--role-tint) * 2.2), var(--surface));
+  filter: drop-shadow(0 0 5px color-mix(in srgb, var(--lit) 65%, transparent));
+}
+
+.dg-node:is([data-state="attack"], [data-state="detect"], [data-state="respond"]) .dg-sub {
+  fill: var(--text);
 }
 
 /* A lit edge wears the stage of what travelled it, the whole line at once and a little heavier: the
@@ -5490,6 +5535,33 @@ html[data-tech="on"] .dg-label {
 
 .dg-foot {
   margin-top: 0.6rem;
+}
+
+/* The colour key under the diagram: a swatch per role, the box's own stroke and tint. */
+.dg-legend {
+  list-style: none;
+  margin: 0 0 0.5rem;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.2rem 1.1rem;
+  font: 0.72rem var(--font-mono);
+  color: var(--text-muted);
+}
+
+.dg-legend__item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.dg-legend__item::before {
+  content: "";
+  width: 0.7rem;
+  height: 0.7rem;
+  border-radius: 3px;
+  border: 1.6px solid var(--role);
+  background: color-mix(in srgb, var(--role) 55%, var(--surface));
 }
 
 .dg-status {
