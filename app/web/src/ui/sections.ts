@@ -107,23 +107,6 @@ export function mountSections(onChange?: (id: string, expanded: boolean) => void
   };
   syncGroup();
   new MutationObserver(syncGroup).observe(document.documentElement, { attributes: true, attributeFilter: ["data-tech"] });
-  // "Evidence for the curious" (2026-10-13 b): without Technical Mode the evidence, posture and verify
-  // sections are one folded card; its button opens or closes the three at once (each keeps its fold).
-  const root = document.documentElement;
-  const curious = document.querySelector<HTMLButtonElement>(".curious__toggle");
-  const setCurious = (open: boolean) => {
-    if (open) root.dataset.curious = "open";
-    else delete root.dataset.curious;
-    curious?.setAttribute("aria-expanded", String(open));
-  };
-  curious?.addEventListener("click", () => setCurious(root.dataset.curious !== "open"));
-  /** Opens the card if `el` is in one of its sections and the card hides it; whether it did. */
-  const openCard = (el: HTMLElement | null): boolean => {
-    if (!el?.closest('main > [data-group="curious"]') || root.dataset.tech === "on" || root.dataset.curious === "open") return false;
-    setCurious(true);
-    return true;
-  };
-
   // The folded sections are folded by their buttons now: theme.ts's stand-in (styles.css) goes.
   delete document.documentElement.dataset.folded;
 
@@ -139,7 +122,6 @@ export function mountSections(onChange?: (id: string, expanded: boolean) => void
   /** Opens the folded section holding the element `hash` names; that element if it was folded. */
   const reveal = (hash: string): HTMLElement | null => {
     const target = byHash(hash);
-    const card = openCard(target);
     // Skills or Projects inside "About me": the About fold is the one to open.
     const about = folds.get("about");
     if (target?.closest('main > [data-group="about"]') && document.documentElement.dataset.tech !== "on" && about && !isOpen(about)) {
@@ -147,7 +129,7 @@ export function mountSections(onChange?: (id: string, expanded: boolean) => void
       return target;
     }
     const fold = folds.get(target?.closest<HTMLElement>("main > .section")?.id ?? "");
-    if (!target || !fold || isOpen(fold)) return card ? target : null;
+    if (!target || !fold || isOpen(fold)) return null;
     set(fold, true, true);
     return target;
   };

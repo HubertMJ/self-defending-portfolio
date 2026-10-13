@@ -243,12 +243,13 @@ main:focus {
 }
 
 /* The sections are numbered by the stylesheet, not in the copy, so a section the production build
-   drops (an About still to be written) leaves no gap in the numbering. */
+   drops (an About still to be written) leaves no gap in the numbering. The same numbers in both
+   views, About last: Skills and Projects (data-group="about") are About's sub-sections, unnumbered. */
 main {
   counter-reset: section;
 }
 
-.section > .wrap > .section__head > .eyebrow::before {
+.section:not([data-group]) > .wrap > .section__head > .eyebrow::before {
   counter-increment: section;
   content: counter(section, decimal-leading-zero) " · ";
 }
@@ -4304,7 +4305,7 @@ html[data-terminal="off"] .needs-terminal {
   font-size: 0.8rem;
 }
 
-.section--evidence .section__head {
+.section--evidence:not(.section--collapsed) .section__head {
   margin-bottom: 1.25rem;
 }
 
@@ -6324,71 +6325,6 @@ html[data-tech="on"] .tech-less {
   html.js:not([data-tech="on"]) .term__grid {
     grid-template-columns: minmax(0, 1fr);
   }
-}
-
-/* "Evidence for the curious": the evidence, posture and verify sections as one folded card; each
-   keeps its own fold inside it, and a link to any of them opens the card (ui/sections.ts). */
-.curious {
-  margin: 0 0 clamp(1.5rem, 4vw, 2.5rem);
-}
-
-html:not(.js) .curious,
-html[data-tech="on"] .curious {
-  display: none;
-}
-
-html.js:not([data-tech="on"]):not([data-curious="open"]) main > [data-group="curious"] {
-  display: none;
-}
-
-.curious__toggle {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 0.2rem 1rem;
-  align-items: center;
-  width: 100%;
-  padding: 0.9rem 1.1rem;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--surface);
-  color: var(--text);
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-
-.curious__toggle:hover {
-  border-color: var(--border-strong);
-}
-
-.curious__toggle:hover .section__chevron {
-  color: var(--accent);
-}
-
-.curious__toggle[aria-expanded="false"] .section__chevron {
-  transform: rotate(-45deg);
-}
-
-.curious__title {
-  font-weight: 700;
-  font-size: 1.05rem;
-}
-
-.curious__lead {
-  grid-column: 1;
-  color: var(--text-muted);
-  font-size: 0.9rem;
-}
-
-.curious__toggle .section__chevron {
-  grid-column: 2;
-  grid-row: 1 / span 2;
-}
-
-/* Open, its three sections read as the card's contents: under it, set in by a rule at their left. */
-html.js:not([data-tech="on"])[data-curious="open"] main > [data-group="curious"] > .wrap {
-  border-left: 2px solid var(--border);
-  padding-left: clamp(0.9rem, 2vw, 1.25rem);
 }
 
 /* Before a session starts the stage is as tall as the start card: no empty band under it. Once the

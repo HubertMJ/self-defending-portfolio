@@ -784,3 +784,13 @@ contain`, nothing scrolling it for the visitor. The shop stays a fold inside it 
 panel would scroll, unless the visitor chose). On a phone the opened details are capped the same way
 (`min(55vh, 30rem)`), so the input stays within reach under them. A stale rule of the mock's stylesheet
 for the old sticky panel is gone.
+
+**No "Evidence for the curious" card.** The card of (b) read as random and made the numbering jump
+(its three sections were counted only while it was open). Evidence ("What the cluster recorded"),
+Posture ("Live security posture") and Verify ("Verify it yourself") are ordinary folded sections again,
+in the default view too, exactly like the SIEM's and How it works; a link or a `#hash` to any of them
+opens that section. The sections are numbered the same in both views, 01 Attack it to 07 About, About
+last: the attack section's eyebrow shows in the default view too, and Skills and Projects, About's
+sub-sections, carry no number in either view. The navigation is Attack it, SIEM, How it works, Evidence
+and About in both views; the Technical Mode switch says "Show the raw run data, the command palette, the one-click attacks and the run history". The card's markup, styles, script and tests are gone. Height budgets stand
+(measured with the mock banner: desktop 1440 2562 px, phone 390 3230 px).

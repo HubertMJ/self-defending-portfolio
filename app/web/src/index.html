@@ -28,13 +28,13 @@
         <li><a href="#attack">Attack it</a></li>
         <li class="site-nav__siem" hidden><a href="#correlation">SIEM</a></li>
         <li><a href="#how">How<span class="site-nav__more"> it works</span></a></li>
-        <li class="tech-more"><a href="#evidence">Evidence</a></li>
+        <li><a href="#evidence">Evidence</a></li>
         <li><a href="#about">About</a></li>
       </ul>
     </nav>
     <div class="site-header__tools">
       <p class="conn conn--header" id="header-conn" data-state="connecting"><span class="conn__dot" aria-hidden="true"></span>static</p>
-      <button type="button" class="tech-toggle" id="tech-toggle" hidden aria-pressed="false" title="Show the raw run data, the command palette, posture and verification">
+      <button type="button" class="tech-toggle" id="tech-toggle" hidden aria-pressed="false" title="Show the raw run data, the command palette, the one-click attacks and the run history">
         <span class="tech-toggle__icon" aria-hidden="true">{ }</span><span class="tech-toggle__label">Technical<span class="tech-toggle__more"> mode</span></span>
       </button>
       <button type="button" class="theme-toggle" id="theme-toggle" hidden aria-label="Switch theme">
@@ -95,7 +95,7 @@
   <section class="section section--attack" id="attack" aria-labelledby="attack-title">
     <div class="wrap">
       <header class="section__head">
-        <p class="eyebrow tech-more">Attack it</p>
+        <p class="eyebrow">Attack it</p>
         <h2 id="attack-title">Your hands on the pod</h2>
         <p class="section__lead tech-more" id="attack-lead">
           A throwaway pod in an isolated <code>sandbox</code> namespace with a little shop inside it.
@@ -192,19 +192,7 @@
     </div>
   </section>
 
-  <!-- Without Technical Mode the three sections below are one card, folded (2026-10-13); without
-       JavaScript, or in Technical Mode, they show as sections of their own and this card does not. -->
-  <aside class="curious" id="curious" aria-label="Evidence for the curious">
-    <div class="wrap">
-      <button type="button" class="curious__toggle" aria-expanded="false" aria-controls="evidence posture verify">
-        <span class="curious__title">Evidence for the curious</span>
-        <span class="curious__lead">What the cluster recorded, its live security posture, and how to verify the running images yourself.</span>
-        <span class="section__chevron" aria-hidden="true"></span>
-      </button>
-    </div>
-  </aside>
-
-  <section class="section section--evidence" id="evidence" aria-labelledby="evidence-title" data-group="curious">
+  <section class="section section--evidence" id="evidence" aria-labelledby="evidence-title">
     <div class="wrap">
       <header class="section__head">
         <p class="eyebrow">Evidence</p>
@@ -223,7 +211,7 @@
     </div>
   </section>
 
-  <section class="section" id="posture" aria-labelledby="posture-title" data-group="curious">
+  <section class="section" id="posture" aria-labelledby="posture-title">
     <div class="wrap">
       <header class="section__head">
         <p class="eyebrow">Posture</p>
@@ -239,7 +227,7 @@
     </div>
   </section>
 
-  <section class="section" id="verify" aria-labelledby="verify-title" data-group="curious">
+  <section class="section" id="verify" aria-labelledby="verify-title">
     <div class="wrap">
       <header class="section__head">
         <p class="eyebrow">Verify</p>

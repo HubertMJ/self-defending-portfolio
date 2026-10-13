@@ -1488,13 +1488,31 @@ test.describe("technical mode", () => {
     expect(problems).toEqual([]);
   });
 
-  test("the default view is short: the hero, the terminal with the tour, the SIEM, How it works and About; Technical Mode shows the rest", { tag: "@default" }, async ({ page, isMobile }) => {
+  test("the default view is short: the hero, the terminal with the tour, then folded sections numbered as in Technical Mode, About last; Technical Mode shows the rest", { tag: "@default" }, async ({ page, isMobile }) => {
     const problems = guardConsole(page);
     await page.goto("/?mock=1");
-    const hidden = ["#console", "#timeline", ".launcher", "#objectives-fold", "#evidence", "#posture", "#verify", ".hero__secondary", '.site-nav a[href="#evidence"]'];
+    const hidden = ["#console", "#timeline", ".launcher", "#objectives-fold", ".hero__secondary"];
     for (const sel of hidden) await expect(page.locator(sel).first(), sel).toBeHidden();
-    await expect(page.locator(".site-nav a:visible")).toHaveText(["Attack it", "SIEM", /^How( it works)?$/, "About"], { useInnerText: true });
-    await expect(page.locator("#tech-toggle")).toHaveAttribute("title", "Show the raw run data, the command palette, posture and verification");
+    await expect(page.locator(".site-nav a:visible")).toHaveText(["Attack it", "SIEM", /^How( it works)?$/, "Evidence", "About"], { useInnerText: true });
+    // Evidence, Posture and Verify are folded sections like the others: one numbering, 01..07, About last,
+    // the same in both views (no card, no jump).
+    await expect(page.locator("#correlation")).toBeVisible();
+    for (const id of ["#evidence", "#posture", "#verify"]) {
+      await expect(page.locator(id)).toBeVisible();
+      await expect(page.locator(`${id} .section__toggle`)).toHaveAttribute("aria-expanded", "false");
+    }
+    // The stylesheet's counter steps on each shown eyebrow of an ungrouped section (a computed style
+    // does not resolve counter()), so the sections it numbers, in order, are these.
+    const numbers = () =>
+      page.evaluate(() =>
+        [...document.querySelectorAll<HTMLElement>("main > .section:not([data-group])")]
+          .filter((s) => s.querySelector(".section__head > .eyebrow")?.getClientRects().length)
+          .map((s) => s.id),
+      );
+    const expected = ["attack", "correlation", "how", "evidence", "posture", "verify", "about"];
+    expect(await numbers()).toEqual(expected);
+    await expect(page.locator("#curious")).toHaveCount(0);
+    await expect(page.locator("#tech-toggle")).toHaveAttribute("title", "Show the raw run data, the command palette, the one-click attacks and the run history");
     // The terminal alone, the tour's step offering its one command as a chip; no palette, no "This run".
     const term = page.locator("#terminal");
     await term.getByRole("button", { name: /Open the terminal/ }).click();
@@ -1507,18 +1525,12 @@ test.describe("technical mode", () => {
       await chip.click();
       await expect(page.locator("#term-input")).toHaveValue("id");
     }
-    // One card holds the evidence; it opens in place, its three sections inside.
-    const card = page.getByRole("button", { name: /Evidence for the curious/ });
-    await expect(card).toHaveAttribute("aria-expanded", "false");
-    await card.click();
-    await expect(card).toHaveAttribute("aria-expanded", "true");
-    for (const id of ["#evidence", "#posture", "#verify"]) await expect(page.locator(id)).toBeVisible();
-    // Technical Mode: everything as before, the card gone.
+    // Technical Mode: everything, and the same numbers.
     await page.locator("#tech-toggle").click();
     for (const sel of ["#console", "#timeline", ".launcher", "#evidence", "#posture", "#verify", ".hero__secondary"]) await expect(page.locator(sel).first(), sel).toBeVisible();
     await expect(term.locator(".term__palette")).toBeVisible();
     await expect(term.locator(".term__side")).toBeVisible();
-    await expect(page.locator("#curious")).toBeHidden();
+    expect(await numbers()).toEqual(expected);
     expect(problems).toEqual([]);
   });
 
@@ -1551,9 +1563,8 @@ test.describe("technical mode", () => {
     await expect(page.locator("#projects .section__toggle")).toHaveCount(1);
   });
 
-  test("a link to #posture in the default view opens the evidence card and the section", { tag: "@default" }, async ({ page }) => {
+  test("a link to #posture in the default view opens the section", { tag: "@default" }, async ({ page }) => {
     await page.goto("/?mock=1#posture");
-    await expect(page.locator(".curious__toggle")).toHaveAttribute("aria-expanded", "true");
     await expect(page.locator("#posture")).toBeVisible();
     await expect(page.locator("#posture .section__toggle")).toHaveAttribute("aria-expanded", "true");
     await expect(page.locator("#posture-title")).toBeInViewport();
