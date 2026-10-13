@@ -505,29 +505,45 @@ test.describe("layout (ADR 0035, amended 2026-10-05; ?mock=1)", () => {
     }
   });
 
-  test("the hero diagram's ambient traffic: a dot per hop that runs while the diagram is on screen, pauses off screen, and is still under reduced motion", async ({ page, isMobile }) => {
+  test("the hero diagram's ambient traffic: a glowing dot runs the request path and the loop while the diagram is on screen, pauses off screen, and is not drawn under reduced motion", async ({ page, isMobile }) => {
     await page.goto("/?mock=1");
     const svg = isMobile ? "#diagram .dg-narrow svg" : "#diagram .dg-wide svg";
-    const dots = page.locator(`${svg} .dg-ambient`);
-    expect(await dots.count()).toBeGreaterThanOrEqual(8);
-    await expect(dots.first()).toHaveAttribute("pathLength", "100");
+    const prefix = isMobile ? "dgn" : "dg";
+    await expect(page.locator(`${svg} .dg-dot`)).toHaveCount(2);
     await expect(page.locator("#diagram")).toHaveAttribute("data-ambient", "on");
-    const style = (sel: string) => page.locator(sel).first().evaluate((el) => ({ name: getComputedStyle(el).animationName, state: getComputedStyle(el).animationPlayState, display: getComputedStyle(el).display }));
-    let m = await style(`${svg} .dg-edge[data-edge="visitor-cloudflare"] .dg-ambient`);
-    expect(m).toEqual({ name: "dg-ambient", state: "running", display: "block" });
-    m = await style(`${svg} .dg-edge[data-edge="falco-talon"] .dg-ambient`);
-    expect(m.name).toBe("dg-ambient-loop");
-    // The side edges (the twin's syscalls, the logs to the SIEM) carry none.
-    await expect(page.locator(`${svg} .dg-edge--side .dg-ambient`)).toHaveCount(0);
+    const style = (sel: string) =>
+      page.locator(sel).first().evaluate((el) => {
+        const cs = getComputedStyle(el);
+        return { name: cs.animationName, state: cs.animationPlayState, display: cs.display, path: cs.offsetPath };
+      });
+    let m = await style(`#${prefix}-dot-req`);
+    expect(m).toMatchObject({ name: `dg-tr-${prefix}-req`, state: "running", display: "inline" });
+    expect(m.path).toMatch(/^path\("M/);
+    expect((await style(`#${prefix}-dot-loop`)).name).toBe(`dg-tr-${prefix}-loop`);
+    expect((await style(`#${prefix}-glow-gateway-site`)).name).toBe(`dg-tr-${prefix}-gateway-site`);
+    // It moves: two moments of its round put the dot in two places.
+    const at = (ms: number) =>
+      page.evaluate(
+        ([id, t]) => {
+          const dot = document.getElementById(id as string) as unknown as SVGGraphicsElement;
+          for (const a of dot.getAnimations()) a.currentTime = t as number;
+          const r = dot.getBoundingClientRect();
+          return [Math.round(r.x), Math.round(r.y)];
+        },
+        [`${prefix}-dot-req`, ms],
+      );
+    expect(await at(500)).not.toEqual(await at(1800));
+    // The side edges (the twin's syscalls, the logs to the SIEM) carry no glow.
+    await expect(page.locator(`${svg} .dg-edge--side .dg-glow`)).toHaveCount(0);
     // Off screen: paused.
     await page.evaluate(() => document.getElementById("skills")?.scrollIntoView({ behavior: "instant" }));
     await expect(page.locator("#diagram")).toHaveAttribute("data-ambient", "off");
-    m = await style(`${svg} .dg-edge[data-edge="visitor-cloudflare"] .dg-ambient`);
+    m = await style(`#${prefix}-dot-req`);
     expect(m.state).toBe("paused");
     // Reduced motion: not drawn at all.
     await page.emulateMedia({ reducedMotion: "reduce" });
     await page.reload();
-    m = await style(`${svg} .dg-edge[data-edge="visitor-cloudflare"] .dg-ambient`);
+    m = await style(`#${prefix}-dot-req`);
     expect(m.display).toBe("none");
   });
 

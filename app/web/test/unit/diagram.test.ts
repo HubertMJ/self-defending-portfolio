@@ -8,7 +8,7 @@ import { describe, expect, it } from "vitest";
 import { buildTimeline } from "../../src/lib/timeline";
 import { MODEL, nodesOf, validateModel } from "../../src/diagram/model";
 import { FULL_MODEL } from "../../src/diagram/model-docs";
-import { layout } from "../../src/diagram/layout";
+import { TRAFFIC, layout, trafficCss } from "../../src/diagram/layout";
 import { serialise } from "../../src/diagram/tree";
 import { renderDocsSvg } from "../../src/diagram/docs";
 import { describeStates, mountDiagram, pathOf } from "../../src/ui/diagram";
@@ -66,13 +66,29 @@ describe("diagram layout", () => {
     });
   }
 
-  it("the page's flow and response edges carry an ambient path of length 100; the docs file has none", () => {
+  it("the page carries the ambient traffic (two dots, a glow on each lane edge) and its generated routes; the docs file is still", () => {
     const hero = serialise(layout("hero", { interactive: true }));
-    const flows = (hero.match(/class="dg-edge dg-edge--(flow|response)"/g) ?? []).length;
-    expect(flows).toBeGreaterThan(4);
-    expect((hero.match(/class="dg-ambient" d="[^"]+" pathLength="100"/g) ?? []).length).toBe(flows);
-    expect(serialise(layout("narrow", { interactive: true }))).toContain('class="dg-ambient"');
-    expect(serialise(layout("full", { interactive: false }, FULL_MODEL))).not.toContain("dg-ambient");
+    expect((hero.match(/<circle class="dg-dot" id="dg-dot-(req|loop)" r="3"/g) ?? []).length).toBe(2);
+    for (const id of [...TRAFFIC.req.edges, ...TRAFFIC.loop.edges]) expect(hero).toContain(`class="dg-glow" id="dg-glow-${id}"`);
+    // No overlay at rest: no stub of a packet path, no glow on the side edges.
+    expect(hero).not.toContain("dg-packet");
+    expect(hero).not.toMatch(/dg-edge--side[^>]*>(?:(?!<\/g>).)*dg-glow/s);
+    expect(serialise(layout("narrow", { interactive: true }))).toContain('id="dgn-dot-req"');
+    const docs = serialise(layout("full", { interactive: false }, FULL_MODEL));
+    expect(docs).not.toMatch(/dg-dot|dg-glow/);
+    const css = trafficCss();
+    for (const p of ["dg", "dgn"]) for (const l of ["req", "loop"]) expect(css).toMatch(new RegExp(`#${p}-dot-${l} \\{ offset-path: path\\("M[\\d. L]+"\\); --tr-name: dg-tr-${p}-${l}; --tr-period: \\d+s; \\}`));
+    expect(css).toContain("@keyframes dg-tr-dg-gateway-site");
+  });
+
+  it("edges stop short of the boxes: one arrowhead per direction, 8 units, its tip clear of the node", () => {
+    const hero = serialise(layout("hero", { interactive: true }));
+    expect(hero).toMatch(/<marker id="dg-arrow-flow"[^>]*markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse"/);
+    // The tunnel: one line, a head at each end; every other line one head.
+    const tunnel = hero.match(/data-edge="cloudflare-cloudflared"[^]*?<\/g>/)?.[0] ?? "";
+    expect((tunnel.match(/marker-(start|end)=/g) ?? []).length).toBe(2);
+    // Cloudflare's box ends at x=184, cloudflared's starts at 238: the line runs 191 to 231.
+    expect(tunnel).toMatch(/class="dg-line" d="M191,\d+ L231,\d+"/);
   });
 
   it("interactive nodes are focusable buttons inside a role=group svg; the docs view is one role=img", () => {

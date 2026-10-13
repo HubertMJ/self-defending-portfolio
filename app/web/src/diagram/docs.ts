@@ -20,7 +20,6 @@ const STYLE = `
     .dg-line { fill: none; stroke: #57606a; stroke-width: 1.5; }
     .dg-edge--side .dg-line { stroke-dasharray: 3 4; }
     .dg-edge--response .dg-line { stroke: #cf222e; }
-    .dg-packet { display: none; }
     .dg-edgelabel { font: 10.5px system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; fill: #57606a; paint-order: stroke; stroke: #ffffff; stroke-width: 4px; stroke-linejoin: round; }
     .dg-head { fill: #57606a; }
     .dg-head--response { fill: #cf222e; }

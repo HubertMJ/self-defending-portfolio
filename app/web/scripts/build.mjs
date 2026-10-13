@@ -56,6 +56,22 @@ async function heroDiagrams() {
   };
 }
 
+/**
+ * The hero diagram's ambient traffic: its dots' routes and timing, drawn from the same layout into
+ * a stylesheet that styles.css imports (`@import "diagram-traffic.css"`), so it is bundled into the
+ * one hashed CSS file (the CSP allows no inline style, and offset-path needs the route).
+ */
+const trafficPlugin = {
+  name: "diagram-traffic",
+  setup(build) {
+    build.onResolve({ filter: /^diagram-traffic\.css$/ }, () => ({ path: "diagram-traffic.css", namespace: "diagram" }));
+    build.onLoad({ filter: /.*/, namespace: "diagram" }, async () => {
+      const { trafficCss } = await loadDiagram();
+      return { contents: trafficCss(), loader: "css", watchFiles: [join(root, "src/diagram/layout.ts"), join(root, "src/diagram/model.ts")] };
+    });
+  },
+};
+
 /** Rewrites {{name.ext}} placeholders in index.html to the hashed file esbuild produced. */
 const htmlPlugin = {
   name: "html",
@@ -105,7 +121,7 @@ const options = {
   metafile: true,
   legalComments: "none",
   logLevel: "warning",
-  plugins: mock ? [htmlPlugin] : [noMockPlugin, htmlPlugin],
+  plugins: mock ? [trafficPlugin, htmlPlugin] : [trafficPlugin, noMockPlugin, htmlPlugin],
 };
 
 if (watch) {

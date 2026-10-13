@@ -13,7 +13,6 @@
     .dg-line { fill: none; stroke: #57606a; stroke-width: 1.5; }
     .dg-edge--side .dg-line { stroke-dasharray: 3 4; }
     .dg-edge--response .dg-line { stroke: #cf222e; }
-    .dg-packet { display: none; }
     .dg-edgelabel { font: 10.5px system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; fill: #57606a; paint-order: stroke; stroke: #ffffff; stroke-width: 4px; stroke-linejoin: round; }
     .dg-head { fill: #57606a; }
     .dg-head--response { fill: #cf222e; }
@@ -40,260 +39,237 @@
     <title id="ov-title">self-defending-portfolio: architecture overview</title>
     <desc id="ov-desc">The network path from the visitor through Cloudflare and an outbound-only tunnel to the Cilium Gateway and the page with its API; GitOps from a push through CI and Argo CD; the supply chain from the build workflow through Trivy, keyless cosign signing and GHCR to Kyverno admission; detection and response from a sandbox pod through Falco, Falcosidekick and Falco Talon back to kube-apiserver, and from everything to the SIEM on its own VM.</desc>
     <defs>
-      <marker id="ov-arrow-flow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-        <path class="dg-head dg-head--flow" d="M0,0 L10,5 L0,10 z"/>
+      <marker id="ov-arrow-flow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto-start-reverse">
+        <path class="dg-head dg-head--flow" d="M0,1 L10,5 L0,9 z"/>
       </marker>
-      <marker id="ov-arrow-side" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-        <path class="dg-head dg-head--side" d="M0,0 L10,5 L0,10 z"/>
+      <marker id="ov-arrow-side" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto-start-reverse">
+        <path class="dg-head dg-head--side" d="M0,1 L10,5 L0,9 z"/>
       </marker>
-      <marker id="ov-arrow-response" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-        <path class="dg-head dg-head--response" d="M0,0 L10,5 L0,10 z"/>
-      </marker>
-      <marker id="ov-arrow-lit" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-        <path class="dg-head dg-head--lit" d="M0,0 L10,5 L0,10 z"/>
+      <marker id="ov-arrow-response" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto-start-reverse">
+        <path class="dg-head dg-head--response" d="M0,1 L10,5 L0,9 z"/>
       </marker>
     </defs>
     <g class="dg-zones">
       <g class="dg-zone" data-zone="internet">
-        <rect class="dg-zonebox" x="2" y="2" width="428" height="116" rx="12"/>
+        <rect class="dg-zonebox" x="2" y="2" width="428" height="116" rx="10"/>
         <text class="dg-zonetitle" x="16" y="19">Internet</text>
       </g>
       <g class="dg-zone" data-zone="k3s01">
-        <rect class="dg-zonebox" x="450" y="2" width="876" height="116" rx="12"/>
+        <rect class="dg-zonebox" x="450" y="2" width="876" height="116" rx="10"/>
         <text class="dg-zonetitle" x="464" y="19">k3s01</text>
         <text class="dg-zonesub" x="510" y="19">one VM · Ansible-hardened · nftables input drop · Cilium</text>
       </g>
       <g class="dg-zone" data-zone="siem01">
-        <rect class="dg-zonebox" x="1122" y="418" width="204" height="116" rx="12"/>
+        <rect class="dg-zonebox" x="1122" y="418" width="204" height="116" rx="10"/>
         <text class="dg-zonetitle" x="1136" y="435">siem01</text>
         <text class="dg-zonesub" x="1189.2" y="435">VLAN 42 · 10.4.2.10 · append-only</text>
       </g>
       <g class="dg-zone" data-zone="gitops">
-        <rect class="dg-zonebox" x="2" y="147.6" width="652" height="240.8" rx="12"/>
+        <rect class="dg-zonebox" x="2" y="147.6" width="652" height="240.8" rx="10"/>
         <text class="dg-zonetitle" x="16" y="164.6">GitOps: every cluster change is a commit</text>
       </g>
       <g class="dg-zone" data-zone="supply">
-        <rect class="dg-zonebox" x="674" y="147.6" width="652" height="240.8" rx="12"/>
+        <rect class="dg-zonebox" x="674" y="147.6" width="652" height="240.8" rx="10"/>
         <text class="dg-zonetitle" x="688" y="164.6">Supply chain: only our own images, only if signed on main</text>
       </g>
       <g class="dg-zone" data-zone="runtime">
-        <rect class="dg-zonebox" x="2" y="418" width="1100" height="240.8" rx="12"/>
+        <rect class="dg-zonebox" x="2" y="418" width="1100" height="240.8" rx="10"/>
         <text class="dg-zonetitle" x="16" y="435">Detection and response: no human in the loop, sandbox only</text>
       </g>
     </g>
     <g class="dg-edges">
       <g class="dg-edge dg-edge--flow" data-edge="visitor-cloudflare" data-lit="false">
-        <path class="dg-line" d="M192,74 H240" marker-end="url(#ov-arrow-flow)"/>
-        <path class="dg-packet" d="M192,74 H240"/>
-        <text class="dg-edgelabel" x="216" y="67" text-anchor="middle">HTTPS</text>
+        <path class="dg-line" d="M199,74 L233,74" marker-end="url(#ov-arrow-flow)"/>
+        <text class="dg-edgelabel" x="216" y="66" text-anchor="middle">HTTPS</text>
       </g>
       <g class="dg-edge dg-edge--flow" data-edge="cloudflare-cloudflared" data-lit="false">
-        <path class="dg-line" d="M416,74 H464" marker-end="url(#ov-arrow-flow)" marker-start="url(#ov-arrow-flow)"/>
-        <path class="dg-packet" d="M416,74 H464"/>
-        <text class="dg-edgelabel" x="440" y="67" text-anchor="middle">tunnel</text>
+        <path class="dg-line" d="M423,74 L457,74" marker-end="url(#ov-arrow-flow)" marker-start="url(#ov-arrow-flow)"/>
+        <text class="dg-edgelabel" x="440" y="66" text-anchor="middle">tunnel</text>
       </g>
       <g class="dg-edge dg-edge--flow" data-edge="cloudflared-gateway" data-lit="false">
-        <path class="dg-line" d="M640,74 H688" marker-end="url(#ov-arrow-flow)"/>
-        <path class="dg-packet" d="M640,74 H688"/>
-        <text class="dg-edgelabel" x="664" y="67" text-anchor="middle">HTTPS</text>
+        <path class="dg-line" d="M647,74 L681,74" marker-end="url(#ov-arrow-flow)"/>
+        <text class="dg-edgelabel" x="664" y="66" text-anchor="middle">HTTPS</text>
       </g>
       <g class="dg-edge dg-edge--flow" data-edge="gateway-site" data-lit="false">
-        <path class="dg-line" d="M864,74 H912" marker-end="url(#ov-arrow-flow)"/>
-        <path class="dg-packet" d="M864,74 H912"/>
-        <text class="dg-edgelabel" x="888" y="67" text-anchor="middle">route</text>
+        <path class="dg-line" d="M871,74 L905,74" marker-end="url(#ov-arrow-flow)"/>
+        <text class="dg-edgelabel" x="888" y="66" text-anchor="middle">route</text>
       </g>
       <g class="dg-edge dg-edge--flow" data-edge="pod-falco" data-lit="false">
-        <path class="dg-line" d="M192,490 H240" marker-end="url(#ov-arrow-flow)"/>
-        <path class="dg-packet" d="M192,490 H240"/>
-        <text class="dg-edgelabel" x="216" y="483" text-anchor="middle">syscalls</text>
+        <path class="dg-line" d="M199,490 L233,490" marker-end="url(#ov-arrow-flow)"/>
+        <text class="dg-edgelabel" x="216" y="482" text-anchor="middle">syscalls</text>
       </g>
       <g class="dg-edge dg-edge--side" data-edge="twin-falco" data-lit="false">
-        <path class="dg-line" d="M192,614.8000000000001 H328 V520" marker-end="url(#ov-arrow-side)"/>
-        <path class="dg-packet" d="M192,614.8000000000001 H328 V520"/>
-        <text class="dg-edgelabel" x="260" y="607.8000000000001" text-anchor="middle">syscalls</text>
+        <path class="dg-line" d="M199,614.8 L328,614.8 L328,527" marker-end="url(#ov-arrow-side)"/>
+        <text class="dg-edgelabel" x="260" y="606.8" text-anchor="middle">syscalls</text>
       </g>
       <g class="dg-edge dg-edge--flow" data-edge="talon-kube-apiserver" data-lit="false">
-        <path class="dg-line" d="M864,490 H912" marker-end="url(#ov-arrow-flow)"/>
-        <path class="dg-packet" d="M864,490 H912"/>
-        <text class="dg-edgelabel" x="888" y="483" text-anchor="middle">action</text>
+        <path class="dg-line" d="M871,490 L905,490" marker-end="url(#ov-arrow-flow)"/>
+        <text class="dg-edgelabel" x="888" y="482" text-anchor="middle">action</text>
       </g>
       <g class="dg-edge dg-edge--response" data-edge="kube-apiserver-pod" data-lit="false">
-        <path class="dg-line" d="M986,520 V544.2 H104 V520" marker-end="url(#ov-arrow-response)"/>
-        <path class="dg-packet" d="M986,520 V544.2 H104 V520"/>
-        <text class="dg-edgelabel" x="545" y="538.2" text-anchor="middle">delete or quarantine</text>
+        <path class="dg-line" d="M986,527 L986,544.2 L104,544.2 L104,527" marker-end="url(#ov-arrow-response)"/>
+        <text class="dg-edgelabel" x="545" y="537.2" text-anchor="middle">delete or quarantine</text>
       </g>
       <g class="dg-edge dg-edge--side" data-edge="kube-apiserver-siem" data-lit="false">
-        <path class="dg-line" d="M1088,490 H1136" marker-end="url(#ov-arrow-side)"/>
-        <path class="dg-packet" d="M1088,490 H1136"/>
-        <text class="dg-edgelabel" x="1112" y="483" text-anchor="middle">logs</text>
+        <path class="dg-line" d="M1095,490 L1129,490" marker-end="url(#ov-arrow-side)"/>
+        <text class="dg-edgelabel" x="1112" y="482" text-anchor="middle">logs</text>
       </g>
       <g class="dg-edge dg-edge--flow" data-edge="operator-repo" data-lit="false">
-        <path class="dg-line" d="M192,219.6 H240" marker-end="url(#ov-arrow-flow)"/>
-        <path class="dg-packet" d="M192,219.6 H240"/>
+        <path class="dg-line" d="M199,219.6 L233,219.6" marker-end="url(#ov-arrow-flow)"/>
       </g>
       <g class="dg-edge dg-edge--side" data-edge="repo-ci" data-lit="false">
-        <path class="dg-line" d="M328,249.6 V293.6" marker-end="url(#ov-arrow-side)"/>
-        <path class="dg-packet" d="M328,249.6 V293.6"/>
+        <path class="dg-line" d="M328,256.6 L328,286.6" marker-end="url(#ov-arrow-side)"/>
       </g>
       <g class="dg-edge dg-edge--flow" data-edge="repo-argocd" data-lit="false">
-        <path class="dg-line" d="M416,219.6 H464" marker-end="url(#ov-arrow-flow)"/>
-        <path class="dg-packet" d="M416,219.6 H464"/>
-        <text class="dg-edgelabel" x="440" y="212.6" text-anchor="middle">poll</text>
+        <path class="dg-line" d="M423,219.6 L457,219.6" marker-end="url(#ov-arrow-flow)"/>
+        <text class="dg-edgelabel" x="440" y="211.6" text-anchor="middle">poll</text>
       </g>
       <g class="dg-edge dg-edge--flow" data-edge="argocd-apps" data-lit="false">
-        <path class="dg-line" d="M552,249.6 V293.6" marker-end="url(#ov-arrow-flow)"/>
-        <path class="dg-packet" d="M552,249.6 V293.6"/>
-        <text class="dg-edgelabel" x="560" y="275.6" text-anchor="start">sync waves</text>
+        <path class="dg-line" d="M552,256.6 L552,286.6" marker-end="url(#ov-arrow-flow)"/>
+        <text class="dg-edgelabel" x="561" y="275.6" text-anchor="start">sync waves</text>
       </g>
       <g class="dg-edge dg-edge--flow" data-edge="build-trivy" data-lit="false">
-        <path class="dg-line" d="M864,219.6 H912" marker-end="url(#ov-arrow-flow)"/>
-        <path class="dg-packet" d="M864,219.6 H912"/>
+        <path class="dg-line" d="M871,219.6 L905,219.6" marker-end="url(#ov-arrow-flow)"/>
       </g>
       <g class="dg-edge dg-edge--flow" data-edge="trivy-cosign" data-lit="false">
-        <path class="dg-line" d="M1088,219.6 H1136" marker-end="url(#ov-arrow-flow)"/>
-        <path class="dg-packet" d="M1088,219.6 H1136"/>
+        <path class="dg-line" d="M1095,219.6 L1129,219.6" marker-end="url(#ov-arrow-flow)"/>
       </g>
       <g class="dg-edge dg-edge--flow" data-edge="cosign-ghcr" data-lit="false">
-        <path class="dg-line" d="M1238,249.6 V323.6 H1088" marker-end="url(#ov-arrow-flow)"/>
-        <path class="dg-packet" d="M1238,249.6 V323.6 H1088"/>
-        <text class="dg-edgelabel" x="1163" y="316.6" text-anchor="middle">push</text>
+        <path class="dg-line" d="M1238,256.6 L1238,323.6 L1095,323.6" marker-end="url(#ov-arrow-flow)"/>
+        <text class="dg-edgelabel" x="1163" y="315.6" text-anchor="middle">push</text>
       </g>
       <g class="dg-edge dg-edge--flow" data-edge="ghcr-kyverno" data-lit="false">
-        <path class="dg-line" d="M912,323.6 H864" marker-end="url(#ov-arrow-flow)"/>
-        <path class="dg-packet" d="M912,323.6 H864"/>
-        <text class="dg-edgelabel" x="888" y="316.6" text-anchor="middle">verify</text>
+        <path class="dg-line" d="M905,323.6 L871,323.6" marker-end="url(#ov-arrow-flow)"/>
+        <text class="dg-edgelabel" x="888" y="315.6" text-anchor="middle">verify</text>
       </g>
       <g class="dg-edge dg-edge--side" data-edge="ghcr-posture" data-lit="false">
-        <path class="dg-line" d="M1088,323.6 H1136" marker-end="url(#ov-arrow-side)"/>
-        <path class="dg-packet" d="M1088,323.6 H1136"/>
+        <path class="dg-line" d="M1095,323.6 L1129,323.6" marker-end="url(#ov-arrow-side)"/>
       </g>
       <g class="dg-edge dg-edge--flow" data-edge="falco-falcosidekick" data-lit="false">
-        <path class="dg-line" d="M416,490 H464" marker-end="url(#ov-arrow-flow)"/>
-        <path class="dg-packet" d="M416,490 H464"/>
-        <text class="dg-edgelabel" x="440" y="483" text-anchor="middle">alert</text>
+        <path class="dg-line" d="M423,490 L457,490" marker-end="url(#ov-arrow-flow)"/>
+        <text class="dg-edgelabel" x="440" y="482" text-anchor="middle">alert</text>
       </g>
       <g class="dg-edge dg-edge--flow" data-edge="falcosidekick-talon" data-lit="false">
-        <path class="dg-line" d="M640,490 H688" marker-end="url(#ov-arrow-flow)"/>
-        <path class="dg-packet" d="M640,490 H688"/>
-        <text class="dg-edgelabel" x="664" y="483" text-anchor="middle">POST</text>
+        <path class="dg-line" d="M647,490 L681,490" marker-end="url(#ov-arrow-flow)"/>
+        <text class="dg-edgelabel" x="664" y="482" text-anchor="middle">POST</text>
       </g>
     </g>
     <g class="dg-nodes">
       <g class="dg-node dg-node--plain" id="ov-visitor" data-node="visitor" data-state="idle" transform="translate(16 44)">
         <rect class="dg-box" width="176" height="60" rx="8"/>
-        <text class="dg-label" x="88" y="23" text-anchor="middle">Visitor</text>
-        <text class="dg-sub" x="88" y="41" text-anchor="middle">browser</text>
+        <text class="dg-label" x="88" y="27" text-anchor="middle">Visitor</text>
+        <text class="dg-sub" x="88" y="42" text-anchor="middle">browser</text>
       </g>
       <g class="dg-node dg-node--control" id="ov-cloudflare" data-node="cloudflare" data-state="idle" transform="translate(240 44)">
         <rect class="dg-box" width="176" height="60" rx="8"/>
-        <text class="dg-label" x="88" y="23" text-anchor="middle">Cloudflare edge</text>
-        <text class="dg-sub" x="88" y="41" text-anchor="middle">TLS · WAF · HSTS</text>
+        <text class="dg-label" x="88" y="27" text-anchor="middle">Cloudflare edge</text>
+        <text class="dg-sub" x="88" y="42" text-anchor="middle">TLS · WAF · HSTS</text>
       </g>
       <g class="dg-node dg-node--control" id="ov-cloudflared" data-node="cloudflared" data-state="idle" transform="translate(464 44)">
         <rect class="dg-box" width="176" height="60" rx="8"/>
-        <text class="dg-label" x="88" y="23" text-anchor="middle">cloudflared ×2</text>
-        <text class="dg-sub" x="88" y="41" text-anchor="middle">ns cloudflared · dials out :7844</text>
+        <text class="dg-label" x="88" y="27" text-anchor="middle">cloudflared ×2</text>
+        <text class="dg-sub" x="88" y="42" text-anchor="middle">ns cloudflared · dials out :7844</text>
       </g>
       <g class="dg-node dg-node--control" id="ov-gateway" data-node="gateway" data-state="idle" transform="translate(688 44)">
         <rect class="dg-box" width="176" height="60" rx="8"/>
-        <text class="dg-label" x="88" y="23" text-anchor="middle">Cilium Gateway</text>
-        <text class="dg-sub" x="88" y="41" text-anchor="middle">ns gateway · :443 · LE cert (DNS-01)</text>
+        <text class="dg-label" x="88" y="27" text-anchor="middle">Cilium Gateway</text>
+        <text class="dg-sub" x="88" y="42" text-anchor="middle">ns gateway · :443 · LE cert (DNS-01)</text>
       </g>
       <g class="dg-node dg-node--plain" id="ov-site" data-node="site" data-state="idle" transform="translate(912 44)">
         <rect class="dg-box" width="176" height="60" rx="8"/>
-        <text class="dg-label" x="88" y="23" text-anchor="middle">This page + its API</text>
-        <text class="dg-sub" x="88" y="41" text-anchor="middle">hello · portfolio-api</text>
+        <text class="dg-label" x="88" y="27" text-anchor="middle">This page + its API</text>
+        <text class="dg-sub" x="88" y="42" text-anchor="middle">hello · portfolio-api</text>
       </g>
       <g class="dg-node dg-node--control" id="ov-kube-apiserver" data-node="kube-apiserver" data-state="idle" transform="translate(912 460)">
         <rect class="dg-box" width="176" height="60" rx="8"/>
-        <text class="dg-label" x="88" y="23" text-anchor="middle">kube-apiserver</text>
-        <text class="dg-sub" x="88" y="41" text-anchor="middle">RBAC: sandbox pods only · audit log shipped</text>
+        <text class="dg-label" x="88" y="27" text-anchor="middle">kube-apiserver</text>
+        <text class="dg-sub" x="88" y="42" text-anchor="middle">RBAC: sandbox pods only · audit log shipped</text>
       </g>
       <g class="dg-node dg-node--plain" id="ov-pod" data-node="pod" data-state="idle" transform="translate(16 460)">
         <rect class="dg-box" width="176" height="60" rx="8"/>
-        <text class="dg-label" x="88" y="23" text-anchor="middle">Sandbox pod</text>
-        <text class="dg-sub" x="88" y="41" text-anchor="middle">sandbox · non-root · no token</text>
+        <text class="dg-label" x="88" y="27" text-anchor="middle">Sandbox pod</text>
+        <text class="dg-sub" x="88" y="42" text-anchor="middle">sandbox · non-root · no token</text>
       </g>
       <g class="dg-node dg-node--plain" id="ov-twin" data-node="twin" data-state="idle" transform="translate(16 584.8000000000001)">
         <rect class="dg-box" width="176" height="60" rx="8"/>
-        <text class="dg-label" x="88" y="23" text-anchor="middle">Unguarded twin</text>
-        <text class="dg-sub" x="88" y="41" text-anchor="middle">sandbox-unguarded</text>
+        <text class="dg-label" x="88" y="27" text-anchor="middle">Unguarded twin</text>
+        <text class="dg-sub" x="88" y="42" text-anchor="middle">sandbox-unguarded</text>
       </g>
       <g class="dg-node dg-node--control" id="ov-falco" data-node="falco" data-state="idle" transform="translate(240 460)">
         <rect class="dg-box" width="176" height="60" rx="8"/>
-        <text class="dg-label" x="88" y="23" text-anchor="middle">Falco</text>
-        <text class="dg-sub" x="88" y="41" text-anchor="middle">modern eBPF · ns falco · no API token</text>
+        <text class="dg-label" x="88" y="27" text-anchor="middle">Falco</text>
+        <text class="dg-sub" x="88" y="42" text-anchor="middle">modern eBPF · ns falco · no API token</text>
       </g>
       <g class="dg-node dg-node--control" id="ov-talon" data-node="talon" data-state="idle" transform="translate(688 460)">
         <rect class="dg-box" width="176" height="60" rx="8"/>
-        <text class="dg-label" x="88" y="23" text-anchor="middle">Falco Talon</text>
-        <text class="dg-sub" x="88" y="41" text-anchor="middle">ns falco-response · :2803</text>
+        <text class="dg-label" x="88" y="27" text-anchor="middle">Falco Talon</text>
+        <text class="dg-sub" x="88" y="42" text-anchor="middle">ns falco-response · :2803</text>
       </g>
       <g class="dg-node dg-node--control" id="ov-siem" data-node="siem" data-state="idle" transform="translate(1136 460)">
         <rect class="dg-box" width="176" height="60" rx="8"/>
-        <text class="dg-label" x="88" y="23" text-anchor="middle">OpenSearch SIEM</text>
-        <text class="dg-sub" x="88" y="41" text-anchor="middle">Sigma rules · correlation</text>
+        <text class="dg-label" x="88" y="27" text-anchor="middle">OpenSearch SIEM</text>
+        <text class="dg-sub" x="88" y="42" text-anchor="middle">Sigma rules · correlation</text>
       </g>
       <g class="dg-node dg-node--plain" id="ov-falcosidekick" data-node="falcosidekick" data-state="idle" transform="translate(464 460)">
         <rect class="dg-box" width="176" height="60" rx="8"/>
-        <text class="dg-label" x="88" y="23" text-anchor="middle">Falcosidekick</text>
-        <text class="dg-sub" x="88" y="41" text-anchor="middle">:2801 · falco-response</text>
+        <text class="dg-label" x="88" y="27" text-anchor="middle">Falcosidekick</text>
+        <text class="dg-sub" x="88" y="42" text-anchor="middle">:2801 · falco-response</text>
       </g>
       <g class="dg-node dg-node--plain" id="ov-operator" data-node="operator" data-state="idle" transform="translate(16 189.6)">
         <rect class="dg-box" width="176" height="60" rx="8"/>
-        <text class="dg-label" x="88" y="23" text-anchor="middle">Operator</text>
-        <text class="dg-sub" x="88" y="41" text-anchor="middle">git push main</text>
+        <text class="dg-label" x="88" y="27" text-anchor="middle">Operator</text>
+        <text class="dg-sub" x="88" y="42" text-anchor="middle">git push main</text>
       </g>
       <g class="dg-node dg-node--plain" id="ov-repo" data-node="repo" data-state="idle" transform="translate(240 189.6)">
         <rect class="dg-box" width="176" height="60" rx="8"/>
-        <text class="dg-label" x="88" y="23" text-anchor="middle">GitHub repository</text>
-        <text class="dg-sub" x="88" y="41" text-anchor="middle">main branch</text>
+        <text class="dg-label" x="88" y="27" text-anchor="middle">GitHub repository</text>
+        <text class="dg-sub" x="88" y="42" text-anchor="middle">main branch</text>
       </g>
       <g class="dg-node dg-node--plain" id="ov-ci" data-node="ci" data-state="idle" transform="translate(240 293.6)">
         <rect class="dg-box" width="176" height="60" rx="8"/>
-        <text class="dg-label" x="88" y="23" text-anchor="middle">CI lint.yml</text>
-        <text class="dg-sub" x="88" y="41" text-anchor="middle">validate · kyverno · gitleaks</text>
+        <text class="dg-label" x="88" y="27" text-anchor="middle">CI lint.yml</text>
+        <text class="dg-sub" x="88" y="42" text-anchor="middle">validate · kyverno · gitleaks</text>
       </g>
       <g class="dg-node dg-node--control" id="ov-argocd" data-node="argocd" data-state="idle" transform="translate(464 189.6)">
         <rect class="dg-box" width="176" height="60" rx="8"/>
-        <text class="dg-label" x="88" y="19" text-anchor="middle">Argo CD</text>
-        <text class="dg-sub" x="88" y="34" text-anchor="middle">ns argocd · KSOPS + age</text>
-        <text class="dg-sub dg-note" x="88" y="49" text-anchor="middle">19 Applications</text>
+        <text class="dg-label" x="88" y="19.5" text-anchor="middle">Argo CD</text>
+        <text class="dg-sub" x="88" y="34.5" text-anchor="middle">ns argocd · KSOPS + age</text>
+        <text class="dg-sub dg-note" x="88" y="49.5" text-anchor="middle">19 Applications</text>
       </g>
       <g class="dg-node dg-node--plain" id="ov-apps" data-node="apps" data-state="idle" transform="translate(464 293.6)">
         <rect class="dg-box" width="176" height="60" rx="8"/>
-        <text class="dg-label" x="88" y="23" text-anchor="middle">Applications</text>
-        <text class="dg-sub" x="88" y="41" text-anchor="middle">cluster/infra/* + pinned Helm charts</text>
+        <text class="dg-label" x="88" y="27" text-anchor="middle">Applications</text>
+        <text class="dg-sub" x="88" y="42" text-anchor="middle">cluster/infra/* + pinned Helm charts</text>
       </g>
       <g class="dg-node dg-node--plain" id="ov-build" data-node="build" data-state="idle" transform="translate(688 189.6)">
         <rect class="dg-box" width="176" height="60" rx="8"/>
-        <text class="dg-label" x="88" y="23" text-anchor="middle">build-images.yml</text>
-        <text class="dg-sub" x="88" y="41" text-anchor="middle">web · api · scenario</text>
+        <text class="dg-label" x="88" y="27" text-anchor="middle">build-images.yml</text>
+        <text class="dg-sub" x="88" y="42" text-anchor="middle">web · api · scenario</text>
       </g>
       <g class="dg-node dg-node--control" id="ov-trivy" data-node="trivy" data-state="idle" transform="translate(912 189.6)">
         <rect class="dg-box" width="176" height="60" rx="8"/>
-        <text class="dg-label" x="88" y="23" text-anchor="middle">Trivy gate</text>
-        <text class="dg-sub" x="88" y="41" text-anchor="middle">fixable HIGH/CRIT fail</text>
+        <text class="dg-label" x="88" y="27" text-anchor="middle">Trivy gate</text>
+        <text class="dg-sub" x="88" y="42" text-anchor="middle">fixable HIGH/CRIT fail</text>
       </g>
       <g class="dg-node dg-node--control" id="ov-cosign" data-node="cosign" data-state="idle" transform="translate(1136 189.6)">
         <rect class="dg-box" width="176" height="60" rx="8"/>
-        <text class="dg-label" x="88" y="23" text-anchor="middle">cosign keyless</text>
-        <text class="dg-sub" x="88" y="41" text-anchor="middle">sign + SPDX attest</text>
+        <text class="dg-label" x="88" y="27" text-anchor="middle">cosign keyless</text>
+        <text class="dg-sub" x="88" y="42" text-anchor="middle">sign + SPDX attest</text>
       </g>
       <g class="dg-node dg-node--plain" id="ov-ghcr" data-node="ghcr" data-state="idle" transform="translate(912 293.6)">
         <rect class="dg-box" width="176" height="60" rx="8"/>
-        <text class="dg-label" x="88" y="23" text-anchor="middle">GHCR</text>
-        <text class="dg-sub" x="88" y="41" text-anchor="middle">images + bundles</text>
+        <text class="dg-label" x="88" y="27" text-anchor="middle">GHCR</text>
+        <text class="dg-sub" x="88" y="42" text-anchor="middle">images + bundles</text>
       </g>
       <g class="dg-node dg-node--control" id="ov-kyverno" data-node="kyverno" data-state="idle" transform="translate(688 293.6)">
         <rect class="dg-box" width="176" height="60" rx="8"/>
-        <text class="dg-label" x="88" y="23" text-anchor="middle">Kyverno admission</text>
-        <text class="dg-sub" x="88" y="41" text-anchor="middle">failurePolicy Fail</text>
+        <text class="dg-label" x="88" y="27" text-anchor="middle">Kyverno admission</text>
+        <text class="dg-sub" x="88" y="42" text-anchor="middle">failurePolicy Fail</text>
       </g>
       <g class="dg-node dg-node--plain" id="ov-posture" data-node="posture" data-state="idle" transform="translate(1136 293.6)">
         <rect class="dg-box" width="176" height="60" rx="8"/>
-        <text class="dg-label" x="88" y="23" text-anchor="middle">Posture scanning</text>
-        <text class="dg-sub" x="88" y="41" text-anchor="middle">Trivy Operator · kube-bench</text>
+        <text class="dg-label" x="88" y="27" text-anchor="middle">Posture scanning</text>
+        <text class="dg-sub" x="88" y="42" text-anchor="middle">Trivy Operator · kube-bench</text>
       </g>
     </g>
   </svg>

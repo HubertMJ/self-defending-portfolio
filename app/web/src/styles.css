@@ -7,6 +7,9 @@
  * label next to it.
  */
 
+/* The hero diagram's ambient traffic routes, generated from src/diagram at build time (scripts/build.mjs). */
+@import "diagram-traffic.css";
+
 :root {
   color-scheme: dark;
   --bg: #0c0e12;
@@ -5244,11 +5247,11 @@ html[data-terminal="off"] .needs-terminal {
 .dg-box {
   fill: var(--surface-2);
   stroke: var(--border-strong);
-  stroke-width: 1.2;
+  stroke-width: 1.5;
 }
 
 .dg-node--control .dg-box {
-  stroke: color-mix(in srgb, var(--accent) 55%, var(--border-strong));
+  stroke: color-mix(in srgb, var(--accent) 50%, var(--border-strong));
 }
 
 .dg-label {
@@ -5261,13 +5264,22 @@ html[data-terminal="off"] .needs-terminal {
   fill: var(--text-faint);
 }
 
-/* Node sublabels (ports, namespaces) only in Technical Mode, like the console's raw fields. */
+/* Node sublabels (ports, namespaces) only in Technical Mode, like the console's raw fields; the label
+   alone moves down to the middle of its box (src/diagram/layout.ts centres the two as a block). */
 .dg-sub {
   opacity: 0;
 }
 
+.dg-label {
+  transform: translateY(7.5px);
+}
+
 html[data-tech="on"] .dg-sub {
   opacity: 1;
+}
+
+html[data-tech="on"] .dg-label {
+  transform: none;
 }
 
 /* The phone diagram keeps its sublabels: it is the only diagram there and has the room. */
@@ -5275,9 +5287,14 @@ html[data-tech="on"] .dg-sub {
   opacity: 1;
 }
 
+.dg--narrow .dg-label {
+  transform: none;
+}
+
+/* Edges: a muted 1.5 px line at rest, one arrowhead per direction, a gap before every box. */
 .dg-line {
   fill: none;
-  stroke: var(--border-strong);
+  stroke: color-mix(in srgb, var(--border-strong) 85%, var(--text-faint));
   stroke-width: 1.5;
 }
 
@@ -5285,25 +5302,21 @@ html[data-tech="on"] .dg-sub {
   stroke-dasharray: 3 4;
 }
 
+/* Above its line, on a knock-out of the page's background. */
 .dg-edgelabel {
   font: 0.66rem var(--font-sans);
   fill: var(--text-faint);
   paint-order: stroke;
   stroke: var(--bg);
-  stroke-width: 4px;
+  stroke-width: 5px;
   stroke-linejoin: round;
 }
 
+/* The arrowhead wears its line's colour, lit or not (the marker lives in <defs>, out of reach of the
+   edge's selectors; a browser without context-stroke keeps the muted rest colour). */
 .dg-head {
-  fill: var(--border-strong);
-}
-
-.dg-packet {
-  display: none;
-  fill: none;
-  stroke: var(--c, var(--attack));
-  stroke-width: 2.5;
-  stroke-linecap: round;
+  fill: color-mix(in srgb, var(--border-strong) 85%, var(--text-faint));
+  fill: context-stroke;
 }
 
 /* A node is a button: focus ring, a pointer, a lift on hover. */
@@ -5318,7 +5331,7 @@ html[data-tech="on"] .dg-sub {
 .dg-node[role="button"]:hover .dg-box,
 .dg-node[role="button"]:focus-visible .dg-box {
   stroke: var(--accent);
-  stroke-width: 1.8;
+  stroke-width: 2;
 }
 
 .dg-node[role="button"]:focus {
@@ -5327,7 +5340,7 @@ html[data-tech="on"] .dg-sub {
 
 .dg-node[aria-expanded="true"] .dg-box {
   stroke: var(--accent);
-  stroke-width: 1.8;
+  stroke-width: 2;
 }
 
 /* Lit states: one of the three stage colours, on the box and its arrowhead. The word is in the
@@ -5347,10 +5360,11 @@ html[data-tech="on"] .dg-sub {
   fill: color-mix(in srgb, var(--respond) 13%, var(--surface-2));
 }
 
-/* A lit edge wears the stage of what travelled it: the attack in, the detection, the answer back. */
-.dg-edge[data-lit="true"] .dg-line,
-.dg-edge[data-lit="true"][data-tone="attack"] .dg-line {
+/* A lit edge wears the stage of what travelled it, the whole line at once and a little heavier: the
+   attack in, the detection, the answer back. */
+.dg-edge[data-lit="true"] .dg-line {
   stroke: var(--attack);
+  stroke-width: 2;
 }
 
 .dg-edge[data-lit="true"][data-tone="detect"] .dg-line {
@@ -5362,134 +5376,39 @@ html[data-tech="on"] .dg-sub {
   stroke: var(--respond);
 }
 
-.dg-edge[data-lit="true"] .dg-head {
-  fill: var(--attack);
-}
-
-.dg-edge[data-lit="true"][data-tone="detect"] .dg-head {
-  fill: var(--detect);
-}
-
-.dg-edge[data-lit="true"][data-tone="respond"] .dg-head {
-  fill: var(--respond);
-}
-
-/* The packet: a short dash that runs the path once when it lights, where motion is allowed. */
-@media (prefers-reduced-motion: no-preference) {
-  html:not(.reduced-motion) .dg-edge[data-lit="true"] .dg-packet {
-    display: block;
-    stroke: var(--attack);
-    stroke-dasharray: 16 400;
-    animation: dg-flow 0.9s ease-out 1;
-  }
-  html:not(.reduced-motion) .dg-edge[data-lit="true"][data-tone="detect"] .dg-packet {
-    stroke: var(--detect);
-  }
-  html:not(.reduced-motion) .dg-edge[data-lit="true"][data-tone="respond"] .dg-packet {
-    stroke: var(--respond);
-  }
-}
-
-@keyframes dg-flow {
-  from {
-    stroke-dashoffset: 420;
-  }
-  to {
-    stroke-dashoffset: 0;
-  }
-}
-
-/* The ambient traffic (2026-10-13): a faint dot runs the request path hop by hop, every 9 s, and the
-   detect-and-respond loop once in three rounds. Each hop's path is 100 units long (pathLength), so
-   one rule moves the dot across any hop in 1.4 s. Still where motion is not wanted, off screen or in
-   a hidden tab (ui/diagram.ts sets data-ambient), and while a run is playing out on the diagram. */
-.dg-ambient {
+/* The ambient traffic (2026-10-13, redrawn the same day): a small glowing dot runs the request path,
+   the visitor to the page, every 6 s, and the detect-and-respond loop every 18 s; the edge under it
+   brightens as it passes. Routes and timing: the generated diagram-traffic.css (offset-path, so the
+   dot moves by transform). Not drawn where motion is not wanted or while a run is lighting the path;
+   paused off screen and in a hidden tab (ui/diagram.ts sets data-ambient). */
+.dg-dot,
+.dg-glow {
   display: none;
+}
+
+.dg-dot {
+  fill: var(--accent);
+  offset-rotate: 0deg;
+  opacity: 0;
+  filter: drop-shadow(0 0 3px var(--accent)) drop-shadow(0 0 1px var(--accent));
+}
+
+.dg-glow {
   fill: none;
-  stroke: var(--text-faint);
-  stroke-width: 2.5;
-  stroke-linecap: round;
-  stroke-dasharray: 7 400;
-  stroke-dashoffset: 7;
-  opacity: 0.6;
-}
-
-/* Each hop's turn, as properties on its edge (no fight over which rule wins). */
-.dg-edge[data-edge="cloudflare-cloudflared"] {
-  --amb-delay: 1.4s;
-}
-
-.dg-edge[data-edge="cloudflared-gateway"] {
-  --amb-delay: 2.8s;
-}
-
-.dg-edge[data-edge="gateway-site"] {
-  --amb-delay: 4.2s;
-}
-
-.dg-edge[data-edge="site-kube-apiserver"] {
-  --amb-delay: 5.6s;
-}
-
-.dg-edge[data-edge="pod-falco"],
-.dg-edge[data-edge="falco-talon"],
-.dg-edge[data-edge="talon-kube-apiserver"],
-.dg-edge[data-edge="kube-apiserver-pod"] {
-  --amb-name: dg-ambient-loop;
-  --amb-period: 27s;
-}
-
-.dg-edge[data-edge="pod-falco"] {
-  --amb-delay: 18s;
-}
-
-.dg-edge[data-edge="falco-talon"] {
-  --amb-delay: 19.4s;
-}
-
-.dg-edge[data-edge="talon-kube-apiserver"] {
-  --amb-delay: 20.8s;
-}
-
-.dg-edge[data-edge="kube-apiserver-pod"] {
-  --amb-delay: 22.2s;
+  stroke: var(--accent);
+  stroke-width: 2;
+  opacity: 0;
 }
 
 @media (prefers-reduced-motion: no-preference) {
-  html:not(.reduced-motion) .dg-wrap:not([data-run="active"]) .dg-ambient {
-    display: block;
-    animation: var(--amb-name, dg-ambient) var(--amb-period, 9s) linear var(--amb-delay, 0s) infinite;
+  html:not(.reduced-motion) .dg-wrap:not([data-run="active"]) :is(.dg-dot, .dg-glow) {
+    display: inline;
+    animation: var(--tr-name, none) var(--tr-period, 6s) linear infinite;
     animation-play-state: var(--amb-state, running);
   }
 
   .dg-wrap[data-ambient="off"] {
     --amb-state: paused;
-  }
-}
-
-/* 1.4 s of a 9 s round on the hop, then out of sight past its end. */
-@keyframes dg-ambient {
-  0% {
-    stroke-dashoffset: 7;
-  }
-  15.5% {
-    stroke-dashoffset: -100;
-  }
-  100% {
-    stroke-dashoffset: -100;
-  }
-}
-
-/* 1.4 s of a 27 s round. */
-@keyframes dg-ambient-loop {
-  0% {
-    stroke-dashoffset: 7;
-  }
-  5.2% {
-    stroke-dashoffset: -100;
-  }
-  100% {
-    stroke-dashoffset: -100;
   }
 }
 
