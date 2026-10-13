@@ -283,6 +283,11 @@ export function mountTour(root: HTMLElement, hooks: TourHooks): TourHandle {
     const fresh = notices.filter((n) => !items.has(n.id));
     // Oldest of the fresh first, so each goes to the top in order.
     for (const n of [...fresh].reverse()) noticeList.prepend(noticeItem(n));
+    // A new notice goes in at the top of the side panel: the panel shows its top, unless the
+    // visitor is in it (its scroll is theirs then).
+    const scroller = root.querySelector<HTMLElement>('.tour[data-layout="side"]');
+    if (fresh.length && scroller && !scroller.contains(document.activeElement)) scroller.scrollTop = 0;
+    markOverflow();
     while (noticeList.children.length > NOTICES_MAX) noticeList.lastElementChild?.remove();
     // A listed notice's clock is re-read on `now`'s day: past midnight it gains its date.
     for (const n of notices) {
@@ -351,6 +356,17 @@ export function mountTour(root: HTMLElement, hooks: TourHooks): TourHandle {
     const el = find(`[data-focus="${key}"]`) ?? (key.startsWith("step:") ? find('.tour__step[data-current="true"] [data-focus]') : undefined);
     el?.focus({ preventScroll: true });
   };
+
+  /** A fade at the side panel's foot while there is more below it (styles.css): its own scroll is no surprise. */
+  const markOverflow = () => {
+    const p = root.querySelector<HTMLElement>('.tour[data-layout="side"]');
+    if (!p) return;
+    const over = p.scrollHeight > p.clientHeight + 2;
+    p.dataset.overflow = String(over);
+    p.dataset.atEnd = String(!over || p.scrollTop + p.clientHeight >= p.scrollHeight - 2);
+  };
+  root.addEventListener("scroll", markOverflow, { capture: true, passive: true });
+  if (typeof ResizeObserver === "function") new ResizeObserver(markOverflow).observe(root);
 
   const draw = () => {
     const key = focusKey();
@@ -428,6 +444,7 @@ export function mountTour(root: HTMLElement, hooks: TourHooks): TourHandle {
     // The list is live where it can be seen as it changes; on a phone the toast speaks instead.
     noticeList.setAttribute("aria-live", isWide ? "polite" : "off");
     refocus(key);
+    markOverflow();
   };
 
   draw();

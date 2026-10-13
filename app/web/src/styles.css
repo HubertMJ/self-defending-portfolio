@@ -5823,24 +5823,93 @@ html:not(.js) .needs-js {
     min-height: 42rem;
   }
 
+  /* The rail is as tall as the terminal's row and adds nothing to it (as "This run" beside the
+     output): the panel inside never makes the row taller, so a notice landing moves nothing. */
   .tour-wrap {
     order: 2;
     align-self: stretch;
+    height: 0;
+    min-height: 100%;
     margin-bottom: 2.5rem;
   }
 
-  /* --header-h: the sticky header's height as measured (main.ts), the mock banner included. */
+  /* --header-h: the sticky header's height as measured (main.ts), the mock banner included. As tall
+     as its row and the screen under the header allow, scrolling inside only past that, from its top,
+     and never anchored to its own content: a notice landing at the top shows at the top. */
   .tour[data-layout="side"] {
     position: sticky;
     top: calc(var(--header-h, 3.75rem) + 1rem);
-    max-height: min(42rem, calc(100vh - var(--header-h, 3.75rem) - 2rem));
+    max-height: min(100%, calc(100vh - var(--header-h, 3.75rem) - 2rem));
     overflow: auto;
     overscroll-behavior: contain;
+    overflow-anchor: none;
   }
 
   .tour--skipped {
     position: sticky;
     top: calc(var(--header-h, 3.75rem) + 1rem);
+  }
+}
+
+/* From 1400 px the attack section takes a wider column (up to 100rem) and the stage is one grid:
+   the terminal and "This run" left, the tour's rail right, the command palette and the session
+   summary across both (the terminal's wrappers give up their boxes so their parts sit in the grid).
+   The output fills the row "This run" sets, no taller (2026-10-13). */
+@media (min-width: 1400px) {
+  .section--attack > .wrap {
+    max-width: 100rem;
+  }
+
+  .attack-stage {
+    grid-template-columns: minmax(0, 1fr) 20rem;
+    gap: 1.25rem 1.75rem;
+    margin-bottom: 2.5rem;
+  }
+
+  .terminal-wrap,
+  #terminal,
+  .terminal {
+    display: contents;
+  }
+
+  .tour-wrap {
+    grid-column: 2;
+    grid-row: 1;
+    margin-bottom: 0;
+  }
+
+  .term__grid,
+  .term-start,
+  .term-fallback,
+  #terminal > .loading,
+  #terminal > .offline {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  .term__palette,
+  .term__summary {
+    grid-column: 1 / -1;
+  }
+
+  .term__grid {
+    grid-template-columns: minmax(0, 1.7fr) minmax(20rem, 1fr);
+    gap: 1.5rem;
+  }
+
+  /* The output sets the row: tall enough for a session's first lines and most of the panels beside
+     it, no empty box past that; "This run" and the tour scroll inside their cap, with a fade at the foot. */
+  .term__out {
+    min-height: min(50vh, 30rem);
+  }
+
+  .tour[data-layout="side"][data-overflow="true"]:not([data-at-end="true"]) {
+    mask-image: linear-gradient(to bottom, #000 calc(100% - 3rem), transparent);
+  }
+
+  .term__chips {
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 20rem), 1fr));
+    gap: 0.75rem 1.5rem;
   }
 }
 

