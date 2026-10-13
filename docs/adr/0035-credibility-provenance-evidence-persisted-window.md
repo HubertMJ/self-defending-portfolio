@@ -646,3 +646,46 @@ chips still as the output above them grows), that the panel sits beside the term
 stays below the header through the session, that a launch leaves the page and the launcher where they
 were and its link reaches the console, and that the layer map's badges share one column at 360 px
 with nothing past the edge. The height budgets stand.
+
+## Amendment 2026-10-13 (2): the wide screen, every step's button goes somewhere, ambient traffic on the diagram
+
+The owner, on a 1920-px-wide screen of the live page: the attack section squeezed into the narrow
+column with empty margins, three cramped columns, the tour panel cut at its top, a tall empty
+terminal, the commands under the terminal only; "See what the answer is worth (done)" showing
+nothing; and a wish for a small, non-distracting animation of the traffic on the diagram.
+
+**The wide attack section.** From 1400 px the attack section's column widens to 100 rem and the stage
+is one grid: the terminal with "This run" beside it on the left, the tour's rail (20 rem) on the right,
+the command palette and the session summary across both columns (the terminal's wrappers give up
+their boxes, `display: contents`, so their parts are the grid's items). The output sets the row's
+height — at least half the screen, at most 64 vh, no empty box past the first lines — and "This run"
+and the tour panel are capped at the row and the screen under the header, scrolling inside only past
+that, from their top (`overflow-anchor: none`, a notice landing shows at the top), with a fade at the
+foot while there is more. Below 1400 px the layout of the first amendment stands.
+
+**Every step's button has a target that is there.** A step's "Do this step" takes the visitor to the
+terminal with the command picked (their own press, so the page scrolls). A done step offers its way
+back only where there is one: "Watch the kill timeline" while the terminal still shows the session it
+caught (a new session or a reload has its own, and the button goes); "Show the live run" puts the
+side-by-side run in the live-run console and goes there (the console never shows a terminal run, and
+after a newer terminal session it showed the visitor an empty box at `#console`: that is what the
+owner pressed); "Show in SIEM" opens the correlation on the card.
+
+**Ambient traffic.** Each flow and response edge of the page's diagram carries one more path
+(`pathLength="100"`, the docs file has none): a faint dot that runs the request path hop by hop every
+9 s (Visitor, Cloudflare, cloudflared, the Gateway, the page, the API server) and the detect-and-respond
+loop once in three rounds, in the text's faint colour. It is CSS only, still under
+`prefers-reduced-motion`, paused off screen and in a hidden tab (`data-ambient`, an
+IntersectionObserver and `visibilitychange`), and not drawn while a run is playing out on the diagram.
+
+**The header's mark** is the shell's prompt, `>_`, in the brand's green, in place of the three-colour square.
+
+**Tests.** Unit: the progress names the caught session and the side-by-side run; a done step's button
+only with its target; the page's layout has an ambient path per flow and response edge, the docs file
+none (`overview.svg` unchanged). End to end: every step's button, in order, reaches something visible
+(the terminal in view with the command picked, the kill timeline focused, the console with that run,
+the SIEM's card), and the kill-timeline button goes once the session is left; at 1920x1080 and
+2560x1440 the section is 1300-1600 px wide, the terminal and "This run" left of the rail, the palette
+as wide as the stage, the output no taller than "This run", the panel whole (top under the header or
+with its row, nothing scrolled away inside); the ambient dots run on screen, pause off screen, are not
+drawn under reduced motion; the mark reads `>_` in `--respond` in both themes. The height budgets stand.
