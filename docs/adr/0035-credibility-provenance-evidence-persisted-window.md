@@ -751,6 +751,17 @@ their own. Before a session the attack stage is as tall as what it holds. The de
 for a first visit in the default view: desktop 1440 at most 3200 px (measured 2796), phone 390 at
 most 5200 px (measured 3433).
 
+**Step 5 speaks in the rail.** In the default view the one-click cards and the console are hidden,
+so step 5's button says there what the launcher would: it is off with the reason while a run is in
+progress, a request is in flight or a cooldown runs (the countdown beside it, out of the live words);
+the launcher's words show under it (polite); and the side-by-side run's two pods follow as two lines
+(guarded: Falco detected it, Talon answered in N ms; unguarded: nothing answered, held for N s). In
+Technical Mode the cards and the console say it where it happens and the rail stays short.
+
+**No About bar.** The bar between the attack and the SIEM is gone: About is one folded section like
+the others, its first paragraph now ending with "I love automating things: if I have done something
+twice, the third time a script does it."
+
 **Tests.** Unit: the layout's edges stop short of the boxes with one head per direction; the page
 carries two dots and a glow per lane edge, the docs file none, and the generated stylesheet an
 offset-path per dot; the rail's notices fold past two. End to end: the dot moves, pauses off screen,
