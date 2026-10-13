@@ -126,13 +126,13 @@ describe("ApiClient.attack", () => {
   });
 
   it("maps 429 to rate-limited with Retry-After", async () => {
-    const res = await client(async () => json(429, {}, { "Retry-After": "42" })).attack("x");
-    expect(res).toEqual({ kind: "rate-limited", retryAfterSeconds: 42 });
+    const res = await client(async () => json(429, { error: "attack rate limit reached" }, { "Retry-After": "42" })).attack("x");
+    expect(res).toEqual({ kind: "rate-limited", retryAfterSeconds: 42, reason: "attack rate limit reached" });
   });
 
   it("maps 429 without Retry-After to the default wait", async () => {
     const res = await client(async () => json(429, {})).attack("x");
-    expect(res).toEqual({ kind: "rate-limited", retryAfterSeconds: DEFAULT_RETRY_AFTER_SECONDS });
+    expect(res).toEqual({ kind: "rate-limited", retryAfterSeconds: DEFAULT_RETRY_AFTER_SECONDS, reason: "" });
   });
 
   it("maps a JSON 404 to unknown-scenario but a plain 404 to offline", async () => {

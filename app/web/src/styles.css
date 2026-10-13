@@ -6465,6 +6465,19 @@ html.js:not([data-tech="on"]) .attack-stage {
   cursor: not-allowed;
 }
 
+/* Pressed, its request in flight: "Starting…" on an accent ring, at once (2026-10-13 c). */
+.tour__btn[aria-busy="true"] {
+  opacity: 1;
+  cursor: progress;
+  border-color: var(--accent);
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.tour__btn:active:not([aria-disabled="true"]) {
+  transform: translateY(1px);
+}
+
 .tour__twin {
   display: grid;
   gap: 0.15rem;

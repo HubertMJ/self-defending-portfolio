@@ -804,3 +804,25 @@ raw events, the span, the times to detect and isolate, ATT&CK, the evidence time
 and in Technical Mode the incident's JSON as the page holds it (wrapped, nothing scrolling sideways).
 Nothing is computed into a fact that the incident does not carry. The scenario's lead, its note, the
 SOC tiles' foot lines, the contained line and the section's lead are cut to short lines.
+
+**Step 5 reacts, and a 429 says which limit it was.** Pressing "Launch side by side" seemed to do
+nothing: the button did not change while the request was out, and in Technical Mode the launcher's
+answer went to its own line under the one-click cards, far below the rail. Then every 429 read "a few
+attacks per 10 minutes per network address", whatever the API meant. Now the button reads "Starting…"
+(`aria-busy`, an accent ring) from the press until the answer, and the rail's line under step 5 shows
+in both views while it is the current step (in Technical Mode a done step's line stays with the cards). The API answers a refused launch 429 with `{"error": …}` and Retry-After: "attack rate
+limit reached" for its three attack limits (the visitor's 3 runs per 10 min, the wait after a terminal
+run, everyone's 30 per hour) and "too many requests" for its request budget (120 a minute, every
+endpoint). The page keeps that reason; for the attack limits it reads `/api/limits` once and the
+visitor's own last terminal session, and says the wait after a terminal session (with how long it held
+the cluster) where that session ended within its own length of now, everyone's hourly limit where
+`global.remaining` is 0, the address's limits where `per_visitor.remaining` is 0, and the API's own
+words otherwise - always with the countdown from Retry-After. A terminal start refused with 429 says
+the same. The mock waits after a terminal run as the API does with `mock-terminal-wait=1`.
+
+**Tests.** End to end: "This run" is no taller than the terminal through nine commands and keeps its
+own scroll at the top, its opened details capped on a phone; the default view numbers the same seven
+sections as Technical Mode with no card; the incident's facts and its Details (and the raw JSON wrapped
+at 320 px); step 5 after the tour's terminal session says "Starting…" at once and then the wait with
+its countdown. Unit: the 429 texts for each reason, the card's headline, facts and folds kept across a
+redraw.

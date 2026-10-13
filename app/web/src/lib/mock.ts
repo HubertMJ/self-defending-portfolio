@@ -62,6 +62,12 @@ export interface MockOptions {
    * 10 s bound and `exited` with no code, as the API reports a command it cut short.
    */
   noResponse?: boolean;
+  /**
+   * After a terminal run ends, wait as long as it held the slot before the next run, as the API does
+   * (ADR 0015 amendment 2026-10-13): 429 "attack rate limit reached" with Retry-After, and /api/limits
+   * reporting 0 left. Off by default, so the suite's other tours run their step 5 at once.
+   */
+  terminalWait?: boolean;
   /** GET /api/correlation says `available: false`, as with the SIEM down: the section stays hidden. */
   noSiem?: boolean;
   /**
@@ -177,6 +183,10 @@ export class MockBackend {
   private readonly noResponse: boolean;
   private readonly noSiem: boolean;
   private readonly siemDelayMs: number;
+  private readonly terminalWait: boolean;
+  /** When the terminal run holding the slot started, and until when its visitor waits once it ended. */
+  private terminalSince = 0;
+  private cooldownUntil = 0;
   /** Incidents the mock's SIEM has filed for this page's terminal runs, newest first. */
   private readonly filed: unknown[] = [];
 
@@ -191,6 +201,7 @@ export class MockBackend {
     this.noResponse = opts.noResponse ?? false;
     this.noSiem = opts.noSiem ?? false;
     this.siemDelayMs = opts.siemDelayMs ?? 8000;
+    this.terminalWait = opts.terminalWait ?? false;
     if (opts.history ?? true) this.seedHistory();
     if (opts.visitorAfterMs !== undefined) {
       setTimeout(() => {
@@ -295,6 +306,7 @@ export class MockBackend {
       if (scenario.interactive) {
         // The terminal: start the run, keep a token the caller must present for each command.
         const token = this.newToken();
+        this.terminalSince = Date.now();
         this.terminal = this.newTerminal(runId, token);
         this.startTerminal();
         return json(202, { run_id: runId, scenario: id, state: "queued", token });
@@ -315,6 +327,7 @@ export class MockBackend {
       const retry = Math.ceil((this.attempts[0] + this.windowMs - now) / 1000);
       return json(429, { error: "attack rate limit reached" }, { "Retry-After": String(retry) });
     }
+    if (this.cooldownUntil > now) return json(429, { error: "attack rate limit reached" }, { "Retry-After": String(Math.ceil((this.cooldownUntil - now) / 1000)) });
     this.attempts.push(now);
     return null;
   }
@@ -395,8 +408,8 @@ export class MockBackend {
       per_visitor: {
         limit: this.limit,
         window_s: Math.round(this.windowMs / 1000),
-        remaining: Math.max(0, this.limit - recent.length),
-        reset_in_s: recent.length ? Math.ceil((recent[0] + this.windowMs - now) / 1000) : 0,
+        remaining: this.cooldownUntil > now ? 0 : Math.max(0, this.limit - recent.length),
+        reset_in_s: Math.max(recent.length ? Math.ceil((recent[0] + this.windowMs - now) / 1000) : 0, this.cooldownUntil > now ? Math.ceil((this.cooldownUntil - now) / 1000) : 0),
       },
       global: { limit: 30, window_s: 3600, remaining: 30 - Math.min(30, this.seq) },
       active_run: this.activeRun !== null,
@@ -606,6 +619,7 @@ export class MockBackend {
     }
     this.publish(this.termRun(t, "finished", detail));
     if (this.activeRun === t.runId) this.activeRun = null;
+    if (this.terminalWait && this.terminalSince) this.cooldownUntil = Date.now() + (Date.now() - this.terminalSince);
   }
 
   private bearer(init?: RequestInit): string | null {
@@ -850,5 +864,6 @@ export function mockOptionsFromUrl(search: string): MockOptions | null {
     noResponse: q.get("mock-no-response") === "1",
     noSiem: q.get("mock-siem") === "0",
     siemDelayMs: num("mock-siem-delay"),
+    terminalWait: q.get("mock-terminal-wait") === "1",
   };
 }

@@ -42,10 +42,16 @@ export type Result<T> =
   | { ok: true; value: T }
   | { ok: false; error: "offline" | "bad-response"; message: string; status?: number; json?: boolean };
 
+/**
+ * A 429 starting a run. `reason` is the body's `error` as the API wrote it: "attack rate limit reached"
+ * (the visitor's runs per window, the wait after a terminal run, or everyone's runs per hour: the API
+ * does not say which) or "too many requests" (its per-visitor request budget, every endpoint);
+ * "" when the body carried none. Retry-After is the real wait.
+ */
 export type AttackResult =
   | { kind: "accepted"; run: AttackAccepted }
   | { kind: "busy" }
-  | { kind: "rate-limited"; retryAfterSeconds: number }
+  | { kind: "rate-limited"; retryAfterSeconds: number; reason: string }
   | { kind: "unknown-scenario" }
   | { kind: "offline"; message: string }
   | { kind: "error"; status: number; message: string };
@@ -54,7 +60,7 @@ export type AttackResult =
 export type TerminalResult =
   | { kind: "accepted"; run: TerminalAccepted }
   | { kind: "busy" }
-  | { kind: "rate-limited"; retryAfterSeconds: number }
+  | { kind: "rate-limited"; retryAfterSeconds: number; reason: string }
   | { kind: "unavailable" }
   | { kind: "offline"; message: string }
   | { kind: "error"; status: number; message: string };
@@ -262,7 +268,7 @@ export class ApiClient {
       case 409:
         return { kind: "busy" };
       case 429:
-        return { kind: "rate-limited", retryAfterSeconds: parseRetryAfter(res.headers.get("Retry-After")) };
+        return { kind: "rate-limited", retryAfterSeconds: parseRetryAfter(res.headers.get("Retry-After")), reason: await errorText(res) };
       case 502:
       case 503:
       case 504:
@@ -293,7 +299,7 @@ export class ApiClient {
       case 409:
         return { kind: "busy" };
       case 429:
-        return { kind: "rate-limited", retryAfterSeconds: parseRetryAfter(res.headers.get("Retry-After")) };
+        return { kind: "rate-limited", retryAfterSeconds: parseRetryAfter(res.headers.get("Retry-After")), reason: await errorText(res) };
       case 502:
       case 503:
       case 504:

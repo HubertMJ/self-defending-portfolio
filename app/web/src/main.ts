@@ -27,7 +27,7 @@ import { mountTerminal } from "./ui/terminal";
 import { mountLimits, setupTechMode } from "./ui/tech";
 import { mountTimeline } from "./ui/timeline";
 import { mountVerify, pollProvenance } from "./ui/verify";
-import { blockedReason } from "./ui/scenarios";
+import { type RateContext, blockedReason, rateLimitText } from "./ui/scenarios";
 
 const HIDDEN_DISCONNECT_MS = 60_000;
 
@@ -284,6 +284,16 @@ function main(): void {
 
   // What blocks a fresh run right now (another run active, or a cooldown) — shown on the terminal's
   // own start button. The server is the authority (409/429); this is only the up-front label.
+  // The visitor's own last terminal session that has ended (the runs are newest first): when it ended
+  // and how long it held the slot - the API's wait after a terminal run lasts as long (ADR 0015
+  // amendment 2026-10-13), which tells that wait from the other limits behind one 429 reason.
+  const lastTerminal = (): RateContext["lastTerminal"] => {
+    const own = new Set(ownIds);
+    const r = latestView.runs.find((v) => own.has(v.runId) && v.scenario === "terminal" && (v.states.finished ?? v.states.failed ?? v.states.timeout) !== undefined);
+    const begun = r ? (r.states.queued ?? r.states.started) : undefined;
+    const ended = r ? (r.states.finished ?? r.states.failed ?? r.states.timeout) : undefined;
+    return begun !== undefined && ended !== undefined ? { endedAt: ended, heldMs: Math.max(0, ended - begun) } : undefined;
+  };
   let launcherState: { activeRun?: { runId: string; scenario: string; since: number; staleMs?: number }; cooldownUntil?: number } = {};
   const terminal = mountTerminal(byId("terminal"), api, {
     blocked: () => blockedReason(launcherState, Date.now()),
@@ -308,6 +318,7 @@ function main(): void {
     onRateLimited: (seconds) => {
       launcherState = { ...launcherState, cooldownUntil: Date.now() + seconds * 1000 };
     },
+    rateText: (reason, seconds) => rateLimitText(reason, seconds, { now: Date.now(), lastTerminal: lastTerminal() }),
     onAvailable: (available, objectives, timeoutSeconds, commands, idleSeconds) => {
       if (available) stats.setObjectives(objectives);
       else degradeToOneClick();
@@ -346,6 +357,7 @@ function main(): void {
       // The console is below the button that was just pressed; the status line's link takes the
       // visitor there if they want (the page does not move on its own, ADR 0035 2026-10-13).
     },
+    lastTerminal,
   );
 
   launcher.observe((st) => tour.setLaunch(st));

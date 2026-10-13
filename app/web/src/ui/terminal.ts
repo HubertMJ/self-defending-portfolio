@@ -85,6 +85,8 @@ export function mountTerminal(
     blocked?: () => string | null;
     cooldownSeconds?: () => number;
     onRateLimited?: (seconds: number) => void;
+    /** A 429 starting the terminal in the page's words, from the API's reason and Retry-After (ui/scenarios.ts rateLimitText). */
+    rateText?: (reason: string, seconds: number) => string;
     /** Whether this API has the terminal, with its objectives and run timeout: told once the catalogue has loaded or failed to. */
     onAvailable?: (available: boolean, objectives: Objective[], timeoutSeconds?: number, commands?: CatalogueCommand[], idleSeconds?: number) => void;
     /** The status strip (ui/runstatus.ts): carried under the input in a session and under the start button between sessions. */
@@ -341,7 +343,7 @@ export function mountTerminal(
       // The note is set after the sync, so the cooldown it explains does not clear it.
       if (idle) idle.shown = blockedNow();
       setNote(
-        r.kind === "busy" ? "Another run is in progress — only one runs at a time. Try again when it finishes." : r.kind === "rate-limited" ? `Rate limit reached: try again in ${Math.ceil(r.retryAfterSeconds)} s.` : r.kind === "error" ? `The server refused the request (HTTP ${r.status}).` : startTimedOutAt !== undefined && ownRunLost() ? "The start request timed out. The server may have started the run anyway: if it shows up here, it is read-only, because its key never reached this page." : "The attack API is not reachable right now.",
+        r.kind === "busy" ? "Another run is in progress — only one runs at a time. Try again when it finishes." : r.kind === "rate-limited" ? (hooks.rateText?.(r.reason, r.retryAfterSeconds) ?? `Rate limit reached: try again in ${Math.ceil(r.retryAfterSeconds)} s.`) : r.kind === "error" ? `The server refused the request (HTTP ${r.status}).` : startTimedOutAt !== undefined && ownRunLost() ? "The start request timed out. The server may have started the run anyway: if it shows up here, it is read-only, because its key never reached this page." : "The attack API is not reachable right now.",
       );
     }
   };

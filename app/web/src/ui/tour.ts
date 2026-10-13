@@ -249,16 +249,31 @@ export function mountTour(root: HTMLElement, hooks: TourHooks): TourHandle {
   // reason with the cooldown, in the rail where the one-click cards may be hidden (default view).
   const launchText = h("span", {});
   const launchCount = h("span", { class: "tour__launchcount", "aria-hidden": "true" });
-  const launchLine = h("p", { class: "tour__launch tech-less", id: "tour-launch", "aria-live": "polite" }, launchText, launchCount);
+  // While step 5 is current, in both views (2026-10-13 c): in Technical Mode the launcher's own line
+  // is far below the rail, where a press on step 5 seemed to do nothing.
+  const launchLine = h("p", { class: "tour__launch", id: "tour-launch", "aria-live": "polite" }, launchText, launchCount);
+  const tagLaunch = (current: boolean) => {
+    launchLine.classList.toggle("tech-less", !current);
+    return launchLine;
+  };
   const syncLaunch = () => {
     const msg = launch.text?.replace(/ Watch it play out in the live run below\.$/, " Both pods show here as it plays out.");
     // Why the button is off (a run in progress, a cooldown, the request in flight), then what was said.
-    const reason = launch.blocked ? (/[.…]$/.test(launch.blocked) ? launch.blocked : `${launch.blocked}.`) : "";
+    // A cooldown's own message says why and how long: no "Rate limited." before it.
+    const reason = !launch.blocked || (launch.countdown && msg) ? "" : /[.…]$/.test(launch.blocked) ? launch.blocked : `${launch.blocked}.`;
     const text = [reason, msg ?? ""].filter(Boolean).join(" ");
     if (launchText.textContent !== text) launchText.textContent = text;
     launchCount.textContent = launch.countdown ? ` ${launch.countdown}` : "";
     launchLine.dataset.tone = launch.tone ?? "";
-    for (const b of document.querySelectorAll<HTMLButtonElement>('[data-focus="step:compare"], [data-focus="bar"][data-scenario]')) b.setAttribute("aria-disabled", String(launch.blocked !== null));
+    for (const b of document.querySelectorAll<HTMLButtonElement>('[data-focus="step:compare"], [data-focus="bar"][data-scenario]')) markLaunch(b);
+  };
+  /** Step 5's button follows the launcher: off while blocked, "Starting…" while its request is in flight. */
+  const markLaunch = (b: HTMLButtonElement) => {
+    b.setAttribute("aria-disabled", String(launch.blocked !== null));
+    if (launch.pending) b.setAttribute("aria-busy", "true");
+    else b.removeAttribute("aria-busy");
+    const label = launch.pending ? "Starting…" : (b.dataset.label ?? b.textContent ?? "");
+    if (b.textContent !== label) b.textContent = label;
   };
   let shown = skipped();
   let enabled = true;
@@ -393,8 +408,9 @@ export function mountTour(root: HTMLElement, hooks: TourHooks): TourHandle {
         // where there is one, its way there - the panel sits beside the terminal whole, never scrolled.
         isCurrent ? h("p", { class: "tour__hint" }, s.hint) : null,
         isCurrent && act ? h("p", { class: "tour__act" }, act) : null,
-        // In Technical Mode the cards and the console say all this where it happens: the rail stays short.
-        s.scenario && (isCurrent || isDone) ? launchLine : null,
+        // In Technical Mode the cards and the console say all this where it happens: the rail stays
+        // short, but the current step's own press is answered beside its button (2026-10-13 c).
+        s.scenario && (isCurrent || isDone) ? tagLaunch(isCurrent) : null,
         s.scenario && compareRun ? twinBlock(compareRun) : null,
       ),
     );
@@ -431,14 +447,19 @@ export function mountTour(root: HTMLElement, hooks: TourHooks): TourHandle {
       return button(again ? "Run it again" : "Do this step", press(() => hooks.onCommand(id, n)), key);
     }
     if (s.scenario) {
-      const b = button(again ? "Run it again" : "Launch side by side", () => {
+      const label = again ? "Run it again" : "Launch side by side";
+      const b = button(label, () => {
         // Blocked: the line under the step says why; nothing is sent.
         if (launch.blocked) return;
+        // Pressed: the button says so at once, before the launcher's answer redraws it.
+        launch = { ...launch, blocked: "Starting…", pending: true, tone: undefined, text: undefined, countdown: undefined };
+        syncLaunch();
         press(() => hooks.onScenario(s.scenario as string, n))();
       }, key);
       b.dataset.scenario = s.scenario;
-      b.setAttribute("aria-disabled", String(launch.blocked !== null));
+      b.dataset.label = label;
       b.setAttribute("aria-describedby", "tour-launch");
+      markLaunch(b);
       return b;
     }
     return null;

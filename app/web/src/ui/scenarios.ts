@@ -4,7 +4,7 @@
 // but never relies on it.
 
 import type { ApiClient, AttackResult } from "../lib/api";
-import type { Scenario } from "../lib/contract";
+import type { Limits, Scenario } from "../lib/contract";
 import { h, replace } from "../lib/dom";
 import { staleRunMs } from "../lib/timeline";
 import { attackUrl, offlinePanel } from "./common";
@@ -21,6 +21,8 @@ export interface LauncherState {
 /** What the launcher says now: why it is blocked (null: it is not), its last message, the cooldown left. */
 export interface LaunchState {
   blocked: string | null;
+  /** A launch request is in flight (the pressed button says so at once). */
+  pending?: boolean;
   tone?: "ok" | "warn" | "error" | "info";
   text?: string;
   countdown?: string;
@@ -57,7 +59,43 @@ export function blockedReason(state: LauncherState, now: number): string | null 
   return null;
 }
 
-export function describeAttackResult(r: AttackResult, scenarioTitle: string): { tone: "ok" | "warn" | "error"; text: string } {
+/** What the page knows besides the 429 itself, to say which limit it was (none of it is required). */
+export interface RateContext {
+  now: number;
+  /** GET /api/limits read right after the 429; null or absent when it did not answer. */
+  limits?: Limits | null;
+  /** The visitor's own last terminal session: when it ended and how long it held the cluster's slot. */
+  lastTerminal?: { endedAt: number; heldMs: number };
+}
+
+/** The API's word for its attack limits (server.go): one text for all three of them. */
+const ATTACK_LIMIT = "attack rate limit reached";
+/** The API's word for its per-visitor request budget (120 a minute, every endpoint). */
+const REQUEST_LIMIT = "too many requests";
+/** Slack for the page's view of a terminal session's length (event times; the pod's cleanup comes after). */
+const WAIT_SLACK_MS = 30_000;
+
+/**
+ * Why the API refused a launch with 429, in the page's words, from what the API said: the body's
+ * reason, Retry-After, and (when given) /api/limits and the visitor's own last terminal session.
+ * The API sends one reason for its three attack limits, so the page names one only where its own
+ * data points to it, and otherwise names the possibilities.
+ */
+export function rateLimitText(reason: string, retryAfterSeconds: number, ctx: RateContext = { now: Date.now() }): string {
+  const again = `You can launch again in ${formatCountdown(retryAfterSeconds)}.`;
+  if (reason === REQUEST_LIMIT) return `Too many requests from your network address this minute (the API's request limit). ${again}`;
+  if (reason !== ATTACK_LIMIT) return `The API refused the launch${reason ? `: ${reason}` : ""}. ${again}`;
+  const t = ctx.lastTerminal;
+  if (t && t.endedAt + t.heldMs + WAIT_SLACK_MS >= ctx.now)
+    return `After a terminal session the next run waits as long as the session held the cluster (yours: ${formatCountdown(t.heldMs / 1000)}). ${again}`;
+  const l = ctx.limits;
+  if (l && l.global.remaining === 0) return `All visitors together have used the cluster's ${l.global.limit} runs per hour. ${again}`;
+  if (l && l.per_visitor.remaining === 0)
+    return `Your network address can start no run right now: ${l.per_visitor.limit} per ${Math.round(l.per_visitor.window_s / 60)} min, and after a terminal session a wait as long as it lasted. ${again}`;
+  return `The API refused the launch: ${ATTACK_LIMIT}. ${again}`;
+}
+
+export function describeAttackResult(r: AttackResult, scenarioTitle: string, rate?: RateContext): { tone: "ok" | "warn" | "error"; text: string } {
   switch (r.kind) {
     case "accepted":
       return { tone: "ok", text: `“${scenarioTitle}” queued as run ${r.run.run_id}. Watch it play out in the live run below.` };
@@ -65,7 +103,7 @@ export function describeAttackResult(r: AttackResult, scenarioTitle: string): { 
       return { tone: "warn", text: "Another visitor’s run is in progress. Only one attack runs at a time; the buttons unlock when it finishes." };
     case "rate-limited":
       // The countdown itself is rendered live at the end of this line (see mountScenarios).
-      return { tone: "warn", text: `Rate limit reached: a few attacks per 10 minutes per network address, shared by everyone behind the same NAT. You can launch again in ${formatCountdown(r.retryAfterSeconds)}.` };
+      return { tone: "warn", text: rateLimitText(r.reason, r.retryAfterSeconds, rate) };
     case "unknown-scenario":
       return { tone: "error", text: "That scenario no longer exists on the server. The list has been reloaded." };
     case "offline":
@@ -81,6 +119,8 @@ export function mountScenarios(
   api: ApiClient,
   onLoaded?: (scenarios: Scenario[]) => void,
   onAccepted?: (runId: string) => void,
+  /** The visitor's own last terminal session, to tell its wait from the other limits on a 429. */
+  lastTerminal?: () => RateContext["lastTerminal"],
 ): Launcher {
   const state: LauncherState = {};
   let scenarios: Scenario[] = [];
@@ -93,7 +133,7 @@ export function mountScenarios(
   let last: { tone?: LaunchState["tone"]; text?: string } = {};
   const notify = () => {
     const now = Date.now();
-    const s: LaunchState = { blocked: blockedReason(state, now), ...last, countdown: state.cooldownUntil && state.cooldownUntil > now ? `Unlocks in ${formatCountdown((state.cooldownUntil - now) / 1000)}` : undefined };
+    const s: LaunchState = { blocked: blockedReason(state, now), pending: !!state.pending, ...last, countdown: state.cooldownUntil && state.cooldownUntil > now ? `Unlocks in ${formatCountdown((state.cooldownUntil - now) / 1000)}` : undefined };
     for (const cb of observers) cb(s);
   };
 
@@ -136,12 +176,18 @@ export function mountScenarios(
   };
 
   const launch = async (s: Scenario, opts: { compare?: boolean } = {}) => {
-    if (blockedReason(state, Date.now())) return;
+    // Blocked: nothing is sent, and whoever pressed hears the reason again (the tour's step 5 marked
+    // its button pending at the press).
+    if (blockedReason(state, Date.now())) return notify();
     state.pending = s.id;
+    // The last answer is about an earlier press: "Starting…" alone until this one's comes.
+    last = {};
     sync();
     const result = await api.attack(s.id, opts);
+    // A refusal of the attack limits: which one it was is read from /api/limits (the 429 does not say).
+    const limits = result.kind === "rate-limited" && result.reason === ATTACK_LIMIT ? await api.limits().then((r) => (r.ok ? r.value : null)) : undefined;
     state.pending = undefined;
-    const msg = describeAttackResult(result, s.title);
+    const msg = describeAttackResult(result, s.title, { now: Date.now(), limits, lastTerminal: lastTerminal?.() });
     if (result.kind === "accepted") {
       // Lock immediately; the stream's "queued" event confirms it a moment later.
       state.activeRun ??= { runId: result.run.run_id, scenario: s.id, since: Date.now() };
@@ -257,6 +303,7 @@ export function mountScenarios(
     launch(id) {
       const s = scenarios.find((x) => x.id === id);
       if (s) void launch(s, { compare });
+      else notify();
     },
     observe(cb) {
       observers.push(cb);

