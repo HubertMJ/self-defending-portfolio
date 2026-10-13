@@ -6127,6 +6127,12 @@ body:has(.run-toast:not([hidden])) .tour-toast[data-pos="bottom"] {
   color: var(--text);
 }
 
+/* The second line of the bar, under the first, on its own line (2026-10-13). */
+.aboutbar__text--more {
+  flex-basis: 100%;
+  color: var(--text-muted);
+}
+
 .aboutbar__links {
   margin: 0;
   font-size: 0.92rem;

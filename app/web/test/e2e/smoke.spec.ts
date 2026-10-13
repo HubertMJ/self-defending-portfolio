@@ -470,6 +470,18 @@ test.describe("layout (ADR 0035, amended 2026-10-05; ?mock=1)", () => {
     expect(problems).toEqual([]);
   });
 
+  test("the About bar: the first About sentence verbatim, then the automation line on its own line", async ({ page }) => {
+    await page.goto("/?mock=1");
+    const lines = page.locator(".aboutbar .aboutbar__text");
+    await expect(lines).toHaveCount(2);
+    await expect(lines.nth(0)).toHaveText("I have been a Cyber Security Engineer at SecureVisio in Rzeszów, Poland, since March 2020.");
+    await expect(lines.nth(1)).toHaveText("I love automating things: if I have done something twice, the third time a script does it.");
+    const [a, b] = await lines.evaluateAll((els) => els.map((el) => el.getBoundingClientRect().top));
+    expect(b).toBeGreaterThan(a);
+    // The full About text below is untouched: its first sentence is the bar's.
+    await expect(page.locator("#about")).toContainText("I have been a Cyber Security Engineer at SecureVisio in Rzeszów, Poland, since March 2020.");
+  });
+
   test("the header's mark is the prompt in the brand's green", async ({ page }) => {
     await page.goto("/?mock=1");
     const mark = page.locator(".site-header .brand__mark");
