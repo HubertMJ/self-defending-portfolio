@@ -508,7 +508,8 @@ test.describe("layout (ADR 0035, amended 2026-10-05; ?mock=1)", () => {
       await current(id).locator(".tour__btn").click();
       await expect(input).toHaveValue(cmd, { timeout: 10_000 });
       await expect(term.locator(".term__form")).toHaveAttribute("data-step", String(["look", "tamper", "hide", "caught"].indexOf(id) + 1));
-      await expect(input).toBeEnabled({ timeout: 10_000 });
+      // The pick is filled in only once the last command is done, so Enter runs it.
+      await expect(term.locator(".term__send")).toBeEnabled({ timeout: 10_000 });
       await input.press("Enter");
     };
     await step("look", "id");
@@ -538,6 +539,39 @@ test.describe("layout (ADR 0035, amended 2026-10-05; ?mock=1)", () => {
     await expect(five.locator(".tour__twin dd").nth(1)).toContainText(/nothing answered/, { timeout: 20_000 });
     // No mark on the hidden card.
     await expect(page.locator('.scenario[data-suggested="true"]')).toHaveCount(0);
+    expect(problems).toEqual([]);
+  });
+
+  test("a step's chip pressed while the last command's 202 is still in flight says so, fills in once that command is done, and Enter runs it", { tag: "@default" }, async ({ page, isMobile }) => {
+    // The command's end can reach the page before its 202 does (the stream beats the POST): the tour
+    // moves on, and its next chip is pressed while the terminal still holds the one-command lock.
+    await page.addInitScript(() => {
+      const json = Response.prototype.json;
+      Response.prototype.json = function (this: Response) {
+        const body = json.call(this);
+        return this.status === 202 ? body.then((v: unknown) => new Promise((ok) => setTimeout(() => ok(v), 1500))) : body;
+      };
+    });
+    const problems = guardConsole(page);
+    await page.goto("/?mock=1&mock-speed=0.3");
+    const steps = page.locator("#tour-steps");
+    const term = page.locator("#terminal");
+    const input = term.locator("#term-input");
+    if (isMobile) await page.locator("#tour .tour").getByRole("button", { name: "Show the steps" }).click();
+    const current = (id: string) => steps.locator(`.tour__step[data-id="${id}"][data-current="true"]`);
+    await current("look").locator(".tour__btn").click();
+    await expect(input).toHaveValue("id", { timeout: 10_000 });
+    await input.press("Enter");
+    await expect(steps.locator('.tour__step[data-id="look"]')).toHaveAttribute("data-done", "true");
+    await expect(term.locator(".term__send")).toBeDisabled();
+    await current("tamper").locator(".tour__btn").click();
+    await expect(term.locator("#term-hint")).toContainText("it fills in once the current command finishes");
+    await expect(input).toHaveValue("");
+    await expect(input).toHaveValue(/^echo pwned/, { timeout: 10_000 });
+    await expect(term.locator(".term__send")).toBeEnabled();
+    await input.press("Enter");
+    await expect(input).toHaveValue("");
+    await expect(term.locator(".term__cmd .term__line--in")).toHaveCount(2, { timeout: 10_000 });
     expect(problems).toEqual([]);
   });
 
@@ -2469,8 +2503,16 @@ test.describe("this session first (mock, ADR 0035 amendment 2026-10-06)", () => 
     const conn = page.locator("#timeline-conn");
     await expect(conn).toHaveAttribute("data-state", "open");
     await expect(conn.locator(".conn__text")).toContainText("live");
-    const [dot, text] = await Promise.all([conn.locator(".conn__dot").boundingBox(), conn.locator(".conn__text").boundingBox()]);
-    expect(dot && text && Math.abs(dot.y + dot.height / 2 - (text.y + text.height / 2))).toBeLessThan(6);
+    // Both boxes read in one frame: two separate reads can straddle a layout shift above the line.
+    const offset = () =>
+      conn.evaluate((e) => {
+        const mid = (s: string) => {
+          const r = e.querySelector(s)!.getBoundingClientRect();
+          return r.top + r.height / 2;
+        };
+        return Math.abs(mid(".conn__dot") - mid(".conn__text"));
+      });
+    await expect.poll(offset).toBeLessThan(6);
   });
 
     test("a reload keeps the tab's own runs: their incidents under the own tier, no example; a bad id is ignored", async ({ page }) => {

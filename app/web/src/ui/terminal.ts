@@ -651,6 +651,8 @@ export function mountTerminal(
   const resolvePending = () => {
     if (pendingSeq !== undefined && myRun()?.commands.find((c) => c.seq === pendingSeq)?.endedAt !== undefined) pendingSeq = undefined;
     syncControls();
+    // A command picked while the last one was in flight is filled in now (its end may have come before its 202).
+    applySuggestion(myRun());
   };
 
   /** A transient note in the hint line, cleared on the next keystroke. */
@@ -991,7 +993,8 @@ export function mountTerminal(
       }
     }
     const cmd = suggested ? catalogue.commands.find((c) => c.id === suggested) : undefined;
-    if (cmd && ready && !over() && !els.input.disabled && els.input.value === "") {
+    // Never while a command is being sent or runs: Enter would be held back, the pick left half done.
+    if (cmd && ready && !over() && !els.input.disabled && els.input.value === "" && !sending && pendingSeq === undefined) {
       els.input.value = cmd.input;
       noteHint(`picked for you: ${cmd.input} — press Enter to run it`);
     }
@@ -1252,7 +1255,12 @@ export function mountTerminal(
         // The last session is over: the pick starts the next one, as from the start panel.
         again();
         void start();
-      } else applySuggestion(myRun());
+      } else {
+        applySuggestion(myRun());
+        // Held until the current command ends: the hint says so, and the input is filled then.
+        const cmd = catalogue?.commands.find((c) => c.id === suggested);
+        if (els && cmd && ready && !over() && els.input.value === "" && (sending || pendingSeq !== undefined)) noteHint(`picked: ${cmd.input} — it fills in once the current command finishes`);
+      }
     },
     again,
     restart() {
