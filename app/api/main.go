@@ -24,6 +24,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 
+	"github.com/hubertmj/self-defending-portfolio/app/api/internal/clientip"
 	"github.com/hubertmj/self-defending-portfolio/app/api/internal/events"
 	"github.com/hubertmj/self-defending-portfolio/app/api/internal/incidents"
 	"github.com/hubertmj/self-defending-portfolio/app/api/internal/limits"
@@ -181,7 +182,7 @@ func run(log *slog.Logger) error {
 		}),
 		Attacks:            limits.NewAttacks(attackCfg, nil),
 		Requests:           limits.NewRequests(120, time.Minute, 50000, nil),
-		Streams:            limits.NewConns(4, 200),
+		Streams:            limits.NewConns(4, 200).WithGroups(16, clientip.Group),
 		FalcoAlerts:        falcoAlerts,
 		TalonActions:       talonActions,
 		Log:                log,

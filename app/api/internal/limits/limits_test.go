@@ -246,3 +246,80 @@ func TestConnsRemaining(t *testing.T) {
 		t.Fatal("after release")
 	}
 }
+
+func TestInteractiveCooldown(t *testing.T) {
+	c := newClock()
+	a := NewAttacks(DefaultAttackConfig(), c.now)
+	d, release := a.AcquireInteractive("1.2.3.4")
+	if d.Outcome != Allowed {
+		t.Fatalf("first: %v", d.Outcome)
+	}
+	c.add(5 * time.Minute)
+	release()
+	// The terminal held the slot for five minutes: its visitor waits five minutes, for any kind of
+	// run, while everybody else may start one at once.
+	d, _ = a.Acquire("1.2.3.4")
+	if d.Outcome != RateLimited || d.RetryAfter != 5*time.Minute {
+		t.Fatalf("right after: %+v, want RateLimited in 5m", d)
+	}
+	if st := a.Status("1.2.3.4"); st.PerKeyRemaining != 0 || st.PerKeyResetIn != 5*time.Minute {
+		t.Fatalf("status during the wait: %+v", st)
+	}
+	if d, r := a.Acquire("5.6.7.8"); d.Outcome != Allowed {
+		t.Fatalf("other visitor: %v", d.Outcome)
+	} else {
+		r()
+	}
+	c.add(5 * time.Minute)
+	d, release = a.AcquireInteractive("1.2.3.4")
+	if d.Outcome != Allowed {
+		t.Fatalf("after the wait: %v", d.Outcome)
+	}
+	release()
+	release() // idempotent: a zero-length run, and no second cooldown
+	if d, r := a.Acquire("1.2.3.4"); d.Outcome != Allowed {
+		t.Fatalf("after a zero-length run: %v", d.Outcome)
+	} else {
+		r()
+	}
+}
+
+func TestScriptedRunHasNoCooldown(t *testing.T) {
+	c := newClock()
+	a := NewAttacks(DefaultAttackConfig(), c.now)
+	_, release := a.Acquire("1.2.3.4")
+	c.add(90 * time.Second)
+	release()
+	if d, r := a.Acquire("1.2.3.4"); d.Outcome != Allowed {
+		t.Fatalf("after a scripted run: %v", d.Outcome)
+	} else {
+		r()
+	}
+}
+
+func TestConnsGroups(t *testing.T) {
+	group := func(k string) string { return k[:1] } // "a1", "a2" share group "a"
+	c := NewConns(2, 10).WithGroups(3, group)
+	_, r1 := c.Acquire("a1")
+	_, _ = c.Acquire("a1")
+	_, _ = c.Acquire("a2")
+	if ok, _ := c.Acquire("a3"); ok {
+		t.Fatal("group cap")
+	}
+	if c.Remaining("a3") != 0 || c.Remaining("b1") != 2 {
+		t.Fatalf("remaining: a3=%d b1=%d", c.Remaining("a3"), c.Remaining("b1"))
+	}
+	if ok, r := c.Acquire("b1"); !ok {
+		t.Fatal("other group")
+	} else {
+		r()
+	}
+	r1()
+	r1()
+	if ok, _ := c.Acquire("a3"); !ok {
+		t.Fatal("after release")
+	}
+	if c.inGroup["a"] != 3 || len(c.inGroup) != 1 {
+		t.Fatalf("inGroup = %v", c.inGroup)
+	}
+}

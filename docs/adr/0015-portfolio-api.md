@@ -218,3 +218,23 @@ optional, so the API starts with the SIEM part off without it. `SIEM_URL=https:/
 
 **Consequences.** No new RBAC; the CSP files are untouched (browsers never reach siem01). A rotated
 certificate is a new generation, mapped on siem01 before the Secret is replaced.
+
+## Amendment 2026-10-13: a wait after a terminal run, and stream slots per /48
+
+**Context.** A security review found two ways for one visitor to take the demo from everybody else.
+A terminal run holds the only slot for up to 300 s, so two of them outlast the 10-minute window: a
+script that reopens the terminal the moment the last one ends keeps every other visitor at 409 for
+as long as it likes, within the per-visitor quota. And an IPv6 /48 (a free tunnel-broker allocation)
+is 65,536 /64 keys: fifty of them, at 4 streams each, fill all 200 event-stream slots.
+
+**Decision.** When a terminal run ends, its visitor waits as long as the run held the slot before
+starting another run of any kind (429 with Retry-After; `/api/limits` reports 0 left and the wait as
+`reset_in_s`). The slot is then free at least half the time for everyone else. Scripted runs are
+bounded by the catalogue's 90 s and are not cooled down. Event streams are also capped at 16 per /48
+(`clientip.Group`); IPv4 is not widened to its /24, because one address already stands for everyone
+behind a carrier-grade or office NAT.
+
+**Consequences.** A visitor who used the terminal for five minutes waits five before the next
+attack. Rotating many /48s or many IPv4 addresses still fills the global limits (30 attacks per hour,
+200 streams, the 50,000-key request table); that is volumetric abuse, for Cloudflare's rate limiting
+in front of the tunnel rather than for this process.

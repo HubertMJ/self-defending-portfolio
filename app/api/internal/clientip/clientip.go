@@ -8,7 +8,9 @@
 // port to forge it.
 //
 // IPv6 addresses are keyed by their /64: a single subscriber line is routinely handed a whole /64,
-// so keying by the full address would give one visitor 2^64 independent quotas.
+// so keying by the full address would give one visitor 2^64 independent quotas. Group widens that
+// to the /48 for the limits that a visitor holding a whole /48 (a free tunnel-broker allocation)
+// could otherwise fill alone.
 package clientip
 
 import (
@@ -42,4 +44,19 @@ func Key(r *http.Request) string {
 		host = r.RemoteAddr
 	}
 	return "direct:" + host
+}
+
+// Group returns the address block a Key belongs to: the /48 of an IPv6 /64 key, the key itself for
+// anything else (an IPv4 address, a direct: key). IPv4 is not widened to its /24: one address is
+// already shared by everyone behind a carrier-grade or office NAT.
+func Group(key string) string {
+	p, err := netip.ParsePrefix(key)
+	if err != nil || !p.Addr().Is6() || p.Bits() != 64 {
+		return key
+	}
+	g, err := p.Addr().Prefix(48)
+	if err != nil {
+		return key
+	}
+	return g.String()
 }
