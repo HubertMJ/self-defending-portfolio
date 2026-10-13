@@ -20,3 +20,7 @@ __pycache__/
 cluster/infra/*/charts/
 # scratch space of scripts/siem-api-cert.sh (keys before encryption, shredded on exit)
 .siem-tmp/
+
+# screenshots a local script may drop in the web app (never part of the site)
+/app/web/*.png
+cut-*.png
