@@ -470,6 +470,32 @@ test.describe("layout (ADR 0035, amended 2026-10-05; ?mock=1)", () => {
     expect(problems).toEqual([]);
   });
 
+  test("the hero diagram's ambient traffic: a dot per hop that runs while the diagram is on screen, pauses off screen, and is still under reduced motion", async ({ page, isMobile }) => {
+    await page.goto("/?mock=1");
+    const svg = isMobile ? "#diagram .dg-narrow svg" : "#diagram .dg-wide svg";
+    const dots = page.locator(`${svg} .dg-ambient`);
+    expect(await dots.count()).toBeGreaterThanOrEqual(8);
+    await expect(dots.first()).toHaveAttribute("pathLength", "100");
+    await expect(page.locator("#diagram")).toHaveAttribute("data-ambient", "on");
+    const style = (sel: string) => page.locator(sel).first().evaluate((el) => ({ name: getComputedStyle(el).animationName, state: getComputedStyle(el).animationPlayState, display: getComputedStyle(el).display }));
+    let m = await style(`${svg} .dg-edge[data-edge="visitor-cloudflare"] .dg-ambient`);
+    expect(m).toEqual({ name: "dg-ambient", state: "running", display: "block" });
+    m = await style(`${svg} .dg-edge[data-edge="falco-talon"] .dg-ambient`);
+    expect(m.name).toBe("dg-ambient-loop");
+    // The side edges (the twin's syscalls, the logs to the SIEM) carry none.
+    await expect(page.locator(`${svg} .dg-edge--side .dg-ambient`)).toHaveCount(0);
+    // Off screen: paused.
+    await page.evaluate(() => document.getElementById("skills")?.scrollIntoView({ behavior: "instant" }));
+    await expect(page.locator("#diagram")).toHaveAttribute("data-ambient", "off");
+    m = await style(`${svg} .dg-edge[data-edge="visitor-cloudflare"] .dg-ambient`);
+    expect(m.state).toBe("paused");
+    // Reduced motion: not drawn at all.
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await page.reload();
+    m = await style(`${svg} .dg-edge[data-edge="visitor-cloudflare"] .dg-ambient`);
+    expect(m.display).toBe("none");
+  });
+
   test("on a wide screen the attack section widens: the terminal and This run left, the tour's rail right, the commands across both; the sticky panel is never cut at its top", async ({ page, isMobile }) => {
     test.skip(isMobile, "the wide layout is a desktop layout");
     for (const [width, height] of [

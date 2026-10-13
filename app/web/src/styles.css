@@ -5399,6 +5399,100 @@ html[data-tech="on"] .dg-sub {
   }
 }
 
+/* The ambient traffic (2026-10-13): a faint dot runs the request path hop by hop, every 9 s, and the
+   detect-and-respond loop once in three rounds. Each hop's path is 100 units long (pathLength), so
+   one rule moves the dot across any hop in 1.4 s. Still where motion is not wanted, off screen or in
+   a hidden tab (ui/diagram.ts sets data-ambient), and while a run is playing out on the diagram. */
+.dg-ambient {
+  display: none;
+  fill: none;
+  stroke: var(--text-faint);
+  stroke-width: 2.5;
+  stroke-linecap: round;
+  stroke-dasharray: 7 400;
+  stroke-dashoffset: 7;
+  opacity: 0.6;
+}
+
+/* Each hop's turn, as properties on its edge (no fight over which rule wins). */
+.dg-edge[data-edge="cloudflare-cloudflared"] {
+  --amb-delay: 1.4s;
+}
+
+.dg-edge[data-edge="cloudflared-gateway"] {
+  --amb-delay: 2.8s;
+}
+
+.dg-edge[data-edge="gateway-site"] {
+  --amb-delay: 4.2s;
+}
+
+.dg-edge[data-edge="site-kube-apiserver"] {
+  --amb-delay: 5.6s;
+}
+
+.dg-edge[data-edge="pod-falco"],
+.dg-edge[data-edge="falco-talon"],
+.dg-edge[data-edge="talon-kube-apiserver"],
+.dg-edge[data-edge="kube-apiserver-pod"] {
+  --amb-name: dg-ambient-loop;
+  --amb-period: 27s;
+}
+
+.dg-edge[data-edge="pod-falco"] {
+  --amb-delay: 18s;
+}
+
+.dg-edge[data-edge="falco-talon"] {
+  --amb-delay: 19.4s;
+}
+
+.dg-edge[data-edge="talon-kube-apiserver"] {
+  --amb-delay: 20.8s;
+}
+
+.dg-edge[data-edge="kube-apiserver-pod"] {
+  --amb-delay: 22.2s;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  html:not(.reduced-motion) .dg-wrap:not([data-run="active"]) .dg-ambient {
+    display: block;
+    animation: var(--amb-name, dg-ambient) var(--amb-period, 9s) linear var(--amb-delay, 0s) infinite;
+    animation-play-state: var(--amb-state, running);
+  }
+
+  .dg-wrap[data-ambient="off"] {
+    --amb-state: paused;
+  }
+}
+
+/* 1.4 s of a 9 s round on the hop, then out of sight past its end. */
+@keyframes dg-ambient {
+  0% {
+    stroke-dashoffset: 7;
+  }
+  15.5% {
+    stroke-dashoffset: -100;
+  }
+  100% {
+    stroke-dashoffset: -100;
+  }
+}
+
+/* 1.4 s of a 27 s round. */
+@keyframes dg-ambient-loop {
+  0% {
+    stroke-dashoffset: 7;
+  }
+  5.2% {
+    stroke-dashoffset: -100;
+  }
+  100% {
+    stroke-dashoffset: -100;
+  }
+}
+
 .dg-foot {
   margin-top: 0.6rem;
 }

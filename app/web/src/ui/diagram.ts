@@ -148,6 +148,21 @@ export function mountDiagram(figure: HTMLElement, opts: { caption: HTMLElement; 
     }
   };
 
+  // The ambient traffic (styles.css .dg-ambient) runs only while the figure is on screen in a visible
+  // tab: cheap to know, and no animation ticks for a diagram nobody sees.
+  let onScreen = true;
+  const ambient = () => {
+    figure.dataset.ambient = onScreen && !document.hidden ? "on" : "off";
+  };
+  if (typeof IntersectionObserver === "function") {
+    new IntersectionObserver((entries) => {
+      for (const e of entries) onScreen = e.isIntersecting;
+      ambient();
+    }).observe(figure);
+  }
+  document.addEventListener("visibilitychange", ambient);
+  ambient();
+
   let lastKey = "";
   const setRun = (run: RunView | undefined, title?: string) => {
     const { nodes, edges, summary } = pathOf(run);

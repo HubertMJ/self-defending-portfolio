@@ -66,6 +66,15 @@ describe("diagram layout", () => {
     });
   }
 
+  it("the page's flow and response edges carry an ambient path of length 100; the docs file has none", () => {
+    const hero = serialise(layout("hero", { interactive: true }));
+    const flows = (hero.match(/class="dg-edge dg-edge--(flow|response)"/g) ?? []).length;
+    expect(flows).toBeGreaterThan(4);
+    expect((hero.match(/class="dg-ambient" d="[^"]+" pathLength="100"/g) ?? []).length).toBe(flows);
+    expect(serialise(layout("narrow", { interactive: true }))).toContain('class="dg-ambient"');
+    expect(serialise(layout("full", { interactive: false }, FULL_MODEL))).not.toContain("dg-ambient");
+  });
+
   it("interactive nodes are focusable buttons inside a role=group svg; the docs view is one role=img", () => {
     const page = serialise(layout("hero", { interactive: true }));
     expect(page).toContain('role="button"');

@@ -132,13 +132,23 @@ function route(e: DiagramEdge, a: Box, b: Box, m: Metrics): { d: string; label: 
   return { d: `M${x0},${y0} V${cy(b)} H${x1}`, label: [(x0 + x1) / 2, cy(b) - 7] };
 }
 
-function edgeTree(e: DiagramEdge, a: Box, b: Box, m: Metrics, prefix: string): Tree {
+/**
+ * The ambient traffic (2026-10-13): a faint dot that runs each hop of the request path, and now and
+ * then the detect-and-respond loop, on the page only (the docs file is still). `pathLength="100"`
+ * lets one stylesheet rule move it along any hop in the same time, whatever its length.
+ */
+function ambient(e: DiagramEdge, d: string, interactive: boolean | undefined): Tree | null {
+  return interactive && e.kind !== "side" ? t("path", { class: "dg-ambient", d, pathLength: 100 }) : null;
+}
+
+function edgeTree(e: DiagramEdge, a: Box, b: Box, m: Metrics, prefix: string, interactive?: boolean): Tree {
   const { d, label, vertical } = route(e, a, b, m);
   const id = `${e.from}-${e.to}`;
   return t(
     "g",
     { class: `dg-edge dg-edge--${e.kind}`, "data-edge": id, "data-lit": "false" },
     t("path", { class: "dg-line", d, "marker-end": `url(#${prefix}-arrow-${e.kind})`, ...(e.both ? { "marker-start": `url(#${prefix}-arrow-${e.kind})` } : {}) }),
+    ambient(e, d, interactive),
     t("path", { class: "dg-packet", d }),
     e.label ? t("text", { class: "dg-edgelabel", x: label[0], y: label[1], "text-anchor": vertical ? "start" : "middle" }, e.label) : null,
   );
@@ -180,7 +190,7 @@ function layoutGrid(view: "hero" | "full", opts: LayoutOptions, model: DiagramMo
     t("desc", { id: descId }, opts.desc ?? describe(nodes, edges)),
     defs(prefix),
     t("g", { class: "dg-zones" }, ...zoneBoxes.map(([z, b]) => zoneTree(z, b, m))),
-    t("g", { class: "dg-edges" }, ...edges.map((e) => edgeTree(e, boxes.get(e.from) as Box, boxes.get(e.to) as Box, m, prefix))),
+    t("g", { class: "dg-edges" }, ...edges.map((e) => edgeTree(e, boxes.get(e.from) as Box, boxes.get(e.to) as Box, m, prefix, opts.interactive))),
     t("g", { class: "dg-nodes" }, ...nodes.map((n) => nodeTree(n, boxes.get(n.id) as Box, opts))),
   );
 }
@@ -235,6 +245,7 @@ function layoutNarrow(opts: LayoutOptions, model: DiagramModel): Tree {
       "g",
       { class: `dg-edge dg-edge--${e.kind}`, "data-edge": `${e.from}-${e.to}`, "data-lit": "false" },
       t("path", { class: "dg-line", d, "marker-end": `url(#${prefix}-arrow-${e.kind})` }),
+      ambient(e, d, opts.interactive),
       t("path", { class: "dg-packet", d }),
       // Only a straight hop carries its words: the margins are too narrow for a label.
       e.label && down && adjacent ? t("text", { class: "dg-edgelabel", x: label[0], y: label[1], "text-anchor": anchor }, e.label) : null,
