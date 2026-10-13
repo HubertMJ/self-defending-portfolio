@@ -3091,10 +3091,11 @@ html[data-terminal="off"] .needs-terminal {
   gap: 1.25rem;
 }
 
-/* The terminal pane and the "This run" panel. On a wide screen the panel sits beside the pane and
-   goes with the page like everything else (2026-10-13: only the tour's rail stays put); the pane
-   keeps its own fixed height. On a phone the pane's parts become the grid's rows, with the panel as
-   one card between the output and the input. */
+/* The terminal pane and the "This run" panel. On a wide screen the panel sits beside the pane, goes
+   with the page (never sticky) and is never taller than the pane: the aside adds nothing to the row's
+   height, and the panel inside it scrolls on its own past that (2026-10-13 c). On a phone the pane's
+   parts become the grid's rows, with the panel as one card between the output and the input, its
+   opened details capped the same way. */
 .term__grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
@@ -3105,6 +3106,19 @@ html[data-terminal="off"] .needs-terminal {
     grid-template-columns: minmax(0, 1.65fr) minmax(17rem, 1fr);
     gap: 1.25rem;
     align-items: start;
+  }
+
+  .term__side {
+    position: relative;
+    align-self: stretch;
+  }
+
+  .thisrun {
+    position: absolute;
+    inset: 0 0 auto;
+    max-height: 100%;
+    overflow-y: auto;
+    overscroll-behavior: contain;
   }
 
   .thisrun__more {
@@ -3160,6 +3174,13 @@ html[data-terminal="off"] .needs-terminal {
 
   .thisrun[data-open="false"] .thisrun__body {
     display: none;
+  }
+
+  /* Opened, the details scroll inside: the input stays within reach under them. */
+  .thisrun__body {
+    max-height: min(55vh, 30rem);
+    overflow-y: auto;
+    overscroll-behavior: contain;
   }
 
   /* Shorter on a phone, so the card and the input stay within reach under it. */
@@ -3722,6 +3743,13 @@ html[data-terminal="off"] .needs-terminal {
 .thisrun__shop,
 .thisrun .term__shop {
   min-width: 0;
+}
+
+/* Where the panel scrolls inside, its scrollbar shows (a thin one, in the page's colours). */
+.thisrun,
+.thisrun__body {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
 }
 
 .thisrun__shop > summary {

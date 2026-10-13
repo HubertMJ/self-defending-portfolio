@@ -361,7 +361,7 @@ export function mountTerminal(
   // ---- running session skeleton ----
   // The terminal pane on the left (bar, output, input, the status strip), the "This run" panel on the
   // right (detection, response and SIEM rows, the objectives, this run's own timeline, the shop),
-  // going with the page; the command palette full width under both. Only things
+  // going with the page, no taller than the pane; the command palette full width under both. Only things
   // about this session sit beside it: the seven-layer map is in "How it works" (ADR 0035 amendment).
   const renderSession = () => {
     mode = "session";
@@ -423,7 +423,8 @@ export function mountTerminal(
     const sideBody = h("div", { class: "thisrun__body", id: "thisrun-body" }, objectives, timelineWrap, shopFold);
     // On a phone the panel is one card above the input: its rows always, the rest on request.
     const more = h("button", { type: "button", class: "btn btn--ghost btn--small thisrun__more", "aria-expanded": "false", "aria-controls": "thisrun-body" }, "Details");
-    // The aside sits beside the pane and goes with the page; the pane keeps its fixed height.
+    // The aside sits beside the pane and goes with the page; the panel is never taller than the pane
+    // and scrolls inside past that (styles.css).
     const panel = h(
       "div",
       { class: "thisrun", "data-open": "false" },

@@ -771,3 +771,16 @@ scrolls; the terminal's box keeps its height through six commands and the page d
 step's mark is there after 5 s and goes when the step is done; the default view hides what it should
 and Technical Mode shows it; `#posture` opens the card and the section. Most tests run in Technical
 Mode (stored before load); the default view's own tests are tagged `@default`.
+
+## Amendment 2026-10-13 (c): "This run" capped at the terminal, evidence as ordinary sections, a scannable SIEM card, step 5's real refusal
+
+The owner, on the live site after (b).
+
+**"This run" is never taller than the terminal.** In Technical Mode on a wide screen the panel grew
+far below the terminal (the run's timeline and the shop). It still goes with the page (never sticky),
+but its cell adds nothing to the row's height: the panel is as tall as its content up to the
+terminal pane beside it, and scrolls inside past that, its scrollbar shown, `overscroll-behavior:
+contain`, nothing scrolling it for the visitor. The shop stays a fold inside it (folded first when the
+panel would scroll, unless the visitor chose). On a phone the opened details are capped the same way
+(`min(55vh, 30rem)`), so the input stays within reach under them. A stale rule of the mock's stylesheet
+for the old sticky panel is gone.

@@ -2274,7 +2274,7 @@ test.describe("the visitor's run, told back (mock, ADR 0035 amendment: UX stage 
     await expect.poll(() => card.evaluate((e) => e.getBoundingClientRect().top - (document.querySelector(".site-header") as HTMLElement).getBoundingClientRect().bottom)).toBeGreaterThanOrEqual(0);
   });
 
-  test("layout: beside the terminal only this run, which goes with the page (never sticky); the palette full width with its legend; on a phone one card above the input", async ({ page, isMobile }) => {
+  test("layout: beside the terminal only this run, which goes with the page (never sticky) and is never taller than the terminal, scrolling inside; the palette full width with its legend; on a phone one card above the input", async ({ page, isMobile }) => {
     await openSections(page);
     await page.goto(URL);
     const term = page.locator("#terminal");
@@ -2294,14 +2294,31 @@ test.describe("the visitor's run, told back (mock, ADR 0035 amendment: UX stage 
       await expect(term.locator(".thisrun__body")).toBeHidden();
       await term.getByRole("button", { name: "Details" }).click();
       await expect(term.locator(".thisrun__body")).toBeVisible();
+      // Opened, the details are capped and scroll inside: the input stays within reach under them.
+      const body = term.locator(".thisrun__body");
+      expect(await body.evaluate((e) => [getComputedStyle(e).overflowY, getComputedStyle(e).overscrollBehaviorY])).toEqual(["auto", "contain"]);
+      expect(await body.evaluate((e) => e.getBoundingClientRect().height)).toBeLessThanOrEqual(Math.min(844 * 0.55, 480) + 1);
     } else {
       const [pane, side] = [await box(".term__pane"), await box(".thisrun")];
       expect(side.x).toBeGreaterThan(pane.x + pane.width - 1);
       expect(await term.locator(".term__out").evaluate((e) => e.getBoundingClientRect().height)).toBeGreaterThanOrEqual(300);
-      // "This run" goes with the page: never sticky, never scrolled inside, its place in the document
-      // the same however far the page is scrolled (2026-10-13: only the tour's rail stays put).
+      // "This run" goes with the page: never sticky, its place in the document the same however far
+      // the page is scrolled (only the tour's rail stays put); never taller than the terminal beside
+      // it, scrolling inside past that, its own scroll kept from the page's (2026-10-13 c).
       const thisrun = term.locator(".thisrun");
-      expect(await thisrun.evaluate((e) => getComputedStyle(e).position)).toBe("static");
+      expect(await thisrun.evaluate((e) => getComputedStyle(e).position)).not.toBe("sticky");
+      expect(await thisrun.evaluate((e) => [getComputedStyle(e).overflowY, getComputedStyle(e).overscrollBehaviorY])).toEqual(["auto", "contain"]);
+      for (const cmd of ["id", "hostname", "ps", "ls -la /srv/shop", "grep Cap /proc/self/status", "touch /bin/backdoor", "id", "hostname"]) {
+        await expect(term.locator(".term__send")).toBeEnabled({ timeout: 10_000 });
+        await term.locator("#term-input").fill(cmd);
+        await term.locator("#term-input").press("Enter");
+        await expect(term.locator(".thisrun__timeline")).toContainText(cmd);
+      }
+      const [pane2, side2] = [await box(".term__pane"), await box(".thisrun")];
+      expect(side2.y).toBeGreaterThanOrEqual(pane2.y - 1);
+      expect(side2.y + side2.height).toBeLessThanOrEqual(pane2.y + pane2.height + 1);
+      // Nothing scrolls it for the visitor: the newest lines arrive below, its own scroll stays at the top.
+      expect(await thisrun.evaluate((e) => e.scrollTop)).toBe(0);
       const docTop = () => thisrun.evaluate((e) => Math.round(e.getBoundingClientRect().top + scrollY));
       const first = await docTop();
       for (const dy of [200, 400, 300]) {
@@ -2309,7 +2326,6 @@ test.describe("the visitor's run, told back (mock, ADR 0035 amendment: UX stage 
         await page.waitForTimeout(50);
         expect(await docTop()).toBe(first);
       }
-      expect(await thisrun.evaluate((e) => e.scrollHeight <= e.clientHeight + 1)).toBe(true);
     }
   });
 
