@@ -1,6 +1,8 @@
 # Local tooling image: ansible + ansible-lint + yamllint. Same versions as CI.
-FROM python:3.13-slim
+# Base pinned by tag and digest (ADR 0008); the Python packages come from the hashed lock in
+# requirements.txt, so a new release on PyPI changes nothing here until the lock is regenerated.
+FROM python:3.13-slim@sha256:70729b46c69b4f1e97c4822c1af3df53a1476cf5ddc6c087c0c10bc3a5678c2f
 RUN apt-get update && apt-get install -y --no-install-recommends git openssh-client shellcheck && rm -rf /var/lib/apt/lists/*
 COPY requirements.txt /tmp/requirements.txt
-RUN pip install --no-cache-dir -r /tmp/requirements.txt docker
+RUN pip install --no-cache-dir --require-hashes -r /tmp/requirements.txt
 WORKDIR /work

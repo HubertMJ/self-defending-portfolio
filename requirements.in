@@ -1,0 +1,7 @@
+# The Python tooling: ansible + ansible-lint + yamllint, and the Docker SDK the tooling image uses.
+# Edit this file, then regenerate the lock with hashes (ADR 0008: pinned, and checked by content):
+#   pip-compile --generate-hashes --allow-unsafe --strip-extras -o requirements.txt requirements.in
+ansible-core>=2.17,<2.19
+ansible-lint>=24.9
+yamllint>=1.35
+docker

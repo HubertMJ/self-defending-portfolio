@@ -290,7 +290,11 @@ func (s *Server) attack(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "the terminal scenario cannot be compared")
 		return
 	}
-	d, release := s.cfg.Attacks.Acquire(clientip.Key(r))
+	acquire := s.cfg.Attacks.Acquire
+	if sc.Interactive {
+		acquire = s.cfg.Attacks.AcquireInteractive
+	}
+	d, release := acquire(clientip.Key(r))
 	switch d.Outcome {
 	case limits.RateLimited:
 		tooMany(w, d.RetryAfter, "attack rate limit reached")

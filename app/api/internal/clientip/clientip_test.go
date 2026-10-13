@@ -27,3 +27,18 @@ func TestKey(t *testing.T) {
 		}
 	}
 }
+
+func TestGroup(t *testing.T) {
+	cases := []struct{ key, want string }{
+		{"2001:db8:1:2::/64", "2001:db8:1::/48"},
+		{"2001:db8:1:ffff::/64", "2001:db8:1::/48"},
+		{"203.0.113.7", "203.0.113.7"},
+		{"direct:10.0.0.1", "direct:10.0.0.1"},
+		{"2001:db8::/32", "2001:db8::/32"},
+	}
+	for _, c := range cases {
+		if got := Group(c.key); got != c.want {
+			t.Errorf("Group(%q) = %q, want %q", c.key, got, c.want)
+		}
+	}
+}

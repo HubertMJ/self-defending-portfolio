@@ -1,8 +1,16 @@
-# Sandbox pods may resolve names and nothing else (plan section 4.3). That one allowed flow is what makes
-# the quarantine observable: tests/runtime/run.sh proves a victim can look up a name, triggers the
-# isolation rule, and then proves the same lookup fails - a pod with no egress at all could not show the
-# difference. The `wget` the test runs is the trigger (Falco sees the exec), not a connection that is
-# expected to succeed.
+# Sandbox pods may resolve names under x.exfil.sdp.test and nothing else (plan section 4.3). That one
+# allowed flow is what makes the quarantine observable: tests/runtime/run.sh proves a victim can look up
+# the sinkhole's canary, triggers the isolation rule, and then proves the same lookup fails - a pod with
+# no egress at all could not show the difference. The `wget` the test runs is the trigger (Falco sees the
+# exec), not a connection that is expected to succeed.
+#
+# Only that zone, because it is the only one CoreDNS answers itself and never forwards (the sinkhole
+# block in ansible/roles/k3s/templates/coredns-sdp.yaml.j2): any other name would be resolved
+# recursively on the internet, and a recursive lookup is a two-way tunnel to whoever runs the queried
+# domain's name server. The terminal's dns-exfil command, the one that resolves names, asks for
+# ok.x.exfil.sdp.test and sdp-<16 hex>.x.exfil.sdp.test, one label each under x.exfil.sdp.test, which
+# is what `*` matches in Cilium (it does not cross a dot). Cilium's DNS proxy refuses every other name,
+# and Hubble still records the refused query.
 apiVersion: cilium.io/v2
 kind: CiliumNetworkPolicy
 metadata:
@@ -25,4 +33,4 @@ spec:
               protocol: TCP
           rules:
             dns:
-              - matchPattern: "*"
+              - matchPattern: "*.x.exfil.sdp.test"

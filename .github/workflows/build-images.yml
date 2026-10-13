@@ -45,10 +45,12 @@ jobs:
       contents: read
     outputs:
       images: ${{ steps.list.outputs.images }}
+      e2e: ${{ steps.list.outputs.e2e }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: list images
         id: list
@@ -78,9 +80,72 @@ jobs:
           echo "images=$json" >> "$GITHUB_OUTPUT"
           echo "building: $json"
 
-  build:
+          # Of those, the ones with a browser test suite (app/<name>/playwright.config.ts - today
+          # only web). Still generic: the condition is a file, not an image name.
+          e2e=()
+          for name in "${selected[@]}"; do
+            [ -f "app/$name/playwright.config.ts" ] && e2e+=("$name")
+          done
+          json=$(printf '%s\n' "${e2e[@]}" | jq -R . | jq -cs 'map(select(. != ""))')
+          echo "e2e=$json" >> "$GITHUB_OUTPUT"
+          echo "e2e: $json"
+
+  # End-to-end tests run in a job of their own, with nothing but read access to the repository. They
+  # install the whole npm devDependency tree and a browser; in the build job that code would run next
+  # to the OIDC token cosign signs with and a GITHUB_TOKEN that can push to GHCR, so one compromised
+  # package could sign and push any image Kyverno admits, the api and falco-response included. Here
+  # it can only fail the tests. Lint, unit tests and the bundle run inside the image's own builder
+  # stage; end-to-end tests need a browser, which does not belong in it.
+  e2e:
     needs: discover
-    if: needs.discover.outputs.images != '[]'
+    if: needs.discover.outputs.e2e != '[]'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        name: ${{ fromJSON(needs.discover.outputs.e2e) }}
+    env:
+      CONTEXT: app/${{ matrix.name }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: set up node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: ${{ env.CONTEXT }}/package-lock.json
+
+      # --ignore-scripts as in the image's builder stage: no package's install script runs, and
+      # nothing in the tree needs one (the browser comes from the explicit install below).
+      - name: e2e tests (playwright, chromium)
+        working-directory: ${{ env.CONTEXT }}
+        run: |
+          npm ci --ignore-scripts
+          npx playwright install --with-deps chromium
+          npm run test:e2e
+
+      - name: upload playwright report
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: playwright-report-${{ matrix.name }}-${{ github.sha }}
+          path: ${{ env.CONTEXT }}/playwright-report
+          if-no-files-found: ignore
+
+  # An image with a browser test suite must pass it before anything is built or pushed. `needs` is
+  # per job, not per matrix entry, so a failed e2e run holds back every image of this push, not only
+  # its own; a manual run rebuilds them once it is fixed. Skipped e2e (no image with a suite changed)
+  # is a pass.
+  build:
+    needs: [discover, e2e]
+    if: >-
+      !cancelled() && needs.discover.result == 'success' && needs.discover.outputs.images != '[]'
+      && (needs.e2e.result == 'success' || needs.e2e.result == 'skipped')
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -97,34 +162,8 @@ jobs:
       CONTEXT: app/${{ matrix.name }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      # An image with a browser test suite (app/<name>/playwright.config.ts - today only web) must
-      # pass it before anything is built or pushed. Lint, unit tests and the bundle run inside the
-      # image's own builder stage; end-to-end tests need a browser, which does not belong in it.
-      # Still generic: the condition is a file, not an image name.
-      - name: set up node (e2e)
-        if: hashFiles(format('app/{0}/playwright.config.ts', matrix.name)) != ''
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: "22"
-          cache: npm
-          cache-dependency-path: ${{ env.CONTEXT }}/package-lock.json
-
-      - name: e2e tests (playwright, chromium)
-        if: hashFiles(format('app/{0}/playwright.config.ts', matrix.name)) != ''
-        working-directory: ${{ env.CONTEXT }}
-        run: |
-          npm ci
-          npx playwright install --with-deps chromium
-          npm run test:e2e
-
-      - name: upload playwright report
-        if: failure() && hashFiles(format('app/{0}/playwright.config.ts', matrix.name)) != ''
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: playwright-report-${{ matrix.name }}-${{ github.sha }}
-          path: ${{ env.CONTEXT }}/playwright-report
-          if-no-files-found: ignore
+          persist-credentials: false
 
       - name: set up buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
@@ -184,7 +223,7 @@ jobs:
       # An image with its own smoke test (app/<name>/test/image-smoke.sh: web and the four Cilium
       # images) runs it against the digest just pushed, the way the cluster runs it, before anything
       # signs it: a failure means the digest is never signed, so Kyverno never admits it. Generic, like
-      # the e2e step: the condition is a file, not an image name.
+      # the e2e job: the condition is a file, not an image name.
       #
       # The scripts report each failed check as an `::error::` annotation, readable from the run's
       # public annotations without the (login-only) job log. A script that dies before it can say why

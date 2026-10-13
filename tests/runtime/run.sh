@@ -174,9 +174,11 @@ step "case 2: a network tool in a sandbox pod gets the pod quarantined"
 iso_pod="rt-iso-$(suffix)"
 new_victim "$iso_pod"
 
-lookup() { $KUBECTL -n "$NAMESPACE" exec "$iso_pod" -- nslookup kubernetes.default.svc.cluster.local.; }
+# The sinkhole's canary: the sandbox may resolve names under x.exfil.sdp.test and nothing else, and
+# CoreDNS answers this one itself (192.0.2.53).
+lookup() { $KUBECTL -n "$NAMESPACE" exec "$iso_pod" -- nslookup ok.x.exfil.sdp.test.; }
 
-# The sandbox allows DNS and nothing else; proving the lookup works first is what makes "it fails
+# The sandbox allows that DNS and nothing else; proving the lookup works first is what makes "it fails
 # later" mean "quarantined" rather than "never had network".
 if poll 30 lookup; then
   pass "$iso_pod can resolve names before the trigger"
