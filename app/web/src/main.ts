@@ -243,7 +243,8 @@ function main(): void {
     },
     onScenario: (id, step) => {
       terminal.clearSuggestion();
-      launcher.highlight(id, step);
+      // The card is marked only where it can be seen (Technical Mode); the rail says the rest.
+      if (document.documentElement.dataset.tech === "on") launcher.highlight(id, step);
       launcher.launch(id);
     },
     commandInput: (id) => inputOf(id),
@@ -346,6 +347,8 @@ function main(): void {
       // visitor there if they want (the page does not move on its own, ADR 0035 2026-10-13).
     },
   );
+
+  launcher.observe((st) => tour.setLaunch(st));
 
   // Same words as the timeline's connection line (ui/common.ts), so the two never disagree.
   const headerConn = byId("header-conn");

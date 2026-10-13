@@ -18,11 +18,21 @@ export interface LauncherState {
   pending?: string;
 }
 
+/** What the launcher says now: why it is blocked (null: it is not), its last message, the cooldown left. */
+export interface LaunchState {
+  blocked: string | null;
+  tone?: "ok" | "warn" | "error" | "info";
+  text?: string;
+  countdown?: string;
+}
+
 export interface Launcher {
   setActiveRun(run: LauncherState["activeRun"]): void;
   reload(): Promise<void>;
   /** Starts a scenario as its card's main button would (the tour's step): side by side when the API can. */
   launch(scenarioId: string): void;
+  /** Each change of what the launcher would say or allow (the tour's step 5 says it in the rail, where the cards may be hidden). */
+  observe(cb: (s: LaunchState) => void): void;
   /** Marks a scenario's card as the tour step's target ("Step n"), or clears the mark. */
   highlight(scenarioId: string | undefined, step?: number): void;
 }
@@ -79,10 +89,18 @@ export function mountScenarios(
   // aria-hidden: the sentence already says how long, and a screen reader must not hear every second.
   const countdown = h("span", { class: "launch-status__countdown", "aria-hidden": "true" });
   let ticker: ReturnType<typeof setInterval> | undefined;
+  const observers: ((s: LaunchState) => void)[] = [];
+  let last: { tone?: LaunchState["tone"]; text?: string } = {};
+  const notify = () => {
+    const now = Date.now();
+    const s: LaunchState = { blocked: blockedReason(state, now), ...last, countdown: state.cooldownUntil && state.cooldownUntil > now ? `Unlocks in ${formatCountdown((state.cooldownUntil - now) / 1000)}` : undefined };
+    for (const cb of observers) cb(s);
+  };
 
   // "Watch it play out in the live run below." carries a link to the console: the page does not go
   // there on its own (ADR 0035, amendment 2026-10-13).
   const say = (tone: "ok" | "warn" | "error" | "info", text: string) => {
+    last = { tone, text };
     statusEl.dataset.tone = tone;
     const m = /^(.*)(live run below)(\.)$/.exec(text);
     replace(statusEl, m ? h("span", {}, m[1], h("a", { href: "#console", class: "launch-status__link" }, "live run below ↓"), m[3]) : h("span", {}, text), state.cooldownUntil ? countdown : null);
@@ -114,6 +132,7 @@ export function mountScenarios(
         ticker = undefined;
       }
     }
+    notify();
   };
 
   const launch = async (s: Scenario, opts: { compare?: boolean } = {}) => {
@@ -238,6 +257,10 @@ export function mountScenarios(
     launch(id) {
       const s = scenarios.find((x) => x.id === id);
       if (s) void launch(s, { compare });
+    },
+    observe(cb) {
+      observers.push(cb);
+      notify();
     },
     highlight(id, step) {
       for (const el of root.querySelectorAll<HTMLElement>(".scenario")) {

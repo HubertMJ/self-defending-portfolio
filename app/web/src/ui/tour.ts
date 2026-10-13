@@ -19,7 +19,9 @@ import type { CorrelationIncident } from "../lib/contract";
 import { type Child, h, plClock, replace } from "../lib/dom";
 import { SIEM_COMMAND, lastResponse } from "../lib/runstatus";
 import type { RunView } from "../lib/timeline";
-import { ts } from "../lib/timeline";
+import { formatDuration, ts } from "../lib/timeline";
+import type { LaunchState } from "./scenarios";
+import { heldMs } from "./twin";
 
 export interface TourStep {
   id: string;
@@ -177,6 +179,30 @@ export interface TourHandle {
   update(runs: readonly RunView[], incidents: readonly CorrelationIncident[], ownRunIds: ReadonlySet<string>): void;
   /** The terminal drives the tour; on an API without one it is removed, not merely hidden. */
   setEnabled(enabled: boolean): void;
+  /** What the one-click launcher says and allows: step 5's button and its line in the rail. */
+  setLaunch(s: LaunchState): void;
+}
+
+/** The side-by-side run in two lines, for the rail: what each pod got. */
+export function twinLines(run: RunView, now: number = Date.now()): { guarded: string; unguarded: string } {
+  const gFalco = run.falco.some((f) => f.arm !== "unguarded");
+  const gTalon = run.talon.some((t) => t.arm !== "unguarded");
+  const ms = run.timings.respondMs;
+  const guarded = gTalon
+    ? `Falco detected it, Talon answered${ms !== undefined ? ` in ${formatDuration(ms)}` : ""}.`
+    : gFalco
+      ? "Falco detected it; waiting for Talon."
+      : run.active
+        ? "Running."
+        : "No detection.";
+  const uFalco = run.falco.some((f) => f.arm === "unguarded");
+  const held = heldMs(run, now);
+  const unguarded = uFalco
+    ? `Falco detected it, nothing answered${held !== undefined ? `; held for ${formatDuration(held)}` : ""}${run.active ? ", still running" : ""}.`
+    : run.active
+      ? "Running."
+      : "No detection.";
+  return { guarded, unguarded };
 }
 
 export interface TourHooks {
@@ -216,6 +242,24 @@ export function mountTour(root: HTMLElement, hooks: TourHooks): TourHandle {
   let pressed: string | undefined;
   /** The commands that have reached their objective in the visitor's runs (which of a step's two to offer). */
   let reached = new Set<string>();
+  /** The visitor's side-by-side run, for step 5's two lines. */
+  let compareRun: RunView | undefined;
+  let launch: LaunchState = { blocked: null };
+  // Step 5's line: what the launcher said (a polite live region kept across redraws), and the blocked
+  // reason with the cooldown, in the rail where the one-click cards may be hidden (default view).
+  const launchText = h("span", {});
+  const launchCount = h("span", { class: "tour__launchcount", "aria-hidden": "true" });
+  const launchLine = h("p", { class: "tour__launch tech-less", id: "tour-launch", "aria-live": "polite" }, launchText, launchCount);
+  const syncLaunch = () => {
+    const msg = launch.text?.replace(/ Watch it play out in the live run below\.$/, " Both pods show here as it plays out.");
+    // Why the button is off (a run in progress, a cooldown, the request in flight), then what was said.
+    const reason = launch.blocked ? (/[.…]$/.test(launch.blocked) ? launch.blocked : `${launch.blocked}.`) : "";
+    const text = [reason, msg ?? ""].filter(Boolean).join(" ");
+    if (launchText.textContent !== text) launchText.textContent = text;
+    launchCount.textContent = launch.countdown ? ` ${launch.countdown}` : "";
+    launchLine.dataset.tone = launch.tone ?? "";
+    for (const b of document.querySelectorAll<HTMLButtonElement>('[data-focus="step:compare"], [data-focus="bar"][data-scenario]')) b.setAttribute("aria-disabled", String(launch.blocked !== null));
+  };
   let shown = skipped();
   let enabled = true;
   // On a phone the bar starts folded: the terminal stays near the top; the current step's button is in the bar.
@@ -349,7 +393,21 @@ export function mountTour(root: HTMLElement, hooks: TourHooks): TourHandle {
         // where there is one, its way there - the panel sits beside the terminal whole, never scrolled.
         isCurrent ? h("p", { class: "tour__hint" }, s.hint) : null,
         isCurrent && act ? h("p", { class: "tour__act" }, act) : null,
+        // In Technical Mode the cards and the console say all this where it happens: the rail stays short.
+        s.scenario && (isCurrent || isDone) ? launchLine : null,
+        s.scenario && compareRun ? twinBlock(compareRun) : null,
       ),
+    );
+  };
+
+  /** Step 5's result, both pods, in the rail: the console that shows it whole is in Technical Mode. */
+  const twinBlock = (run: RunView) => {
+    const t = twinLines(run, now());
+    return h(
+      "dl",
+      { class: "tour__twin tech-less" },
+      h("div", {}, h("dt", {}, "Guarded"), h("dd", {}, t.guarded)),
+      h("div", {}, h("dt", {}, "Unguarded"), h("dd", {}, t.unguarded)),
     );
   };
 
@@ -372,7 +430,17 @@ export function mountTour(root: HTMLElement, hooks: TourHooks): TourHandle {
       }
       return button(again ? "Run it again" : "Do this step", press(() => hooks.onCommand(id, n)), key);
     }
-    if (s.scenario) return button(again ? "Run it again" : "Launch side by side", press(() => hooks.onScenario(s.scenario as string, n)), key);
+    if (s.scenario) {
+      const b = button(again ? "Run it again" : "Launch side by side", () => {
+        // Blocked: the line under the step says why; nothing is sent.
+        if (launch.blocked) return;
+        press(() => hooks.onScenario(s.scenario as string, n))();
+      }, key);
+      b.dataset.scenario = s.scenario;
+      b.setAttribute("aria-disabled", String(launch.blocked !== null));
+      b.setAttribute("aria-describedby", "tour-launch");
+      return b;
+    }
     return null;
   };
 
@@ -528,8 +596,14 @@ export function mountTour(root: HTMLElement, hooks: TourHooks): TourHandle {
         hooks.onStepDone?.();
       }
       notices = deriveNotices(runs, incidents, ownRunIds);
+      compareRun = progress.runs.compare ? runs.find((r) => r.runId === progress.runs.compare) : undefined;
       draw();
       syncNotices();
+      syncLaunch();
+    },
+    setLaunch(s) {
+      launch = s;
+      syncLaunch();
     },
   };
 }

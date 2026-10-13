@@ -6365,3 +6365,54 @@ html.js:not([data-tech="on"]) main > [data-group="about"] .section__head h2 {
 html.js:not([data-tech="on"]) .attack-stage {
   margin-bottom: 0;
 }
+
+/* Step 5 in the rail: what the launcher said, and both pods of the side-by-side run. */
+.tour__launch {
+  margin: 0.3rem 0 0;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  line-height: 1.4;
+}
+
+.tour__launch:empty,
+.tour__launch:has(> span:first-child:empty) {
+  display: none;
+}
+
+.tour__launch[data-tone="warn"],
+.tour__launch[data-tone="error"] {
+  color: var(--warning);
+}
+
+.tour__launchcount {
+  font-variant-numeric: tabular-nums;
+}
+
+.tour__btn[aria-disabled="true"] {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.tour__twin {
+  display: grid;
+  gap: 0.15rem;
+  margin: 0.3rem 0 0;
+  font-size: 0.78rem;
+  line-height: 1.4;
+}
+
+.tour__twin > div {
+  display: grid;
+  grid-template-columns: 5.2rem minmax(0, 1fr);
+  gap: 0.4rem;
+}
+
+.tour__twin dt {
+  color: var(--text-faint);
+  font-weight: 600;
+}
+
+.tour__twin dd {
+  margin: 0;
+  color: var(--text-muted);
+}

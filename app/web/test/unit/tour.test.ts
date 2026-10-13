@@ -3,7 +3,7 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildTimeline } from "../../src/lib/timeline";
-import { deriveNotices, deriveProgress, mountTour, noticeText, SETTLE_MS, STEPS, WIDE_QUERY } from "../../src/ui/tour";
+import { deriveNotices, deriveProgress, mountTour, noticeText, SETTLE_MS, STEPS, twinLines, WIDE_QUERY } from "../../src/ui/tour";
 import { FOLDED_BY_DEFAULT, startsFolded } from "../../src/lib/folds";
 import type { CorrelationIncident, StreamEvent } from "../../src/lib/contract";
 
@@ -246,6 +246,62 @@ describe("the tour panel never moves the page (amendment 2026-10-13)", () => {
     t.update([caughtRun()], [INCIDENT], new Set([RUN]));
     expect((root.querySelector(".tour__nsec") as HTMLElement).dataset.all).toBe("true");
     expect(root.querySelector(".tour__newchip")).toBeNull();
+  });
+
+  it("step 5 in the rail: blocked, its button is off and the line under it says why; free, the press launches and the launcher's words show there", () => {
+    const root = document.createElement("div");
+    document.body.append(root);
+    const h = hooks(true);
+    const t = mountTour(root, h);
+    // Steps 1-4 done (a shell caught after the deface, the flag and the DNS trick): step 5 is current.
+    const caught = buildTimeline(
+      [
+        { type: "run", data: { run_id: RUN, scenario: "terminal", state: "started", at: "2026-10-03T18:00:00Z", pod: "p" } },
+        ...(["whoami", "deface", "read-flag", "dns-exfil"] as const).flatMap((id, i): StreamEvent[] => [
+          { type: "command", data: { run_id: RUN, seq: i + 1, id, state: "started", at: `2026-10-03T18:00:0${i + 1}Z` } },
+          { type: "command", data: { run_id: RUN, seq: i + 1, id, state: "exited", at: `2026-10-03T18:00:0${i + 1}.5Z`, exit_code: 0, achieved: true } },
+        ]),
+        { type: "command", data: { run_id: RUN, seq: 5, id: "shell", state: "started", at: "2026-10-03T18:00:06Z" } },
+        { type: "talon", data: { at: "2026-10-03T18:00:06.5Z", action: "Terminate Pod", actionner: "kubernetes:terminate", namespace: "sandbox", pod: "p", status: "success" } },
+        { type: "run", data: { run_id: RUN, scenario: "terminal", state: "finished", at: "2026-10-03T18:00:07Z", detail: "killed" } },
+      ],
+      Date.parse("2026-10-03T18:00:30Z"),
+    ).runs[0];
+    t.update([caught], [], new Set([RUN]));
+    const five = () => root.querySelector('.tour__step[data-id="compare"]') as HTMLElement;
+    expect(five().dataset.current).toBe("true");
+    t.setLaunch({ blocked: "A run is in progress", tone: "info", text: "Another visitor’s run is in progress." });
+    const btn = five().querySelector("button") as HTMLButtonElement;
+    expect(btn.getAttribute("aria-disabled")).toBe("true");
+    expect(five().querySelector(".tour__launch")?.textContent).toBe("A run is in progress. Another visitor’s run is in progress.");
+    expect(five().querySelector(".tour__launch")?.getAttribute("aria-live")).toBe("polite");
+    btn.click();
+    expect(h.onScenario).not.toHaveBeenCalled();
+    // Free again: the press launches; the accepted line points at the rail, not at a hidden console.
+    t.setLaunch({ blocked: null, tone: "ok", text: "“Shell” queued as run 0123. Watch it play out in the live run below." });
+    expect(btn.getAttribute("aria-disabled")).toBe("false");
+    expect(five().querySelector(".tour__launch")?.textContent).toBe("“Shell” queued as run 0123. Both pods show here as it plays out.");
+    btn.click();
+    expect(h.onScenario).toHaveBeenCalledWith("shell-in-container", 5);
+    // A cooldown: its countdown beside the reason, kept out of the live words.
+    t.setLaunch({ blocked: "Rate limited", tone: "warn", text: "Too many attacks.", countdown: "Unlocks in 0:42" });
+    expect(five().querySelector(".tour__launchcount")?.textContent).toBe(" Unlocks in 0:42");
+    expect(five().querySelector(".tour__launchcount")?.getAttribute("aria-hidden")).toBe("true");
+  });
+
+  it("twinLines: the guarded pod answered in N ms, the unguarded one held for N s", () => {
+    const evs: StreamEvent[] = [
+      { type: "run", data: { run_id: RUN, scenario: "shell-in-container", state: "started", at: "2026-10-03T18:00:00Z", pod: "g", pods: { guarded: "g", unguarded: "u" } } },
+      { type: "run", data: { run_id: RUN, scenario: "shell-in-container", state: "detected", at: "2026-10-03T18:00:02Z" } },
+      { type: "falco", data: { at: "2026-10-03T18:00:02Z", rule: "Terminal shell in container", priority: "Critical", namespace: "sandbox", pod: "g", output: "x", arm: "guarded" } },
+      { type: "falco", data: { at: "2026-10-03T18:00:02Z", rule: "Terminal shell in container", priority: "Critical", namespace: "sandbox-unguarded", pod: "u", output: "x", arm: "unguarded" } },
+      { type: "talon", data: { at: "2026-10-03T18:00:02.2Z", action: "Terminate Pod", actionner: "kubernetes:terminate", namespace: "sandbox", pod: "g", status: "success" } },
+      { type: "run", data: { run_id: RUN, scenario: "shell-in-container", state: "responded", at: "2026-10-03T18:00:02.2Z" } },
+    ];
+    const run = buildTimeline(evs, Date.parse("2026-10-03T18:00:10Z")).runs[0];
+    const l = twinLines(run, Date.parse("2026-10-03T18:00:10Z"));
+    expect(l.guarded).toBe("Falco detected it, Talon answered in 200 ms.");
+    expect(l.unguarded).toMatch(/^Falco detected it, nothing answered/);
   });
 
   it("a redraw under the keyboard puts the focus back on the same control", () => {
