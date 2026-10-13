@@ -6,8 +6,8 @@
 //   - per visitor: 3 runs per 10 minutes (sliding window, keyed by client.Key);
 //   - for everybody together: 30 runs per hour, so rotating addresses cannot run the node hot;
 //   - one run at a time, cluster-wide, which is also what keeps the live feed readable;
-//   - after a terminal run, its visitor waits as long as the run held the slot before starting
-//     another, so one visitor cannot keep the single slot to themselves.
+//   - after a terminal run, its visitor waits as long as the run held the slot before opening the
+//     terminal again, so one visitor cannot keep the single slot to themselves.
 //
 // Every other endpoint is cheap but still not free, so Requests applies a coarse per-visitor
 // request budget, and Conns caps concurrently open event streams, per visitor, per address block
@@ -88,11 +88,12 @@ func (a *Attacks) Acquire(key string) (Decision, func()) {
 
 // AcquireInteractive is Acquire for a terminal run, whose length the visitor decides (up to the
 // scenario's timeout, as long as they keep typing): when it ends, the key waits as long as the run
-// held the slot before it may start another run of any kind. A script that reopens the terminal the
+// held the slot before it may open the terminal again. A script that reopens the terminal the
 // moment the last one ends would otherwise keep the only slot, and every other visitor at 409, for
 // as long as it likes - two five-minute runs fit the per-visitor window. With the wait, the slot is
-// free at least half the time for everyone else. Scripted runs are bounded by the catalogue's
-// short timeout and are not cooled down.
+// free for everyone else at least as long as the terminal held it, less the one-click runs in
+// between (90 s each at most). Those runs are not held back: the tour goes from the terminal
+// straight to the side-by-side run, and a wait there would block its next step.
 func (a *Attacks) AcquireInteractive(key string) (Decision, func()) {
 	return a.acquire(key, true)
 }
@@ -121,7 +122,7 @@ func (a *Attacks) acquire(key string, interactive bool) (Decision, func()) {
 	if ts := a.perKey[key]; len(ts) >= a.cfg.PerKey {
 		return Decision{Outcome: RateLimited, RetryAfter: ts[len(ts)-a.cfg.PerKey].Add(a.cfg.PerKeyWindow).Sub(now)}, noop
 	}
-	if until, ok := a.cooldown[key]; ok {
+	if until, ok := a.cooldown[key]; ok && interactive {
 		return Decision{Outcome: RateLimited, RetryAfter: until.Sub(now)}, noop
 	}
 	if len(a.global) >= a.cfg.Global {
@@ -157,8 +158,9 @@ type AttackStatus struct {
 	PerKeyWindow    time.Duration
 	PerKeyRemaining int
 	// PerKeyResetIn is when the visitor's oldest counted run leaves the window (one more attempt
-	// becomes available); zero when nothing is counted. During the wait after a terminal run,
-	// PerKeyRemaining is 0 and PerKeyResetIn is when the wait ends, if that is later.
+	// becomes available); zero when nothing is counted. The wait after a terminal run is not in
+	// here: it holds back only the next terminal, whose start answers 429 with Retry-After, and the
+	// page launches one-click runs from these numbers.
 	PerKeyResetIn   time.Duration
 	GlobalLimit     int
 	GlobalWindow    time.Duration
@@ -180,10 +182,6 @@ func (a *Attacks) Status(key string) AttackStatus {
 	}
 	if len(mine) > 0 {
 		st.PerKeyResetIn = mine[0].Add(a.cfg.PerKeyWindow).Sub(now)
-	}
-	if until, ok := a.cooldown[key]; ok && until.After(now) {
-		st.PerKeyRemaining = 0
-		st.PerKeyResetIn = max(st.PerKeyResetIn, until.Sub(now))
 	}
 	return st
 }
