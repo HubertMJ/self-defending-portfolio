@@ -25,7 +25,8 @@ export interface TerminalHandle {
   /** The "This run" panel's SIEM row (lib/runstatus.ts siemRow). */
   setSiem(row: SiemRow): void;
   /** Takes the visitor to the terminal with a command picked: opens a session if idle (one run), highlights its chip and fills it in once the pod is ready. */
-  suggest(commandId: string): void;
+  /** Picks a command (the chip, the input); `scroll` only for a navigation button's press. */
+  suggest(commandId: string, opts?: { scroll?: boolean }): void;
   /** Back to the start panel for another session (the summary's "Run another session"). */
   again(): void;
   /** Starts the next session at once (the strip's "Run again": it costs one run, as the start panel says). */
@@ -650,7 +651,7 @@ export function mountTerminal(
     if (!els) return;
     els.out.appendChild(h("div", { class: "term__cmd" }, promptEcho(input), h("p", { class: "term__line term__line--err" }, answer)));
     scrollOut();
-    if (els.input) els.input.focus();
+    if (els.input) els.input.focus({ preventScroll: true });
   };
 
   const promptEcho = (input: string) => h("p", { class: "term__line term__line--in" }, h("span", { class: "term__prompt", "aria-hidden": "true" }, "sandbox$ "), breakable(input));
@@ -767,7 +768,9 @@ export function mountTerminal(
     ready = true;
     bannerReady();
     syncControls();
-    setTimeout(() => els && !els.input.disabled && els.input.focus(), 0);
+    // Focus, without pulling the page to it: the visitor opened the terminal a moment ago, but may
+    // have moved on while the pod started.
+    setTimeout(() => els && !els.input.disabled && els.input.focus({ preventScroll: true }), 0);
   };
 
   const chunkLine = (x: CommandRun["chunks"][number]) => h("p", { class: x.stream === "stderr" ? "term__line term__line--err" : "term__line" }, x.text.replace(/\n$/, ""));
@@ -1122,8 +1125,8 @@ export function mountTerminal(
       ),
     );
     els.summary.hidden = false;
-    // Only scroll the visitor's own session into view; a watcher's page must not jump (item 12).
-    if (!watching) els.summary.scrollIntoView({ behavior: reduced ? "auto" : "smooth", block: "nearest" });
+    // The page does not move for the summary either (ADR 0035, amendment 2026-10-13): it appears
+    // below the output, where the visitor is, or is listed by the notices beside the terminal.
   };
 
   const scrollOut = () => {
@@ -1194,7 +1197,6 @@ export function mountTerminal(
     endedShown = false;
     if (watching) return;
     renderIdle();
-    root.scrollIntoView({ behavior: reduced ? "auto" : "smooth", block: "nearest" });
     idle?.btn.focus({ preventScroll: true });
   };
 
@@ -1205,9 +1207,10 @@ export function mountTerminal(
       siem = row;
       renderSiem();
     },
-    suggest(commandId) {
+    suggest(commandId, opts = {}) {
       suggested = commandId;
-      root.scrollIntoView({ behavior: reduced ? "auto" : "smooth", block: "start" });
+      // Only a navigation button's press ("Run it in the terminal ↑") moves the page here.
+      if (opts.scroll) root.scrollIntoView({ behavior: reduced ? "auto" : "smooth", block: "start" });
       if (mode === "idle") void start();
       else if (session && !watching && over()) {
         // The last session is over: the pick starts the next one, as from the start panel.
@@ -1221,9 +1224,9 @@ export function mountTerminal(
       if (mode === "idle") void start();
     },
     focus() {
-      if (els && mode === "session" && !els.input.disabled && !els.form.hidden) els.input.focus();
-      else if (idle) idle.btn.focus();
-      else els?.out.focus();
+      if (els && mode === "session" && !els.input.disabled && !els.form.hidden) els.input.focus({ preventScroll: true });
+      else if (idle) idle.btn.focus({ preventScroll: true });
+      else els?.out.focus({ preventScroll: true });
     },
     showTimeline() {
       const wrap = els?.timeline.parentElement;

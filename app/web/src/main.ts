@@ -77,6 +77,13 @@ function main(): void {
   document.documentElement.classList.add("js");
   if (prefersReducedMotion()) document.documentElement.classList.add("reduced-motion");
   setupThemeToggle();
+  // The sticky header's height (the mock banner included), for what sticks below it (the tour panel).
+  const header = document.querySelector<HTMLElement>(".site-header");
+  if (header && typeof ResizeObserver === "function") {
+    const measure = () => document.documentElement.style.setProperty("--header-h", `${header.offsetHeight}px`);
+    new ResizeObserver(measure).observe(header);
+    measure();
+  }
 
   // Always null in the production bundle: the mock is not in it (lib/mock-hook.ts, ADR 0035).
   const mock = installMock(location.search);
@@ -195,7 +202,8 @@ function main(): void {
         refreshTour();
         diagram.setSiem((c?.incidents ?? []).some((i) => i.kind === "dns-exfil" && ownIds.includes(i.run_id)));
       },
-      onScenario: () => terminal.suggest(SIEM_COMMAND),
+      // The SIEM section's "Run it in the terminal ↑" is a navigation button: that press scrolls.
+      onScenario: () => terminal.suggest(SIEM_COMMAND, { scroll: true }),
       ...(mock?.eagerPollMs !== undefined ? { eagerMs: mock.eagerPollMs } : {}),
     },
   );
@@ -221,15 +229,15 @@ function main(): void {
   );
   const defenceMap = mountDefenceMap(byId("defence-map"), api);
 
-  // The guided tour at the top of #attack: steps ticked from the visitor's own runs and the SIEM's
-  // incidents for them, each step's button picking a command or launching the twin.
+  // The guided tour beside the terminal: steps ticked from the visitor's own runs and the SIEM's
+  // incidents for them, each step's button picking a command or launching the twin; the notices
+  // (Falco, Talon, the SIEM) in the same panel. It never scrolls the page: a done step or a notice
+  // offers a link, and the visitor follows it or not (ADR 0035, amendment 2026-10-13).
   const tour = mountTour(byId("tour"), {
     onCommand: (id) => terminal.suggest(id),
     onScenario: (id) => launcher.launch(id),
-    onReveal: (id) => {
-      sections.open(id);
-      byId(id).scrollIntoView({ behavior: prefersReducedMotion() ? "auto" : "smooth", block: "start" });
-    },
+    onTimeline: () => terminal.showTimeline(),
+    toastParent: document.body,
   });
   refreshTour = () => {
     const own = new Set(ownIds);
@@ -309,8 +317,8 @@ function main(): void {
       addOwn([runId]);
       runConsole.markOwn(runId);
       timeline.setShown(undefined);
-      // On a phone the console is far below the button that was just pressed: take the visitor there.
-      runConsole.reveal();
+      // The console is below the button that was just pressed; the status line's link takes the
+      // visitor there if they want (the page does not move on its own, ADR 0035 2026-10-13).
     },
   );
 
@@ -404,7 +412,7 @@ function main(): void {
     if (!b) return;
     const section = b.closest("main > .section");
     scope.set("all");
-    section?.querySelector<HTMLButtonElement>('.scope__opt[data-scope="all"]')?.focus();
+    section?.querySelector<HTMLButtonElement>('.scope__opt[data-scope="all"]')?.focus({ preventScroll: true });
   });
   byId("timeline-panel").before(scope.control("runs"));
   byId("ticker").before(scope.control("events"));
@@ -419,6 +427,14 @@ function main(): void {
     if (id === "evidence") evidence.setActive(open);
     else if (id === "posture") posture.setActive(open);
     else if (id === "correlation") correlation.setActive(open);
+  });
+  // A link to an incident card ("Show in SIEM", "Open it ↓") while #correlation is folded: the board
+  // is not drawn while folded, so the card the link names is not there for ui/sections.ts to find.
+  // The section opens first (the board draws at once), then the browser lands on the card.
+  document.addEventListener("click", (e) => {
+    if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    const a = e.target instanceof Element ? e.target.closest("a[href^='#incident-']") : null;
+    if (a) sections.open("correlation");
   });
 
   // One open SSE connection per forgotten background tab adds up; the server replays the last 50

@@ -78,9 +78,12 @@ export function mountScenarios(
   const countdown = h("span", { class: "launch-status__countdown", "aria-hidden": "true" });
   let ticker: ReturnType<typeof setInterval> | undefined;
 
+  // "Watch it play out in the live run below." carries a link to the console: the page does not go
+  // there on its own (ADR 0035, amendment 2026-10-13).
   const say = (tone: "ok" | "warn" | "error" | "info", text: string) => {
     statusEl.dataset.tone = tone;
-    replace(statusEl, h("span", {}, text), state.cooldownUntil ? countdown : null);
+    const m = /^(.*)(live run below)(\.)$/.exec(text);
+    replace(statusEl, m ? h("span", {}, m[1], h("a", { href: "#console", class: "launch-status__link" }, "live run below ↓"), m[3]) : h("span", {}, text), state.cooldownUntil ? countdown : null);
   };
 
   const sync = () => {

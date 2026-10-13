@@ -579,3 +579,50 @@ phone 390 ≤ 9 000 px); the diagram's nodes reached by Tab, opened with Enter o
 Escape, `aria-expanded` following; the tour advancing through its steps from real commands in the
 mock terminal, its skip remembered, its progress re-derived; the sections folded by default and a stored
 choice kept over a reload; and no horizontal scroll at 360 and 320 px.
+
+## Amendment 2026-10-13: nothing moves the page but the visitor; the tour is a panel beside the terminal
+
+The owner, on the live page of 2026-10-12: visitors still did not like it — "it jumps on its own"; the
+step-by-step list could sit beside the terminal on a desktop, floating or sticky; the SIEM's
+detection should be a notification; the page should not scroll by itself.
+
+**No automatic scrolling.** Nothing the page does on its own moves the viewport or the focus: not a
+tour step completing, not a run ending (the session summary no longer scrolls into view), not a
+one-click launch (the console is no longer revealed; the status line says "Watch it play out in the
+live run below ↓" with a link), not an incident landing, not a redraw restoring a focus (every such
+`focus()` passes `preventScroll`). The page scrolls only for the visitor's own press on something whose
+purpose is to go somewhere — a navigation link, "Attack this cluster", "Run it in the terminal ↑",
+"Watch the kill timeline", "Show in SIEM", "Open it ↓", the history's Show — and for landing on a
+`#hash` when the page opens. Sections no longer open on a step's completion: the step, or the
+notice, offers a link, and the visitor follows it or not. A link to an incident card while
+`#correlation` is folded opens the section first (its board is not drawn while folded), then the
+browser lands on the card. Content that changes above the visitor reserves its room so the page does
+not shift under them: the diagram's status line keeps two lines (the lit nodes in words stay for a
+screen reader on a phone, where the picture shows them), the launch status moved below the buttons
+and keeps its line, the start panel's "a run is in progress" lines keep theirs, the attack stage's
+row is never shorter than the panel can get (so a notice landing beside the terminal moves nothing
+below it), the phone's tour bar keeps its height.
+
+**The tour beside the terminal.** From 1100 px the attack stage is two columns: the terminal, and a
+sticky panel (below the header, which is measured — the mock banner included — into `--header-h`)
+with the six steps, the current one expanded with its hint and button, the done ones ticked; a done
+step offers its way there ("Watch the kill timeline", "Show the live run", "Show in SIEM"). Below the
+steps, the notices: Falco's detection, Talon's response and the SIEM's incident for the visitor's own
+runs, each with its time, newest first, derived from the same evidence as the progress (so a reload
+lists them again and nothing is listed that did not happen), a polite live list that never takes the
+focus. Below 1100 px the tour is a folded bar above the terminal — "Step n of 6", the current step's
+title and button, a toggle for the list — and a fresh notice is one small toast at the bottom (above
+the terminal's input when that is down there), `role="status"`, dismissable, gone after nine seconds;
+while the run's own toast (amendment 2026-10-06) is up with the same news, only that one shows.
+Colour never carries a meaning alone (each notice names its source; each step its number or tick),
+the motion is a short fade that `prefers-reduced-motion` drops, and everything is a button or a link.
+
+**Tests.** The unit suite covers the notices (named, timed, own runs only, stable ids), the side
+panel (no toggle, polite list, nothing scrolled or focused on an update, no toast) and the bar (folded,
+the current step's button in it, a fresh notice as a toast that auto-hides and can be dismissed, an
+old one re-listed without a toast). The end-to-end suite (mock build, desktop and phone) asserts
+that `scrollY` does not change when a step completes or the SIEM's incident lands (on the phone, where
+the output grows above the chips and the browser anchors the scroll to keep them still, that the
+chips do not move), that the panel sits beside the terminal at 1440x900 and stays below the header
+through the session, and that a launch leaves the page where it was and its link reaches the
+console. The height budgets stand.

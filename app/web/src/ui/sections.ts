@@ -42,10 +42,11 @@ export function sectionTitle(heading: HTMLElement): HTMLElement {
 /**
  * Turns each `main > .section` with a .section__head h2 and a .section__body into a disclosure.
  * `onChange(id, expanded)`: each change of a section's state, including a folded one restored at
- * mount, so its live panels can stop redrawing while nobody can see them.
+ * mount, so its live panels can stop redrawing while nobody can see them. Nothing opens a section
+ * but the visitor: a click on its heading, or on a link into it (ADR 0035, amendment 2026-10-13).
  */
 export interface SectionsHandle {
-  /** Opens a section (a tour step's reveal); the choice is kept like a click's. */
+  /** Opens a section, as a click on its heading would; the choice is kept like a click's. */
   open(id: string): void;
 }
 

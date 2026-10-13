@@ -293,7 +293,7 @@ export function mountTimeline(
       more?.addEventListener("toggle", () => (moreOpen = (more as HTMLDetailsElement).open));
       replace(root, h("ol", { class: "runs", role: "list" }, runs.slice(0, HISTORY_SHOWN).map((r) => card(r))), more, focus.all ? null : hiddenNote(view.runs.length - runs.length, "run", "runs"));
     }
-    if (focusKey) [...root.querySelectorAll<HTMLElement>("[data-focus-key]")].find((el) => el.dataset.focusKey === focusKey)?.focus();
+    if (focusKey) [...root.querySelectorAll<HTMLElement>("[data-focus-key]")].find((el) => el.dataset.focusKey === focusKey)?.focus({ preventScroll: true });
     // Announce transitions of the newest run while it is active, plus the terminal state of a run
     // we were already announcing; replayed history from before the page loaded stays silent.
     const newest = view.runs[0];

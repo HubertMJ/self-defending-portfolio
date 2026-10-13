@@ -120,7 +120,7 @@ export function mountDiagram(figure: HTMLElement, opts: { caption: HTMLElement; 
     const close = h("button", { type: "button", class: "btn btn--ghost btn--small dg-caption__close", "aria-label": "Close" }, "×");
     close.addEventListener("click", () => {
       closeCaption();
-      nodeEls(id).find((el) => el.getClientRects().length)?.focus();
+      nodeEls(id).find((el) => el.getClientRects().length)?.focus({ preventScroll: true });
     });
     replace(opts.caption, renderCaption(n), close);
     opts.caption.hidden = false;

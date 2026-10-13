@@ -96,11 +96,13 @@
         </p>
       </header>
       <div class="section__body" id="attack-body">
-        <div class="tour-wrap" id="tour"></div>
-        <div class="terminal-wrap">
-          <div id="terminal" class="panel panel--flush" data-state="loading">
-            <p class="loading">Loading the terminal…</p>
-            <noscript><p class="offline__body">The terminal needs JavaScript. The rest of this page does not.</p></noscript>
+        <div class="attack-stage">
+          <div class="tour-wrap" id="tour"></div>
+          <div class="terminal-wrap">
+            <div id="terminal" class="panel panel--flush" data-state="loading">
+              <p class="loading">Loading the terminal…</p>
+              <noscript><p class="offline__body">The terminal needs JavaScript. The rest of this page does not.</p></noscript>
+            </div>
           </div>
         </div>
 
@@ -114,10 +116,11 @@
             <h3 id="justshowme-title">Just show me</h3>
             <p class="section__lead">One click runs a fixed attack and plays the detection and the response out below.</p>
           </header>
-          <p class="launch-status" id="launch-status" role="status" aria-live="polite"></p>
           <div class="panel panel--flush" id="scenario-panel" aria-busy="true" data-state="loading">
             <p class="loading">Loading scenarios…</p>
           </div>
+          <!-- Below the buttons: a message appearing here pushes nothing the visitor is looking at (2026-10-13). -->
+          <p class="launch-status" id="launch-status" role="status" aria-live="polite"></p>
           <div class="limits-panel tech-only" id="limits-panel" aria-live="polite"></div>
         </div>
 

@@ -1130,16 +1130,14 @@ html[data-folded~="projects"] #projects
 
 
 
+/* Its one line is reserved, empty or not: the message appearing must not move the console under
+   the visitor who just pressed a button above it (2026-10-13). */
 .launch-status {
-  min-height: 1.5rem;
-  margin-bottom: 0.9rem;
+  box-sizing: border-box;
+  min-height: 2.75rem;
+  margin: 0.9rem 0 0;
   font-size: 0.92rem;
   color: var(--text-muted);
-}
-
-.launch-status:empty {
-  min-height: 0;
-  margin: 0;
 }
 
 .launch-status[data-tone] {
@@ -3050,13 +3048,22 @@ html[data-terminal="off"] .needs-terminal {
   min-width: 14rem;
 }
 
+/* Both lines keep their room while empty: a run starting elsewhere on the page writes them, and
+   what sits below (the launcher, the console) must not move under the visitor (2026-10-13). */
 .term-start__blocked {
   margin: 0.75rem 0 0;
+  min-height: 1.5em;
   color: var(--detect);
 }
 
 .term-start__eta {
   margin: 0.35rem 0 0;
+  min-height: 1.5em;
+}
+
+.term-start__eta[hidden] {
+  display: block;
+  visibility: hidden;
 }
 
 .term-start .run-strip {
@@ -5380,6 +5387,35 @@ html[data-tech="on"] .dg-sub {
   font-size: 0.9rem;
   color: var(--text-muted);
   margin: 0;
+  /* Rewritten as runs land, above everything else: its lines are reserved, so a line more or less
+     does not move the page under the visitor (2026-10-13). */
+  min-height: 3.2em;
+}
+
+@media (max-width: 1099.98px) {
+  .dg-status {
+    min-height: 4.8em;
+  }
+}
+
+/* On a phone the lit nodes in words would run to five lines under the picture that shows them: they
+   stay for a screen reader, the picture speaks for the eyes. */
+@media (max-width: 760px) {
+  .dg-status {
+    min-height: 3.2em;
+  }
+
+  .dg-status__states {
+    position: absolute !important;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+    border: 0;
+  }
 }
 
 .dg-status__what {
@@ -5444,25 +5480,35 @@ html:not(.js) .needs-js {
   display: none;
 }
 
-/* ---------- the guided tour ---------- */
+/* ---------- the guided tour (ADR 0035, amended 2026-10-12 and 2026-10-13) ---------- */
+/* The stage: the terminal, and the tour beside it from 1100 px (a sticky side panel), above it as a
+   compact bar below that. Nothing here moves the page: the panel changes its words in place. */
+.attack-stage {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0 1.5rem;
+  align-items: start;
+}
+
 .tour-wrap {
-  margin-bottom: 1.25rem;
+  min-width: 0;
+  margin-bottom: 1rem;
 }
 
 .tour {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--surface);
-  padding: 1rem 1.1rem;
+  padding: 0.75rem 0.9rem;
 }
 
 .tour__head {
   display: flex;
   flex-wrap: wrap;
-  align-items: baseline;
+  align-items: center;
   justify-content: space-between;
-  gap: 0.5rem 1rem;
-  margin-bottom: 0.75rem;
+  gap: 0.4rem 1rem;
+  min-height: 2rem;
 }
 
 .tour__count {
@@ -5473,20 +5519,77 @@ html:not(.js) .needs-js {
   margin: 0;
 }
 
+.tour__cost {
+  color: var(--text-faint);
+  letter-spacing: 0;
+  text-transform: none;
+  font-weight: 500;
+}
+
+/* The phone bar's toggle: the same disclosure shape as the section headings. */
+.tour__toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.3rem 0.5rem;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--text);
+  font: 600 0.82rem/1.3 var(--font-sans);
+  cursor: pointer;
+}
+
+.tour__toggle:hover {
+  border-color: var(--accent);
+}
+
+.tour__chevron {
+  flex: none;
+  width: 0.38em;
+  height: 0.38em;
+  border-right: 0.1em solid currentColor;
+  border-bottom: 0.1em solid currentColor;
+  color: var(--text-faint);
+  transform: translateY(-0.12em) rotate(45deg);
+}
+
+.tour__toggle[aria-expanded="false"] .tour__chevron {
+  transform: rotate(-45deg);
+}
+
+/* The bar's one line while folded: the current step's title and its button. Its height is reserved,
+   so a step completing does not push the terminal below it. */
+.tour__barstep {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem 0.75rem;
+  min-height: 2.4rem;
+  margin: 0.35rem 0 0;
+}
+
+.tour__bartitle {
+  font-weight: 650;
+}
+
+.tour__panel {
+  margin-top: 0.75rem;
+}
+
 .tour__list {
   display: grid;
-  gap: 0.5rem;
+  gap: 0.4rem;
   margin: 0;
   padding: 0;
   list-style: none;
-  counter-reset: tourstep;
 }
 
 .tour__step {
   display: grid;
-  grid-template-columns: 1.75rem 1fr;
-  gap: 0.75rem;
-  padding: 0.6rem 0.7rem;
+  grid-template-columns: 1.6rem 1fr;
+  gap: 0.6rem;
+  padding: 0.45rem 0.6rem;
   border-radius: var(--radius-sm);
   background: var(--surface-2);
   border-left: 3px solid var(--border-strong);
@@ -5504,10 +5607,10 @@ html:not(.js) .needs-js {
 .tour__mark {
   display: grid;
   place-items: center;
-  width: 1.75rem;
-  height: 1.75rem;
+  width: 1.6rem;
+  height: 1.6rem;
   border-radius: 50%;
-  font: 650 0.85rem var(--font-mono);
+  font: 650 0.8rem var(--font-mono);
   background: var(--surface);
   border: 1px solid var(--border-strong);
   color: var(--text-muted);
@@ -5525,22 +5628,227 @@ html:not(.js) .needs-js {
 
 .tour__title {
   font-weight: 650;
+  font-size: 0.95rem;
   margin: 0;
+  line-height: 1.6rem;
 }
 
 .tour__hint {
   color: var(--text-muted);
-  font-size: 0.9rem;
-  margin: 0.15rem 0 0;
+  font-size: 0.86rem;
+  margin: 0.1rem 0 0;
+}
+
+.tour__step[data-done="true"] .tour__hint {
+  font-size: 0.8rem;
 }
 
 .tour__act {
-  margin: 0.55rem 0 0;
+  margin: 0.45rem 0 0;
+}
+
+.tour__foot {
+  margin: 0.75rem 0 0;
 }
 
 .tour--skipped {
   color: var(--text-muted);
   margin: 0;
+}
+
+/* The notices: Falco, Talon, the SIEM, newest first, above the steps; a polite live list, never a jump. */
+.tour__nsec {
+  margin-bottom: 0.9rem;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.tour__nhead {
+  font: 650 0.78rem/1.3 var(--font-mono);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin: 0 0 0.5rem;
+}
+
+.tour__notices {
+  display: grid;
+  gap: 0.4rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tour__notice {
+  --c: var(--neutral);
+  display: grid;
+  grid-template-columns: 0.6rem 1fr;
+  gap: 0.2rem 0.5rem;
+  align-items: start;
+  padding: 0.45rem 0.6rem;
+  border-radius: var(--radius-sm);
+  border-left: 3px solid var(--c);
+  background: color-mix(in srgb, var(--c) 8%, var(--surface-2));
+  font-size: 0.84rem;
+}
+
+.tour__notice--falco {
+  --c: var(--detect);
+}
+
+.tour__notice--talon {
+  --c: var(--respond);
+}
+
+.tour__notice--siem {
+  --c: var(--critical);
+}
+
+.tour__nmark {
+  width: 0.6rem;
+  height: 0.6rem;
+  margin-top: 0.35rem;
+  border-radius: 50%;
+  background: var(--c);
+}
+
+.tour__ntext {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.tour__nact {
+  grid-column: 2;
+}
+
+/* From 1100 px: the terminal left, the tour as a sticky panel right. The wrap stretches to the
+   terminal's height, so the panel sticks through the whole session and lets go with the section. */
+@media (min-width: 1100px) {
+  /* The row is at least as tall as the panel can get (the panel caps there and scrolls inside), so
+     a notice landing or a step opening never changes the row's height, and nothing below moves. */
+  .attack-stage {
+    grid-template-columns: minmax(0, 1fr) 19rem;
+    min-height: 42rem;
+  }
+
+  .tour-wrap {
+    order: 2;
+    align-self: stretch;
+    margin-bottom: 2.5rem;
+  }
+
+  /* --header-h: the sticky header's height as measured (main.ts), the mock banner included. */
+  .tour[data-layout="side"] {
+    position: sticky;
+    top: calc(var(--header-h, 3.75rem) + 1rem);
+    max-height: min(42rem, calc(100vh - var(--header-h, 3.75rem) - 2rem));
+    overflow: auto;
+    overscroll-behavior: contain;
+  }
+
+  .tour--skipped {
+    position: sticky;
+    top: calc(var(--header-h, 3.75rem) + 1rem);
+  }
+}
+
+/* The phone toast: the newest notice, one small line at the bottom, or under the header when the
+   terminal's input is down there. role=status; never over the input, never a jump. */
+.tour-toast {
+  --c: var(--neutral);
+  position: fixed;
+  z-index: 21;
+  left: 50%;
+  bottom: 0.75rem;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: min(40rem, calc(100vw - 1.5rem));
+  padding: 0.4rem 0.4rem 0.4rem 0.7rem;
+  border: 1px solid color-mix(in srgb, var(--c) 45%, var(--border));
+  border-left: 4px solid var(--c);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--c) 10%, var(--surface));
+  box-shadow: var(--shadow);
+  color: var(--text);
+  font-size: 0.84rem;
+}
+
+.tour-toast[data-pos="top"] {
+  bottom: auto;
+  top: 4.25rem;
+}
+
+/* Over the run toast when both are up. */
+body:has(.run-toast:not([hidden])) .tour-toast[data-pos="bottom"] {
+  bottom: 4.25rem;
+}
+
+.tour-toast[data-kind="falco"] {
+  --c: var(--detect);
+}
+
+.tour-toast[data-kind="talon"] {
+  --c: var(--respond);
+}
+
+.tour-toast[data-kind="siem"] {
+  --c: var(--critical);
+}
+
+.tour-toast__msg {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+}
+
+.tour-toast__act:empty {
+  display: none;
+}
+
+.tour-toast__act .tour__btn {
+  white-space: nowrap;
+}
+
+.tour-toast__close {
+  flex: none;
+  width: 1.9rem;
+  height: 1.9rem;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 1.1rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.tour-toast__close:hover {
+  background: var(--neutral-bg);
+  color: var(--text);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .tour-toast:not([hidden]) {
+    animation: sdp-toast-in 0.25s ease-out;
+  }
+}
+
+@keyframes sdp-toast-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 0.4rem);
+  }
+
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+}
+
+.launch-status__link {
+  font-weight: 600;
 }
 
 /* ---------- the About bar ---------- */
