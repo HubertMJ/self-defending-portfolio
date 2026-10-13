@@ -116,7 +116,7 @@ describe("a done step's button goes to its run (2026-10-13)", () => {
     const t = mountTour(root, { onCommand: vi.fn(), onScenario: vi.fn(), onTimeline: vi.fn(), onShowRun, matchMedia: ((q: string) => ({ matches: q === WIDE_QUERY, addEventListener() {} }) as unknown as MediaQueryList) });
     t.update(runs, [], new Set([RUN, "bb22cc33dd44ee55"]));
     const btn = root.querySelector<HTMLButtonElement>('.tour__step[data-id="compare"] button');
-    expect(btn?.textContent).toBe("Show the live run");
+    expect(btn?.getAttribute("aria-label")).toBe("Show the live run");
     btn?.click();
     expect(onShowRun).toHaveBeenCalledWith("bb22cc33dd44ee55");
     document.body.replaceChildren();
@@ -200,7 +200,11 @@ describe("the tour panel never moves the page (amendment 2026-10-13)", () => {
     expect(root.querySelector('.tour__step[data-id="caught"] button')).toBeNull();
     shows.add(RUN);
     t.update([caughtRun()], [INCIDENT], new Set([RUN]));
-    expect(root.querySelector('.tour__step[data-id="caught"] button')?.textContent).toBe("Watch the kill timeline");
+    const watch = root.querySelector('.tour__step[data-id="caught"] button');
+    expect(watch?.getAttribute("aria-label")).toBe("Watch the kill timeline");
+    expect(watch?.textContent).toBe("Timeline");
+    // A done step is one line: the link sits in its title's line, no button row of its own.
+    expect(watch?.closest(".tour__title")).not.toBeNull();
     shows.clear();
     expect(scrolls).toEqual([]);
     expect(document.activeElement).toBe(input);
@@ -221,26 +225,27 @@ describe("the tour panel never moves the page (amendment 2026-10-13)", () => {
     expect(root.querySelectorAll(".tour__step")).toHaveLength(6);
   });
 
-  it("a redraw keeps where the visitor scrolled the side panel to, and the 'New notice ↑' chip if up", () => {
+  it("the side panel shows the newest two notices; 'Earlier notices (n)' opens the rest in place; skip is a small link on the head's line", () => {
     const root = document.createElement("div");
     document.body.append(root);
     const t = mountTour(root, hooks(true));
-    const panel = () => root.querySelector(".tour") as HTMLElement;
-    // jsdom lays nothing out: the scroll position is a property it keeps, which is what a redraw must carry over.
-    Object.defineProperty(HTMLElement.prototype, "scrollTop", { configurable: true, get() { return this._st ?? 0; }, set(v) { this._st = v; } });
-    panel().scrollTop = 90;
-    t.update([runOf({ id: "whoami" })], [], new Set([RUN]));
-    expect(panel().scrollTop).toBe(90);
-    // A notice lands with the panel scrolled down: the panel stays, the chip shows; the chip's press goes up.
+    expect(root.querySelector(".tour__head .tour__skip")?.textContent).toBe("Skip the tour");
     t.update([caughtRun()], [INCIDENT], new Set([RUN]));
-    expect(panel().scrollTop).toBe(90);
-    const chip = root.querySelector<HTMLButtonElement>(".tour__newchip");
-    expect(chip?.hidden).toBe(false);
-    panel().scrollTo = ((o: ScrollToOptions) => (panel().scrollTop = o.top as number)) as typeof panel.prototype.scrollTo;
-    chip?.click();
-    expect(panel().scrollTop).toBe(0);
-    expect(chip?.hidden).toBe(true);
-    delete (HTMLElement.prototype as unknown as Record<string, unknown>).scrollTop;
+    const sec = root.querySelector(".tour__nsec") as HTMLElement;
+    const more = root.querySelector(".tour__more") as HTMLButtonElement;
+    expect(sec.querySelectorAll(".tour__notice")).toHaveLength(3);
+    expect(sec.dataset.all).toBe("false");
+    expect(more.hidden).toBe(false);
+    expect(more.textContent).toBe("Earlier notices (1)");
+    expect(more.getAttribute("aria-expanded")).toBe("false");
+    more.click();
+    expect(sec.dataset.all).toBe("true");
+    expect(more.getAttribute("aria-expanded")).toBe("true");
+    expect(more.textContent).toBe("Fewer notices");
+    // Kept open across a redraw; no chip, no inner scroller.
+    t.update([caughtRun()], [INCIDENT], new Set([RUN]));
+    expect((root.querySelector(".tour__nsec") as HTMLElement).dataset.all).toBe("true");
+    expect(root.querySelector(".tour__newchip")).toBeNull();
   });
 
   it("a redraw under the keyboard puts the focus back on the same control", () => {

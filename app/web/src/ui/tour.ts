@@ -16,7 +16,7 @@
 // step 5, out of the per-visitor limit. It says so.
 
 import type { CorrelationIncident } from "../lib/contract";
-import { type Child, h, plClock, prefersReducedMotion, replace } from "../lib/dom";
+import { type Child, h, plClock, replace } from "../lib/dom";
 import { SIEM_COMMAND, lastResponse } from "../lib/runstatus";
 import type { RunView } from "../lib/timeline";
 import { ts } from "../lib/timeline";
@@ -78,6 +78,8 @@ export const WIDE_QUERY = "(min-width: 1100px)";
 /** How long the phone toast stays unless dismissed. */
 const TOAST_MS = 9_000;
 const NOTICES_MAX = 6;
+/** The notices the side panel shows open; the rest behind "Earlier notices (n)", so it never scrolls inside. */
+const NOTICES_OPEN = 2;
 /**
  * A notice listed within this long of the mount is what the page already knew (a reload re-listing
  * the visitor's earlier runs and incidents as the feed's replay and the first correlation poll come
@@ -223,8 +225,21 @@ export function mountTour(root: HTMLElement, hooks: TourHooks): TourHandle {
   // whole list again.
   const noticeList = h("ol", { class: "tour__notices", role: "list", "aria-live": "polite", "aria-relevant": "additions" });
   const noticeHead = h("h3", { class: "tour__nhead", id: "tour-nhead" }, "Notices");
-  // Above the steps, so the newest news is the first thing in the panel; not there at all while empty.
-  const noticeSec = h("section", { class: "tour__nsec", "aria-labelledby": "tour-nhead", hidden: true }, noticeHead, noticeList);
+  // The newest two show; the older ones open in place on the visitor's press (the list stays one live list).
+  const moreBtn = h("button", { type: "button", class: "tour__more", "aria-expanded": "false", "aria-controls": "tour-notices", hidden: true, "data-focus": "more" });
+  noticeList.id = "tour-notices";
+  const noticeSec = h("section", { class: "tour__nsec", "aria-labelledby": "tour-nhead", hidden: true, "data-all": "false" }, noticeHead, noticeList, moreBtn);
+  moreBtn.addEventListener("click", () => {
+    const all = noticeSec.dataset.all !== "true";
+    noticeSec.dataset.all = String(all);
+    moreBtn.setAttribute("aria-expanded", String(all));
+    syncMore();
+  });
+  const syncMore = () => {
+    const older = Math.max(0, noticeList.children.length - NOTICES_OPEN);
+    moreBtn.hidden = older === 0;
+    moreBtn.textContent = noticeSec.dataset.all === "true" ? "Fewer notices" : `Earlier notices (${older})`;
+  };
   // The steps and the notices: in the side panel on a wide screen; below the terminal on a phone,
   // where the bar above it keeps one fixed height whatever happens.
   const panel = h("div", { class: "tour__panel", id: "tour-steps", hidden: true });
@@ -295,11 +310,6 @@ export function mountTour(root: HTMLElement, hooks: TourHooks): TourHandle {
     const fresh = notices.filter((n) => !items.has(n.id));
     // Oldest of the fresh first, so each goes to the top in order.
     for (const n of [...fresh].reverse()) noticeList.prepend(noticeItem(n));
-    // A new notice goes in at the top of the side panel; a panel the visitor has scrolled down
-    // stays where they left it (nothing moves by itself), and a chip at its top edge offers the way up.
-    const scroller = root.querySelector<HTMLElement>('.tour[data-layout="side"]');
-    if (fresh.length && scroller && scroller.scrollTop > 0) showNewChip(scroller);
-    markOverflow();
     while (noticeList.children.length > NOTICES_MAX) noticeList.lastElementChild?.remove();
     // A listed notice's clock is re-read on `now`'s day: past midnight it gains its date.
     for (const n of notices) {
@@ -308,6 +318,8 @@ export function mountTour(root: HTMLElement, hooks: TourHooks): TourHandle {
       if (t && t.textContent !== text) t.textContent = text;
     }
     noticeSec.hidden = noticeList.children.length === 0;
+    syncMore();
+    fit();
     // The toast says the newest one, on a narrow screen only, and only news: what the page lists in
     // its first seconds, or with the first incidents it hears of, is what it already knew before a reload.
     const newest = fresh[0];
@@ -326,11 +338,11 @@ export function mountTour(root: HTMLElement, hooks: TourHooks): TourHandle {
       h(
         "div",
         { class: "tour__body" },
-        h("p", { class: "tour__title" }, s.title, isDone ? h("span", { class: "visually-hidden" }, " (done)") : null),
-        // The current step carries its hint; a done one only its tick and, where there is one, its
-        // way there — the panel stays short enough to sit beside the terminal whole.
+        h("p", { class: "tour__title" }, h("span", { class: "tour__tname" }, s.title), isDone ? h("span", { class: "visually-hidden" }, " (done)") : null, isDone && !isCurrent ? act : null),
+        // The current step carries its hint and its button; a done one is one line, its tick and,
+        // where there is one, its way there - the panel sits beside the terminal whole, never scrolled.
         isCurrent ? h("p", { class: "tour__hint" }, s.hint) : null,
-        act ? h("p", { class: "tour__act" }, act) : null,
+        isCurrent && act ? h("p", { class: "tour__act" }, act) : null,
       ),
     );
   };
@@ -356,11 +368,12 @@ export function mountTour(root: HTMLElement, hooks: TourHooks): TourHandle {
   const doneAction = (s: TourStep): Child => {
     const key = `step:${s.id}`;
     const { caught, compare } = progress.runs;
-    if (s.id === "caught") return caught && (hooks.showsRun?.(caught) ?? true) ? button("Watch the kill timeline", () => hooks.onTimeline(), key) : null;
-    if (s.id === "compare") return compare ? button("Show the live run", () => hooks.onShowRun(compare), key) : null;
+    // On the done step's one line, short words; the full name for a screen reader, which carries them.
+    if (s.id === "caught") return caught && (hooks.showsRun?.(caught) ?? true) ? button("Timeline", () => hooks.onTimeline(), key, "tour__doneact", "Watch the kill timeline") : null;
+    if (s.id === "compare") return compare ? button("Live run", () => hooks.onShowRun(compare), key, "tour__doneact", "Show the live run") : null;
     if (s.id === "siem") {
       const inc = notices.find((n) => n.kind === "siem");
-      return link({ href: inc?.link?.href ?? "#correlation", label: "Show in SIEM" }, key);
+      return h("a", { class: "tour__doneact", href: inc?.link?.href ?? "#correlation", "data-focus": key, "aria-label": "Show in SIEM" }, "SIEM");
     }
     return null;
   };
@@ -380,43 +393,22 @@ export function mountTour(root: HTMLElement, hooks: TourHooks): TourHandle {
     el?.focus({ preventScroll: true });
   };
 
-  // "New notice ↑": a chip at the side panel's top edge while a notice landed above where the
-  // visitor scrolled to; their press scrolls the panel to its top, and the chip goes.
-  const newChip = h("button", { type: "button", class: "tour__newchip", hidden: true }, "New notice ↑");
-  newChip.addEventListener("click", () => {
+  /**
+   * The side panel never scrolls inside (2026-10-13): it is compact enough to sit whole beside the
+   * terminal, sticky under the header. Where it would still be taller than the screen under the
+   * header (a short window), it lets go of sticky and goes with the page instead of being cut.
+   */
+  const fit = () => {
     const p = root.querySelector<HTMLElement>('.tour[data-layout="side"]');
-    p?.scrollTo({ top: 0, behavior: prefersReducedMotion() ? "auto" : "smooth" });
-    newChip.hidden = true;
-  });
-  const showNewChip = (p: HTMLElement) => {
-    if (newChip.parentElement !== p) p.prepend(newChip);
-    newChip.hidden = false;
+    if (!p || typeof innerHeight !== "number") return;
+    const header = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--header-h")) || 60;
+    p.dataset.fits = String(p.offsetHeight <= innerHeight - header - 32);
   };
-  root.addEventListener(
-    "scroll",
-    (e) => {
-      if (e.target instanceof HTMLElement && e.target.scrollTop === 0) newChip.hidden = true;
-    },
-    { capture: true, passive: true },
-  );
-
-  /** A fade at the side panel's foot while there is more below it (styles.css): its own scroll is no surprise. */
-  const markOverflow = () => {
-    const p = root.querySelector<HTMLElement>('.tour[data-layout="side"]');
-    if (!p) return;
-    const over = p.scrollHeight > p.clientHeight + 2;
-    p.dataset.overflow = String(over);
-    p.dataset.atEnd = String(!over || p.scrollTop + p.clientHeight >= p.scrollHeight - 2);
-  };
-  root.addEventListener("scroll", markOverflow, { capture: true, passive: true });
-  if (typeof ResizeObserver === "function") new ResizeObserver(markOverflow).observe(root);
+  if (typeof ResizeObserver === "function") new ResizeObserver(fit).observe(root);
+  if (typeof addEventListener === "function") addEventListener("resize", fit);
 
   const draw = () => {
     const key = focusKey();
-    // The side panel is redrawn whole on every update: where the visitor scrolled it to, and the
-    // "New notice ↑" chip if up, are kept across the redraw (nothing moves by itself).
-    const prevTop = root.querySelector<HTMLElement>('.tour[data-layout="side"]')?.scrollTop ?? 0;
-    const chipUp = !newChip.hidden;
     if (!enabled) {
       replace(root);
       replace(panel);
@@ -432,7 +424,7 @@ export function mountTour(root: HTMLElement, hooks: TourHooks): TourHandle {
       setSkipped(true);
       shown = true;
       draw();
-    }, "skip");
+    }, "skip", isWide ? "tour__skip" : undefined);
     const unskip = button("Show the guided tour", () => {
       setSkipped(false);
       shown = false;
@@ -464,7 +456,9 @@ export function mountTour(root: HTMLElement, hooks: TourHooks): TourHandle {
     }
     // The current step's number (steps can complete out of order: getting caught before the DNS trick).
     const stepN = current ? STEPS.indexOf(current) + 1 : total;
-    const count = h("p", { class: "tour__count" }, complete ? "Tour complete" : `Step ${stepN} of ${total}`, h("span", { class: "tour__cost" }, " · uses two of your runs"));
+    const count = h("p", { class: "tour__count" }, complete ? "Tour complete" : `Step ${stepN} of ${total}`);
+    // What the tour costs, on its own small line under the head (the phone's bar has no room for it).
+    const cost = isWide ? h("p", { class: "tour__cost" }, "Uses two of your runs.") : null;
     // On a phone the head is the bar, one fixed height: the count and the toggle, then the current
     // step's title (cut with an ellipsis) and its button; "Tour done" once there is no step left.
     const toggle = isWide
@@ -484,19 +478,15 @@ export function mountTour(root: HTMLElement, hooks: TourHooks): TourHandle {
         "div",
         { class: "tour", "data-complete": String(complete), "data-layout": isWide ? "side" : "bar", "data-open": String(open) },
         h("div", { class: "tour__head" }, count, toggle, isWide ? skip : null),
+        cost,
         barStep,
         isWide ? panel : null,
       ),
     );
     // The list is live where it can be seen as it changes; on a phone the toast speaks instead.
     noticeList.setAttribute("aria-live", isWide ? "polite" : "off");
-    const scroller = root.querySelector<HTMLElement>('.tour[data-layout="side"]');
-    if (scroller && prevTop > 0) {
-      scroller.scrollTop = prevTop;
-      if (chipUp) showNewChip(scroller);
-    }
     refocus(key);
-    markOverflow();
+    fit();
   };
 
   draw();
@@ -526,8 +516,8 @@ export function mountTour(root: HTMLElement, hooks: TourHooks): TourHandle {
   };
 }
 
-function button(label: string, onClick: () => void, key?: string): HTMLButtonElement {
-  const b = h("button", { type: "button", class: "btn btn--ghost btn--small tour__btn", "data-focus": key }, label);
+function button(label: string, onClick: () => void, key?: string, cls?: string, ariaLabel?: string): HTMLButtonElement {
+  const b = h("button", { type: "button", class: cls ?? "btn btn--ghost btn--small tour__btn", "data-focus": key, "aria-label": ariaLabel }, label);
   b.addEventListener("click", onClick);
   return b;
 }
