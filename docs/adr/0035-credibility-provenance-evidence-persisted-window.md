@@ -657,11 +657,14 @@ nothing; and a wish for a small, non-distracting animation of the traffic on the
 **The wide attack section.** From 1400 px the attack section's column widens to 100 rem and the stage
 is one grid: the terminal with "This run" beside it on the left, the tour's rail (20 rem) on the right,
 the command palette and the session summary across both columns (the terminal's wrappers give up
-their boxes, `display: contents`, so their parts are the grid's items). The output sets the row's
-height — at least half the screen, at most 64 vh, no empty box past the first lines — and "This run"
-and the tour panel are capped at the row and the screen under the header, scrolling inside only past
-that, from their top (`overflow-anchor: none`, a notice landing shows at the top), with a fade at the
-foot while there is more. Below 1400 px the layout of the first amendment stands.
+their boxes, `display: contents`, so their parts are the grid's items; the header's wrap widens with
+it, so the brand and the section's left edge line up). The output sets the row's height — a 17 rem
+floor for the first lines, then as tall as the output up to 64 vh, no empty box — and "This run" and
+the tour panel are capped at the row and the screen under the header, scrolling inside only past
+that, with a fade at the foot while there is more. A panel the visitor has scrolled down stays where
+they left it when a notice lands above (`overflow-anchor: none`, nothing moves by itself): a
+"New notice ↑" chip at its top edge offers the way up, and goes once they are there. Below 1400 px the
+layout of the first amendment stands.
 
 **Every step's button has a target that is there.** A step's "Do this step" takes the visitor to the
 terminal with the command picked (their own press, so the page scrolls). A done step offers its way

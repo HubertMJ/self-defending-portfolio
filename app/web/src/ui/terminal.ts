@@ -1215,8 +1215,10 @@ export function mountTerminal(
     },
     suggest(commandId, opts = {}) {
       suggested = commandId;
-      // Only a navigation button's press ("Run it in the terminal ↑") moves the page here.
-      if (opts.scroll) root.scrollIntoView({ behavior: reduced ? "auto" : "smooth", block: "start" });
+      // Only a navigation button's press ("Run it in the terminal ↑", a tour step) moves the page
+      // here: to what the terminal shows (its mount has no box of its own on a wide screen, where
+      // its parts are the stage's grid items).
+      if (opts.scroll) (root.querySelector<HTMLElement>(":scope > *:not([hidden])") ?? root).scrollIntoView({ behavior: reduced ? "auto" : "smooth", block: "start" });
       if (mode === "idle") void start();
       else if (session && !watching && over()) {
         // The last session is over: the pick starts the next one, as from the start panel.

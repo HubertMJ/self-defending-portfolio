@@ -221,6 +221,28 @@ describe("the tour panel never moves the page (amendment 2026-10-13)", () => {
     expect(root.querySelectorAll(".tour__step")).toHaveLength(6);
   });
 
+  it("a redraw keeps where the visitor scrolled the side panel to, and the 'New notice ↑' chip if up", () => {
+    const root = document.createElement("div");
+    document.body.append(root);
+    const t = mountTour(root, hooks(true));
+    const panel = () => root.querySelector(".tour") as HTMLElement;
+    // jsdom lays nothing out: the scroll position is a property it keeps, which is what a redraw must carry over.
+    Object.defineProperty(HTMLElement.prototype, "scrollTop", { configurable: true, get() { return this._st ?? 0; }, set(v) { this._st = v; } });
+    panel().scrollTop = 90;
+    t.update([runOf({ id: "whoami" })], [], new Set([RUN]));
+    expect(panel().scrollTop).toBe(90);
+    // A notice lands with the panel scrolled down: the panel stays, the chip shows; the chip's press goes up.
+    t.update([caughtRun()], [INCIDENT], new Set([RUN]));
+    expect(panel().scrollTop).toBe(90);
+    const chip = root.querySelector<HTMLButtonElement>(".tour__newchip");
+    expect(chip?.hidden).toBe(false);
+    panel().scrollTo = ((o: ScrollToOptions) => (panel().scrollTop = o.top as number)) as typeof panel.prototype.scrollTo;
+    chip?.click();
+    expect(panel().scrollTop).toBe(0);
+    expect(chip?.hidden).toBe(true);
+    delete (HTMLElement.prototype as unknown as Record<string, unknown>).scrollTop;
+  });
+
   it("a redraw under the keyboard puts the focus back on the same control", () => {
     const root = document.createElement("div");
     document.body.append(root);

@@ -16,7 +16,7 @@
 // step 5, out of the per-visitor limit. It says so.
 
 import type { CorrelationIncident } from "../lib/contract";
-import { type Child, h, plClock, replace } from "../lib/dom";
+import { type Child, h, plClock, prefersReducedMotion, replace } from "../lib/dom";
 import { SIEM_COMMAND, lastResponse } from "../lib/runstatus";
 import type { RunView } from "../lib/timeline";
 import { ts } from "../lib/timeline";
@@ -291,10 +291,10 @@ export function mountTour(root: HTMLElement, hooks: TourHooks): TourHandle {
     const fresh = notices.filter((n) => !items.has(n.id));
     // Oldest of the fresh first, so each goes to the top in order.
     for (const n of [...fresh].reverse()) noticeList.prepend(noticeItem(n));
-    // A new notice goes in at the top of the side panel: the panel shows its top, unless the
-    // visitor is in it (its scroll is theirs then).
+    // A new notice goes in at the top of the side panel; a panel the visitor has scrolled down
+    // stays where they left it (nothing moves by itself), and a chip at its top edge offers the way up.
     const scroller = root.querySelector<HTMLElement>('.tour[data-layout="side"]');
-    if (fresh.length && scroller && !scroller.contains(document.activeElement)) scroller.scrollTop = 0;
+    if (fresh.length && scroller && scroller.scrollTop > 0) showNewChip(scroller);
     markOverflow();
     while (noticeList.children.length > NOTICES_MAX) noticeList.lastElementChild?.remove();
     // A listed notice's clock is re-read on `now`'s day: past midnight it gains its date.
@@ -371,6 +371,26 @@ export function mountTour(root: HTMLElement, hooks: TourHooks): TourHandle {
     el?.focus({ preventScroll: true });
   };
 
+  // "New notice ↑": a chip at the side panel's top edge while a notice landed above where the
+  // visitor scrolled to; their press scrolls the panel to its top, and the chip goes.
+  const newChip = h("button", { type: "button", class: "tour__newchip", hidden: true }, "New notice ↑");
+  newChip.addEventListener("click", () => {
+    const p = root.querySelector<HTMLElement>('.tour[data-layout="side"]');
+    p?.scrollTo({ top: 0, behavior: prefersReducedMotion() ? "auto" : "smooth" });
+    newChip.hidden = true;
+  });
+  const showNewChip = (p: HTMLElement) => {
+    if (newChip.parentElement !== p) p.prepend(newChip);
+    newChip.hidden = false;
+  };
+  root.addEventListener(
+    "scroll",
+    (e) => {
+      if (e.target instanceof HTMLElement && e.target.scrollTop === 0) newChip.hidden = true;
+    },
+    { capture: true, passive: true },
+  );
+
   /** A fade at the side panel's foot while there is more below it (styles.css): its own scroll is no surprise. */
   const markOverflow = () => {
     const p = root.querySelector<HTMLElement>('.tour[data-layout="side"]');
@@ -384,6 +404,10 @@ export function mountTour(root: HTMLElement, hooks: TourHooks): TourHandle {
 
   const draw = () => {
     const key = focusKey();
+    // The side panel is redrawn whole on every update: where the visitor scrolled it to, and the
+    // "New notice ↑" chip if up, are kept across the redraw (nothing moves by itself).
+    const prevTop = root.querySelector<HTMLElement>('.tour[data-layout="side"]')?.scrollTop ?? 0;
+    const chipUp = !newChip.hidden;
     if (!enabled) {
       replace(root);
       replace(panel);
@@ -457,6 +481,11 @@ export function mountTour(root: HTMLElement, hooks: TourHooks): TourHandle {
     );
     // The list is live where it can be seen as it changes; on a phone the toast speaks instead.
     noticeList.setAttribute("aria-live", isWide ? "polite" : "off");
+    const scroller = root.querySelector<HTMLElement>('.tour[data-layout="side"]');
+    if (scroller && prevTop > 0) {
+      scroller.scrollTop = prevTop;
+      if (chipUp) showNewChip(scroller);
+    }
     refocus(key);
     markOverflow();
   };
