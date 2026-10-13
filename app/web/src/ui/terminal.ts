@@ -28,7 +28,9 @@ export interface TerminalHandle {
   shownRun(): string | undefined;
   /** Takes the visitor to the terminal with a command picked: opens a session if idle (one run), highlights its chip and fills it in once the pod is ready. */
   /** Picks a command (the chip, the input); `scroll` only for a navigation button's press. */
-  suggest(commandId: string, opts?: { scroll?: boolean }): void;
+  suggest(commandId: string, opts?: { scroll?: boolean; step?: number }): void;
+  /** Drops the picked command's mark (another step's button, or its step is done). */
+  clearSuggestion(): void;
   /** Back to the start panel for another session (the summary's "Run another session"). */
   again(): void;
   /** Starts the next session at once (the strip's "Run again": it costs one run, as the start panel says). */
@@ -965,14 +967,24 @@ export function mountTerminal(
 
   // ---- a command picked for the visitor (the SIEM scenario's button) ----
   let suggested: string | undefined;
+  /** The tour step that picked it, for the "Step n" tag on the chip and the input. */
+  let suggestedStep: number | undefined;
 
   /** Highlights the picked command's chip and fills it in, once the pod is ready; cleared once it has run. */
   const applySuggestion = (run?: RunView) => {
     if (!els || !catalogue || watching) return;
     if (suggested && run?.commands.some((c) => c.id === suggested)) suggested = undefined;
-    for (const b of els.chips.querySelectorAll<HTMLElement>(".term__chip")) {
-      if (b.dataset.id === suggested) b.dataset.suggested = "true";
-      else delete b.dataset.suggested;
+    // The mark stays until the command has run or another pick replaces it: a ring and a "Step n"
+    // tag (styles.css) on its chip and on the input it fills.
+    for (const b of [...els.chips.querySelectorAll<HTMLElement>(".term__chip"), els.form]) {
+      if (suggested && (b === els.form || b.dataset.id === suggested)) {
+        b.dataset.suggested = "true";
+        if (suggestedStep) b.dataset.step = String(suggestedStep);
+        else delete b.dataset.step;
+      } else {
+        delete b.dataset.suggested;
+        delete b.dataset.step;
+      }
     }
     const cmd = suggested ? catalogue.commands.find((c) => c.id === suggested) : undefined;
     if (cmd && ready && !over() && !els.input.disabled && els.input.value === "") {
@@ -1219,8 +1231,13 @@ export function mountTerminal(
       siem = row;
       renderSiem();
     },
+    clearSuggestion() {
+      suggested = undefined;
+      applySuggestion(myRun());
+    },
     suggest(commandId, opts = {}) {
       suggested = commandId;
+      suggestedStep = opts.step;
       // Only a navigation button's press ("Run it in the terminal ↑", a tour step) moves the page
       // here: to what the terminal shows (its mount has no box of its own on a wide screen, where
       // its parts are the stage's grid items).

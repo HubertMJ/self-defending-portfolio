@@ -23,6 +23,8 @@ export interface Launcher {
   reload(): Promise<void>;
   /** Starts a scenario as its card's main button would (the tour's step): side by side when the API can. */
   launch(scenarioId: string): void;
+  /** Marks a scenario's card as the tour step's target ("Step n"), or clears the mark. */
+  highlight(scenarioId: string | undefined, step?: number): void;
 }
 
 const RESPONSE_LABEL: Record<string, string> = {
@@ -236,6 +238,17 @@ export function mountScenarios(
     launch(id) {
       const s = scenarios.find((x) => x.id === id);
       if (s) void launch(s, { compare });
+    },
+    highlight(id, step) {
+      for (const el of root.querySelectorAll<HTMLElement>(".scenario")) {
+        if (id && el.dataset.scenario === id) {
+          el.dataset.suggested = "true";
+          el.dataset.step = String(step ?? "");
+        } else {
+          delete el.dataset.suggested;
+          delete el.dataset.step;
+        }
+      }
     },
   };
 }

@@ -235,8 +235,19 @@ function main(): void {
   // offers a link, and the visitor follows it or not (ADR 0035, amendment 2026-10-13).
   const tour = mountTour(byId("tour"), {
     // Each is the visitor's own press on a button whose purpose is to go there: the page may scroll.
-    onCommand: (id) => terminal.suggest(id, { scroll: true }),
-    onScenario: (id) => launcher.launch(id),
+    onCommand: (id, step) => {
+      launcher.highlight(undefined);
+      terminal.suggest(id, { scroll: true, step });
+    },
+    onScenario: (id, step) => {
+      terminal.clearSuggestion();
+      launcher.highlight(id, step);
+      launcher.launch(id);
+    },
+    onStepDone: () => {
+      terminal.clearSuggestion();
+      launcher.highlight(undefined);
+    },
     onTimeline: () => terminal.showTimeline(),
     showsRun: (id) => terminal.shownRun() === id,
     onShowRun: (id) => {

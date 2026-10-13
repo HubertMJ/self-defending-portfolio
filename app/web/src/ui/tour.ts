@@ -176,10 +176,12 @@ export interface TourHandle {
 }
 
 export interface TourHooks {
-  /** A step's button: the command to pick in the terminal (the visitor asked to go there). */
-  onCommand(commandId: string): void;
+  /** A step's button: the command to pick in the terminal (the visitor asked to go there); `step` is its number, for the target's "Step n" tag. */
+  onCommand(commandId: string, step: number): void;
   /** A step's button: the scenario to launch. */
-  onScenario(scenarioId: string): void;
+  onScenario(scenarioId: string, step: number): void;
+  /** The step whose button was pressed is done: its target's mark goes. */
+  onStepDone?(): void;
   /** The "caught" step's done button: show this session's kill timeline (the visitor asked to go there). */
   onTimeline(): void;
   /** Whether the terminal shows that run now, so its kill timeline is there to watch. */
@@ -204,6 +206,8 @@ export function mountTour(root: HTMLElement, hooks: TourHooks): TourHandle {
   const now = hooks.now ?? Date.now;
   let progress: TourProgress = { done: new Set(), current: STEPS[0], runs: {} };
   let notices: TourNotice[] = [];
+  /** The step whose button the visitor pressed last: its target stays marked until the step is done. */
+  let pressed: string | undefined;
   let shown = skipped();
   let enabled = true;
   // On a phone the bar starts folded: the terminal stays near the top; the current step's button is in the bar.
@@ -333,8 +337,13 @@ export function mountTour(root: HTMLElement, hooks: TourHooks): TourHandle {
 
   /** The current step's button: a command to pick, a scenario to launch. */
   const action = (s: TourStep, again: boolean, key = `step:${s.id}`): Child => {
-    if (s.command) return button(again ? "Run it again" : "Do this step", () => hooks.onCommand(s.command as string), key);
-    if (s.scenario) return button(again ? "Run it again" : "Launch side by side", () => hooks.onScenario(s.scenario as string), key);
+    const n = STEPS.indexOf(s) + 1;
+    const press = (go: () => void) => () => {
+      pressed = s.id;
+      go();
+    };
+    if (s.command) return button(again ? "Run it again" : "Do this step", press(() => hooks.onCommand(s.command as string, n)), key);
+    if (s.scenario) return button(again ? "Run it again" : "Launch side by side", press(() => hooks.onScenario(s.scenario as string, n)), key);
     return null;
   };
 
@@ -506,6 +515,10 @@ export function mountTour(root: HTMLElement, hooks: TourHooks): TourHandle {
     update(runs, incidents, ownRunIds) {
       if (!enabled) return;
       progress = deriveProgress(runs, incidents, ownRunIds);
+      if (pressed && progress.done.has(pressed)) {
+        pressed = undefined;
+        hooks.onStepDone?.();
+      }
       notices = deriveNotices(runs, incidents, ownRunIds);
       draw();
       syncNotices();
