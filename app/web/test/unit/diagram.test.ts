@@ -2,7 +2,7 @@
 // turns it into a valid SVG tree with a node per element and no HTML sink, the hero path lights from a
 // run's events, and the committed docs/architecture/overview.svg is what the model generates.
 
-import { readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { buildTimeline } from "../../src/lib/timeline";
@@ -123,12 +123,16 @@ describe("the hero diagram lights the path of a run (ADR 0035 amendment)", () =>
   });
 });
 
+// The image build (app/web/Dockerfile) sees app/web only, without docs/ or cluster/: there the check
+// cannot run, and `make validate` runs the same check (`node scripts/diagram.mjs --check`) on the whole repo.
+const DOCS_SVG = join(process.cwd(), "..", "..", "docs", "architecture", "overview.svg");
+
 describe("docs/architecture/overview.svg is generated from the model", () => {
-  it("the committed file matches `npm run diagram` (run it when this fails)", () => {
+  it.skipIf(!existsSync(DOCS_SVG))("the committed file matches `npm run diagram` (run it when this fails)", () => {
     // The script counts Argo apps from cluster/apps; count them the same way here.
     const apps = readdirApps();
     const generated = renderDocsSvg({ argoApps: apps });
-    const committed = readFileSync(join(process.cwd(), "..", "..", "docs", "architecture", "overview.svg"), "utf8");
+    const committed = readFileSync(DOCS_SVG, "utf8");
     expect(committed).toBe(generated);
   });
 });

@@ -28,6 +28,7 @@ validate:        ## render every kustomization under cluster/ and validate it ag
 	@scripts/check-cis-na.sh
 	@scripts/check-siem.sh
 	@scripts/gen-siem-index.sh --check
+	@cd app/web && node scripts/diagram.mjs --check
 	@DOCKER="$(DOCKER)" scripts/validate-cluster.sh
 
 smoke:           ## idempotency smoke test in a container
