@@ -610,25 +610,36 @@ step offers its way there ("Watch the kill timeline", "Show the live run", "Show
 steps, the notices: Falco's detection, Talon's response and the SIEM's incident for the visitor's own
 runs, each with its time, newest first, derived from the same evidence as the progress (so a reload
 lists them again and nothing is listed that did not happen), a polite live list that never takes the
-focus. Below 1100 px the tour is a folded bar above the terminal — "Step n of 6", the current step's
-title and button, a toggle for the list — and a fresh notice is one small toast at the bottom (above
-the terminal's input when that is down there), `role="status"`, dismissable, gone after nine seconds;
-while the run's own toast (amendment 2026-10-06) is up with the same news, only that one shows.
-Colour never carries a meaning alone (each notice names its source; each step its number or tick),
-the motion is a short fade that `prefers-reduced-motion` drops, and everything is a button or a link.
+focus. The SIEM's notice dates the attack it caught ("from HH:MM:SS"), as the API publishes an
+incident's first event and not when the SIEM filed it; a listed notice's clock is re-read on each
+redraw, so past midnight it gains its date. A redraw under the keyboard (the feed's every view redraws
+the panel) puts the focus back on the equivalent control, or on the current step's button when the
+one it was on is gone. The notices stay when the tour is hidden. Below 1100 px the tour is a bar of
+two fixed rows above the terminal — "Step n of 6" and the toggle; the current step's title, cut with
+an ellipsis, and its button ("Tour done" at the end) — so nothing above the terminal ever changes
+height; the opened steps and the notices go below the terminal (`#tour-below`), and a fresh notice is
+one small toast at the bottom (under the header when the terminal's input is down there, placed again
+on scroll, resize and the visual viewport's moves), `role="status"`, dismissable, gone after nine
+seconds. "Fresh" is not the notice's own time (the SIEM files minutes after the event it dates) but
+whether the page already listed it in its first eight seconds, which is what a load re-lists; while
+the run's own toast (amendment 2026-10-06) is up with the same news, only that one shows. Colour never
+carries a meaning alone (each notice names its source; each step its number or tick), the motion is a
+short fade that `prefers-reduced-motion` drops, and everything is a button or a link.
 
 **The defence-map result.** In "Which layer answered which move" each command is one grid row: the
 command in the first column, its verdict in the second, "ended the session" under the verdict; the
-verdicts share one width, and a long command wraps in its own column instead of pushing a badge
-onto a line of its own.
+verdicts share one width (the widest word of the family, in the badge's own font), and a long
+command wraps in its own column instead of pushing a badge onto a line of its own.
 
-**Tests.** The unit suite covers the notices (named, timed, own runs only, stable ids), the side
-panel (no toggle, polite list, nothing scrolled or focused on an update, no toast) and the bar (folded,
-the current step's button in it, a fresh notice as a toast that auto-hides and can be dismissed, an
-old one re-listed without a toast). The end-to-end suite (mock build, desktop and phone) asserts
-that `scrollY` does not change when a step completes or the SIEM's incident lands (on the phone, where
-the output grows above the chips and the browser anchors the scroll to keep them still, that the
-chips do not move), that the panel sits beside the terminal at 1440x900 and stays below the header
-through the session, that a launch leaves the page where it was and its link reaches the console,
-and that the layer map's badges share one column at 360 px with nothing past the edge. The height
-budgets stand.
+**Tests.** The unit suite covers the notices (named, timed with the date when not today, own runs
+only, stable ids), the side panel (no toggle, polite list, nothing scrolled or focused on an update,
+no toast, the notices kept when hidden), the focus put back after a redraw, and the bar (fixed, the
+current step's button in it, the steps below the terminal, what a load lists raising no toast whatever
+its age, a later notice as a toast that auto-hides and can be dismissed). The end-to-end suite (mock
+build, desktop and phone, the SIEM filing 9 s after the command) asserts that the terminal's place in
+the document does not change when a step completes, the SIEM's incident lands or the session ends,
+nor `scrollY` on the desktop (on the phone the browser's scroll anchoring moves it to keep the pressed
+chips still as the output above them grows), that the panel sits beside the terminal at 1440x900 and
+stays below the header through the session, that a launch leaves the page and the launcher where they
+were and its link reaches the console, and that the layer map's badges share one column at 360 px
+with nothing past the edge. The height budgets stand.

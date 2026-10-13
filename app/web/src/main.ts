@@ -238,6 +238,7 @@ function main(): void {
     onScenario: (id) => launcher.launch(id),
     onTimeline: () => terminal.showTimeline(),
     toastParent: document.body,
+    below: byId("tour-below"),
   });
   refreshTour = () => {
     const own = new Set(ownIds);

