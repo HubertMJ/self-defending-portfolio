@@ -3151,7 +3151,7 @@ html[data-terminal="off"] .needs-terminal {
 
   /* Shorter on a phone, so the card and the input stay within reach under it. */
   .term__pane > .term__out {
-    min-height: min(40vh, 20rem);
+    height: 45vh;
   }
 }
 
@@ -3219,13 +3219,14 @@ html[data-terminal="off"] .needs-terminal {
   font-size: 0.72rem;
 }
 
+/* One fixed height, like a real terminal (2026-10-13): the output scrolls inside it, the page never
+   grows with it. ui/terminal.ts keeps it at the bottom only while the visitor is there. */
 .term__out {
   margin: 0;
   padding: 0.85rem 0.95rem;
-  /* The tallest thing in the grid: the panel beside it never leaves a void under it. */
-  min-height: min(56vh, 34rem);
-  max-height: 64vh;
+  height: min(50vh, 28rem);
   overflow: auto;
+  overscroll-behavior: contain;
   color: #e6e3dc;
   font: 0.82rem/1.5 var(--font-mono);
   overflow-wrap: anywhere;
@@ -3274,13 +3275,40 @@ html[data-terminal="off"] .needs-terminal {
   font-weight: 600;
 }
 
+/* Why a command did what it did: one line, "why?", opened on the visitor's press, so the output reads
+   like a terminal. */
 .term__explain {
-  margin: 0.2rem 0 0.9rem;
-  padding-left: 0.6rem;
-  border-left: 2px solid #262b34;
+  margin: 0.1rem 0 0.6rem;
   color: #b7bcc6;
   font-family: var(--font-sans);
-  font-size: 0.82rem;
+  font-size: 0.8rem;
+}
+
+.term__explain > summary {
+  display: inline-block;
+  color: #8a8f99;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  cursor: pointer;
+  list-style: none;
+}
+
+.term__explain > summary::-webkit-details-marker {
+  display: none;
+}
+
+.term__explain > summary::before {
+  content: "▸ ";
+}
+
+.term__explain[open] > summary::before {
+  content: "▾ ";
+}
+
+.term__explain > p {
+  margin: 0.2rem 0 0;
+  padding-left: 0.6rem;
+  border-left: 2px solid #262b34;
 }
 
 .term__cmd {

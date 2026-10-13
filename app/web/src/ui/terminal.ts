@@ -351,6 +351,9 @@ export function mountTerminal(
     rendered.clear();
   };
 
+  // Whether the output is at its bottom (it follows new lines then); kept by its own scroll events.
+  let followOut = true;
+
   // ---- running session skeleton ----
   // The terminal pane on the left (bar, output, input, the status strip), the "This run" panel on the
   // right (detection, response and SIEM rows, the objectives, this run's own timeline, the shop),
@@ -359,6 +362,8 @@ export function mountTerminal(
   const renderSession = () => {
     mode = "session";
     const out = h("div", { class: "term__out", role: "log", "aria-live": "polite", "aria-label": "Terminal output", tabindex: "0" });
+    followOut = true;
+    out.addEventListener("scroll", () => (followOut = out.scrollTop + out.clientHeight >= out.scrollHeight - 8), { passive: true });
     const input = h("input", { type: "text", class: "term__input", id: "term-input", autocomplete: "off", autocapitalize: "off", autocorrect: "off", spellcheck: "false", "aria-label": "Command to run in the pod", "aria-describedby": "term-hint", placeholder: "starting the pod…", disabled: true }) as HTMLInputElement;
     input.disabled = true;
     const hint = h("p", { class: "term__hint", id: "term-hint" });
@@ -820,7 +825,8 @@ export function mountTerminal(
             : h("p", { class: "term__line term__line--win" }, `✓ objective reached: ${title}`),
         );
       }
-      if (cmd) foot.push(h("p", { class: "term__explain" }, cmd.explain));
+      // Why it did what it did: folded to one line, so the output stays a terminal's.
+      if (cmd) foot.push(h("details", { class: "term__explain" }, h("summary", {}, "why?"), h("p", {}, cmd.explain)));
       const key = foot.map((p) => p.textContent).join("\u0000");
       if (key !== rec.footKey) {
         rec.footKey = key;
@@ -1133,8 +1139,9 @@ export function mountTerminal(
     // below the output, where the visitor is, or is listed by the notices beside the terminal.
   };
 
+  /** New output: the terminal follows it only while the visitor is at its bottom (scrolled up, they stay put). */
   const scrollOut = () => {
-    if (!els) return;
+    if (!els || !followOut) return;
     els.out.scrollTop = els.out.scrollHeight;
   };
 
