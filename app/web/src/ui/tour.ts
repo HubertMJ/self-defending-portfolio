@@ -58,15 +58,16 @@ export interface TourNotice {
   at: number;
   /** The words before the time ("Falco detected: Terminal shell in container"). */
   what: string;
-  /** Joins `what` and the clock: "at" for a moment, "from" for an incident whose first event this is. */
-  join: "at" | "from";
+  /** How the clock joins `what`: "at" for a moment, "first seen" for an incident, whose first event this is. */
+  join: "at" | "first seen";
   /** An in-page link the visitor may follow (never followed for them). */
   link?: { href: string; label: string };
 }
 
-/** The notice's sentence, on `now`'s day: "Falco detected: X at 20:00:05 CEST." (with the date when not today). */
+/** The notice's sentence, on `now`'s day: "Falco detected: X at 20:00:05 CEST.", "The SIEM caught … (first seen 20:02:00 CEST)." (with the date when not today). */
 export function noticeText(n: TourNotice, now: number = Date.now()): string {
-  return `${n.what} ${n.join} ${plClock(n.at, now)}.`;
+  const clock = plClock(n.at, now);
+  return n.join === "at" ? `${n.what} at ${clock}.` : `${n.what} (first seen ${clock}).`;
 }
 
 const SKIP_KEY = "sdp:tour-skipped";
@@ -157,7 +158,7 @@ export function deriveNotices(runs: readonly RunView[], incidents: readonly Corr
     // The API publishes the incident's first and last event, not when the SIEM filed it (ADR 0036):
     // the notice dates the attack it caught, not the filing.
     const what = i.kind === SIEM_COMMAND ? "The SIEM caught your DNS exfiltration" : `The SIEM filed an incident: ${i.title || i.kind}`;
-    out.push({ id: `siem:${i.id}`, kind: "siem", at, what, join: "from", link: { href: `#incident-${i.id}`, label: "Show in SIEM" } });
+    out.push({ id: `siem:${i.id}`, kind: "siem", at, what, join: "first seen", link: { href: `#incident-${i.id}`, label: "Show in SIEM" } });
   }
   out.sort((a, b) => b.at - a.at);
   return out.slice(0, NOTICES_MAX);
@@ -200,6 +201,9 @@ export function mountTour(root: HTMLElement, hooks: TourHooks): TourHandle {
   // On a phone the bar starts folded: the terminal stays near the top; the current step's button is in the bar.
   let expanded = false;
   const mountedAt = now();
+  // The first update that carries incidents: the first correlation poll's answer, which (after a
+  // reload) lists what the SIEM filed earlier - known, not news, however late that poll comes.
+  let incidentsSeen = false;
   const mm = hooks.matchMedia ?? (typeof matchMedia === "function" ? matchMedia : undefined);
   const wideQuery = mm?.(WIDE_QUERY);
   const wide = () => wideQuery?.matches ?? true;
@@ -288,9 +292,10 @@ export function mountTour(root: HTMLElement, hooks: TourHooks): TourHandle {
     }
     noticeSec.hidden = noticeList.children.length === 0;
     // The toast says the newest one, on a narrow screen only, and only news: what the page lists in
-    // its first seconds is what it already knew before a reload.
+    // its first seconds, or with the first incidents it hears of, is what it already knew before a reload.
     const newest = fresh[0];
-    if (newest && !wide() && now() - mountedAt > SETTLE_MS) showToast(newest);
+    if (newest && !wide() && now() - mountedAt > SETTLE_MS && !(newest.kind === "siem" && !incidentsSeen)) showToast(newest);
+    if (notices.some((n) => n.kind === "siem")) incidentsSeen = true;
   };
 
   const stepItem = (s: TourStep, i: number) => {

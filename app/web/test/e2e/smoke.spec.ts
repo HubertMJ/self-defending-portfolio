@@ -365,7 +365,7 @@ test.describe("layout (ADR 0035, amended 2026-10-05; ?mock=1)", () => {
     await expect(tour.locator('.tour__step[data-id="hide"]')).toHaveAttribute("data-done", "true");
     const siem = tour.locator(".tour__notice--siem");
     await expect(siem).toHaveCount(1, { timeout: 25_000 });
-    await expect(siem.locator(".tour__ntext")).toHaveText(/^The SIEM caught your DNS exfiltration from \d\d:\d\d:\d\d CES?T\.$/);
+    await expect(siem.locator(".tour__ntext")).toHaveText(/^The SIEM caught your DNS exfiltration \(first seen \d\d:\d\d:\d\d CES?T\)\.$/);
     await expect(siem.getByRole("link", { name: "Show in SIEM" })).toHaveAttribute("href", /^#incident-[0-9a-f]{16}$/);
     await expect(tour.locator('.tour__step[data-id="siem"]')).toHaveAttribute("data-done", "true");
     await still(y0, c0);

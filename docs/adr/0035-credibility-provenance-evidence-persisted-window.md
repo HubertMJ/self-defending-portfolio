@@ -610,8 +610,8 @@ step offers its way there ("Watch the kill timeline", "Show the live run", "Show
 steps, the notices: Falco's detection, Talon's response and the SIEM's incident for the visitor's own
 runs, each with its time, newest first, derived from the same evidence as the progress (so a reload
 lists them again and nothing is listed that did not happen), a polite live list that never takes the
-focus. The SIEM's notice dates the attack it caught ("from HH:MM:SS"), as the API publishes an
-incident's first event and not when the SIEM filed it; a listed notice's clock is re-read on each
+focus. The SIEM's notice dates the attack it caught ("(first seen HH:MM:SS)"), as the API publishes
+an incident's first event and not when the SIEM filed it; a listed notice's clock is re-read on each
 redraw, so past midnight it gains its date. A redraw under the keyboard (the feed's every view redraws
 the panel) puts the focus back on the equivalent control, or on the current step's button when the
 one it was on is gone. The notices stay when the tour is hidden. Below 1100 px the tour is a bar of
@@ -621,7 +621,9 @@ height; the opened steps and the notices go below the terminal (`#tour-below`), 
 one small toast at the bottom (under the header when the terminal's input is down there, placed again
 on scroll, resize and the visual viewport's moves), `role="status"`, dismissable, gone after nine
 seconds. "Fresh" is not the notice's own time (the SIEM files minutes after the event it dates) but
-whether the page already listed it in its first eight seconds, which is what a load re-lists; while
+whether the page already listed it in its first eight seconds, or with the first incidents the
+correlation poll brought (a slow first poll after a reload lists old ones late), which is what a load
+re-lists; while
 the run's own toast (amendment 2026-10-06) is up with the same news, only that one shows. Colour never
 carries a meaning alone (each notice names its source; each step its number or tick), the motion is a
 short fade that `prefers-reduced-motion` drops, and everything is a button or a link.
@@ -635,7 +637,8 @@ command wraps in its own column instead of pushing a badge onto a line of its ow
 only, stable ids), the side panel (no toggle, polite list, nothing scrolled or focused on an update,
 no toast, the notices kept when hidden), the focus put back after a redraw, and the bar (fixed, the
 current step's button in it, the steps below the terminal, what a load lists raising no toast whatever
-its age, a later notice as a toast that auto-hides and can be dismissed). The end-to-end suite (mock
+its age or however late the first incidents come, a later notice as a toast that auto-hides and can
+be dismissed). The end-to-end suite (mock
 build, desktop and phone, the SIEM filing 9 s after the command) asserts that the terminal's place in
 the document does not change when a step completes, the SIEM's incident lands or the session ends,
 nor `scrollY` on the desktop (on the phone the browser's scroll anchoring moves it to keep the pressed

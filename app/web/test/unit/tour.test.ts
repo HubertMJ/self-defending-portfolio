@@ -108,11 +108,11 @@ describe("the notices are derived from the same evidence (amendment 2026-10-13)"
     expect(noticeText(n[2], now)).toBe("Falco detected: Terminal shell in container at 20:00:05 CEST.");
     expect(noticeText(n[1], now)).toBe("Talon deleted the pod at 20:00:05 CEST.");
     // The API publishes the incident's first event, not its filing: the notice dates the attack.
-    expect(noticeText(n[0], now)).toBe("The SIEM caught your DNS exfiltration from 20:02:00 CEST.");
+    expect(noticeText(n[0], now)).toBe("The SIEM caught your DNS exfiltration (first seen 20:02:00 CEST).");
     expect(n[0].link).toEqual({ href: "#incident-0123456789abcdef", label: "Show in SIEM" });
     expect(n[1].link).toBeUndefined();
     // Read on a later day, the clock carries its date.
-    expect(noticeText(n[0], now + 86_400_000)).toBe("The SIEM caught your DNS exfiltration from 2026-10-03 20:02:00 CEST.");
+    expect(noticeText(n[0], now + 86_400_000)).toBe("The SIEM caught your DNS exfiltration (first seen 2026-10-03 20:02:00 CEST).");
   });
 
   it("says nothing about another visitor's run or incident", () => {
@@ -245,7 +245,7 @@ describe("the tour panel never moves the page (amendment 2026-10-13)", () => {
     const toast = document.querySelector(".tour-toast") as HTMLElement;
     expect(toast.hidden).toBe(false);
     expect(toast.getAttribute("role")).toBe("status");
-    expect(toast.querySelector(".tour-toast__msg")?.textContent).toMatch(/^The SIEM caught your DNS exfiltration from /);
+    expect(toast.querySelector(".tour-toast__msg")?.textContent).toMatch(/^The SIEM caught your DNS exfiltration \(first seen /);
     expect(toast.querySelector('a[href="#incident-0000000000000001"]')).not.toBeNull();
     expect(scrolls).toEqual([]);
     vi.advanceTimersByTime(9_100);
@@ -258,5 +258,25 @@ describe("the tour panel never moves the page (amendment 2026-10-13)", () => {
     expect(toast.hidden).toBe(true);
     // Every step done: the bar keeps its line.
     expect(root.querySelector(".tour__barstep")).not.toBeNull();
+  });
+
+  it("narrow: the first correlation answer, however late after a reload, lists its incidents without a toast; the next incident is news", () => {
+    vi.useFakeTimers();
+    const root = document.createElement("div");
+    const below = document.createElement("div");
+    document.body.append(root, below);
+    const t = mountTour(root, hooks(false, below));
+    // The feed's replay came at once; the SIEM's answer only well past the settling window.
+    t.update([caughtRun()], [], new Set([RUN]));
+    clock += SETTLE_MS + 30_000;
+    t.update([caughtRun()], [INCIDENT], new Set([RUN]));
+    expect(below.querySelectorAll(".tour__notice--siem")).toHaveLength(1);
+    expect(document.querySelector(".tour-toast")).toBeNull();
+    // A Talon notice arriving now would be news (the feed was heard at once); so is the next incident.
+    const next = { ...INCIDENT, id: "0000000000000003" };
+    t.update([caughtRun()], [INCIDENT, next], new Set([RUN]));
+    const toast = document.querySelector(".tour-toast") as HTMLElement;
+    expect(toast.hidden).toBe(false);
+    expect(toast.querySelector('a[href="#incident-0000000000000003"]')).not.toBeNull();
   });
 });
