@@ -238,3 +238,10 @@ behind a carrier-grade or office NAT.
 attack. Rotating many /48s or many IPv4 addresses still fills the global limits (30 attacks per hour,
 200 streams, the 50,000-key request table); that is volumetric abuse, for Cloudflare's rate limiting
 in front of the tunnel rather than for this process.
+
+**Correction (same day).** The wait held back every kind of run, which broke the tour: its fifth
+step, the side-by-side run, follows the terminal steps straight away, so it answered 429 and its
+button stayed disabled (`/api/limits` showed 0 left). The wait now holds back only the next terminal
+run. One-click runs (90 s at most) start as before, and `/api/limits` does not show the wait; a
+terminal start during it answers 429 with Retry-After, which the page already reports. A script
+alternating terminal and one-click runs still leaves the slot free for most of the wait.

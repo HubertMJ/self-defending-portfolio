@@ -256,14 +256,21 @@ func TestInteractiveCooldown(t *testing.T) {
 	}
 	c.add(5 * time.Minute)
 	release()
-	// The terminal held the slot for five minutes: its visitor waits five minutes, for any kind of
-	// run, while everybody else may start one at once.
-	d, _ = a.Acquire("1.2.3.4")
+	// The terminal held the slot for five minutes: its visitor waits five minutes before the next
+	// terminal, while everybody else may start one at once.
+	d, _ = a.AcquireInteractive("1.2.3.4")
 	if d.Outcome != RateLimited || d.RetryAfter != 5*time.Minute {
-		t.Fatalf("right after: %+v, want RateLimited in 5m", d)
+		t.Fatalf("terminal right after: %+v, want RateLimited in 5m", d)
 	}
-	if st := a.Status("1.2.3.4"); st.PerKeyRemaining != 0 || st.PerKeyResetIn != 5*time.Minute {
+	// A one-click run is not held back (the tour's side-by-side step follows the terminal), and the
+	// budget the page reads does not show the wait.
+	if st := a.Status("1.2.3.4"); st.PerKeyRemaining != 2 {
 		t.Fatalf("status during the wait: %+v", st)
+	}
+	if d, r := a.Acquire("1.2.3.4"); d.Outcome != Allowed {
+		t.Fatalf("one-click run right after the terminal: %v", d.Outcome)
+	} else {
+		r()
 	}
 	if d, r := a.Acquire("5.6.7.8"); d.Outcome != Allowed {
 		t.Fatalf("other visitor: %v", d.Outcome)
@@ -276,8 +283,9 @@ func TestInteractiveCooldown(t *testing.T) {
 		t.Fatalf("after the wait: %v", d.Outcome)
 	}
 	release()
-	release() // idempotent: a zero-length run, and no second cooldown
-	if d, r := a.Acquire("1.2.3.4"); d.Outcome != Allowed {
+	release()               // idempotent: a zero-length run, and no second cooldown
+	c.add(10 * time.Minute) // out of the per-visitor window, which three runs have filled
+	if d, r := a.AcquireInteractive("1.2.3.4"); d.Outcome != Allowed {
 		t.Fatalf("after a zero-length run: %v", d.Outcome)
 	} else {
 		r()
