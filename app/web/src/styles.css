@@ -6332,7 +6332,7 @@ html.js:not([data-tech="on"])[data-curious="open"] main > [data-group="curious"]
 
 /* Skills and Projects are part of "About me" in the default view (ui/sections.ts): shown with it,
    folded with it, read as its sub-sections - no number, no rule above, a smaller heading. */
-html.js:not([data-tech="on"]) main:is(:has(#about.section--collapsed), :has(#about[hidden])) > [data-group="about"],
+html.js:not([data-tech="on"])[data-about-folded] main > [data-group="about"],
 html.js:not([data-tech="on"])[data-folded~="about"] main > [data-group="about"] {
   display: none;
 }

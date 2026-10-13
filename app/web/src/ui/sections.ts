@@ -59,6 +59,8 @@ export function mountSections(onChange?: (id: string, expanded: boolean) => void
     f.btn.setAttribute("aria-expanded", String(expanded));
     f.body.hidden = !expanded;
     f.section.classList.toggle("section--collapsed", !expanded);
+    // Skills and Projects follow About in the default view (styles.css): its state on <html>, no :has().
+    if (f.section.id === "about") document.documentElement.toggleAttribute("data-about-folded", !expanded);
     if (persist) store(f.section.id, expanded);
     if (was !== expanded) onChange?.(f.section.id, expanded);
   };
