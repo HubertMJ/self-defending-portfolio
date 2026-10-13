@@ -4543,11 +4543,80 @@ html[data-terminal="off"] .needs-terminal {
   border-left-color: var(--warning);
 }
 
+/* One headline line: the severity, the kind, when it started (2026-10-13 c). */
 .incident__head {
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
-  gap: 0.5rem;
+  gap: 0.25rem 0.6rem;
+}
+
+.incident__at {
+  margin-left: auto;
+  color: var(--text-faint);
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  white-space: nowrap;
+}
+
+/* Two to four short labelled facts, one per line: Source, Rule, Falco saw it, Flag. */
+.incident__brief {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.15rem 0.75rem;
+  margin: 0.55rem 0 0;
+  font-size: 0.86rem;
+}
+
+.incident__brief > div {
+  display: contents;
+}
+
+.incident__brief dt {
+  color: var(--text-faint);
+}
+
+.incident__brief dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.incident__brief code {
+  font-size: 0.8rem;
+}
+
+.incident__details {
+  margin: 0.6rem 0 0;
+}
+
+.incident__details > summary {
+  cursor: pointer;
+  width: fit-content;
+  color: var(--accent);
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.incident__details[open] > summary {
+  margin-bottom: 0.5rem;
+}
+
+.incident__summary {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.incident__raw > summary {
+  cursor: pointer;
+}
+
+/* The raw JSON wraps in the card: nothing in it scrolls on its own. */
+.incident__json {
+  margin: 0.4rem 0 0;
+  font-size: 0.75rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .incident .chip {
@@ -4564,7 +4633,7 @@ html[data-terminal="off"] .needs-terminal {
 }
 
 .incident__kind {
-  margin: 0.4rem 0 0;
+  margin: 0.3rem 0 0;
   font-size: 0.88rem;
   color: var(--text-muted);
   overflow-wrap: anywhere;

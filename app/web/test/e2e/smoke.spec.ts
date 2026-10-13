@@ -2003,7 +2003,7 @@ test.describe("correlation (ADR 0036; serve.mjs --terminal-api --siem / --no-sie
     await expect(tiles.nth(1)).toContainText("Time to detect");
     await expect(tiles.nth(1).locator(".tile__value")).toHaveText("840 ms");
     await expect(tiles.nth(2).locator(".tile__value")).toHaveText("212 ms");
-    await expect(tiles.nth(2)).toContainText("p95 1.8 s over the 3 contained intrusions listed");
+    await expect(tiles.nth(2)).toContainText("p95 1.8 s (3 intrusions)");
     await expect(tiles.nth(3).locator(".tile__value")).toHaveText("1 min 1 s");
     await expect(tiles.nth(4).locator(".tile__value")).toHaveText("2");
     await expect(s.locator(".corr-lag")).toContainText("falco 1.2 s · talon 860 ms · k8s-audit 2.1 s · hubble 3.4 s · api 610 ms · host –");
@@ -2013,8 +2013,11 @@ test.describe("correlation (ADR 0036; serve.mjs --terminal-api --siem / --no-sie
     await expect(incidents).toHaveCount(6);
     const dns = incidents.first();
     await expect(dns).toHaveAttribute("data-kind", "dns-exfil");
-    await expect(dns.locator(".incident__facts")).toContainText("Falcono event");
-    await expect(dns.locator(".incident__facts")).toContainText("matched the run's flag");
+    await expect(dns.locator(".incident__brief")).toContainText("Falco saw itno");
+    await expect(dns.locator(".incident__brief")).toContainText("matched the run's flag");
+    // The rest is behind "Details": the steps, the links, the ids.
+    await expect(dns.locator(".corr-step").first()).toBeHidden();
+    await dns.locator("details.incident__details > summary").click();
     await expect(dns.locator('a[href="https://attack.mitre.org/techniques/T1048/003/"]')).toHaveCount(1);
     await expect(dns.locator('a[href="/api/runs/7e57000000000001"]')).toHaveCount(1);
     const steps = dns.locator(".corr-step");
@@ -2555,19 +2558,25 @@ test.describe("this session first (mock, ADR 0035 amendment 2026-10-06)", () => 
   });
 
   for (const width of [360, 320]) {
-    test(`the SIEM evidence is one line of counts, its ids folded as chips; nothing scrolls sideways at ${width} px`, async ({ page }) => {
+    test(`the SIEM evidence is one line of counts behind the card's Details, its ids folded as chips, the raw JSON wrapped; nothing scrolls sideways at ${width} px`, async ({ page }) => {
     await openSections(page);
       await page.setViewportSize({ width, height: 760 });
       await page.goto("/?mock=1");
-      const ev = board(page).locator(`.incident[data-incident="${EXAMPLE}"] details.incident__evidence`);
+      const card = board(page).locator(`.incident[data-incident="${EXAMPLE}"]`);
+      const ev = card.locator("details.incident__evidence");
+      await expect(ev.locator("summary")).toBeHidden();
+      await card.locator("details.incident__details > summary").click();
       await expect(ev.locator("summary")).toHaveText("Evidence: 1 finding · 1 document show IDs");
       await expect(ev.locator(".idchip").first()).toBeHidden();
       await expect(page.locator("#correlation")).not.toContainText("SIEM evidence:");
       await ev.locator("summary").click();
       await expect(ev.locator(".idchip code")).toHaveText(["8f0e6c1e-0d6b-4f7e-9a51-2b7f3c4d5e6f", "Zx3kQ5gBf2mP0aL1rT9e"]);
-      await expect(ev.locator('a[href="/api/correlation"]')).toBeVisible();
+      // In Technical Mode the incident's raw JSON is in the card too, wrapped inside it.
+      await card.locator("details.incident__raw > summary").click();
+      await expect(card.locator(".incident__json")).toContainText(`"id": "${EXAMPLE}"`);
       await noHorizontalScroll(page);
       await nothingPastEdge(page, "#correlation .incident__evidence");
+      await nothingPastEdge(page, "#correlation .incident__json");
       for (const s of await page.locator(".scope").all()) await expect(s).toBeVisible();
       await nothingPastEdge(page, "#attack .scope");
       await nothingPastEdge(page, "#correlation .scope");

@@ -192,7 +192,7 @@ describe("the SIEM scenario block and the eager poll", () => {
     const { mounts, calls, handle } = setup([ok()]);
     await vi.advanceTimersByTimeAsync(0);
     expect(mounts.scenario.querySelector(".corr-scenario__title")?.textContent).toBe("Make the SIEM catch what Falco cannot.");
-    expect(mounts.scenario.textContent).toContain("one to three minutes later the SIEM ties it to your run and raises a CRITICAL incident below");
+    expect(mounts.scenario.textContent).toContain("1–3 min later the SIEM files a CRITICAL incident for your run below");
     const chip = mounts.scenario.querySelector(".corr-scenario__state") as HTMLElement;
     expect(chip.textContent).toBe("not run yet");
     (mounts.scenario.querySelector(".corr-scenario__btn") as HTMLButtonElement).click();

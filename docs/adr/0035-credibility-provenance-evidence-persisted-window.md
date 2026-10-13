@@ -794,3 +794,13 @@ last: the attack section's eyebrow shows in the default view too, and Skills and
 sub-sections, carry no number in either view. The navigation is Attack it, SIEM, How it works, Evidence
 and About in both views; the Technical Mode switch says "Show the raw run data, the command palette, the one-click attacks and the run history". The card's markup, styles, script and tests are gone. Height budgets stand
 (measured with the mock banner: desktop 1440 2562 px, phone 390 3230 px).
+
+**A SIEM incident is scannable.** Each card is a headline - the severity, the kind, when it started -
+then up to four short labelled facts: Source (your run, a run, no run, the operator's test suite, with
+the twin's arm), Rule (the first Sigma finding's rule, "+N" for the others), Falco saw it (no / yes, N
+events, only where the API counts) and, for a DNS exfiltration, Flag. Everything else is behind
+"Details", closed, kept open across a redraw once the visitor opens it: the SIEM's own title, the run's
+raw events, the span, the times to detect and isolate, ATT&CK, the evidence timeline, the record ids,
+and in Technical Mode the incident's JSON as the page holds it (wrapped, nothing scrolling sideways).
+Nothing is computed into a fact that the incident does not carry. The scenario's lead, its note, the
+SOC tiles' foot lines, the contained line and the section's lead are cut to short lines.

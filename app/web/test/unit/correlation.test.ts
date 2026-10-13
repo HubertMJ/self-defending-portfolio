@@ -338,13 +338,23 @@ describe("review L5: what the parsers drop and sort", () => {
 describe("the section's parts", () => {
   const ctx = (c: Correlation) => ({ now: NOW, rules: new Map(index().rules.map((r) => [r.id, r])), commit: COMMIT, c });
 
-  it("an incident: severity, kind, Polish times, TTD/TTI, the timeline with rule links at the commit, the evidence ids", () => {
+  it("an incident: a headline (severity, kind, time), short facts, and behind Details the title, Polish times, TTD/TTI, the timeline with rule links at the commit, the evidence ids, the raw JSON", () => {
     const c = parseCorrelation(answer());
     const el = renderIncident(c.incidents[0], ctx(c));
-    expect(el.querySelector(".incident__title")?.textContent).toBe("Shadow file read, pod quarantined");
+    expect(el.querySelector(".incident__head")?.textContent).toBe("!high" + kindLabel("contained-intrusion") + "13:50:00 CEST");
+    expect(el.querySelector(".incident__title")?.textContent).toBe(kindLabel("contained-intrusion"));
     expect(el.querySelector(".chip")?.textContent).toContain("high");
-    expect(el.querySelector(".incident__kind")?.textContent).toContain(kindLabel("contained-intrusion"));
-    expect(el.querySelector(".incident__when")?.textContent).toBe("from 13:50:00.000 CEST to 13:50:02.000 CEST");
+    expect([...el.querySelectorAll(".incident__brief dt")].map((d) => d.textContent)).toEqual(["Source", "Rule", "Falco saw it"]);
+    expect(el.querySelector(".incident__brief")?.textContent).toBe("Sourcerun 7e57000000000001RuleCredential file read +1Falco saw ityes, 1 event");
+    // Everything else is behind Details, closed.
+    const details = el.querySelector<HTMLDetailsElement>("details.incident__details");
+    expect(details?.open).toBe(false);
+    expect(details?.querySelector("summary")?.textContent).toBe("Details");
+    expect(details?.querySelector(".incident__summary")?.textContent).toBe("Shadow file read, pod quarantined");
+    expect(details?.querySelector(".incident__when")?.textContent).toBe("from 13:50:00.000 CEST to 13:50:02.000 CEST");
+    const raw = details?.querySelector<HTMLDetailsElement>("details.incident__raw");
+    expect(raw?.classList.contains("tech-only")).toBe(true);
+    expect(JSON.parse(raw?.querySelector("pre")?.textContent ?? "{}").id).toBe(c.incidents[0].id);
     expect(el.querySelector(".incident__facts")?.textContent).toContain("Time to detect840 ms");
     expect(el.querySelector(".incident__facts")?.textContent).toContain("Time to isolate212 ms");
     const steps = el.querySelectorAll(".corr-step");
@@ -376,13 +386,13 @@ describe("the section's parts", () => {
 
   it("dns-exfil says Falco saw nothing and what the flag match is; the other kinds do not", () => {
     const dns = (flag: unknown) => parseCorrelation(answer({ incidents: [incident({ kind: "dns-exfil", falco_events: 0, flag_match: flag })] })).incidents[0];
-    const facts = (flag: unknown) => renderIncident(dns(flag), ctx(parseCorrelation(answer()))).querySelector(".incident__facts")?.textContent ?? "";
-    expect(facts(true)).toContain("Falcono event");
+    const facts = (flag: unknown) => renderIncident(dns(flag), ctx(parseCorrelation(answer()))).querySelector(".incident__brief")?.textContent ?? "";
+    expect(facts(true)).toContain("Falco saw itno");
     expect(facts(true)).toContain("matched the run's flag");
-    expect(facts(false)).toContain("no match for this run");
-    expect(facts(null)).toContain("flag match unavailable");
+    expect(facts(false)).toContain("Flag•no match");
+    expect(facts(null)).toContain("match unavailable");
     const c = parseCorrelation(answer());
-    expect(renderIncident(c.incidents[0], ctx(c)).querySelector(".incident__facts")?.textContent).not.toContain("Flag");
+    expect(renderIncident(c.incidents[0], ctx(c)).querySelector(".incident__brief")?.textContent).not.toContain("Flag");
   });
 
   it("renders hostile text as text: no element, no attribute comes from the API", () => {
@@ -390,7 +400,7 @@ describe("the section's parts", () => {
     const c = parseCorrelation(answer({ incidents: [incident({ title: evil, steps: [{ at: at(1), source: "api", rule: evil, rule_id: "", command_seq: null, detail: evil }] })] }));
     const el = renderIncident(c.incidents[0], ctx(c));
     expect(el.querySelector("img")).toBeNull();
-    expect(el.querySelector(".incident__title")?.textContent).toBe(evil);
+    expect(el.querySelector(".incident__summary")?.textContent).toBe(evil);
     expect(el.querySelector(".corr-step__detail")?.textContent).toBe(` · ${evil}`);
   });
 
@@ -413,6 +423,7 @@ describe("the section's parts", () => {
     const c = parseCorrelation(answer({ incidents: [incident({ title: "on k3s01", steps: [{ at: at(1), source: "k8s-audit", rule: "Exec", rule_id: "", command_seq: null, detail: "kube-system/x-1 · exec" }] })] }));
     const el = renderIncident(c.incidents[0], ctx(c));
     expect(el.querySelector(".incident__title")?.textContent).toBe(kindLabel("contained-intrusion"));
+    expect(el.querySelector(".incident__summary")).toBeNull();
     expect(el.querySelector(".corr-step__detail--withheld")?.textContent).toContain("withheld");
     expect(el.textContent).not.toMatch(/k3s01|kube-system/);
   });
@@ -422,7 +433,6 @@ describe("the section's parts", () => {
     for (const i of c.incidents) {
       const el = renderIncident(i, ctx(c));
       expect(el.querySelector(".incident__title")?.textContent).toBe("Incident");
-      expect(el.querySelector(".incident__kind")?.textContent).toMatch(/^Incident/);
     }
     expect(kindLabel("dns-exfil")).toBe("DNS exfiltration");
   });
@@ -493,7 +503,7 @@ describe("the section's parts", () => {
     const tiles = [...el.querySelectorAll(".tile")].map((t) => t.textContent);
     expect(tiles[1]).toContain("840 ms");
     expect(tiles[2]).toContain("212 ms");
-    expect(tiles[2]).toContain("p95 1.8 s over the 2 contained intrusions listed");
+    expect(tiles[2]).toContain("p95 1.8 s (2 intrusions)");
     expect(tiles[3]).toContain("–");
     expect(tiles[3]).toContain("no compare run yet");
     const one = renderMetrics(parseCorrelation(answer()), NOW);

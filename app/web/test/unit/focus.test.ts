@@ -250,9 +250,15 @@ describe("the SIEM's board, scoped", () => {
     if (!fold) throw new Error("no evidence fold");
     fold.open = true;
     fold.dispatchEvent(new Event("toggle"));
+    // …and so do the card's Details.
+    const details = m.board.querySelector<HTMLDetailsElement>("details.incident__details");
+    if (!details) throw new Error("no details fold");
+    details.open = true;
+    details.dispatchEvent(new Event("toggle"));
     handle.setFocus({ all: true, own: new Set([MINE]) });
     expect(m.board.querySelector(".corr-board--session")).toBeNull();
     expect(m.board.querySelector<HTMLDetailsElement>('[data-incident="a100000000000001"] details.incident__evidence')?.open).toBe(true);
+    expect(m.board.querySelector<HTMLDetailsElement>('[data-incident="a100000000000001"] details.incident__details')?.open).toBe(true);
     expect(m.board.querySelector(".corr-tier--own .incident")?.getAttribute("data-incident")).toBe("a100000000000001");
     // The SOC figures say they are everyone's.
     expect(m.metrics.querySelector(".corr-metrics__title")?.textContent).toBe("SOC figures · last 24 h, all visitors");
@@ -298,7 +304,8 @@ describe("the SIEM evidence line", () => {
     expect(fold?.open).toBe(false);
     expect(fold?.querySelector("summary")?.textContent).toBe("Evidence: 1 SA correlation · 4 findings show IDs");
     expect([...(fold?.querySelectorAll(".idchip code") ?? [])].map((c) => c.textContent)).toEqual(list.map((e) => e.id));
-    expect(fold?.querySelector('a[href="/api/correlation"]')).not.toBeNull();
+    // The incident's JSON is in the card itself, in Technical Mode.
+    expect(card.querySelector(".incident__raw.tech-only pre")).not.toBeNull();
     expect(card.textContent).not.toContain("SIEM evidence:");
   });
 });

@@ -100,10 +100,10 @@ function metricTile(label: string, value: string, tone: Tone, status: string, fo
   return h("article", { class: `tile tile--${tone}` }, h("h3", { class: "tile__label" }, label), h("p", { class: "tile__value" }, value), statusChip(tone, status), h("p", { class: "tile__foot" }, ...foot));
 }
 
-/** "p95 1.4 s over the 7 contained intrusions listed", or null under two values (a p95 of one is the value itself). */
+/** "p95 1.4 s (7 intrusions)": over the contained intrusions listed; null under two values (a p95 of one is the value itself). */
 function p95Foot(values: number[]): string | null {
   const p = percentile(values, 95);
-  return p !== undefined && values.length >= 2 ? `p95 ${formatDuration(p)} over the ${values.length} contained intrusions listed` : null;
+  return p !== undefined && values.length >= 2 ? `p95 ${formatDuration(p)} (${values.length} intrusions)` : null;
 }
 
 export function renderMetrics(c: Correlation, now: number): HTMLElement {
@@ -119,17 +119,17 @@ export function renderMetrics(c: Correlation, now: number): HTMLElement {
     { class: "tiles corr-metrics" },
     metricTile("Incidents", String(m.incidents), m.incidents > 0 ? "warning" : "good", m.incidents > 0 ? "correlated" : "none", m.since ? ["last 24 h, since ", whenEl(m.since, now, { class: "corr-since" })] : ["last 24 h"]),
     metricTile("Time to detect", median(m.median_ttd_ms), m.median_ttd_ms === null ? "neutral" : "good", m.median_ttd_ms === null ? "no sample yet" : "median", [
-      "Falco's alert after the command started",
+      "Falco's alert after the command",
       p95Foot(ttd) ? ` · ${p95Foot(ttd)}` : null,
     ]),
     metricTile("Time to isolate", median(m.median_tti_ms), m.median_tti_ms === null ? "neutral" : "good", m.median_tti_ms === null ? "no sample yet" : "median", [
-      "Talon's audited quarantine or delete after the alert",
+      "Talon's isolation after the alert",
       p95Foot(tti) ? ` · ${p95Foot(tti)}` : null,
     ]),
     metricTile("Twin dwell time", median(m.median_twin_dwell_ms), m.median_twin_dwell_ms === null ? "neutral" : "warning", m.median_twin_dwell_ms === null ? "no compare run yet" : "median", [
-      "how long the unguarded twin lived, from its audited create to its delete",
+      "how long the unguarded twin lived",
     ]),
-    metricTile("Host findings", String(m.host_findings), m.host_findings > 0 ? "warning" : "good", m.host_findings > 0 ? "on the VM hosts" : "none", ["counted only: a host finding names users and addresses, which this page never shows"]),
+    metricTile("Host findings", String(m.host_findings), m.host_findings > 0 ? "warning" : "good", m.host_findings > 0 ? "on the VM hosts" : "none", ["counted only: they name users and addresses"]),
   );
   // Not the visitor's own figures: every incident of the window, whoever's run it was.
   return h("div", {}, h("h3", { class: "panel-title corr-metrics__title" }, "SOC figures · last 24 h, all visitors"), tiles);
@@ -163,6 +163,8 @@ export interface BoardContext {
   own?: ReadonlySet<string>;
   /** Incidents whose evidence ids the visitor opened: they stay open across a redraw. */
   openEvidence?: ReadonlySet<string>;
+  /** Incidents whose details the visitor opened: they stay open across a redraw. */
+  openDetails?: ReadonlySet<string>;
 }
 
 /** "T1046, T1048.003", each linked to its MITRE page. */
@@ -178,15 +180,15 @@ const fact = (k: string, v: Node | string | (Node | string)[] | null) => (v === 
 function flagFact(i: CorrelationIncident): HTMLElement | null {
   if (i.kind !== "dns-exfil") return null;
   if (i.flag_match === true) return fact("Flag", statusChip("critical", "matched the run's flag"));
-  if (i.flag_match === false) return fact("Flag", statusChip("neutral", "no match for this run"));
-  return fact("Flag", statusChip("neutral", "flag match unavailable"));
+  if (i.flag_match === false) return fact("Flag", statusChip("neutral", "no match"));
+  return fact("Flag", statusChip("neutral", "match unavailable"));
 }
 
 /** Falco's count; for dns-exfil a zero is the point (nothing in the pod's syscalls gives it away). */
 function falcoFact(i: CorrelationIncident): HTMLElement | null {
   if (i.falco_events === null) return null;
-  if (i.falco_events === 0) return fact("Falco", h("span", { class: "corr-nofalco" }, "no event"));
-  return fact("Falco", `${i.falco_events} event${i.falco_events === 1 ? "" : "s"}`);
+  if (i.falco_events === 0) return fact("Falco saw it", h("span", { class: "corr-nofalco" }, "no"));
+  return fact("Falco saw it", `yes, ${i.falco_events} event${i.falco_events === 1 ? "" : "s"}`);
 }
 
 /** The step's rule, linked to its Sigma file at the commit when the index knows it; null for a plain document. */
@@ -237,12 +239,39 @@ function stepItem(s: CorrelationStep, n: number, t0: number, ctx: BoardContext):
   );
 }
 
+/** Where the incident came from, in a few words: the visitor's run, another run, the operator's tests, none. */
+function sourceFact(i: CorrelationIncident, own: ReadonlySet<string>): (Node | string)[] {
+  const arm = i.arm ? [" ", h("span", { class: "tag tag--arm", "data-arm": i.arm }, i.arm === "guarded" ? "guarded" : "twin, unguarded")] : [];
+  if (i.operator_test) return ["the operator's test suite"];
+  if (!i.run_id) return ["no run", ...arm];
+  return [own.has(i.run_id) ? "your run " : "run ", h("code", {}, i.run_id), ...arm];
+}
+
+/** The rule that fired, by name: a Sigma finding's first (a step with a rule id), "+N" for the other names. */
+function ruleFact(i: CorrelationIncident, ctx: BoardContext): string | null {
+  const ranked = [...i.steps.filter((s) => s.rule_id), ...i.steps.filter((s) => !s.rule_id)];
+  const names = [...new Set(ranked.map((s) => s.rule || (s.rule_id ? ctx.rules.get(s.rule_id)?.title : "") || "").filter(Boolean))];
+  if (!names.length) return null;
+  return names.length > 1 ? `${names[0]} +${names.length - 1}` : names[0];
+}
+
+/**
+ * One incident, scannable (2026-10-13 c): a headline (kind, severity, when it started), two to four
+ * short labelled facts (where from, the rule, whether Falco saw it, the flag for a DNS exfiltration),
+ * and everything else behind "Details": the SIEM's title, the run's raw events, the span, the times to
+ * detect and isolate, ATT&CK, the evidence timeline, the SIEM's record ids, and in Technical Mode the
+ * incident's raw JSON as the API published it.
+ */
 export function renderIncident(i: CorrelationIncident, ctx: BoardContext, tier?: "pinned" | "own" | "live" | "example"): HTMLElement {
   // Deltas count from the first step timed to the millisecond; a whole-second Talon step is no origin.
   const origin = i.steps.find((s) => !secondPrecision(s)) ?? i.steps[0];
   const t0 = origin ? Date.parse(origin.at) : Date.parse(i.first_at);
   const shown = i.steps.slice(0, INCIDENT_STEPS);
   const more = i.steps.length - shown.length;
+  const kind = kindLabel(i.kind);
+  // A kind the page does not know reads by the SIEM's title, else "Incident".
+  const headline = kind === "Incident" && i.title ? i.title : kind;
+  const rule = ruleFact(i, ctx);
   return h(
     "article",
     // The card carries the id every "Open it" link names, so the card's top (badge, title) is what lands.
@@ -251,29 +280,36 @@ export function renderIncident(i: CorrelationIncident, ctx: BoardContext, tier?:
       "header",
       { class: "incident__head" },
       statusChip(SEVERITY_TONE[i.severity], i.severity),
-      " ",
-      h("h4", { class: "incident__title", id: `incident-${i.id}-title` }, i.title || kindLabel(i.kind)),
+      h("h4", { class: "incident__title", id: `incident-${i.id}-title` }, headline),
+      timeEl(i.first_at, plClock(i.first_at, ctx.now), { class: "incident__at" }),
     ),
-    h(
-      "p",
-      { class: "incident__kind" },
-      kindLabel(i.kind),
-      i.arm ? [" ", h("span", { class: "tag tag--arm", "data-arm": i.arm }, i.arm === "guarded" ? "guarded" : "twin, unguarded")] : null,
-      i.run_id ? [" · run ", extLink(rawRunUrl(i.run_id), h("code", {}, i.run_id))] : null,
-    ),
-    h("p", { class: "incident__when small" }, "from ", timeEl(i.first_at, plClock(i.first_at, ctx.now, { ms: true })), " to ", timeEl(i.last_at, plClock(i.last_at, ctx.now, { ms: true }))),
     h(
       "dl",
-      { class: "facts incident__facts" },
-      fact("Time to detect", i.ttd_ms !== null ? formatDuration(i.ttd_ms) : null),
-      fact("Time to isolate", i.tti_ms !== null ? formatDuration(i.tti_ms) : null),
+      { class: "incident__brief" },
+      fact("Source", sourceFact(i, ctx.own ?? new Set())),
+      rule ? fact("Rule", rule) : null,
       falcoFact(i),
       flagFact(i),
-      fact("ATT&CK", i.attack.length ? techniqueLinks(i.attack) : null),
     ),
-    shown.length ? h("ol", { class: "corr-steps", "aria-label": "Evidence timeline" }, shown.map((s, n) => stepItem(s, n, t0, ctx))) : h("p", { class: "small" }, "No step of this incident is publishable."),
-    more > 0 ? h("p", { class: "small" }, `${more} more step${more === 1 ? "" : "s"} in the raw JSON.`) : null,
-    evidenceFold(i, ctx.openEvidence?.has(i.id) ?? false),
+    h(
+      "details",
+      { class: "incident__details", open: ctx.openDetails?.has(i.id) ?? false },
+      h("summary", {}, "Details"),
+      i.title && i.title !== headline ? h("p", { class: "incident__summary" }, i.title) : null,
+      i.run_id ? h("p", { class: "incident__kind small" }, "The run's raw events: ", extLink(rawRunUrl(i.run_id), h("code", {}, i.run_id))) : null,
+      h("p", { class: "incident__when small" }, "from ", timeEl(i.first_at, plClock(i.first_at, ctx.now, { ms: true })), " to ", timeEl(i.last_at, plClock(i.last_at, ctx.now, { ms: true }))),
+      h(
+        "dl",
+        { class: "facts incident__facts" },
+        fact("Time to detect", i.ttd_ms !== null ? formatDuration(i.ttd_ms) : null),
+        fact("Time to isolate", i.tti_ms !== null ? formatDuration(i.tti_ms) : null),
+        fact("ATT&CK", i.attack.length ? techniqueLinks(i.attack) : null),
+      ),
+      shown.length ? h("ol", { class: "corr-steps", "aria-label": "Evidence timeline" }, shown.map((s, n) => stepItem(s, n, t0, ctx))) : h("p", { class: "small" }, "No step of this incident is publishable."),
+      more > 0 ? h("p", { class: "small" }, `${more} more step${more === 1 ? "" : "s"} in the raw JSON.`) : null,
+      evidenceFold(i, ctx.openEvidence?.has(i.id) ?? false),
+      h("details", { class: "incident__raw tech-only small" }, h("summary", {}, "Raw JSON"), h("pre", { class: "incident__json" }, JSON.stringify(i, null, 2))),
+    ),
   );
 }
 
@@ -307,7 +343,7 @@ function evidenceFold(i: CorrelationIncident, open: boolean): HTMLElement | null
       { class: "idchips", role: "list" },
       i.evidence.map((e) => h("li", { class: "idchip" }, h("span", { class: "idchip__type" }, (EVIDENCE_WORD.get(e.type) ?? [e.type])[0]), " ", h("code", {}, e.id))),
     ),
-    h("p", { class: "small" }, "The SIEM's own record ids. The whole incident as the API publishes it: ", extLink("/api/correlation", "/api/correlation"), " (JSON)."),
+    h("p", { class: "small" }, "The SIEM's own record ids."),
   );
 }
 
@@ -422,7 +458,7 @@ export function renderBoard(c: Correlation, ctx: BoardContext): HTMLElement {
           "details",
           { class: "corr-contained" },
           h("summary", {}, `Contained automatically by Falco + Talon (${contained.length})`),
-          h("p", { class: "small corr-contained__line" }, containedSummary(contained), ". Falco caught each one and Talon ended it on its own; the SIEM filed them afterwards."),
+          h("p", { class: "small corr-contained__line" }, containedSummary(contained), ". Falco caught each, Talon ended it; the SIEM filed them after."),
           h("ol", { class: "corr-older__list" }, contained.map((i) => olderItem(i, ctx.now))),
         )
       : null,
@@ -498,7 +534,7 @@ function renderScenario(onRun: () => void): { el: HTMLElement; chip: HTMLElement
     if (btn.getAttribute("aria-disabled") !== "true") onRun();
   });
   const chip = h("span", { class: "corr-scenario__state", "data-phase": "idle" }, PHASE_WORD.idle);
-  const note = h("p", { class: "small corr-scenario__note" }, "Opens a terminal session (it costs one run) and picks the command for you.");
+  const note = h("p", { class: "small corr-scenario__note" }, "Opens the terminal (one run) with the command picked.");
   const el = h(
     "div",
     { class: "corr-scenario" },
@@ -506,9 +542,9 @@ function renderScenario(onRun: () => void): { el: HTMLElement; chip: HTMLElement
     h(
       "p",
       { class: "corr-scenario__lead" },
-      "Falco watches syscalls and never reads DNS. Run ",
+      "Falco watches syscalls, not DNS. Run ",
       h("strong", {}, "DNS exfiltration"),
-      " in the terminal and the secret leaves as a name lookup: Falco stays silent, Hubble logs the query, and one to three minutes later the SIEM ties it to your run and raises a CRITICAL incident below.",
+      ": Falco stays silent, Hubble logs the lookup, and 1–3 min later the SIEM files a CRITICAL incident for your run below.",
     ),
     h("div", { class: "corr-scenario__actions" }, btn, h("span", { class: "corr-scenario__statewrap" }, h("span", { class: "corr-scenario__label" }, "Your run: "), chip)),
     note,
@@ -699,6 +735,7 @@ export function mountCorrelation(
   const pulsed = new Set<string>();
   let healthOpen = false;
   const openEvidence = new Set<string>();
+  const openDetails = new Set<string>();
   // The board's and the rule library's one-of-a-kind folds (contained, operator tests, older
   // incidents, the rule list), by class: reopened after a redraw as the visitor left them.
   const openFolds = new Set<string>();
@@ -722,16 +759,17 @@ export function mountCorrelation(
   };
   trackFolds(mounts.board);
   trackFolds(mounts.rules);
-  // The evidence folds stay as the visitor left them across a redraw (each poll can redraw the board).
+  // The evidence and details folds stay as the visitor left them across a redraw (each poll can redraw the board).
   mounts.board.addEventListener(
     "toggle",
     (e) => {
       const t = e.target;
-      if (!(t instanceof HTMLDetailsElement) || !t.classList.contains("incident__evidence")) return;
+      if (!(t instanceof HTMLDetailsElement)) return;
+      const set = t.classList.contains("incident__evidence") ? openEvidence : t.classList.contains("incident__details") ? openDetails : undefined;
       const id = t.closest<HTMLElement>(".incident")?.dataset.incident;
-      if (!id) return;
-      if (t.open) openEvidence.add(id);
-      else openEvidence.delete(id);
+      if (!set || !id) return;
+      if (t.open) set.add(id);
+      else set.delete(id);
     },
     true,
   );
@@ -748,7 +786,7 @@ export function mountCorrelation(
       replace(sc.chip, ...scenarioChip(scenario));
     }
     sc.btn.setAttribute("aria-disabled", String(!terminal));
-    replace(sc.note, terminal ? "Opens a terminal session (it costs one run) and picks the command for you." : "The terminal is not on this build of the site right now, so the scenario cannot be run from here.");
+    replace(sc.note, terminal ? "Opens the terminal (one run) with the command picked." : "The terminal is not on this build of the site right now, so the scenario cannot be run from here.");
   };
   drawScenario();
 
@@ -798,7 +836,7 @@ export function mountCorrelation(
     replace(mounts.health, health);
     replace(mounts.metrics, renderMetrics(data, now));
     const tiers = new Set([...own, ...focus.own]);
-    replace(mounts.board, focus.all ? renderBoard(data, { now, rules, commit: linkCommit(), own: tiers, openEvidence }) : renderSessionBoard(data, { now, rules, commit: linkCommit(), own: tiers, live: focus.live, openEvidence }));
+    replace(mounts.board, focus.all ? renderBoard(data, { now, rules, commit: linkCommit(), own: tiers, openEvidence, openDetails }) : renderSessionBoard(data, { now, rules, commit: linkCommit(), own: tiers, live: focus.live, openEvidence, openDetails }));
     replace(mounts.rules, renderRuleLibrary(index, linkCommit(), data.incidents));
     restoreFolds(mounts.board);
     restoreFolds(mounts.rules);
