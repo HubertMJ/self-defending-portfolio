@@ -617,6 +617,11 @@ while the run's own toast (amendment 2026-10-06) is up with the same news, only 
 Colour never carries a meaning alone (each notice names its source; each step its number or tick),
 the motion is a short fade that `prefers-reduced-motion` drops, and everything is a button or a link.
 
+**The defence-map result.** In "Which layer answered which move" each command is one grid row: the
+command in the first column, its verdict in the second, "ended the session" under the verdict; the
+verdicts share one width, and a long command wraps in its own column instead of pushing a badge
+onto a line of its own.
+
 **Tests.** The unit suite covers the notices (named, timed, own runs only, stable ids), the side
 panel (no toggle, polite list, nothing scrolled or focused on an update, no toast) and the bar (folded,
 the current step's button in it, a fresh notice as a toast that auto-hides and can be dismissed, an
@@ -624,5 +629,6 @@ old one re-listed without a toast). The end-to-end suite (mock build, desktop an
 that `scrollY` does not change when a step completes or the SIEM's incident lands (on the phone, where
 the output grows above the chips and the browser anchors the scroll to keep them still, that the
 chips do not move), that the panel sits beside the terminal at 1440x900 and stays below the header
-through the session, and that a launch leaves the page where it was and its link reaches the
-console. The height budgets stand.
+through the session, that a launch leaves the page where it was and its link reaches the console,
+and that the layer map's badges share one column at 360 px with nothing past the edge. The height
+budgets stand.
