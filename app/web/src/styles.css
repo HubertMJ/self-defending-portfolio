@@ -3078,10 +3078,10 @@ html[data-terminal="off"] .needs-terminal {
   gap: 1.25rem;
 }
 
-/* The terminal pane and the "This run" panel. On a wide screen the panel's cell is as tall as the
-   pane (the aside adds nothing to the row) and the panel inside it is sticky, capped at the screen:
-   it can never outgrow the terminal. On a phone the pane's parts become the grid's rows, with the
-   panel as one card between the output and the input. */
+/* The terminal pane and the "This run" panel. On a wide screen the panel sits beside the pane and
+   goes with the page like everything else (2026-10-13: only the tour's rail stays put); the pane
+   keeps its own fixed height. On a phone the pane's parts become the grid's rows, with the panel as
+   one card between the output and the input. */
 .term__grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
@@ -3091,28 +3091,11 @@ html[data-terminal="off"] .needs-terminal {
   .term__grid {
     grid-template-columns: minmax(0, 1.65fr) minmax(17rem, 1fr);
     gap: 1.25rem;
-  }
-
-  .term__side {
-    height: 0;
-    min-height: 100%;
-  }
-
-  .thisrun {
-    position: sticky;
-    top: 4.75rem;
-    max-height: min(100%, calc(100vh - 6rem));
-    overflow: auto;
-    overscroll-behavior: contain;
+    align-items: start;
   }
 
   .thisrun__more {
     display: none;
-  }
-
-  /* More below: the panel's foot fades, so its own scroll is not a surprise. */
-  .thisrun[data-overflow="true"]:not([data-at-end="true"]) {
-    mask-image: linear-gradient(to bottom, #000 calc(100% - 3rem), transparent);
   }
 }
 
@@ -3637,6 +3620,13 @@ html[data-terminal="off"] .needs-terminal {
 
 .thisrun__event[data-tone="siem"] .thisrun__what {
   color: var(--good);
+}
+
+/* Nothing in the panel widens it past its column (the shop's product row, a long URL). */
+.thisrun__body,
+.thisrun__shop,
+.thisrun .term__shop {
+  min-width: 0;
 }
 
 .thisrun__shop > summary {

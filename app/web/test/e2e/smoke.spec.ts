@@ -1990,7 +1990,7 @@ test.describe("the visitor's run, told back (mock, ADR 0035 amendment: UX stage 
     await expect.poll(() => card.evaluate((e) => e.getBoundingClientRect().top - (document.querySelector(".site-header") as HTMLElement).getBoundingClientRect().bottom)).toBeGreaterThanOrEqual(0);
   });
 
-  test("layout: beside the terminal only this run, never taller than the terminal; the palette full width with its legend; on a phone one card above the input", async ({ page, isMobile }) => {
+  test("layout: beside the terminal only this run, which goes with the page (never sticky); the palette full width with its legend; on a phone one card above the input", async ({ page, isMobile }) => {
     await openSections(page);
     await page.goto(URL);
     const term = page.locator("#terminal");
@@ -2013,14 +2013,19 @@ test.describe("the visitor's run, told back (mock, ADR 0035 amendment: UX stage 
     } else {
       const [pane, side] = [await box(".term__pane"), await box(".thisrun")];
       expect(side.x).toBeGreaterThan(pane.x + pane.width - 1);
-      expect(side.y + side.height).toBeLessThanOrEqual(pane.y + pane.height + 1);
       expect(await term.locator(".term__out").evaluate((e) => e.getBoundingClientRect().height)).toBeGreaterThanOrEqual(300);
-      // A panel that scrolls says so: the shop folds first, and a fade marks more below.
-      const st = await term.locator(".thisrun").evaluate((e) => ({ over: e.scrollHeight > e.clientHeight + 1, atEnd: e.getAttribute("data-at-end"), shop: (e.querySelector(".thisrun__shop") as HTMLDetailsElement).open }));
-      if (st.over) {
-        expect(st.shop).toBe(false);
-        expect(st.atEnd).toBe("false");
+      // "This run" goes with the page: never sticky, never scrolled inside, its place in the document
+      // the same however far the page is scrolled (2026-10-13: only the tour's rail stays put).
+      const thisrun = term.locator(".thisrun");
+      expect(await thisrun.evaluate((e) => getComputedStyle(e).position)).toBe("static");
+      const docTop = () => thisrun.evaluate((e) => Math.round(e.getBoundingClientRect().top + scrollY));
+      const first = await docTop();
+      for (const dy of [200, 400, 300]) {
+        await page.evaluate((y) => scrollBy(0, y), dy);
+        await page.waitForTimeout(50);
+        expect(await docTop()).toBe(first);
       }
+      expect(await thisrun.evaluate((e) => e.scrollHeight <= e.clientHeight + 1)).toBe(true);
     }
   });
 
