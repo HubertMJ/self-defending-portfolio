@@ -373,6 +373,10 @@ main {
   .site-nav__more {
     display: none;
   }
+
+  .site-nav a {
+    padding-inline: 0.45rem;
+  }
 }
 
 .theme-toggle {
@@ -5815,6 +5819,38 @@ html:not(.js) .needs-js {
   white-space: normal;
 }
 
+/* The current step's command, as the terminal would type it: one chip, pressed to fill it in there. */
+.tour__cmd {
+  display: inline-flex;
+  max-width: 100%;
+  padding: 0.25rem 0.6rem;
+  border: 1px solid color-mix(in srgb, var(--accent) 60%, var(--border-strong));
+  border-radius: 999px;
+  background: #0a0c10;
+  color: #e6e3dc;
+  font: 0.8rem/1.4 var(--font-mono);
+  text-align: left;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+
+.tour__cmd code {
+  font: inherit;
+  background: none;
+  padding: 0;
+  color: inherit;
+}
+
+.tour__cmd::before {
+  content: "$ ";
+  color: #5ee0a4;
+  white-space: pre;
+}
+
+.tour__cmd:hover {
+  border-color: var(--accent);
+}
+
 /* A done step's way there, "Skip the tour" and "Earlier notices": small text links, not buttons. */
 .tour__doneact,
 .tour__skip,
@@ -5949,11 +5985,11 @@ html:not(.js) .needs-js {
 /* From 1100 px: the terminal left, the tour as a sticky panel right. The wrap stretches to the
    terminal's height, so the panel sticks through the whole session and lets go with the section. */
 @media (min-width: 1100px) {
-  /* The row is at least as tall as the panel can get (the panel caps there and scrolls inside), so
-     a notice landing or a step opening never changes the row's height, and nothing below moves. */
+  /* The row is about as tall as the terminal's fixed box and the compact panel get (2026-10-13), so a
+     notice landing or a step opening rarely changes the row's height and moves nothing below. */
   .attack-stage {
     grid-template-columns: minmax(0, 1fr) 19rem;
-    min-height: 42rem;
+    min-height: 34rem;
   }
 
   /* The rail is as tall as the terminal's row and adds nothing to it (as "This run" beside the
@@ -6200,4 +6236,90 @@ body:has(.run-toast:not([hidden])) .tour-toast[data-pos="bottom"] {
 
 .objectives-wrap {
   padding: 0 1.1rem 1rem;
+}
+
+/* ---------- the default view and Technical Mode (ADR 0035, amendment 2026-10-13 b) ---------- */
+/* The default view is short: the hero, the terminal with the tour beside it, the SIEM, How it works and
+   About. The raw run data, the command palette, "This run", the one-click cards, the console, the run
+   history, the limits and the evidence sections are one switch away (ui/tech.ts). Hidden only where
+   scripts run (theme.ts adds .js before first paint): without JavaScript everything shows. */
+html.js:not([data-tech="on"]) .tech-more {
+  display: none !important;
+}
+
+/* Words for the default view that Technical Mode says another way. */
+html[data-tech="on"] .tech-less {
+  display: none !important;
+}
+
+/* The terminal alone, without "This run" beside it. */
+@media (min-width: 900px) {
+  html.js:not([data-tech="on"]) .term__grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* "Evidence for the curious": the evidence, posture and verify sections as one folded card; each
+   keeps its own fold inside it, and a link to any of them opens the card (ui/sections.ts). */
+.curious {
+  margin: 0 0 clamp(1.5rem, 4vw, 2.5rem);
+}
+
+html:not(.js) .curious,
+html[data-tech="on"] .curious {
+  display: none;
+}
+
+html.js:not([data-tech="on"]):not([data-curious="open"]) main > [data-group="curious"] {
+  display: none;
+}
+
+.curious__toggle {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.2rem 1rem;
+  align-items: center;
+  width: 100%;
+  padding: 0.9rem 1.1rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.curious__toggle:hover {
+  border-color: var(--border-strong);
+}
+
+.curious__toggle:hover .section__chevron {
+  color: var(--accent);
+}
+
+.curious__toggle[aria-expanded="false"] .section__chevron {
+  transform: rotate(-45deg);
+}
+
+.curious__title {
+  font-weight: 700;
+  font-size: 1.05rem;
+}
+
+.curious__lead {
+  grid-column: 1;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+}
+
+.curious__toggle .section__chevron {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+}
+
+/* Open, its three sections read as the card's contents: under it, set in by a rule at their left. */
+html.js:not([data-tech="on"])[data-curious="open"] main > [data-group="curious"] > .wrap {
+  border-left: 2px solid var(--border);
+  padding-left: clamp(0.9rem, 2vw, 1.25rem);
 }

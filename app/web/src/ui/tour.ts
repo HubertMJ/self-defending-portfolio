@@ -27,6 +27,8 @@ export interface TourStep {
   hint: string;
   /** The catalogue command the button picks (steps that run in the terminal). */
   command?: string;
+  /** The step's second command, picked once the first has reached its objective (break something: the flag after the deface). */
+  then?: string;
   /** The one-click scenario the button launches (the twin step). */
   scenario?: string;
   /** What the completed line reads. */
@@ -35,7 +37,7 @@ export interface TourStep {
 
 export const STEPS: readonly TourStep[] = [
   { id: "look", title: "Look around", hint: "Open the terminal and run id (or any look-around command) — plain recon raises no alarm.", command: "whoami", done: "You looked around: a non-root user in a hardened pod." },
-  { id: "tamper", title: "Break something", hint: "Deface the shop, then read the run's flag. Both are allowed — detection is not prevention.", command: "deface", done: "You defaced the shop and read the flag; nothing stopped you." },
+  { id: "tamper", title: "Break something", hint: "Deface the shop, then read the run's flag. Both are allowed — detection is not prevention.", command: "deface", then: "read-flag", done: "You defaced the shop and read the flag; nothing stopped you." },
   { id: "hide", title: "Hide it in DNS", hint: "Smuggle the flag out in a DNS name. Falco has no rule for name lookups.", command: SIEM_COMMAND, done: "You sent the flag out in a DNS query; Falco saw nothing." },
   { id: "caught", title: "Get caught", hint: "Open a shell with sh -i. Falco detects it and Talon deletes the pod — watch the diagram.", command: "shell", done: "Falco caught the shell and Talon deleted the pod, in milliseconds." },
   { id: "compare", title: "See what the answer is worth", hint: "Run the same attack with and without the response, side by side. (Costs one more run.)", scenario: "shell-in-container", done: "Side by side: the guarded pod died, the unguarded one stayed owned." },
@@ -184,6 +186,8 @@ export interface TourHooks {
   onScenario(scenarioId: string, step: number): void;
   /** The step whose button was pressed is done: its target's mark goes. */
   onStepDone?(): void;
+  /** What a catalogue command types ("id" for whoami), for the step's command chip; undefined until the catalogue is in. */
+  commandInput?(commandId: string): string | undefined;
   /** The "caught" step's done button: show this session's kill timeline (the visitor asked to go there). */
   onTimeline(): void;
   /** Whether the terminal shows that run now, so its kill timeline is there to watch. */
@@ -210,6 +214,8 @@ export function mountTour(root: HTMLElement, hooks: TourHooks): TourHandle {
   let notices: TourNotice[] = [];
   /** The step whose button the visitor pressed last: its target stays marked until the step is done. */
   let pressed: string | undefined;
+  /** The commands that have reached their objective in the visitor's runs (which of a step's two to offer). */
+  let reached = new Set<string>();
   let shown = skipped();
   let enabled = true;
   // On a phone the bar starts folded: the terminal stays near the top; the current step's button is in the bar.
@@ -354,7 +360,18 @@ export function mountTour(root: HTMLElement, hooks: TourHooks): TourHandle {
       pressed = s.id;
       go();
     };
-    if (s.command) return button(again ? "Run it again" : "Do this step", press(() => hooks.onCommand(s.command as string, n)), key);
+    if (s.command) {
+      const id = s.then && reached.has(s.command) ? s.then : s.command;
+      const input = key === "bar" ? undefined : hooks.commandInput?.(id);
+      // The step's one command, as a chip: the visitor sees what it will type, and the press fills it
+      // in the terminal (the full palette is in Technical Mode).
+      if (input) {
+        const chip = h("button", { type: "button", class: "tour__btn tour__cmd", "data-focus": key }, h("span", { class: "visually-hidden" }, "Run in the terminal: "), h("code", {}, input));
+        chip.addEventListener("click", press(() => hooks.onCommand(id, n)));
+        return chip;
+      }
+      return button(again ? "Run it again" : "Do this step", press(() => hooks.onCommand(id, n)), key);
+    }
     if (s.scenario) return button(again ? "Run it again" : "Launch side by side", press(() => hooks.onScenario(s.scenario as string, n)), key);
     return null;
   };
@@ -369,8 +386,8 @@ export function mountTour(root: HTMLElement, hooks: TourHooks): TourHandle {
     const key = `step:${s.id}`;
     const { caught, compare } = progress.runs;
     // On the done step's one line, short words; the full name for a screen reader, which carries them.
-    if (s.id === "caught") return caught && (hooks.showsRun?.(caught) ?? true) ? button("Timeline", () => hooks.onTimeline(), key, "tour__doneact", "Watch the kill timeline") : null;
-    if (s.id === "compare") return compare ? button("Live run", () => hooks.onShowRun(compare), key, "tour__doneact", "Show the live run") : null;
+    if (s.id === "caught") return caught && (hooks.showsRun?.(caught) ?? true) ? button("Timeline", () => hooks.onTimeline(), key, "tour__doneact tech-more", "Watch the kill timeline") : null;
+    if (s.id === "compare") return compare ? button("Live run", () => hooks.onShowRun(compare), key, "tour__doneact tech-more", "Show the live run") : null;
     if (s.id === "siem") {
       const inc = notices.find((n) => n.kind === "siem");
       return h("a", { class: "tour__doneact", href: inc?.link?.href ?? "#correlation", "data-focus": key, "aria-label": "Show in SIEM" }, "SIEM");
@@ -505,6 +522,7 @@ export function mountTour(root: HTMLElement, hooks: TourHooks): TourHandle {
     update(runs, incidents, ownRunIds) {
       if (!enabled) return;
       progress = deriveProgress(runs, incidents, ownRunIds);
+      reached = new Set(runs.flatMap((r) => r.commands.filter((c) => c.achieved).map((c) => c.id)));
       if (pressed && progress.done.has(pressed)) {
         pressed = undefined;
         hooks.onStepDone?.();

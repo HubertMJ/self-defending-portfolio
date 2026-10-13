@@ -28,13 +28,13 @@
         <li><a href="#attack">Attack it</a></li>
         <li class="site-nav__siem" hidden><a href="#correlation">SIEM</a></li>
         <li><a href="#how">How<span class="site-nav__more"> it works</span></a></li>
-        <li><a href="#posture">Posture</a></li>
+        <li class="tech-more"><a href="#evidence">Evidence</a></li>
         <li><a href="#about">About</a></li>
       </ul>
     </nav>
     <div class="site-header__tools">
       <p class="conn conn--header" id="header-conn" data-state="connecting"><span class="conn__dot" aria-hidden="true"></span>static</p>
-      <button type="button" class="tech-toggle" id="tech-toggle" hidden aria-pressed="false" title="Show raw events, Falco fields, Talon parameters, policies and limits">
+      <button type="button" class="tech-toggle" id="tech-toggle" hidden aria-pressed="false" title="Show the raw run data, the command palette, posture and verification">
         <span class="tech-toggle__icon" aria-hidden="true">{ }</span><span class="tech-toggle__label">Technical<span class="tech-toggle__more"> mode</span></span>
       </button>
       <button type="button" class="theme-toggle" id="theme-toggle" hidden aria-label="Switch theme">
@@ -54,7 +54,7 @@
   <section class="hero" id="top" aria-labelledby="hero-title">
     <div class="wrap hero__statement">
       <div class="hero__copy">
-        <p class="eyebrow">DevOps · Platform security · Kubernetes</p>
+        <p class="eyebrow tech-more">DevOps · Platform security · Kubernetes</p>
         <h1 id="hero-title">Hubert Jabłoński</h1>
         <p class="hero__lead">
           This site runs on a Kubernetes cluster that defends itself.
@@ -66,7 +66,7 @@
         </p>
         <p class="hero__actions">
           <a class="btn btn--primary" id="hero-cta" href="#attack">Attack this cluster</a>
-          <a class="btn btn--ghost hero__secondary" href="https://github.com/HubertMJ/self-defending-portfolio" rel="noopener noreferrer">Read the source</a>
+          <a class="btn btn--ghost hero__secondary tech-more" href="https://github.com/HubertMJ/self-defending-portfolio" rel="noopener noreferrer">Read the source</a>
         </p>
       </div>
       <div class="hero__numbers" id="hero-stats" hidden></div>
@@ -88,9 +88,9 @@
   <section class="section section--attack" id="attack" aria-labelledby="attack-title">
     <div class="wrap">
       <header class="section__head">
-        <p class="eyebrow">Attack it</p>
+        <p class="eyebrow tech-more">Attack it</p>
         <h2 id="attack-title">Your hands on the pod</h2>
-        <p class="section__lead" id="attack-lead">
+        <p class="section__lead tech-more" id="attack-lead">
           A throwaway pod in an isolated <code>sandbox</code> namespace with a little shop inside it.
           Type real commands and read the real output; the cluster ends your session when it has seen enough.
         </p>
@@ -108,12 +108,12 @@
           <div class="tour-below" id="tour-below"></div>
         </div>
 
-        <details class="fold objectives-fold" id="objectives-fold" hidden>
+        <details class="fold objectives-fold tech-more" id="objectives-fold" hidden>
           <summary class="fold__summary">Objectives, and who has reached them</summary>
           <div class="objectives-wrap" id="objectives"></div>
         </details>
 
-        <div class="launcher">
+        <div class="launcher tech-more">
           <header class="section__head launcher__head">
             <h3 id="justshowme-title">Just show me</h3>
             <p class="section__lead">One click runs a fixed attack and plays the detection and the response out below.</p>
@@ -126,11 +126,11 @@
           <div class="limits-panel tech-only" id="limits-panel" aria-live="polite"></div>
         </div>
 
-        <section class="console" id="console" aria-labelledby="console-title" data-state="empty">
+        <section class="console tech-more" id="console" aria-labelledby="console-title" data-state="empty">
           <noscript><p class="offline__body">The live run panel needs JavaScript.</p></noscript>
         </section>
 
-        <div class="timeline" id="timeline" aria-labelledby="timeline-title">
+        <div class="timeline tech-more" id="timeline" aria-labelledby="timeline-title">
           <div class="timeline__head">
             <h3 class="panel-title" id="timeline-title">Run history</h3>
             <p class="conn" id="timeline-conn" data-state="connecting"><span class="conn__dot" aria-hidden="true"></span>Waiting for JavaScript…</p>
@@ -193,7 +193,19 @@
     </div>
   </section>
 
-  <section class="section section--evidence" id="evidence" aria-labelledby="evidence-title">
+  <!-- Without Technical Mode the three sections below are one card, folded (2026-10-13); without
+       JavaScript, or in Technical Mode, they show as sections of their own and this card does not. -->
+  <aside class="curious" id="curious" aria-label="Evidence for the curious">
+    <div class="wrap">
+      <button type="button" class="curious__toggle" aria-expanded="false" aria-controls="evidence posture verify">
+        <span class="curious__title">Evidence for the curious</span>
+        <span class="curious__lead">What the cluster recorded, its live security posture, and how to verify the running images yourself.</span>
+        <span class="section__chevron" aria-hidden="true"></span>
+      </button>
+    </div>
+  </aside>
+
+  <section class="section section--evidence" id="evidence" aria-labelledby="evidence-title" data-group="curious">
     <div class="wrap">
       <header class="section__head">
         <p class="eyebrow">Evidence</p>
@@ -212,7 +224,7 @@
     </div>
   </section>
 
-  <section class="section" id="posture" aria-labelledby="posture-title">
+  <section class="section" id="posture" aria-labelledby="posture-title" data-group="curious">
     <div class="wrap">
       <header class="section__head">
         <p class="eyebrow">Posture</p>
@@ -228,7 +240,7 @@
     </div>
   </section>
 
-  <section class="section" id="verify" aria-labelledby="verify-title">
+  <section class="section" id="verify" aria-labelledby="verify-title" data-group="curious">
     <div class="wrap">
       <header class="section__head">
         <p class="eyebrow">Verify</p>

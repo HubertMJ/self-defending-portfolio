@@ -2,6 +2,10 @@
 // first paint. Kept to a few lines on purpose: everything else waits for the deferred module.
 import { FOLDED_BY_DEFAULT, FOLD_KEY, startsFolded } from "./lib/folds";
 
+// Scripts run: what the default view leaves to Technical Mode (styles.css .tech-more) is hidden from
+// the first paint; without JavaScript everything shows.
+document.documentElement.classList.add("js");
+
 try {
   const t = localStorage.getItem("theme");
   if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;

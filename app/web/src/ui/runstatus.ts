@@ -121,7 +121,8 @@ export function mountRunStatus(opts: {
       });
       return link;
     }
-    const b = h("button", { type: "button", class: "btn btn--small run-strip__btn", "data-action": a }, ACTION_WORD[a]);
+    // The kill timeline is in "This run", shown in Technical Mode: its button only there (styles.css .tech-more).
+    const b = h("button", { type: "button", class: `btn btn--small run-strip__btn${a === "timeline" ? " tech-more" : ""}`, "data-action": a }, ACTION_WORD[a]);
     b.addEventListener("click", () => (a === "again" ? opts.onAgain() : opts.onTimeline()));
     return b;
   };

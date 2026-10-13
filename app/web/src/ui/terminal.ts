@@ -31,6 +31,8 @@ export interface TerminalHandle {
   suggest(commandId: string, opts?: { scroll?: boolean; step?: number }): void;
   /** Drops the picked command's mark (another step's button, or its step is done). */
   clearSuggestion(): void;
+  /** What a catalogue command types ("id" for whoami); undefined before the catalogue is in. */
+  inputOf(commandId: string): string | undefined;
   /** Back to the start panel for another session (the summary's "Run another session"). */
   again(): void;
   /** Starts the next session at once (the strip's "Run again": it costs one run, as the start panel says). */
@@ -378,7 +380,7 @@ export function mountTerminal(
     const chips = h("div", { class: "term__chips" });
     const palette = h(
       "div",
-      { class: "term__palette" },
+      { class: "term__palette tech-more" },
       h(
         "div",
         { class: "term__palettehead" },
@@ -429,7 +431,7 @@ export function mountTerminal(
       h("dl", { class: "thisrun__rows" }, detection.el, response.el, siem.el),
       sideBody,
     );
-    const side = h("aside", { class: "term__side", "aria-labelledby": "thisrun-title" }, panel);
+    const side = h("aside", { class: "term__side tech-more", "aria-labelledby": "thisrun-title" }, panel);
     more.addEventListener("click", () => {
       const open = panel.dataset.open !== "true";
       panel.dataset.open = String(open);
@@ -499,14 +501,14 @@ export function mountTerminal(
       ? reloadedOwn()
         ? h("p", { class: "term__line term__line--sys" }, "Your session from before the reload, read-only: the page lost its key to type into it when it reloaded. The pod runs as uid 10001, non-root, with no network and a read-only root filesystem; it ends at its idle or session limit.")
         : h("p", { class: "term__line term__line--sys" }, ownRunLost() ? "Read-only: this may be the run you just started — its start timed out before the page got the key to type into it. " : "Another visitor's session, read-only. ", "Their pod runs as uid 10001, non-root, with no network and a read-only root filesystem; each command and its output appears here as they type.")
-      : h("p", { class: "term__line term__line--sys" }, "Pod starting. You will be uid 10001, non-root, no network, read-only root filesystem. When it is ready, try ", h("code", {}, "id"), " or tap a command below.");
+      : h("p", { class: "term__line term__line--sys" }, "Pod starting. You will be uid 10001, non-root, no network, read-only root filesystem. When it is ready, try ", h("code", {}, "id"), h("span", { class: "tech-less" }, " or the command the tour suggests."), h("span", { class: "tech-more" }, " or tap a command below."));
 
   /** The banner's ready moment: "Pod starting…" does not stay at the top of the session. */
   const bannerReady = () => {
     if (!els || watching) return;
     // Inside the live log; the strip already says "Pod ready" aloud, so this swap is for the eye only.
     els.banner.setAttribute("aria-hidden", "true");
-    replace(els.banner, "Pod ready. You are uid 10001, non-root, with no network and a read-only root filesystem. Try ", h("code", {}, "id"), " or tap a command below.");
+    replace(els.banner, "Pod ready. You are uid 10001, non-root, with no network and a read-only root filesystem. Try ", h("code", {}, "id"), h("span", { class: "tech-less" }, " or the command the tour suggests."), h("span", { class: "tech-more" }, " or tap a command below."));
   };
 
   // The completion hint. Read out only when the visitor asks for it (Tab), so routine typing does
@@ -1231,6 +1233,7 @@ export function mountTerminal(
       siem = row;
       renderSiem();
     },
+    inputOf: (id) => catalogue?.commands.find((c) => c.id === id)?.input,
     clearSuggestion() {
       suggested = undefined;
       applySuggestion(myRun());

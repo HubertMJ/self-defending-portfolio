@@ -79,6 +79,23 @@ export function mountSections(onChange?: (id: string, expanded: boolean) => void
     btn.addEventListener("click", () => set(fold, !isOpen(fold), true));
     if (stored(section.id)) set(fold, false, false);
   }
+  // "Evidence for the curious" (2026-10-13 b): without Technical Mode the evidence, posture and verify
+  // sections are one folded card; its button opens or closes the three at once (each keeps its fold).
+  const root = document.documentElement;
+  const curious = document.querySelector<HTMLButtonElement>(".curious__toggle");
+  const setCurious = (open: boolean) => {
+    if (open) root.dataset.curious = "open";
+    else delete root.dataset.curious;
+    curious?.setAttribute("aria-expanded", String(open));
+  };
+  curious?.addEventListener("click", () => setCurious(root.dataset.curious !== "open"));
+  /** Opens the card if `el` is in one of its sections and the card hides it; whether it did. */
+  const openCard = (el: HTMLElement | null): boolean => {
+    if (!el?.closest('main > [data-group="curious"]') || root.dataset.tech === "on" || root.dataset.curious === "open") return false;
+    setCurious(true);
+    return true;
+  };
+
   // The folded sections are folded by their buttons now: theme.ts's stand-in (styles.css) goes.
   delete document.documentElement.dataset.folded;
 
@@ -94,8 +111,9 @@ export function mountSections(onChange?: (id: string, expanded: boolean) => void
   /** Opens the folded section holding the element `hash` names; that element if it was folded. */
   const reveal = (hash: string): HTMLElement | null => {
     const target = byHash(hash);
+    const card = openCard(target);
     const fold = folds.get(target?.closest<HTMLElement>("main > .section")?.id ?? "");
-    if (!target || !fold || isOpen(fold)) return null;
+    if (!target || !fold || isOpen(fold)) return card ? target : null;
     set(fold, true, true);
     return target;
   };

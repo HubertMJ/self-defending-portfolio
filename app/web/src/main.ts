@@ -183,6 +183,8 @@ function main(): void {
   let tourIncidents: readonly CorrelationIncident[] = [];
   /** Re-derive the tour's progress and light the diagram; a no-op until the tour and the titles exist. */
   let refreshTour: () => void = () => {};
+  // The terminal's catalogue, for the tour's command chips: the terminal mounts after the tour.
+  let inputOf: (id: string) => string | undefined = () => undefined;
 
   // The SIEM's section (ADR 0036): shown only while GET /api/correlation says available.
   const siemNav = document.querySelector<HTMLElement>(".site-nav__siem");
@@ -244,6 +246,7 @@ function main(): void {
       launcher.highlight(id, step);
       launcher.launch(id);
     },
+    commandInput: (id) => inputOf(id),
     onStepDone: () => {
       terminal.clearSuggestion();
       launcher.highlight(undefined);
@@ -321,6 +324,8 @@ function main(): void {
       }
     },
   });
+
+  inputOf = (id) => terminal.inputOf(id);
 
   let titles = new Map<string, string>();
   const launcher = mountScenarios(
