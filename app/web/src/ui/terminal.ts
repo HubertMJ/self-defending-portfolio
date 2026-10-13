@@ -579,6 +579,8 @@ export function mountTerminal(
     if (!catalogue || !session || watching) return;
     const line = raw.trim();
     if (!line) return;
+    // The visitor sent a command: the output follows it again, wherever they had scrolled to.
+    followOut = true;
     if (over()) {
       noteHint("the session is over — start another below");
       return;
