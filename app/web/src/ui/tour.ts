@@ -248,7 +248,8 @@ export function mountTour(root: HTMLElement, hooks: TourHooks): TourHandle {
   // Step 5's line: what the launcher said (a polite live region kept across redraws), and the blocked
   // reason with the cooldown, in the rail where the one-click cards may be hidden (default view).
   const launchText = h("span", {});
-  const launchCount = h("span", { class: "tour__launchcount", "aria-hidden": "true" });
+  // A timer (not live): the wait, said with the line and read on request, never every second.
+  const launchCount = h("span", { class: "tour__launchcount", role: "timer" });
   // While step 5 is current, in both views (2026-10-13 c): in Technical Mode the launcher's own line
   // is far below the rail, where a press on step 5 seemed to do nothing.
   const launchLine = h("p", { class: "tour__launch", id: "tour-launch", "aria-live": "polite" }, launchText, launchCount);

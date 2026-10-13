@@ -814,11 +814,16 @@ in both views while it is the current step (in Technical Mode a done step's line
 limit reached" for its three attack limits (the visitor's 3 runs per 10 min, the wait after a terminal
 run, everyone's 30 per hour) and "too many requests" for its request budget (120 a minute, every
 endpoint). The page keeps that reason; for the attack limits it reads `/api/limits` once and the
-visitor's own last terminal session, and says the wait after a terminal session (with how long it held
-the cluster) where that session ended within its own length of now, everyone's hourly limit where
-`global.remaining` is 0, the address's limits where `per_visitor.remaining` is 0, and the API's own
-words otherwise - always with the countdown from Retry-After. A terminal start refused with 429 says
-the same. The mock waits after a terminal run as the API does with `mock-terminal-wait=1`.
+visitor's own last terminal session, and follows the API's own order (the visitor's window, then the
+wait, then everyone's hour; the first that fails sets Retry-After). It says the wait after a terminal
+session (with about how long it held the cluster) when Retry-After is where that session's end plus
+its length puts it (15 s early to 60 s late: the API holds the slot from before `queued` to after the
+pod's cleanup) - the visitor's window reads 0 left during the wait too, so Retry-After decides; the
+address's limits when `per_visitor.remaining` is 0 otherwise; everyone's hourly limit only when the
+visitor's window has room; and the API's own words otherwise. The sentence carries no number: the wait
+is the live countdown beside it (a `role="timer"`, read with the line, never announced each second),
+and the unlock is announced once. A terminal start refused with 429 says the same, its wait a line that
+counts down under the button. The mock waits after a terminal run as the API does with `mock-terminal-wait=1`.
 
 **Tests.** End to end: "This run" is no taller than the terminal through nine commands and keeps its
 own scroll at the top, its opened details capped on a phone; the default view numbers the same seven

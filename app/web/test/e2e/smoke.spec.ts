@@ -1092,7 +1092,7 @@ test.describe("mock mode", () => {
     await expect(button).toContainText("Rate limited");
     // The copy names the limit /api/limits says is used up (the API's 429 says only "attack rate limit
     // reached"), and the countdown from Retry-After lives in the same line.
-    await expect(page.locator("#launch-status")).toContainText("Your network address can start no run right now: 1 per 10 min");
+    await expect(page.locator("#launch-status")).toContainText("Your network address has no run left right now: 1 per 10 min");
     await expect(page.locator("#launch-status")).not.toContainText("a few attacks per 10 minutes");
     await expect(page.locator("#launch-status .launch-status__countdown")).toContainText(/Unlocks in \d+:\d\d/);
     expect(problems).toEqual([]);

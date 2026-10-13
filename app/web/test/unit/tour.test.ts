@@ -283,10 +283,12 @@ describe("the tour panel never moves the page (amendment 2026-10-13)", () => {
     expect(five().querySelector(".tour__launch")?.textContent).toBe("“Shell” queued as run 0123. Both pods show here as it plays out.");
     btn.click();
     expect(h.onScenario).toHaveBeenCalledWith("shell-in-container", 5);
-    // A cooldown: its countdown beside the reason, kept out of the live words.
+    // A cooldown: the reason alone (no "Rate limited." before it), the countdown beside it as a timer:
+    // read with the line, never announced every second.
     t.setLaunch({ blocked: "Rate limited", tone: "warn", text: "Too many attacks.", countdown: "Unlocks in 0:42" });
+    expect(five().querySelector(".tour__launch > span")?.textContent).toBe("Too many attacks.");
     expect(five().querySelector(".tour__launchcount")?.textContent).toBe(" Unlocks in 0:42");
-    expect(five().querySelector(".tour__launchcount")?.getAttribute("aria-hidden")).toBe("true");
+    expect(five().querySelector(".tour__launchcount")?.getAttribute("role")).toBe("timer");
   });
 
   it("twinLines: the guarded pod answered in N ms, the unguarded one held for N s", () => {

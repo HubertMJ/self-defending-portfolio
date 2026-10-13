@@ -72,27 +72,42 @@ export interface RateContext {
 const ATTACK_LIMIT = "attack rate limit reached";
 /** The API's word for its per-visitor request budget (120 a minute, every endpoint). */
 const REQUEST_LIMIT = "too many requests";
-/** Slack for the page's view of a terminal session's length (event times; the pod's cleanup comes after). */
-const WAIT_SLACK_MS = 30_000;
+/**
+ * How far the API's Retry-After may sit from the wait the page expects after the visitor's terminal
+ * session (its end plus its length, from event times): the API's slot is held from before `queued` to
+ * after the pod's cleanup, so its wait is a little longer, never much shorter.
+ */
+const WAIT_EARLY_MS = 15_000;
+const WAIT_LATE_MS = 60_000;
 
 /**
  * Why the API refused a launch with 429, in the page's words, from what the API said: the body's
- * reason, Retry-After, and (when given) /api/limits and the visitor's own last terminal session.
- * The API sends one reason for its three attack limits, so the page names one only where its own
- * data points to it, and otherwise names the possibilities.
+ * reason, Retry-After, and (when given) /api/limits and the visitor's own last terminal session. The
+ * API checks the visitor's window, then the wait after a terminal run, then everyone's hourly limit,
+ * and answers the first that fails with one reason for all three (limits.go acquire); during the wait
+ * /api/limits reports the visitor's window as 0 left too (limits.go Status). So: the wait when
+ * Retry-After is where the visitor's last terminal session puts it; the visitor's limits when their
+ * window reads 0; everyone's hourly limit only when theirs does not; otherwise the API's own words.
+ * No time here: the live countdown beside the sentence says how long.
  */
 export function rateLimitText(reason: string, retryAfterSeconds: number, ctx: RateContext = { now: Date.now() }): string {
-  const again = `You can launch again in ${formatCountdown(retryAfterSeconds)}.`;
-  if (reason === REQUEST_LIMIT) return `Too many requests from your network address this minute (the API's request limit). ${again}`;
-  if (reason !== ATTACK_LIMIT) return `The API refused the launch${reason ? `: ${reason}` : ""}. ${again}`;
+  if (reason === REQUEST_LIMIT) return "Too many requests from your network address this minute (the API's request limit).";
+  if (reason !== ATTACK_LIMIT) return `The API refused the launch${reason ? `: ${reason}` : ""}.`;
   const t = ctx.lastTerminal;
-  if (t && t.endedAt + t.heldMs + WAIT_SLACK_MS >= ctx.now)
-    return `After a terminal session the next run waits as long as the session held the cluster (yours: ${formatCountdown(t.heldMs / 1000)}). ${again}`;
+  const expected = t ? t.endedAt + t.heldMs - ctx.now : undefined;
+  const retryMs = retryAfterSeconds * 1000;
+  if (t && expected !== undefined && retryMs >= expected - WAIT_EARLY_MS && retryMs <= expected + WAIT_LATE_MS)
+    return `After a terminal session the next run waits as long as the session held the cluster (yours: about ${formatCountdown(t.heldMs / 1000)}).`;
   const l = ctx.limits;
-  if (l && l.global.remaining === 0) return `All visitors together have used the cluster's ${l.global.limit} runs per hour. ${again}`;
-  if (l && l.per_visitor.remaining === 0)
-    return `Your network address can start no run right now: ${l.per_visitor.limit} per ${Math.round(l.per_visitor.window_s / 60)} min, and after a terminal session a wait as long as it lasted. ${again}`;
-  return `The API refused the launch: ${ATTACK_LIMIT}. ${again}`;
+  if (l && l.per_visitor.remaining === 0) return `Your network address has no run left right now: ${l.per_visitor.limit} per ${Math.round(l.per_visitor.window_s / 60)} min, and a wait after each terminal session as long as it lasted.`;
+  if (l && l.global.remaining === 0) return `All visitors together have used the cluster's ${l.global.limit} runs per hour.`;
+  return `The API refused the launch: ${ATTACK_LIMIT}.`;
+}
+
+/** rateLimitText with /api/limits read for an attack limit (the 429 does not say which); null if it does not answer. */
+export async function explainRateLimit(api: Pick<ApiClient, "limits">, reason: string, retryAfterSeconds: number, lastTerminal?: RateContext["lastTerminal"]): Promise<string> {
+  const limits = reason === ATTACK_LIMIT ? await api.limits().then((r) => (r.ok ? r.value : null)) : undefined;
+  return rateLimitText(reason, retryAfterSeconds, { now: Date.now(), limits, lastTerminal });
 }
 
 export function describeAttackResult(r: AttackResult, scenarioTitle: string, rate?: RateContext): { tone: "ok" | "warn" | "error"; text: string } {
@@ -125,9 +140,10 @@ export function mountScenarios(
   const state: LauncherState = {};
   let scenarios: Scenario[] = [];
   const buttons = new Map<string, HTMLButtonElement>();
-  // The live countdown sits inside the status line, after the sentence that explains it. It is
-  // aria-hidden: the sentence already says how long, and a screen reader must not hear every second.
-  const countdown = h("span", { class: "launch-status__countdown", "aria-hidden": "true" });
+  // The live countdown sits inside the status line, after the sentence that explains it; it is the
+  // only place the wait is said. A timer: read with the sentence when it lands and on request, never
+  // every second; the line's "You can launch another attack." announces the unlock once.
+  const countdown = h("span", { class: "launch-status__countdown", role: "timer" });
   let ticker: ReturnType<typeof setInterval> | undefined;
   const observers: ((s: LaunchState) => void)[] = [];
   let last: { tone?: LaunchState["tone"]; text?: string } = {};
@@ -184,10 +200,10 @@ export function mountScenarios(
     last = {};
     sync();
     const result = await api.attack(s.id, opts);
-    // A refusal of the attack limits: which one it was is read from /api/limits (the 429 does not say).
-    const limits = result.kind === "rate-limited" && result.reason === ATTACK_LIMIT ? await api.limits().then((r) => (r.ok ? r.value : null)) : undefined;
+    // A refusal: which limit it was is read from /api/limits and the visitor's last session.
+    const why = result.kind === "rate-limited" ? await explainRateLimit(api, result.reason, result.retryAfterSeconds, lastTerminal?.()) : undefined;
     state.pending = undefined;
-    const msg = describeAttackResult(result, s.title, { now: Date.now(), limits, lastTerminal: lastTerminal?.() });
+    const msg = why !== undefined ? { tone: "warn" as const, text: why } : describeAttackResult(result, s.title);
     if (result.kind === "accepted") {
       // Lock immediately; the stream's "queued" event confirms it a moment later.
       state.activeRun ??= { runId: result.run.run_id, scenario: s.id, since: Date.now() };

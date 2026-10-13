@@ -86,7 +86,7 @@ export function mountTerminal(
     cooldownSeconds?: () => number;
     onRateLimited?: (seconds: number) => void;
     /** A 429 starting the terminal in the page's words, from the API's reason and Retry-After (ui/scenarios.ts rateLimitText). */
-    rateText?: (reason: string, seconds: number) => string;
+    rateText?: (reason: string, seconds: number) => Promise<string>;
     /** Whether this API has the terminal, with its objectives and run timeout: told once the catalogue has loaded or failed to. */
     onAvailable?: (available: boolean, objectives: Objective[], timeoutSeconds?: number, commands?: CatalogueCommand[], idleSeconds?: number) => void;
     /** The status strip (ui/runstatus.ts): carried under the input in a session and under the start button between sessions. */
@@ -286,7 +286,9 @@ export function mountTerminal(
     }
     // "A run is in progress" says when it must end at the latest (its session or idle limit).
     const left = blocked === "A run is in progress" ? hooks.blockedEndsIn?.() : undefined;
-    const etaText = left === undefined ? "" : left > 0 ? `That run ends within ${clockText(left)} at the latest; the button unlocks then.` : "That run should end any moment now.";
+    const wait = blocked === "Rate limited" ? (hooks.cooldownSeconds?.() ?? 0) : 0;
+    const etaText =
+      wait > 0 ? `You can start again in ${clockText(wait * 1000)}.` : left === undefined ? "" : left > 0 ? `That run ends within ${clockText(left)} at the latest; the button unlocks then.` : "That run should end any moment now.";
     if (idle.eta.textContent !== etaText) idle.eta.textContent = etaText;
     idle.eta.hidden = etaText === "";
     // A cooldown ends on its own, with no event to say so: re-check every second while blocked.
@@ -307,7 +309,7 @@ export function mountTerminal(
     if (blocked !== null) {
       // A press on a blocked button says why, rather than doing nothing.
       const wait = hooks.cooldownSeconds?.() ?? 0;
-      setNote(wait > 0 ? `Rate limit reached: you can start again in ${wait} s.` : "Another run is in progress — only one runs at a time. The button unlocks when it finishes.");
+      if (wait <= 0) setNote("Another run is in progress — only one runs at a time. The button unlocks when it finishes.");
       return;
     }
     starting = true;
@@ -339,11 +341,13 @@ export function mountTerminal(
       hooks.onStarting?.(false);
       if (r.kind === "rate-limited") hooks.onRateLimited?.(r.retryAfterSeconds);
       if (r.kind === "offline" && r.message === "timed out") startTimedOutAt = Date.now();
+      // Which limit it was, as step 5 says it (ui/scenarios.ts); the wait is the live line under it.
+      const why = r.kind === "rate-limited" ? await hooks.rateText?.(r.reason, r.retryAfterSeconds) : undefined;
       syncIdle();
       // The note is set after the sync, so the cooldown it explains does not clear it.
       if (idle) idle.shown = blockedNow();
       setNote(
-        r.kind === "busy" ? "Another run is in progress — only one runs at a time. Try again when it finishes." : r.kind === "rate-limited" ? (hooks.rateText?.(r.reason, r.retryAfterSeconds) ?? `Rate limit reached: try again in ${Math.ceil(r.retryAfterSeconds)} s.`) : r.kind === "error" ? `The server refused the request (HTTP ${r.status}).` : startTimedOutAt !== undefined && ownRunLost() ? "The start request timed out. The server may have started the run anyway: if it shows up here, it is read-only, because its key never reached this page." : "The attack API is not reachable right now.",
+        r.kind === "busy" ? "Another run is in progress — only one runs at a time. Try again when it finishes." : r.kind === "rate-limited" ? (why ?? "Rate limit reached.") : r.kind === "error" ? `The server refused the request (HTTP ${r.status}).` : startTimedOutAt !== undefined && ownRunLost() ? "The start request timed out. The server may have started the run anyway: if it shows up here, it is read-only, because its key never reached this page." : "The attack API is not reachable right now.",
       );
     }
   };

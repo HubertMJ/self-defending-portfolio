@@ -475,7 +475,10 @@ describe("the start panel between sessions (review 2, item 5)", () => {
     expect(text(btn)).toContain("Rate limited");
     btn.click();
     await flush();
-    expect(text(t.root.querySelector(".term-start__blocked"))).toContain("you can start again in 3 s");
+    // The wait is a line that counts down with the button, not a number frozen in the note.
+    expect(text(t.root.querySelector(".term-start__eta"))).toBe("You can start again in 0:03.");
+    vi.advanceTimersByTime(1000);
+    expect(text(t.root.querySelector(".term-start__eta"))).toBe("You can start again in 0:02.");
     expect(t.calls.some((c) => c.path === "/api/attack/terminal")).toBe(false);
     vi.advanceTimersByTime(3100); // no event, no update() call
     expect(text(btn)).toContain("Open the terminal");

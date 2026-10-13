@@ -27,7 +27,7 @@ import { mountTerminal } from "./ui/terminal";
 import { mountLimits, setupTechMode } from "./ui/tech";
 import { mountTimeline } from "./ui/timeline";
 import { mountVerify, pollProvenance } from "./ui/verify";
-import { type RateContext, blockedReason, rateLimitText } from "./ui/scenarios";
+import { type RateContext, blockedReason, explainRateLimit } from "./ui/scenarios";
 
 const HIDDEN_DISCONNECT_MS = 60_000;
 
@@ -318,7 +318,7 @@ function main(): void {
     onRateLimited: (seconds) => {
       launcherState = { ...launcherState, cooldownUntil: Date.now() + seconds * 1000 };
     },
-    rateText: (reason, seconds) => rateLimitText(reason, seconds, { now: Date.now(), lastTerminal: lastTerminal() }),
+    rateText: (reason, seconds) => explainRateLimit(api, reason, seconds, lastTerminal()),
     onAvailable: (available, objectives, timeoutSeconds, commands, idleSeconds) => {
       if (available) stats.setObjectives(objectives);
       else degradeToOneClick();
