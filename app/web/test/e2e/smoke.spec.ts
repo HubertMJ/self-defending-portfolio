@@ -1433,6 +1433,35 @@ test.describe("technical mode", () => {
     expect(problems).toEqual([]);
   });
 
+  test("before a session the attack stage is as tall as what it holds; Skills and Projects are part of About, a link to #skills opens it", { tag: "@default" }, async ({ page, isMobile }) => {
+    await page.setViewportSize(isMobile ? { width: 390, height: 844 } : { width: 1920, height: 1080 });
+    await page.goto("/?mock=1");
+    await expect(page.locator("#terminal .term-start__btn")).toBeVisible();
+    const gap = await page.evaluate(() => {
+      const stage = document.querySelector(".attack-stage")!.getBoundingClientRect();
+      const kids = [...document.querySelectorAll(".attack-stage > *")].map((e) => e.getBoundingClientRect()).filter((r) => r.height > 0);
+      return stage.bottom - Math.max(...kids.map((r) => r.bottom));
+    });
+    // (On a phone the rows' own margins, 1 and 1.5 rem, end the stage.)
+    expect(gap).toBeLessThanOrEqual(isMobile ? 41 : 2);
+    // About folded: Skills and Projects are not on the page; their headings are not disclosures of their own.
+    await expect(page.locator("#skills")).toBeHidden();
+    await expect(page.locator("#projects")).toBeHidden();
+    await expect(page.locator("#skills .section__toggle")).toHaveCount(0);
+    await page.locator("#about .section__toggle").click();
+    await expect(page.locator("#skills-title")).toBeVisible();
+    await expect(page.locator("#projects-title")).toBeVisible();
+    // A link to #skills from a fresh page opens About.
+    await page.evaluate(() => localStorage.clear());
+    await page.goto("/?mock=1#skills");
+    await expect(page.locator("#about .section__toggle")).toHaveAttribute("aria-expanded", "true");
+    await expect(page.locator("#skills-title")).toBeInViewport();
+    // Technical Mode: their own folds, as before.
+    await page.locator("#tech-toggle").click();
+    await expect(page.locator("#skills .section__toggle")).toHaveCount(1);
+    await expect(page.locator("#projects .section__toggle")).toHaveCount(1);
+  });
+
   test("a link to #posture in the default view opens the evidence card and the section", { tag: "@default" }, async ({ page }) => {
     await page.goto("/?mock=1#posture");
     await expect(page.locator(".curious__toggle")).toHaveAttribute("aria-expanded", "true");

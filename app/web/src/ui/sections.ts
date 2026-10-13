@@ -79,6 +79,32 @@ export function mountSections(onChange?: (id: string, expanded: boolean) => void
     btn.addEventListener("click", () => set(fold, !isOpen(fold), true));
     if (stored(section.id)) set(fold, false, false);
   }
+
+  // Skills and Projects (2026-10-13 b): without Technical Mode they are part of "About me", shown
+  // whole when it is open and not at all when it is folded (styles.css); their headings are plain
+  // headings then, not disclosures of their own. In Technical Mode they fold on their own as before.
+  const grouped = [...folds.values()].filter((f) => f.section.dataset.group === "about");
+  const syncGroup = () => {
+    const merged = document.documentElement.dataset.tech !== "on";
+    for (const f of grouped) {
+      const h2 = f.section.querySelector<HTMLElement>(":scope > .wrap > .section__head > h2");
+      const label = f.section.querySelector<HTMLElement>(".section__label");
+      if (!h2 || !label) continue;
+      if (merged && f.btn.isConnected) {
+        h2.replaceChildren(label);
+        f.body.hidden = false;
+        f.section.classList.remove("section--collapsed");
+      } else if (!merged && !f.btn.isConnected) {
+        f.btn.prepend(label);
+        h2.replaceChildren(f.btn);
+        set(f, !stored(f.section.id), false);
+        f.body.hidden = !isOpen(f);
+        f.section.classList.toggle("section--collapsed", !isOpen(f));
+      }
+    }
+  };
+  syncGroup();
+  new MutationObserver(syncGroup).observe(document.documentElement, { attributes: true, attributeFilter: ["data-tech"] });
   // "Evidence for the curious" (2026-10-13 b): without Technical Mode the evidence, posture and verify
   // sections are one folded card; its button opens or closes the three at once (each keeps its fold).
   const root = document.documentElement;
@@ -112,6 +138,12 @@ export function mountSections(onChange?: (id: string, expanded: boolean) => void
   const reveal = (hash: string): HTMLElement | null => {
     const target = byHash(hash);
     const card = openCard(target);
+    // Skills or Projects inside "About me": the About fold is the one to open.
+    const about = folds.get("about");
+    if (target?.closest('main > [data-group="about"]') && document.documentElement.dataset.tech !== "on" && about && !isOpen(about)) {
+      set(about, true, true);
+      return target;
+    }
     const fold = folds.get(target?.closest<HTMLElement>("main > .section")?.id ?? "");
     if (!target || !fold || isOpen(fold)) return card ? target : null;
     set(fold, true, true);

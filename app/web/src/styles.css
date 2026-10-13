@@ -6323,3 +6323,45 @@ html.js:not([data-tech="on"])[data-curious="open"] main > [data-group="curious"]
   border-left: 2px solid var(--border);
   padding-left: clamp(0.9rem, 2vw, 1.25rem);
 }
+
+/* Before a session starts the stage is as tall as the start card: no empty band under it. Once the
+   terminal is open its row keeps the floor above, so the tour's rail never shifts. */
+.attack-stage:not(:has(.term__grid)) {
+  min-height: 0;
+}
+
+/* Skills and Projects are part of "About me" in the default view (ui/sections.ts): shown with it,
+   folded with it, read as its sub-sections - no number, no rule above, a smaller heading. */
+html.js:not([data-tech="on"]) main:is(:has(#about.section--collapsed), :has(#about[hidden])) > [data-group="about"],
+html.js:not([data-tech="on"])[data-folded~="about"] main > [data-group="about"] {
+  display: none;
+}
+
+html.js:not([data-tech="on"]) main > [data-group="about"] {
+  padding-block: 0 clamp(2rem, 5vw, 3rem);
+}
+
+html.js:not([data-tech="on"]) #about {
+  border-bottom: 0;
+}
+
+html.js:not([data-tech="on"]) main > [data-group="about"]:not(:last-of-type) {
+  border-bottom: 0;
+}
+
+html.js:not([data-tech="on"]) main > [data-group="about"] .eyebrow {
+  display: none;
+}
+
+html.js:not([data-tech="on"]) main > [data-group="about"] .section__head {
+  margin-bottom: 1rem;
+}
+
+html.js:not([data-tech="on"]) main > [data-group="about"] .section__head h2 {
+  font-size: 1.35rem;
+}
+
+/* In the default view nothing follows the stage inside the section: no margin of its own under it. */
+html.js:not([data-tech="on"]) .attack-stage {
+  margin-bottom: 0;
+}

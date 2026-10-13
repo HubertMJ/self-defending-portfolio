@@ -744,7 +744,9 @@ the rail. Below the attack: the SIEM, How it works and About; Evidence, Posture 
 folded card, "Evidence for the curious", each still its own fold inside it, and a link or a `#hash`
 to any of them opens the card and the section. The navigation is Attack it, SIEM, How it works and
 About, with Evidence in Technical Mode, whose switch says what it reveals ("Show the raw run data, the
-command palette, posture and verification"). The default view is hidden only where scripts run
+command palette, posture and verification"). Skills and Projects are part of "About me" in the
+default view (shown and folded with it, a link to either opens it); in Technical Mode they fold on
+their own. Before a session the attack stage is as tall as what it holds. The default view is hidden only where scripts run
 (`theme.ts` adds `.js` before the first paint): without JavaScript everything shows. Height budgets
 for a first visit in the default view: desktop 1440 at most 3200 px (measured 2796), phone 390 at
 most 5200 px (measured 3433).
