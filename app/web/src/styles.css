@@ -5825,7 +5825,7 @@ html:not(.js) .needs-js {
   max-width: 100%;
   padding: 0.25rem 0.6rem;
   border: 1px solid color-mix(in srgb, var(--accent) 60%, var(--border-strong));
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
   background: #0a0c10;
   color: #e6e3dc;
   font: 0.8rem/1.4 var(--font-mono);
