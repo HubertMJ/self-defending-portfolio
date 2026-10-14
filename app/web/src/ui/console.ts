@@ -20,11 +20,13 @@ import type { ApiClient, Result } from "../lib/api";
 import type { Scenario, ScenarioDetails } from "../lib/contract";
 import { type Child, h, prefersReducedMotion, replace, plClock } from "../lib/dom";
 import { type Hop, type Schedule, TIMER_END, TIMER_START, humanAction, runHops, scheduleHops, timerReading } from "../lib/pipeline";
+import type { PodEvent } from "../lib/contract";
 import { type RunView, type TimelineView, QUARANTINE_LABEL, formatDuration, guardedFalco, guardedTalon, publishedPod, ts } from "../lib/timeline";
 import { cosignVerifyCommand, isPinnedImageRef, oneLine } from "../lib/provenance";
 import { type Focus, ALL } from "../lib/scope";
 import { copyButton, extLink, sourceUrl } from "./common";
-import { heldMs, heldText, renderTwin } from "./twin";
+import { lastResponse } from "../lib/runstatus";
+import { TWIN_FOOT, heldMs, heldText, renderTwin } from "./twin";
 import { labelOf, renderVictim, victimState } from "./victim";
 
 export interface ConsoleHandle {
@@ -64,7 +66,9 @@ interface Panels {
   badge: HTMLElement;
   replayBtn: HTMLButtonElement;
   head: HTMLElement;
+  arms: HTMLElement;
   victim: HTMLElement;
+  foot: HTMLElement;
   pod: HTMLElement;
   executed: HTMLElement;
   proof: HTMLElement;
@@ -166,6 +170,81 @@ function term(argv: readonly string[]): HTMLElement {
 }
 
 
+/**
+ * One pod of a run in a few short lines (2026-10-14, the console made scannable): a badge (which pod),
+ * the outcome with its tone and time, then the key steps, each one line with its time - the pod
+ * started, Falco's rule, Talon's answer with how long it took, the pod gone or still running. A
+ * side-by-side run has two (the guarded pod, then the unguarded one); any other run one.
+ */
+export interface ArmSummary {
+  arm: "guarded" | "unguarded";
+  badge: string;
+  outcome: string;
+  tone: "good" | "warning" | "critical" | "neutral";
+  /** When the outcome happened (epoch ms), if it has a moment. */
+  at?: number;
+  steps: { at?: number; text: string }[];
+}
+
+export function armSummaries(run: RunView, now: number = Date.now()): ArmSummary[] {
+  const twin = run.armPods !== undefined;
+  const first = (pods: PodEvent[]) => (pods[0] ? ts(pods[0].at) : undefined);
+  const gone = (pods: PodEvent[]) => pods.find((p) => p.deleted);
+  const ended = run.states.finished ?? run.states.failed ?? run.states.timeout;
+  const failed = run.current === "failed" || run.current === "timeout";
+  // The pod with the response.
+  const gF = guardedFalco(run);
+  const resp = lastResponse(run);
+  const ms = resp?.afterAlertMs ?? run.timings.respondMs;
+  const gGone = gone(run.pods);
+  const gSteps: ArmSummary["steps"] = [{ at: first(run.pods) ?? run.states.started, text: "Pod started" }];
+  if (gF) gSteps.push({ at: ts(gF.at), text: `Falco: ${gF.rule}` });
+  if (resp) gSteps.push({ at: resp.at, text: `Talon ${resp.action === "terminate" ? "deleted" : "quarantined"} the pod` });
+  gSteps.push(
+    gGone
+      ? { at: ts(gGone.at), text: "Pod gone" }
+      : run.active
+        ? { text: resp?.action === "quarantine" ? "Pod still running, cut off from the network" : "Pod still running" }
+        : { at: ended, text: "Run ended" },
+  );
+  const guarded: ArmSummary = {
+    arm: "guarded",
+    badge: twin ? "guarded · sandbox" : "guarded",
+    steps: gSteps,
+    ...(resp
+      ? { outcome: `Contained${ms !== undefined ? ` ${formatDuration(ms)} after the alert` : ""}`, tone: "good" as const, at: resp.at }
+      : failed
+        ? { outcome: STATE_WORD[run.current] ?? run.current, tone: "critical" as const, at: ended }
+        : gF
+          ? { outcome: "Detected, waiting for the response", tone: "warning" as const, at: ts(gF.at) }
+          : run.active
+            ? { outcome: "Running", tone: "warning" as const }
+            : { outcome: "No detection", tone: "neutral" as const, at: ended }),
+  };
+  if (!twin) return [guarded];
+  // The unguarded twin: Falco sees it, nothing answers.
+  const uF = run.falco.find((f) => f.arm === "unguarded");
+  const uGone = gone(run.unguardedPods);
+  const held = heldMs(run, now);
+  const uSteps: ArmSummary["steps"] = [{ at: first(run.unguardedPods) ?? run.states.started, text: "Pod started" }];
+  if (uF) uSteps.push({ at: ts(uF.at), text: `Falco: ${uF.rule}` }, { text: "Nothing answered" });
+  uSteps.push(uGone ? { at: ts(uGone.at), text: "Pod deleted at the end of the run" } : run.active ? { text: "Pod still running" } : { at: ended, text: "Run ended" });
+  const over = uGone !== undefined || !run.active;
+  const unguarded: ArmSummary = {
+    arm: "unguarded",
+    badge: "unguarded · sandbox-unguarded",
+    steps: uSteps,
+    ...(uF
+      ? over
+        ? { outcome: held !== undefined ? `Held for ${formatDuration(held)}, nothing answered` : "Nothing answered", tone: "critical" as const, at: uGone ? ts(uGone.at) : ended }
+        : { outcome: held !== undefined ? `Still compromised · ${formatDuration(held)}` : "Detected, nothing answers", tone: "critical" as const, at: ts(uF.at) }
+      : run.active
+        ? { outcome: "Running", tone: "warning" as const }
+        : { outcome: "No detection", tone: "neutral" as const, at: ended }),
+  };
+  return [guarded, unguarded];
+}
+
 /** onDetails: a scenario's details as they load (their timeout bounds how long its runs may last). */
 export function mountConsole(root: HTMLElement, api: ApiClient, onDetails?: (scenario: string, details: ScenarioDetails) => void): ConsoleHandle {
   const reduced = prefersReducedMotion();
@@ -193,6 +272,7 @@ export function mountConsole(root: HTMLElement, api: ApiClient, onDetails?: (sce
         const el = panels?.victim.querySelector(".twin__held");
         const ms = r && heldMs(r, Date.now());
         if (el && ms !== undefined) replace(el, ...heldText(ms));
+        if (r && panels) patch(panels, "arms", armsKey(r), () => armsPanel(r));
       }, 1000);
     } else if (!live && twinClock !== undefined) {
       clearInterval(twinClock);
@@ -401,7 +481,9 @@ export function mountConsole(root: HTMLElement, api: ApiClient, onDetails?: (sce
       badge,
       replayBtn,
       head: h("div", { class: "console__head" }),
+      arms: h("div", { class: "console__arms" }),
       victim: h("div", { class: "console__victim" }),
+      foot: h("p", { class: "small console__foot" }),
       pod: h("section", { class: "card card--pod", "aria-labelledby": "pod-title" }),
       executed: h("section", { class: "card card--exec", "aria-labelledby": "exec-title" }),
       proof: h("section", { class: "card card--proof", "aria-labelledby": "proof-title" }),
@@ -423,10 +505,11 @@ export function mountConsole(root: HTMLElement, api: ApiClient, onDetails?: (sce
           h("div", { class: "trace__meta" }, badge, replayBtn),
         ),
       ),
-      h("div", { class: "console__grid" }, p.victim, h("div", { class: "console__side" }, p.pod, p.executed)),
+      h("div", { class: "console__grid" }, p.arms, p.victim),
       p.proof,
-      p.verify,
-      p.raw,
+      // The long parts - the pod's record, what was executed, the explanations, the ids to verify,
+      // the raw data (Technical Mode) - one press away, kept open across a redraw of the same run.
+      h("details", { class: "console__details" }, h("summary", {}, "Details"), h("div", { class: "console__more" }, h("div", { class: "console__side" }, p.pod, p.executed), p.foot, p.verify, p.raw)),
     );
     return p;
   };
@@ -461,14 +544,33 @@ export function mountConsole(root: HTMLElement, api: ApiClient, onDetails?: (sce
       h(
         "p",
         { class: "console__sub" },
-        selected && selected !== view.activeRun?.runId && view.runs[0]?.runId !== selected ? "From the history. " : run.active ? "Happening now. " : "Most recent run. ",
-        "Run ",
-        h("code", {}, run.runId),
-        publishedPod(run) ? [" · pod ", h("code", {}, publishedPod(run))] : null,
+        // The run's and the pod's ids are under Details (the pod's record, Verify it yourself).
+        selected && selected !== view.activeRun?.runId && view.runs[0]?.runId !== selected ? "From the history." : run.active ? "Happening now." : "Most recent run.",
         selected ? [" ", followButton()] : null,
       ),
       failed && run.detail ? h("p", { class: "console__fail" }, run.detail) : null,
     ];
+  };
+
+  const armsKey = (run: RunView) => {
+    const held = heldMs(run, Date.now());
+    return `${run.events.length}|${run.active}|${run.current}|${scenarios.size}|${held === undefined ? "" : Math.floor(held / 100)}`;
+  };
+  const armsPanel = (run: RunView): Kids => {
+    const title = scenarios.get(run.scenario)?.title ?? run.scenario;
+    return armSummaries(run).map((a) =>
+      h(
+        "article",
+        { class: `armsum armsum--${a.arm}`, "aria-label": `${title}, ${a.badge}` },
+        h(
+          "header",
+          { class: "armsum__head" },
+          h("p", { class: "armsum__title" }, h("span", { class: "armsum__name" }, title), h("span", { class: "armsum__badge" }, a.badge)),
+          h("p", { class: "armsum__outcome" }, h("span", { class: `chip chip--${a.tone}` }, a.outcome), a.at !== undefined ? h("time", { class: "armsum__at" }, plClock(a.at)) : null),
+        ),
+        h("ol", { class: "armsum__steps", "aria-label": "Key steps" }, a.steps.map((st) => h("li", {}, h("time", {}, st.at !== undefined ? clockMs(st.at) : ""), h("span", {}, st.text)))),
+      ),
+    );
   };
 
   const followButton = () => {
@@ -744,7 +846,9 @@ export function mountConsole(root: HTMLElement, api: ApiClient, onDetails?: (sce
     patch(p, "head", `${run.current}|${run.active}|${own.has(run.runId) || focus.own.has(run.runId)}|${publishedPod(run)}|${selected}|${scenarios.size}|${view.activeRun?.runId}`, () => headPanel(run));
     const vKey = run.victim.map((v) => `${v.arm ?? ""}${v.status}${v.checksum}${v.until}`).join(",");
     const twin = run.armPods !== undefined;
-    patch(p, "victim", `${twin ? `twin|${run.unguardedPods.length}|` : ""}${vKey}|${run.active}|${run.pod}|${run.pods[run.pods.length - 1]?.phase}`, () => (twin ? renderTwin(run) : renderVictim(run, run.active && !own.has(run.runId))));
+    patch(p, "victim", `${twin ? `twin|${run.unguardedPods.length}|` : ""}${vKey}|${run.active}|${run.pod}|${run.pods[run.pods.length - 1]?.phase}`, () => (twin ? renderTwin(run, Date.now(), false) : renderVictim(run, run.active && !own.has(run.runId))));
+    patch(p, "arms", armsKey(run), () => armsPanel(run));
+    patch(p, "foot", String(twin), () => (twin ? [TWIN_FOOT] : null));
     patch(p, "pod", `${run.pods.length}|${publishedPod(run)}`, () => podPanel(run));
     patch(p, "executed", `${dKey}|${scenarios.size}`, () => executedPanel(run));
     patch(p, "proof", `${run.pods.length}|${vKey}|${run.flows.length}|${run.talon.length}|${scenarios.size}`, () => proofPanel(run));

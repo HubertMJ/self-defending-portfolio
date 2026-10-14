@@ -1238,6 +1238,7 @@ test.describe("live run console (mock)", () => {
     await expect(consoleEl.locator(".card--exec .steps > li").first()).toContainText("mv .index index.html &&");
     await expect(consoleEl.locator(".card--exec .steps > li").nth(1)).toContainText("Attack, in an interactive terminal");
     await expect(consoleEl.locator(".card--exec a").first()).toHaveAttribute("href", /^https:\/\/github\.com\/HubertMJ\/self-defending-portfolio\/blob\/[0-9a-f]{7,40}\//);
+    await consoleEl.locator(".console__details > summary").click();
     await consoleEl.getByText("Verify it yourself").click();
     await expect(consoleEl.locator(".verify")).toContainText("cosign verify ghcr.io/hubertmj/self-defending-portfolio/scenario@sha256:");
     // The one identity every image is verified against (lib/provenance.ts, scripts/verify-image.sh; ADR 0035).
@@ -1564,6 +1565,36 @@ test.describe("unguarded twin (mock, ADR 0033)", () => {
   });
 });
 
+test.describe("the live run console reads at a glance (mock, 2026-10-14)", () => {
+  test("Technical Mode: each pod a headline and its key steps one line each; the record, the explanations, the ids and the raw data behind Details", { tag: "@default" }, async ({ page }) => {
+    const problems = guardConsole(page);
+    await page.goto("/?mock=1&mock-speed=0.3");
+    await page.locator("#tech-toggle").click();
+    await page.locator('.scenario[data-scenario="shell-in-container"] .btn--attack').click();
+    const c = page.locator("#console");
+    const arms = c.locator(".armsum");
+    await expect(arms).toHaveCount(2, { timeout: 8_000 });
+    await expect(arms.first().locator(".armsum__badge")).toHaveText("guarded · sandbox");
+    await expect(arms.nth(1).locator(".armsum__badge")).toHaveText("unguarded · sandbox-unguarded");
+    await expect(arms.first().locator(".armsum__name")).toHaveText("Shell in a container");
+    await expect(arms.first().locator(".chip")).toHaveText(/^Contained [\d.]+ (ms|s) after the alert$/, { timeout: 15_000 });
+    await expect(arms.first().locator(".armsum__steps li")).toHaveText([/Pod started$/, /Falco: Terminal shell in container$/, /Talon deleted the pod$/, /Pod gone$/]);
+    await expect(arms.nth(1).locator(".armsum__steps li").nth(2)).toHaveText("Nothing answered");
+    // Each step is one line at this width.
+    for (const li of await c.locator(".armsum__steps li span").all()) expect(await li.evaluate((e) => e.getClientRects().length)).toBe(1);
+    // The long parts are folded: the pod's record, what was executed, the explanation, the ids, the raw data.
+    const details = c.locator(".console__details");
+    await expect(details).not.toHaveAttribute("open", "");
+    for (const sel of [".card--pod", ".card--exec", ".console__foot", ".verify", ".console__raw"]) await expect(c.locator(sel)).toBeHidden();
+    await expect(c.locator(".console__sub")).not.toContainText("Run ");
+    await details.locator("> summary").click();
+    for (const sel of [".card--pod", ".card--exec", ".console__foot", ".verify", ".console__raw"]) await expect(c.locator(sel)).toBeVisible();
+    await expect(c.locator(".console__foot")).toContainText("Same image, same policies, same attack");
+    await noHorizontalScroll(page);
+    expect(problems).toEqual([]);
+  });
+});
+
 test.describe("narrow screens", () => {
   test("no horizontal scroll at 360 px with a finished run, Technical Mode and every panel open", { tag: "@default" }, async ({ page }) => {
     await page.setViewportSize({ width: 360, height: 780 });
@@ -1571,6 +1602,7 @@ test.describe("narrow screens", () => {
     await page.locator("#tech-toggle").click();
     await page.locator('.scenario[data-scenario="network-tool"] .scenario__alt').click();
     await expect(page.locator("#console .browser")).toHaveAttribute("data-status", "unreachable");
+    await page.locator("#console .console__details > summary").click();
     await page.locator("#console .verify > summary").click();
     await page.locator("#console .rawlog > summary").click();
     await noHorizontalScroll(page);
@@ -1588,6 +1620,8 @@ test.describe("technical mode", () => {
     await toggle.click();
     await expect(toggle).toHaveAttribute("aria-pressed", "true");
     await expect(page.locator("html")).toHaveAttribute("data-tech", "on");
+    // The raw data is behind the console's Details (2026-10-14), in Technical Mode only.
+    await page.locator("#console .console__details > summary").click();
     await expect(page.locator("#console .console__raw")).toBeVisible();
     await expect(page.locator("#console .console__raw")).toContainText("Falco output fields");
     await expect(page.locator("#console .console__raw")).toContainText("kubernetes:terminate");
@@ -2062,7 +2096,8 @@ test.describe("a side-by-side run, contained with the twin still held (serve.mjs
     await expect(attack).toContainText(pod);
     await expect(attack).not.toContainText("not a sandbox pod");
     await expect(page.locator("#console .twin")).toBeVisible();
-    await expect(page.locator("#console .console__sub")).toContainText(`pod ${pod}`);
+    // The pod's name is in its record under Details; the headline says what happened to it.
+    await expect(page.locator("#console .armsum")).toHaveCount(2);
     await expect(page.locator("#console .card--pod dd").first()).toHaveText(pod);
     await noHorizontalScroll(page);
     expect(problems).toEqual([]);
@@ -2469,7 +2504,7 @@ test.describe("the visitor's run, told back (mock, ADR 0035 amendment: UX stage 
       await expect(nav.locator("a:visible")).toHaveText(["Attack it", "SIEM", "How", "Evidence", "About"], { useInnerText: true });
       await page.locator("#terminal").getByRole("button", { name: /Open the terminal/ }).click();
       await expect(page.locator("#term-input")).toBeEnabled({ timeout: 10_000 });
-      for (const d of await page.locator("#console details.verify").all()) await d.evaluate((e) => ((e as HTMLDetailsElement).open = true));
+      for (const d of await page.locator("#console details.verify, #console details.console__details").all()) await d.evaluate((e) => ((e as HTMLDetailsElement).open = true));
       await noHorizontalScroll(page);
       await nothingPastEdge(page, "#terminal");
       // The console's URL bar ends in an ellipsis inside its box; what must fit is the verify body.

@@ -111,3 +111,30 @@ describe("the twin's clock is stopped on every path (final review, item 7)", () 
     }
   });
 });
+
+describe("the console's pods in a few lines (2026-10-14)", () => {
+  it("a side-by-side run: the guarded pod quarantined after the alert, the unguarded one held then deleted, each step one line", async () => {
+    const { armSummaries } = await import("../../src/ui/console");
+    const run = buildTimeline(compareRun(), T0 + 20_000).runs[0];
+    const [g, u] = armSummaries(run, T0 + 20_000);
+    expect(g.badge).toBe("guarded · sandbox");
+    expect(g.tone).toBe("good");
+    expect(g.outcome).toMatch(/^Contained( [\d.]+ (ms|s) after the alert)?$/);
+    expect(g.steps.map((s) => s.text)).toEqual(["Pod started", "Talon quarantined the pod", "Run ended"]);
+    expect(u.badge).toBe("unguarded · sandbox-unguarded");
+    expect(u.tone).toBe("critical");
+    expect(u.outcome).toBe("Held for 13 s, nothing answered");
+    expect(u.steps.map((s) => s.text)).toEqual(["Pod started", "Falco: SDP network tool in sandbox", "Nothing answered", "Pod deleted at the end of the run"]);
+    for (const s of [...g.steps, ...u.steps]) expect(s.text.length).toBeLessThan(60);
+  });
+
+  it("while the twin is held: the unguarded pod still compromised and still running; a plain run has one summary", async () => {
+    const { armSummaries } = await import("../../src/ui/console");
+    const run = buildTimeline(compareRun({ held: true }), T0 + 5_210).runs[0];
+    const [, u] = armSummaries(run, T0 + 5_210);
+    expect(u.outcome).toBe("Still compromised · 3.0 s");
+    expect(u.steps[u.steps.length - 1]).toEqual({ text: "Pod still running" });
+    const plain = buildTimeline(compareRun().map((e) => (e.type === "run" ? ({ ...e, data: { ...e.data, pods: undefined } } as StreamEvent) : e)), T0 + 20_000).runs[0];
+    expect(armSummaries(plain, T0 + 20_000).map((a) => a.badge)).toEqual(["guarded"]);
+  });
+});

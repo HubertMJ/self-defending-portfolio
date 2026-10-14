@@ -11,8 +11,11 @@ import { h } from "../lib/dom";
 import { type RunView, formatDuration, victimByArm } from "../lib/timeline";
 import { renderVictim } from "./victim";
 
-/** A compare run has `armPods`; this renders its two shop windows and the contrast between them. */
-export function renderTwin(run: RunView, now: number = Date.now()): HTMLElement {
+/** The twin's one-paragraph explanation (the console keeps it behind its Details). */
+export const TWIN_FOOT = "Same image, same policies, same attack — the only difference is whether a response rule matches the namespace. Everything that prevents (non-root, read-only, no token, no capabilities) is in force on both; only the automatic response is missing on the right.";
+
+/** A compare run has `armPods`; this renders its two shop windows and the contrast between them (`foot`: the explanation under them). */
+export function renderTwin(run: RunView, now: number = Date.now(), foot = true): HTMLElement {
   const guardedSpan = victimByArm(run, "guarded");
   const unguardedSpan = victimByArm(run, "unguarded");
   const guardedFalco = run.falco.some((f) => f.arm === "guarded" || f.arm === undefined);
@@ -29,7 +32,7 @@ export function renderTwin(run: RunView, now: number = Date.now()): HTMLElement 
       arm("Guarded · sandbox", "Falco detects and Talon answers.", guardedSpan ? renderVictimFor(run, "guarded") : waiting(), guardedFalco, run.talon.length > 0, undefined),
       arm("Unguarded · sandbox-unguarded", "Falco detects. Nothing answers.", unguardedSpan ? renderVictimFor(run, "unguarded") : waiting(), unguardedFalco, false, held),
     ),
-    h("p", { class: "twin__foot small" }, "Same image, same policies, same attack — the only difference is whether a response rule matches the namespace. Everything that prevents (non-root, read-only, no token, no capabilities) is in force on both; only the automatic response is missing on the right."),
+    foot ? h("p", { class: "twin__foot small" }, TWIN_FOOT) : null,
   );
 }
 

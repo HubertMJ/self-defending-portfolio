@@ -715,10 +715,12 @@ describe("a side-by-side run on the card, in the history and in the console (ADR
       return root;
     };
     const twin = consoleOf();
-    expect(twin.querySelector(".console__sub")?.textContent).toContain(`pod ${POD}`);
+    // The headline names no ids (2026-10-14): the pod is named in its record and Verify, under Details.
+    expect(twin.querySelector(".console__sub")?.textContent).not.toContain(POD);
     expect(twin.querySelector(".verify")?.textContent).toContain(POD);
     const other = consoleOf("portfolio-api");
-    expect(other.querySelector(".console__sub")?.textContent).not.toContain(POD);
+    expect(other.querySelector(".console__head")?.textContent).not.toContain(POD);
+    expect(other.querySelector(".console__arms")?.textContent).not.toContain(POD);
     expect(other.querySelector(".verify")?.textContent).not.toContain(POD);
     expect(twin.querySelector(".card--pod")?.textContent).toContain(POD);
     expect(other.querySelector(".card--pod")?.textContent).not.toContain(POD);

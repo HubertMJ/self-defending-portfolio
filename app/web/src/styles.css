@@ -1984,10 +1984,145 @@ html:not([data-tech="on"]) .tech-only {
 }
 
 @media (min-width: 900px) {
+  /* The pods' key steps beside their windows (2026-10-14): the record itself is under Details. */
   .console__grid {
-    grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
+    grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);
     align-items: start;
   }
+}
+
+/* One pod in a few lines: which pod, how it ended and when, then its key steps, one short line each. */
+.console__arms {
+  display: grid;
+  gap: 1rem;
+  min-width: 0;
+}
+
+.armsum {
+  min-width: 0;
+  padding: 0.9rem 1rem;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--respond);
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+.armsum--unguarded {
+  border-left-color: var(--critical);
+}
+
+.armsum__head {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.armsum__title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.25rem 0.6rem;
+  margin: 0;
+}
+
+.armsum__name {
+  font-weight: 650;
+}
+
+.armsum__badge {
+  font: 600 0.72rem/1.4 var(--font-mono);
+  color: var(--text-faint);
+}
+
+.armsum__outcome {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 0.6rem;
+  margin: 0;
+}
+
+.armsum__outcome .chip {
+  white-space: normal;
+}
+
+.armsum__at {
+  font: 0.78rem/1.4 var(--font-mono);
+  color: var(--text-faint);
+}
+
+/* A compact vertical timeline: a rule down the left, a dot per step. */
+.armsum__steps {
+  display: grid;
+  gap: 0.3rem;
+  margin: 0.75rem 0 0;
+  padding: 0 0 0 0.9rem;
+  border-left: 1px solid var(--border);
+  list-style: none;
+  font-size: 0.85rem;
+}
+
+.armsum__steps li {
+  position: relative;
+  display: grid;
+  grid-template-columns: 9.5rem minmax(0, 1fr);
+  gap: 0.6rem;
+}
+
+.armsum__steps li::before {
+  content: "";
+  position: absolute;
+  left: calc(-0.9rem - 4px);
+  top: 0.45em;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-faint);
+}
+
+.armsum__steps time {
+  font: 0.75rem/1.6 var(--font-mono);
+  color: var(--text-faint);
+  white-space: nowrap;
+}
+
+@media (max-width: 480px) {
+  .armsum__steps li {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
+  }
+}
+
+/* Under Details: the pod's record, what was executed, the explanations, the ids, the raw data. */
+.console__details {
+  margin-top: 1.25rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+.console__details > summary {
+  padding: 0.75rem 1rem;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.console__more {
+  display: grid;
+  gap: 1.25rem;
+  padding: 0 1rem 1rem;
+  min-width: 0;
+}
+
+@media (min-width: 900px) {
+  .console__more > .console__side {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    align-items: start;
+  }
+}
+
+.console__foot {
+  margin: 0;
+  color: var(--text-muted);
 }
 
 @media (min-width: 900px) {
