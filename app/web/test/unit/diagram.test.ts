@@ -8,7 +8,7 @@ import { describe, expect, it } from "vitest";
 import { buildTimeline } from "../../src/lib/timeline";
 import { MODEL, ROLE_LEGEND, nodesOf, validateModel } from "../../src/diagram/model";
 import { FULL_MODEL } from "../../src/diagram/model-docs";
-import { TRAFFIC, layout, trafficCss } from "../../src/diagram/layout";
+import { PAD_X, TRAFFIC, fitReport, layout, textWidth, trafficCss, wrapSub } from "../../src/diagram/layout";
 import { serialise } from "../../src/diagram/tree";
 import { renderDocsSvg } from "../../src/diagram/docs";
 import { describeStates, mountDiagram, pathOf } from "../../src/ui/diagram";
@@ -51,7 +51,7 @@ describe("diagram model", () => {
     for (const id of ["visitor", "cloudflare", "cloudflared", "gateway", "site"]) expect(of(id)).toBe("entry");
     expect([of("pod"), of("falco"), of("talon"), of("kube-apiserver"), of("siem"), of("twin")]).toEqual(["attack", "detect", "respond", "respond", "record", "neutral"]);
     const hero = serialise(layout("hero", { interactive: true }));
-    for (const n of MODEL.nodes) expect(hero).toMatch(new RegExp(`class="dg-node dg-node--\\w+ dg-role--${n.role}"[^>]*data-node="${n.id}"`));
+    for (const n of MODEL.nodes) expect(hero).toMatch(new RegExp(`class="dg-node dg-node--\\w+ dg-role--${n.role}(?: dg-node--sub\\d)?"[^>]*data-node="${n.id}"`));
     const html = readFileSync(join(process.cwd(), "src", "index.html"), "utf8");
     for (const { role, word } of ROLE_LEGEND) expect(html).toMatch(new RegExp(`dg-legend__item dg-role--${role}"[^>]*>(?:<[^>]+>)*${word}<`));
   });
@@ -99,8 +99,8 @@ describe("diagram layout", () => {
     // The tunnel: one line, a head at each end; every other line one head.
     const tunnel = hero.match(/data-edge="cloudflare-cloudflared"[^]*?<\/g>/)?.[0] ?? "";
     expect((tunnel.match(/marker-(start|end)=/g) ?? []).length).toBe(2);
-    // Cloudflare's box ends at x=184, cloudflared's starts at 238: the line runs 191 to 231.
-    expect(tunnel).toMatch(/class="dg-line" d="M191,\d+ L231,\d+"/);
+    // Cloudflare's box ends at x=200, cloudflared's starts at 254: the line runs 207 to 247.
+    expect(tunnel).toMatch(/class="dg-line" d="M207,[\d.]+ L247,[\d.]+"/);
   });
 
   it("interactive nodes are focusable buttons inside a role=group svg; the docs view is one role=img", () => {
@@ -248,5 +248,35 @@ describe("mountDiagram: nodes open a caption by click and keyboard, the SIEM sta
     d.setSiem(false);
     expect(siem.dataset.state).toBe("idle");
     expect(siemEdge.dataset.lit).toBe("false");
+  });
+});
+
+describe("every word fits its box (2026-10-14)", () => {
+  it("each node's label and sublabel lines, estimated, keep PAD_X clear on both sides; each zone's title and subtitle fit inside it; zones hold their nodes 12 units clear (page and docs models, every view)", () => {
+    const cases: [string, ReturnType<typeof fitReport>][] = [
+      ["hero", fitReport("hero")],
+      ["narrow", fitReport("narrow")],
+      ["full", fitReport("full", FULL_MODEL, { argocd: "26 Applications" })],
+    ];
+    for (const [view, report] of cases) {
+      for (const { box, texts } of report) {
+        for (const tx of texts) {
+          const where = `${view}: "${tx.text}" in a ${box.w} wide box`;
+          if (tx.kind === "label" || tx.kind === "sub") {
+            expect(tx.w + 2 * PAD_X, where).toBeLessThanOrEqual(box.w);
+          } else {
+            expect(tx.x, where).toBeGreaterThanOrEqual(box.x + 12);
+            expect(tx.x + tx.w, where).toBeLessThanOrEqual(box.x + box.w - 12);
+          }
+        }
+      }
+    }
+    // A long sublabel wraps at its separators instead of spilling: the gateway's, the sandbox pod's.
+    expect(wrapSub("gateway · TLS from Let's Encrypt", 150)).toEqual(["gateway ·", "TLS from Let's Encrypt"]);
+    expect(textWidth("RBAC: sandbox pods only", "sub")).toBeGreaterThan(textWidth("falco", "sub"));
+  });
+
+  it("the drawing starts inside its viewBox: no zone or node at a negative or edge coordinate", () => {
+    for (const { box } of [...fitReport("hero"), ...fitReport("full", FULL_MODEL)]) expect(box.x).toBeGreaterThanOrEqual(4);
   });
 });

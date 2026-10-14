@@ -27,10 +27,115 @@ interface Metrics {
   zonePad: number;
 }
 
+/** The smallest node box and the grid's gaps; a box widens or heightens to fit its words (fitted). */
 const METRICS: Record<"hero" | "full", Metrics> = {
-  hero: { cw: 170, ch: 56, gx: 54, gy: 50, pad: 14, zoneHead: 26, zonePad: 14 },
-  full: { cw: 176, ch: 60, gx: 48, gy: 44, pad: 16, zoneHead: 28, zonePad: 14 },
+  hero: { cw: 170, ch: 56, gx: 54, gy: 50, pad: 18, zoneHead: 26, zonePad: 14 },
+  full: { cw: 176, ch: 60, gx: 48, gy: 44, pad: 20, zoneHead: 28, zonePad: 14 },
 };
+
+// ---------- text that fits (2026-10-14) ----------
+//
+// A box is sized from its words, not the other way round: each text's width is estimated per
+// character for the larger of the page's font (styles.css) and the docs file's (docs.ts), with a
+// safety margin, and every text keeps PAD_X units clear of its box on each side. A sublabel too long
+// for the smallest box wraps at its " · " separators; a zone's subtitle that does not fit beside its
+// title goes under it. Deterministic: the same model always draws the same boxes.
+
+/** Clear space between a node's text and its box, each side; around a zone's contents (zonePad, 14) at least 12. */
+export const PAD_X = 10;
+const SAFETY = 1.08;
+/** Line pitch of a node's words. */
+const LINE = 15;
+
+type TextKind = "label" | "sub" | "zonetitle" | "zonesub";
+/** Font size in user units (the larger of page and docs) and whether the face is monospace; the page's zone title is uppercase mono with letter-spacing, the docs file's sans: 8.1 per character covers both. */
+const FONTS: Record<TextKind, { size: number; mono: boolean; perChar?: number }> = {
+  label: { size: 13.44, mono: false },
+  sub: { size: 10.5, mono: true },
+  zonetitle: { size: 13, mono: false, perChar: 8.1 },
+  zonesub: { size: 11, mono: true },
+};
+
+/** One character's advance in ems for a bold sans face (generous: system-ui varies). */
+function sansEm(c: string): number {
+  if (/[ijlI.,:;'|!]/.test(c)) return 0.32;
+  if (/[ frt()\[\]\-]/.test(c)) return 0.42;
+  if (/[mwMW@]/.test(c)) return 0.95;
+  if (/[A-Z+×]/.test(c)) return 0.74;
+  return 0.6;
+}
+
+/** The estimated width of `s` drawn as `kind`, in user units, safety margin included. */
+export function textWidth(s: string, kind: TextKind): number {
+  const f = FONTS[kind];
+  const raw = f.perChar ? s.length * f.perChar : f.mono ? s.length * 0.62 * f.size : [...s].reduce((w, c) => w + sansEm(c) * f.size, 0);
+  return Math.ceil(raw * SAFETY);
+}
+
+/** A sublabel as lines no wider than `max`: whole " · " parts, greedily; one part longer than `max` stays whole (its box widens). */
+export function wrapSub(sub: string, max: number): string[] {
+  if (textWidth(sub, "sub") <= max) return [sub];
+  const lines: string[] = [];
+  for (const part of sub.split(" · ")) {
+    const last = lines[lines.length - 1];
+    if (last !== undefined && textWidth(`${last} · ${part}`, "sub") <= max) lines[lines.length - 1] = `${last} · ${part}`;
+    else lines.push(part);
+  }
+  // A separator ends the line it breaks, so the reader sees the list goes on.
+  return lines.map((l, i) => (i < lines.length - 1 ? `${l} ·` : l));
+}
+
+/** Each node's sublabel lines and the box size that holds every node's words with PAD_X each side. */
+function fitted(nodes: DiagramNode[], cw: number, ch: number, notes?: Record<string, string>): { cw: number; ch: number; subs: Map<string, string[]> } {
+  // The labels never wrap: the box is at least as wide as the widest; the sublabels wrap within it,
+  // and a box widened by one sublabel lets the others wrap less (until nothing changes).
+  let w = Math.max(cw, ...nodes.map((n) => textWidth(n.label, "label") + 2 * PAD_X));
+  let subs = new Map<string, string[]>();
+  for (let i = 0; i < 4; i++) {
+    subs = new Map(nodes.map((n) => [n.id, wrapSub(n.sub, w - 2 * PAD_X)]));
+    const next = Math.max(w, ...nodes.flatMap((n) => (subs.get(n.id) as string[]).map((l) => textWidth(l, "sub") + 2 * PAD_X)));
+    if (next === w) break;
+    w = next;
+  }
+  let lines = 2;
+  for (const n of nodes) {
+    const sl = subs.get(n.id) as string[];
+    const note = notes?.[n.id];
+    w = Math.max(w, textWidth(n.label, "label") + 2 * PAD_X, ...sl.map((l) => textWidth(l, "sub") + 2 * PAD_X), note ? textWidth(note, "sub") + 2 * PAD_X : 0);
+    lines = Math.max(lines, 1 + sl.length + (note ? 1 : 0));
+  }
+  // The block: a label's ascent (10), the line pitch between baselines, the last line's descent (3); PAD_X above and below.
+  return { cw: Math.ceil(w), ch: Math.max(ch, 10 + (lines - 1) * LINE + 3 + 2 * PAD_X), subs };
+}
+
+/** For the tests: every node's and zone's words with the box that holds them. */
+export function fitReport(view: "hero" | "full" | "narrow", model: DiagramModel = MODEL, notes?: Record<string, string>): { box: Box; texts: { kind: TextKind; text: string; x: number; w: number }[] }[] {
+  const out: { box: Box; texts: { kind: TextKind; text: string; x: number; w: number }[] }[] = [];
+  const g = view === "narrow" ? narrowGeometry(model) : gridGeometry(view, model, notes);
+  for (const n of g.nodes) {
+    const b = g.boxes.get(n.id) as Box;
+    const lines = [n.label, ...(g.subs.get(n.id) as string[]), ...(notes?.[n.id] ? [notes[n.id]] : [])];
+    // Centred: each text starts half its width left of the box's middle.
+    out.push({ box: b, texts: lines.map((text, i) => ({ kind: i === 0 ? "label" : "sub", text, x: b.x + b.w / 2 - textWidth(text, i === 0 ? "label" : "sub") / 2, w: textWidth(text, i === 0 ? "label" : "sub") })) });
+  }
+  if (view !== "narrow") {
+    const zg = g as ReturnType<typeof gridGeometry>;
+    for (const [z, b] of zg.zoneBoxes) {
+      const zt = zoneText(z, b, zg.m);
+      out.push({ box: b, texts: [{ kind: "zonetitle", text: z.title, x: zt.title[0], w: textWidth(z.title, "zonetitle") }, ...(z.sub && zt.sub ? [{ kind: "zonesub" as const, text: z.sub, x: zt.sub[0], w: textWidth(z.sub, "zonesub") }] : [])] });
+    }
+  }
+  return out;
+}
+
+/** Where a zone's title and subtitle sit: the subtitle beside the title when it fits, else under it (the zone grows up by a line for it). */
+function zoneText(z: DiagramZone, b: Box, m: Metrics): { title: Pt; sub?: Pt } {
+  const tx = b.x + m.zonePad;
+  if (!z.sub) return { title: [tx, b.y + 17] };
+  const beside = tx + textWidth(z.title, "zonetitle") + 10;
+  if (beside + textWidth(z.sub, "zonesub") <= right(b) - m.zonePad) return { title: [tx, b.y + 17], sub: [beside, b.y + 17] };
+  return { title: [tx, b.y + 17], sub: [tx, b.y + 32] };
+}
 
 const cx = (b: Box) => b.x + b.w / 2;
 const cy = (b: Box) => b.y + b.h / 2;
@@ -61,9 +166,10 @@ const GAP = 7;
  * sublabel is shown only in Technical Mode, and styles.css moves a lone label down by 7.5 units
  * (half the block's second line) so it sits in the middle then too.
  */
-function nodeTree(n: DiagramNode, b: Box, opts: LayoutOptions): Tree {
+function nodeTree(n: DiagramNode, b: Box, opts: LayoutOptions, subs: string[] = [n.sub]): Tree {
   const id = `${opts.idPrefix ?? "dg"}-${n.id}`;
-  const attrs: Record<string, string | number> = { class: `dg-node dg-node--${n.tone} dg-role--${n.role}`, id, "data-node": n.id, "data-state": "idle", transform: `translate(${b.x} ${b.y})` };
+  // A wrapped sublabel: styles.css moves a lone label down by half the block's extra lines.
+  const attrs: Record<string, string | number> = { class: `dg-node dg-node--${n.tone} dg-role--${n.role}${subs.length > 1 ? ` dg-node--sub${subs.length}` : ""}`, id, "data-node": n.id, "data-state": "idle", transform: `translate(${b.x} ${b.y})` };
   if (opts.interactive) {
     attrs.tabindex = 0;
     attrs.role = "button";
@@ -71,26 +177,27 @@ function nodeTree(n: DiagramNode, b: Box, opts: LayoutOptions): Tree {
     attrs["aria-expanded"] = "false";
   }
   const note = opts.notes?.[n.id];
-  // Baselines: two lines centred as a block (three with a note), 15 units apart.
-  const mid = b.h / 2;
-  const first = note ? mid - 10.5 : mid - 3;
+  // Baselines: the label, the sublabel's lines and the note centred as a block, LINE units apart.
+  const lines = 1 + subs.length + (note ? 1 : 0);
+  const first = b.h / 2 - ((lines - 1) * LINE) / 2 + 4.5;
   return t(
     "g",
     attrs,
     t("rect", { class: "dg-box", width: b.w, height: b.h, rx: 8 }),
     t("text", { class: "dg-label", x: b.w / 2, y: first, "text-anchor": "middle" }, n.label),
-    t("text", { class: "dg-sub", x: b.w / 2, y: first + 15, "text-anchor": "middle" }, n.sub),
-    note ? t("text", { class: "dg-sub dg-note", x: b.w / 2, y: first + 30, "text-anchor": "middle" }, note) : null,
+    ...subs.map((l, i) => t("text", { class: "dg-sub", x: b.w / 2, y: first + LINE * (i + 1), "text-anchor": "middle" }, l)),
+    note ? t("text", { class: "dg-sub dg-note", x: b.w / 2, y: first + LINE * (subs.length + 1), "text-anchor": "middle" }, note) : null,
   );
 }
 
 function zoneTree(z: DiagramZone, b: Box, m: Metrics): Tree {
+  const at = zoneText(z, b, m);
   return t(
     "g",
     { class: "dg-zone", "data-zone": z.id },
     t("rect", { class: "dg-zonebox", x: b.x, y: b.y, width: b.w, height: b.h, rx: 10 }),
-    t("text", { class: "dg-zonetitle", x: b.x + m.zonePad, y: b.y + 17 }, z.title),
-    z.sub ? t("text", { class: "dg-zonesub", x: b.x + m.zonePad + z.title.length * 7.2 + 10, y: b.y + 17 }, z.sub) : null,
+    t("text", { class: "dg-zonetitle", x: at.title[0], y: at.title[1] }, z.title),
+    at.sub ? t("text", { class: "dg-zonesub", x: at.sub[0], y: at.sub[1] }, z.sub) : null,
   );
 }
 
@@ -287,24 +394,26 @@ export function trafficCss(model: DiagramModel = MODEL): string {
 }
 
 /** The grid views' geometry: boxes by node id, zone boxes, the drawn edges and their routes. */
-function gridGeometry(view: "hero" | "full", model: DiagramModel) {
-  const m = METRICS[view];
+function gridGeometry(view: "hero" | "full", model: DiagramModel, notes?: Record<string, string>) {
+  const nodes = nodesOf(view, model);
+  const fit = fitted(nodes, METRICS[view].cw, METRICS[view].ch, notes);
+  const m: Metrics = { ...METRICS[view], cw: fit.cw, ch: fit.ch };
   const px = m.cw + m.gx;
   const py = m.ch + m.gy;
   const top = m.pad + m.zoneHead;
   const cell = ([c, r]: [number, number]): Box => ({ x: m.pad + c * px, y: top + r * py, w: m.cw, h: m.ch });
-  const nodes = nodesOf(view, model);
   const boxes = new Map(nodes.map((n) => [n.id, cell(n.at[view] as [number, number])]));
   const zones = model.zones.filter((z) => z.at[view]);
   const zoneBox = (z: DiagramZone): Box => {
     const [c, r, cs, rs] = z.at[view] as [number, number, number, number];
     const b = cell([c, r]);
-    return { x: b.x - m.zonePad, y: b.y - m.zonePad - m.zoneHead, w: cs * px - m.gx + 2 * m.zonePad, h: rs * py - m.gy + 2 * m.zonePad + m.zoneHead };
+    const box = { x: b.x - m.zonePad, y: b.y - m.zonePad - m.zoneHead, w: cs * px - m.gx + 2 * m.zonePad, h: rs * py - m.gy + 2 * m.zonePad + m.zoneHead };
+    return zoneText(z, box, m).sub?.[1] === box.y + 32 ? { ...box, y: box.y - 15, h: box.h + 15 } : box;
   };
   const zoneBoxes = zones.map((z) => [z, zoneBox(z)] as const);
   const edges = model.edges.filter((e) => boxes.has(e.from) && boxes.has(e.to) && (view === "full" || e.detail === "hero") && (!e.views || e.views.includes(view)));
   const routes = new Map(edges.map((e) => [`${e.from}-${e.to}`, route(e, boxes.get(e.from) as Box, boxes.get(e.to) as Box, m)]));
-  return { m, nodes, boxes, zoneBoxes, edges, routes };
+  return { m, nodes, boxes, zoneBoxes, edges, routes, subs: fit.subs };
 }
 
 function gridRoutes(view: "hero" | "full", model: DiagramModel): Routes {
@@ -314,7 +423,7 @@ function gridRoutes(view: "hero" | "full", model: DiagramModel): Routes {
 
 function layoutGrid(view: "hero" | "full", opts: LayoutOptions, model: DiagramModel): Tree {
   const prefix = opts.idPrefix ?? "dg";
-  const { m, nodes, boxes, zoneBoxes, edges, routes } = gridGeometry(view, model);
+  const { m, nodes, boxes, zoneBoxes, edges, routes, subs } = gridGeometry(view, model, opts.notes);
   let width = 0;
   let height = 0;
   for (const b of [...boxes.values(), ...zoneBoxes.map(([, b]) => b)]) {
@@ -325,11 +434,13 @@ function layoutGrid(view: "hero" | "full", opts: LayoutOptions, model: DiagramMo
   for (const e of edges) if (e.route === "under") height = Math.max(height, Math.max(bottom(boxes.get(e.from) as Box), bottom(boxes.get(e.to) as Box)) + m.gy * 0.55 + 4);
   width += m.pad;
   height += m.pad;
+  // A zone grown up for its subtitle's line may reach above the first row's: the drawing starts above it.
+  const minY = Math.min(0, ...zoneBoxes.map(([, b]) => b.y - m.pad));
   const titleId = `${prefix}-title`;
   const descId = `${prefix}-desc`;
   return t(
     "svg",
-    { xmlns: "http://www.w3.org/2000/svg", viewBox: `0 0 ${width} ${height}`, class: `dg dg--${view}`, role: opts.interactive ? "group" : "img", "aria-labelledby": `${titleId} ${descId}` },
+    { xmlns: "http://www.w3.org/2000/svg", viewBox: `0 ${minY} ${width} ${height - minY}`, class: `dg dg--${view}`, role: opts.interactive ? "group" : "img", "aria-labelledby": `${titleId} ${descId}` },
     t("title", { id: titleId }, opts.title ?? "Architecture: how an attack on this site is detected and answered"),
     t("desc", { id: descId }, opts.desc ?? describe(nodes, edges)),
     defs(prefix),
@@ -343,14 +454,15 @@ function layoutGrid(view: "hero" | "full", opts: LayoutOptions, model: DiagramMo
       }),
     ),
     trafficDots(prefix, opts.interactive),
-    t("g", { class: "dg-nodes" }, ...nodes.map((n) => nodeTree(n, boxes.get(n.id) as Box, opts))),
+    t("g", { class: "dg-nodes" }, ...nodes.map((n) => nodeTree(n, boxes.get(n.id) as Box, opts, subs.get(n.id)))),
   );
 }
 
 /** The phone's geometry: the story's nodes top to bottom, the answer looping back up the right side. */
 function narrowGeometry(model: DiagramModel) {
-  const m: Metrics = { cw: 236, ch: 50, gx: 0, gy: 30, pad: 12, zoneHead: 18, zonePad: 0 };
   const nodes = nodesOf("narrow", model);
+  const fit = fitted(nodes, 236, 50);
+  const m: Metrics = { cw: fit.cw, ch: fit.ch, gx: 0, gy: 30, pad: 12, zoneHead: 18, zonePad: 0 };
   const boxes = new Map<string, Box>();
   const heads: { x: number; y: number; title: string }[] = [];
   let y = m.pad;
@@ -396,7 +508,7 @@ function narrowGeometry(model: DiagramModel) {
       return [`${e.from}-${e.to}`, { pts, label, anchor, text }] as const;
     }),
   );
-  return { nodes, boxes, heads, edges, routes, width, height };
+  return { nodes, boxes, heads, edges, routes, width, height, subs: fit.subs };
 }
 
 function narrowRoutes(model: DiagramModel): Routes {
@@ -407,7 +519,7 @@ function narrowRoutes(model: DiagramModel): Routes {
 /** The phone's hero: the story's nodes top to bottom, the answer looping back up the right side. */
 function layoutNarrow(opts: LayoutOptions, model: DiagramModel): Tree {
   const prefix = opts.idPrefix ?? "dgn";
-  const { nodes, boxes, heads, edges, routes, width, height } = narrowGeometry(model);
+  const { nodes, boxes, heads, edges, routes, width, height, subs } = narrowGeometry(model);
   const titleId = `${prefix}-title`;
   const descId = `${prefix}-desc`;
   return t(
@@ -426,7 +538,7 @@ function layoutNarrow(opts: LayoutOptions, model: DiagramModel): Tree {
       }),
     ),
     trafficDots(prefix, opts.interactive),
-    t("g", { class: "dg-nodes" }, ...nodes.map((n) => nodeTree(n, boxes.get(n.id) as Box, opts))),
+    t("g", { class: "dg-nodes" }, ...nodes.map((n) => nodeTree(n, boxes.get(n.id) as Box, opts, subs.get(n.id)))),
   );
 }
 

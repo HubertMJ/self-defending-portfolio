@@ -5513,9 +5513,11 @@ html[data-terminal="off"] .needs-terminal {
 }
 
 /* ---------- the live diagram ---------- */
+/* The page's gutter on both sides (2026-10-14): the drawing scales to the wrap's inner width
+   (viewBox, width 100%) and its outermost zones keep clear of the page's edges. */
 .dg-wrap {
   margin-top: clamp(0.75rem, 2vw, 1.25rem);
-  padding: 0;
+  padding-block: 0;
 }
 
 .dg {
@@ -5614,6 +5616,11 @@ html[data-terminal="off"] .needs-terminal {
 
 .dg-label {
   transform: translateY(7.5px);
+}
+
+/* A sublabel wrapped to two lines (src/diagram/layout.ts): a lone label moves down by a line. */
+.dg-node--sub2 .dg-label {
+  transform: translateY(15px);
 }
 
 html[data-tech="on"] .dg-sub {

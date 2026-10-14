@@ -1565,6 +1565,55 @@ test.describe("unguarded twin (mock, ADR 0033)", () => {
   });
 });
 
+test.describe("the hero diagram stays inside the page (2026-10-14)", () => {
+  for (const width of [1280, 1440, 1920, 2560]) {
+    test(`at ${width} px, default and Technical Mode, every zone and node is inside the wrap's gutter and on screen`, { tag: "@default" }, async ({ page, isMobile }) => {
+      test.skip(isMobile, "a desktop layout");
+      await page.setViewportSize({ width, height: 1000 });
+      await page.goto("/?mock=1");
+      for (const tech of [false, true]) {
+        if (tech) await page.locator("#tech-toggle").click();
+        const r = await page.evaluate(() => {
+          const wrap = document.getElementById("diagram") as HTMLElement;
+          const cs = getComputedStyle(wrap);
+          const w = wrap.getBoundingClientRect();
+          const inner = { left: w.left + parseFloat(cs.paddingLeft), right: w.right - parseFloat(cs.paddingRight) };
+          const parts = [...wrap.querySelectorAll(".dg-wide :is(.dg-zonebox, .dg-box, .dg-label, .dg-sub, .dg-zonetitle, .dg-zonesub)")].map((e) => e.getBoundingClientRect()).filter((b) => b.width > 0);
+          return { inner, vw: innerWidth, left: Math.min(...parts.map((b) => b.left)), right: Math.max(...parts.map((b) => b.right)) };
+        });
+        expect(r.left, `tech ${tech}`).toBeGreaterThanOrEqual(r.inner.left - 1);
+        expect(r.right, `tech ${tech}`).toBeLessThanOrEqual(r.inner.right + 1);
+        expect(r.left).toBeGreaterThan(8);
+        expect(r.right).toBeLessThan(r.vw - 8);
+        // As drawn in this browser's fonts: every node's words clear of its frame (in the drawing's units).
+        const gap = await page.evaluate(() =>
+          Math.min(
+            ...[...document.querySelectorAll(".dg-wide .dg-node")].flatMap((n) => {
+              const box = (n.querySelector(".dg-box") as SVGGraphicsElement).getBBox();
+              return [...n.querySelectorAll<SVGTextElement>(".dg-label, .dg-sub")].map((t) => {
+                const b = t.getBBox();
+                return Math.min(b.x - box.x, box.x + box.width - (b.x + b.width));
+              });
+            }),
+          ),
+        );
+        expect(gap).toBeGreaterThanOrEqual(10);
+      }
+    });
+  }
+
+  test("on a phone, the vertical diagram is inside the screen with a margin", { tag: "@default" }, async ({ page, isMobile }) => {
+    test.skip(!isMobile, "the phone layout");
+    await page.goto("/?mock=1");
+    const r = await page.evaluate(() => {
+      const parts = [...document.querySelectorAll(".dg-narrow :is(.dg-box, .dg-label, .dg-sub)")].map((e) => e.getBoundingClientRect()).filter((b) => b.width > 0);
+      return { vw: innerWidth, left: Math.min(...parts.map((b) => b.left)), right: Math.max(...parts.map((b) => b.right)) };
+    });
+    expect(r.left).toBeGreaterThan(8);
+    expect(r.right).toBeLessThan(r.vw - 8);
+  });
+});
+
 test.describe("one left edge (2026-10-14)", () => {
   for (const width of [1440, 1920, 2560]) {
     test(`at ${width} px every section's heading, the hero and the footer start under the header's brand`, { tag: "@default" }, async ({ page, isMobile }) => {
