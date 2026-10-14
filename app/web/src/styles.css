@@ -243,8 +243,7 @@ main:focus {
 }
 
 /* The sections are numbered by the stylesheet, not in the copy, so a section the production build
-   drops (an About still to be written) leaves no gap in the numbering. The same numbers in both
-   views, About last: Skills and Projects (data-group="about") are About's sub-sections, unnumbered. */
+   drops leaves no gap in the numbering. The same numbers in both views. */
 main {
   counter-reset: section;
 }
@@ -791,12 +790,9 @@ main {
 html[data-folded~="attack"] #attack,
 html[data-folded~="correlation"] #correlation,
 html[data-folded~="how"] #how,
-html[data-folded~="about"] #about,
 html[data-folded~="evidence"] #evidence,
 html[data-folded~="posture"] #posture,
-html[data-folded~="verify"] #verify,
-html[data-folded~="skills"] #skills,
-html[data-folded~="projects"] #projects
+html[data-folded~="verify"] #verify
 ) {
   padding-block: clamp(1.5rem, 4vw, 2.25rem);
 }
@@ -805,12 +801,9 @@ html[data-folded~="projects"] #projects
 html[data-folded~="attack"] #attack,
 html[data-folded~="correlation"] #correlation,
 html[data-folded~="how"] #how,
-html[data-folded~="about"] #about,
 html[data-folded~="evidence"] #evidence,
 html[data-folded~="posture"] #posture,
-html[data-folded~="verify"] #verify,
-html[data-folded~="skills"] #skills,
-html[data-folded~="projects"] #projects
+html[data-folded~="verify"] #verify
 ) :is(.section__head, .section__head h2) {
   margin-bottom: 0;
 }
@@ -819,12 +812,9 @@ html[data-folded~="projects"] #projects
 html[data-folded~="attack"] #attack,
 html[data-folded~="correlation"] #correlation,
 html[data-folded~="how"] #how,
-html[data-folded~="about"] #about,
 html[data-folded~="evidence"] #evidence,
 html[data-folded~="posture"] #posture,
-html[data-folded~="verify"] #verify,
-html[data-folded~="skills"] #skills,
-html[data-folded~="projects"] #projects
+html[data-folded~="verify"] #verify
 ) :is(.section__head > :not(.eyebrow, h2), .section__body) {
   display: none;
 }
@@ -2923,62 +2913,6 @@ p.small {
   margin: 0;
   font-size: 0.92rem;
   color: var(--text-muted);
-}
-
-/* ---------- about, projects ---------- */
-
-.prose p {
-  max-width: 40rem;
-  color: var(--text-muted);
-}
-
-.skills {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem;
-  margin: 0 0 1rem;
-  padding: 0;
-  list-style: none;
-}
-
-.skills li {
-  padding: 0.3rem 0.7rem;
-  border: 1px solid var(--border-strong);
-  border-radius: 999px;
-  font: 500 0.82rem/1.4 var(--font-mono);
-  background: var(--surface);
-}
-
-.projects {
-  display: grid;
-  gap: 1rem;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 18rem), 1fr));
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.project {
-  padding: 1.2rem;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--surface);
-}
-
-.project h3 {
-  font-size: 1.05rem;
-  margin-bottom: 0.5rem;
-}
-
-.project p {
-  font-size: 0.92rem;
-  color: var(--text-muted);
-}
-
-.project__tags {
-  margin: 0;
-  font: 500 0.78rem/1.5 var(--font-mono);
-  color: var(--text-faint) !important;
 }
 
 /* ---------- footer ---------- */
@@ -6555,37 +6489,6 @@ html[data-tech="on"] .tech-less {
    terminal is open its row keeps the floor above, so the tour's rail never shifts. */
 .attack-stage:not(:has(.term__grid)) {
   min-height: 0;
-}
-
-/* Skills and Projects are part of "About me" in the default view (ui/sections.ts): shown with it,
-   folded with it, read as its sub-sections - no number, no rule above, a smaller heading. */
-html.js:not([data-tech="on"])[data-about-folded] main > [data-group="about"],
-html.js:not([data-tech="on"])[data-folded~="about"] main > [data-group="about"] {
-  display: none;
-}
-
-html.js:not([data-tech="on"]) main > [data-group="about"] {
-  padding-block: 0 clamp(2rem, 5vw, 3rem);
-}
-
-html.js:not([data-tech="on"]) #about {
-  border-bottom: 0;
-}
-
-html.js:not([data-tech="on"]) main > [data-group="about"]:not(:last-of-type) {
-  border-bottom: 0;
-}
-
-html.js:not([data-tech="on"]) main > [data-group="about"] .eyebrow {
-  display: none;
-}
-
-html.js:not([data-tech="on"]) main > [data-group="about"] .section__head {
-  margin-bottom: 1rem;
-}
-
-html.js:not([data-tech="on"]) main > [data-group="about"] .section__head h2 {
-  font-size: 1.35rem;
 }
 
 /* In the default view nothing follows the stage inside the section: no margin of its own under it. */

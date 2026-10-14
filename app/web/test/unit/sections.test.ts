@@ -195,12 +195,12 @@ describe("folded at first paint (theme.ts, styles.css)", () => {
     localStorage.setItem("collapsed:skills", "1");
     vi.resetModules();
     await import("../../src/theme");
-    expect((document.documentElement.dataset.folded ?? "").split(" ").sort()).toEqual(["about", "correlation", "evidence", "posture", "projects", "skills", "verify"]);
+    expect((document.documentElement.dataset.folded ?? "").split(" ").sort()).toEqual(["correlation", "evidence", "posture", "verify"]);
   });
 
   it("with no stored choice it folds the defaults; it folds them too when storage throws", async () => {
     localStorage.clear();
-    const defaults = ["correlation", "how", "evidence", "posture", "verify", "about", "skills", "projects"].sort();
+    const defaults = ["correlation", "how", "evidence", "posture", "verify"].sort();
     vi.resetModules();
     await import("../../src/theme");
     expect((document.documentElement.dataset.folded ?? "").split(" ").sort()).toEqual(defaults);
@@ -218,7 +218,7 @@ describe("folded at first paint (theme.ts, styles.css)", () => {
     const html = readFileSync(join(process.cwd(), "src", "index.html"), "utf8");
     const css = readFileSync(join(process.cwd(), "src", "styles.css"), "utf8");
     const ids = [...html.matchAll(/<section class="section[ "][^>]*\sid="([^"]+)"/g)].map((m) => m[1]);
-    expect(ids.length).toBe(9);
+    expect(ids.length).toBe(6);
     for (const id of ids) expect(css.split(`html[data-folded~="${id}"] #${id}`).length - 1, id).toBe(3);
   });
 });

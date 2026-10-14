@@ -35,7 +35,7 @@ async function wideFonts(page: Page) {
  * The hero shows no provenance data (ADR 0035, amended 2026-10-04): its copy has no commit, digest,
  * cosign or Rekor, and nothing in it (the evidence card included, which shows the attacked pod's own
  * image) names the api or web image or the commit they were built from. Nor does it link to #verify:
- * the owner moved that link to the footer, with the panel far down the page, above the skills.
+ * the owner moved that link to the footer, with the panel last on the page.
  */
 async function hasNoProvenance(page: Page) {
   const hero = page.locator("#top");
@@ -69,7 +69,7 @@ test.beforeEach(async ({ page }, info) => {
  * The page's sections in order (ADR 0035, amended 2026-10-05), as every build ships them: the console
  * is inside #attack.
  */
-const PAGE_ORDER = ["top", "attack", "correlation", "how", "evidence", "posture", "verify", "about", "skills", "projects"];
+const PAGE_ORDER = ["top", "attack", "correlation", "how", "evidence", "posture", "verify"];
 
 /**
  * "All activity, last 24 h" chosen before the page loads (ADR 0035, amendment "this session first"):
@@ -84,7 +84,7 @@ async function allActivity(page: Page) {
  * panel's content (not the fold defaults themselves) opens them all first, as a returning visitor who
  * expanded them would — the stored "0" wins over the default (lib/folds.ts).
  */
-const FOLDABLE = ["correlation", "how", "evidence", "posture", "verify", "about", "skills", "projects"];
+const FOLDABLE = ["correlation", "how", "evidence", "posture", "verify"];
 async function openSections(page: Page) {
   // Only on a first load (no stored choice yet): a fold the test makes afterwards survives a reload,
   // so this does not fight the fold-mechanics tests.
@@ -157,13 +157,8 @@ test.describe("production build has no placeholder copy (FIX 2)", () => {
     expect(html).not.toMatch(/\btodo-content\b/);
     await page.goto("/");
     // The real content that sat next to the placeholders is still there.
-    await expect(page.getByRole("heading", { name: "Projects" })).toBeVisible();
-    await expect(page.getByRole("link", { name: "self-defending-portfolio" }).first()).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Verify it yourself" })).toBeVisible();
     await expect(page.locator(".todo-content")).toHaveCount(0);
-    // The written About ships, linked from the navigation.
-    await expect(page.getByRole("heading", { name: "About me" })).toBeVisible();
-    await expect(page.locator('.site-nav a[href="#about"]')).toHaveCount(1);
-    await expect(page.getByRole("heading", { name: "Skills shown in this repository" })).toBeVisible();
   });
 });
 
@@ -177,14 +172,14 @@ test.describe("API offline (nothing behind /api)", () => {
     await expect(page.getByText("The attack launcher is offline")).toBeVisible();
     await expect(page.locator("#timeline-conn")).toHaveAttribute("data-state", /reconnecting|offline/);
     await expect(page.locator("#mock-banner")).toBeHidden();
-    await expect(page.getByRole("heading", { name: "Projects" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Verify it yourself" })).toBeVisible();
     await noHorizontalScroll(page);
     expect(problems).toEqual([]);
   });
 });
 
 test.describe("layout (ADR 0035, amended 2026-10-05; ?mock=1)", () => {
-  test("the attack, its response and the correlation come first; evidence, posture and verify sit above the skills", async ({ page }) => {
+  test("the attack, its response and the correlation come first; evidence, posture and verify close the page", async ({ page }) => {
     await page.goto("/?mock=1");
     await expect(page.locator("#correlation")).toBeVisible();
     expect(await page.evaluate(() => [...document.querySelectorAll("main > section")].map((el) => el.id))).toEqual(PAGE_ORDER);
@@ -192,7 +187,7 @@ test.describe("layout (ADR 0035, amended 2026-10-05; ?mock=1)", () => {
     expect(await page.evaluate(() => document.querySelector("#attack #console") !== null)).toBe(true);
     // The navigation follows the page; the one link to #verify is the footer's.
     // The SIEM's section is linked while it is shown (UX stage 1).
-    expect(await page.locator(".site-nav a").evaluateAll((as) => as.map((a) => a.getAttribute("href")))).toEqual(["#attack", "#correlation", "#how", "#evidence", "#about"]);
+    expect(await page.locator(".site-nav a").evaluateAll((as) => as.map((a) => a.getAttribute("href")))).toEqual(["#attack", "#correlation", "#how", "#evidence"]);
     await expect(page.locator('.site-nav a[href="#correlation"]')).toBeVisible();
     await expect(page.locator('a[href="#verify"]')).toHaveCount(1);
     await expect(page.locator('footer.site-footer a[href="#verify"]')).toHaveCount(1);
@@ -796,15 +791,13 @@ test.describe("layout (ADR 0035, amended 2026-10-05; ?mock=1)", () => {
     await expect.poll(() => panel.evaluate((el) => [getComputedStyle(el).overflowY, getComputedStyle(el).maskImage])).toEqual(["visible", "none"]);
   });
 
-  test("About is one folded section like the others: no bar outside it; its first paragraph ends with the automation sentence", async ({ page }) => {
+  test("the page is the project alone: no About, skills or projects; the footer links to About on the landing page", async ({ page }) => {
+    // Owner decision 2026-10-14: what is about Hubert lives on the landing page, the shared place.
     await page.goto("/?mock=1");
-    await expect(page.locator("#aboutbar, .aboutbar")).toHaveCount(0);
-    await expect(page.locator('a[href="#about"]', { hasText: "More about me" })).toHaveCount(0);
-    const first = page.locator("#about-body .prose p").first();
-    await expect(first).toHaveText(/^I have been a Cyber Security Engineer at SecureVisio in Rzeszów, Poland, since March 2020\./);
-    await expect(first).toHaveText(/ I love automating things: if I have done something twice, the third time a script does it\.$/);
-    // The sentence is said once on the page.
-    expect(await page.evaluate(() => document.body.textContent?.split("I have been a Cyber Security Engineer").length)).toBe(2);
+    for (const id of ["about", "skills", "projects", "aboutbar"]) await expect(page.locator(`#${id}`), id).toHaveCount(0);
+    await expect(page.getByText("Cyber Security Engineer")).toHaveCount(0);
+    await expect(page.locator('a[href="#about"]')).toHaveCount(0);
+    await expect(page.locator('footer.site-footer a[href="/#about"]')).toHaveText("About me");
   });
 
   test("the header's mark is the prompt in the brand's green", async ({ page }) => {
@@ -856,7 +849,7 @@ test.describe("layout (ADR 0035, amended 2026-10-05; ?mock=1)", () => {
     // The side edges (the twin's syscalls, the logs to the SIEM) carry no glow.
     await expect(page.locator(`${svg} .dg-edge--side .dg-glow`)).toHaveCount(0);
     // Off screen: paused.
-    await page.evaluate(() => document.getElementById("skills")?.scrollIntoView({ behavior: "instant" }));
+    await page.evaluate(() => document.querySelector("footer.site-footer")?.scrollIntoView({ behavior: "instant" }));
     await expect(page.locator("#diagram")).toHaveAttribute("data-ambient", "off");
     m = await style(`#${prefix}-dot-req`);
     expect(m.state).toBe("paused");
@@ -955,7 +948,7 @@ test.describe("layout (ADR 0035, amended 2026-10-05; ?mock=1)", () => {
     await page.goto("/?mock=1");
     await expect(page.locator("#diagram")).toBeVisible();
     await expect(page.locator("#attack-body")).toBeVisible();
-    for (const id of ["correlation", "how", "evidence", "posture", "verify", "about", "skills", "projects"]) {
+    for (const id of ["correlation", "how", "evidence", "posture", "verify"]) {
       await expect(page.locator(`#${id}-title > button.section__toggle`), id).toHaveAttribute("aria-expanded", "false");
       await expect(page.locator(`#${id}-body`), id).toBeHidden();
     }
@@ -1049,7 +1042,7 @@ test.describe("layout (ADR 0035, amended 2026-10-05; ?mock=1)", () => {
     await expect(page.locator("#correlation .corr-matrix")).toBeVisible();
     await page.locator("#evidence-title > button").click();
     await expect(page.locator("#evidence-body")).toBeHidden();
-    await page.evaluate(() => window.scrollTo(0, (document.getElementById("skills") as HTMLElement).getBoundingClientRect().top + scrollY - 200));
+    await page.evaluate(() => window.scrollTo(0, (document.getElementById("verify") as HTMLElement).getBoundingClientRect().top + scrollY - 200));
     const y = await page.evaluate(() => scrollY);
     await page.reload();
     await expect(page.locator("#evidence-body")).toBeHidden();
@@ -1087,10 +1080,10 @@ test.describe("layout (ADR 0035, amended 2026-10-05; ?mock=1)", () => {
         if (wide) expect(await page.evaluate(() => getComputedStyle(document.body).fontFamily)).toContain("DejaVu Sans");
         await expect(page.locator("#correlation")).toBeVisible();
         const toggles = page.locator(".section__toggle");
-        await expect(toggles).toHaveCount(9);
+        await expect(toggles).toHaveCount(6);
         expect(await past()).toEqual([]);
         await noHorizontalScroll(page);
-        // The jump bar's five links fit in one row ("How it works" says "How" this narrow); with a wider
+        // The jump bar's four links fit in one row ("How it works" says "How" this narrow); with a wider
         // font it scrolls sideways inside itself, never the page (noHorizontalScroll above).
         if (!wide) await nothingPastEdge(page, ".site-header");
         for (const t of await toggles.all()) await t.click();
@@ -1717,13 +1710,13 @@ test.describe("technical mode", () => {
     expect(problems).toEqual([]);
   });
 
-  test("the default view is short: the hero, the terminal with the tour, then folded sections numbered as in Technical Mode, About last; Technical Mode shows the rest", { tag: "@default" }, async ({ page, isMobile }) => {
+  test("the default view is short: the hero, the terminal with the tour, then folded sections numbered as in Technical Mode; Technical Mode shows the rest", { tag: "@default" }, async ({ page, isMobile }) => {
     const problems = guardConsole(page);
     await page.goto("/?mock=1");
     const hidden = ["#console", "#timeline", ".launcher", "#objectives-fold", ".hero__secondary"];
     for (const sel of hidden) await expect(page.locator(sel).first(), sel).toBeHidden();
-    await expect(page.locator(".site-nav a:visible")).toHaveText(["Attack it", "SIEM", /^How( it works)?$/, "Evidence", "About"], { useInnerText: true });
-    // Evidence, Posture and Verify are folded sections like the others: one numbering, 01..07, About last,
+    await expect(page.locator(".site-nav a:visible")).toHaveText(["Attack it", "SIEM", /^How( it works)?$/, "Evidence"], { useInnerText: true });
+    // Evidence, Posture and Verify are folded sections like the others: one numbering, 01..06,
     // the same in both views (no card, no jump).
     await expect(page.locator("#correlation")).toBeVisible();
     for (const id of ["#evidence", "#posture", "#verify"]) {
@@ -1738,7 +1731,7 @@ test.describe("technical mode", () => {
           .filter((s) => s.querySelector(".section__head > .eyebrow")?.getClientRects().length)
           .map((s) => s.id),
       );
-    const expected = ["attack", "correlation", "how", "evidence", "posture", "verify", "about"];
+    const expected = ["attack", "correlation", "how", "evidence", "posture", "verify"];
     expect(await numbers()).toEqual(expected);
     await expect(page.locator("#curious")).toHaveCount(0);
     await expect(page.locator("#tech-toggle")).toHaveAttribute("title", "Show the raw run data, the command palette, the one-click attacks and the run history");
@@ -1763,7 +1756,7 @@ test.describe("technical mode", () => {
     expect(problems).toEqual([]);
   });
 
-  test("before a session the attack stage is as tall as what it holds; Skills and Projects are part of About, a link to #skills opens it", { tag: "@default" }, async ({ page, isMobile }) => {
+  test("before a session the attack stage is as tall as what it holds", { tag: "@default" }, async ({ page, isMobile }) => {
     await page.setViewportSize(isMobile ? { width: 390, height: 844 } : { width: 1920, height: 1080 });
     await page.goto("/?mock=1");
     await expect(page.locator("#terminal .term-start__btn")).toBeVisible();
@@ -1774,22 +1767,6 @@ test.describe("technical mode", () => {
     });
     // (On a phone the rows' own margins, 1 and 1.5 rem, end the stage.)
     expect(gap).toBeLessThanOrEqual(isMobile ? 48 : 8);
-    // About folded: Skills and Projects are not on the page; their headings are not disclosures of their own.
-    await expect(page.locator("#skills")).toBeHidden();
-    await expect(page.locator("#projects")).toBeHidden();
-    await expect(page.locator("#skills .section__toggle")).toHaveCount(0);
-    await page.locator("#about .section__toggle").click();
-    await expect(page.locator("#skills-title")).toBeVisible();
-    await expect(page.locator("#projects-title")).toBeVisible();
-    // A link to #skills from a fresh page opens About.
-    await page.evaluate(() => localStorage.clear());
-    await page.goto("/?mock=1#skills");
-    await expect(page.locator("#about .section__toggle")).toHaveAttribute("aria-expanded", "true");
-    await expect(page.locator("#skills-title")).toBeInViewport();
-    // Technical Mode: their own folds, as before.
-    await page.locator("#tech-toggle").click();
-    await expect(page.locator("#skills .section__toggle")).toHaveCount(1);
-    await expect(page.locator("#projects .section__toggle")).toHaveCount(1);
   });
 
   test("a link to #posture in the default view opens the section", { tag: "@default" }, async ({ page }) => {
@@ -2581,7 +2558,7 @@ test.describe("the visitor's run, told back (mock, ADR 0035 amendment: UX stage 
       await page.goto("/?mock=1&mock-speed=0.2");
       const nav = page.locator(".site-nav");
       await expect(nav).toBeVisible();
-      await expect(nav.locator("a:visible")).toHaveText(["Attack it", "SIEM", "How", "Evidence", "About"], { useInnerText: true });
+      await expect(nav.locator("a:visible")).toHaveText(["Attack it", "SIEM", "How", "Evidence"], { useInnerText: true });
       await page.locator("#terminal").getByRole("button", { name: /Open the terminal/ }).click();
       await expect(page.locator("#term-input")).toBeEnabled({ timeout: 10_000 });
       for (const d of await page.locator("#console details.verify, #console details.console__details").all()) await d.evaluate((e) => ((e as HTMLDetailsElement).open = true));

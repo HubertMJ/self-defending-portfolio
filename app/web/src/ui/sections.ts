@@ -65,8 +65,6 @@ export function mountSections(onChange?: (id: string, expanded: boolean) => void
     f.btn.setAttribute("aria-expanded", String(expanded));
     f.body.hidden = !expanded;
     f.section.classList.toggle("section--collapsed", !expanded);
-    // Skills and Projects follow About in the default view (styles.css): its state on <html>, no :has().
-    if (f.section.id === "about") document.documentElement.toggleAttribute("data-about-folded", !expanded);
     if (persist) store(f.section.id, expanded);
     if (was !== expanded) onChange?.(f.section.id, expanded);
   };
@@ -88,31 +86,6 @@ export function mountSections(onChange?: (id: string, expanded: boolean) => void
     if (stored(section.id)) set(fold, false, false);
   }
 
-  // Skills and Projects (2026-10-13 b): without Technical Mode they are part of "About me", shown
-  // whole when it is open and not at all when it is folded (styles.css); their headings are plain
-  // headings then, not disclosures of their own. In Technical Mode they fold on their own as before.
-  const grouped = [...folds.values()].filter((f) => f.section.dataset.group === "about");
-  const syncGroup = () => {
-    const merged = document.documentElement.dataset.tech !== "on";
-    for (const f of grouped) {
-      const h2 = f.section.querySelector<HTMLElement>(":scope > .wrap > .section__head > h2");
-      const label = f.section.querySelector<HTMLElement>(".section__label");
-      if (!h2 || !label) continue;
-      if (merged && f.btn.isConnected) {
-        h2.replaceChildren(label);
-        f.body.hidden = false;
-        f.section.classList.remove("section--collapsed");
-      } else if (!merged && !f.btn.isConnected) {
-        f.btn.prepend(label);
-        h2.replaceChildren(f.btn);
-        set(f, !stored(f.section.id), false);
-        f.body.hidden = !isOpen(f);
-        f.section.classList.toggle("section--collapsed", !isOpen(f));
-      }
-    }
-  };
-  syncGroup();
-  new MutationObserver(syncGroup).observe(document.documentElement, { attributes: true, attributeFilter: ["data-tech"] });
   // The folded sections are folded by their buttons now: theme.ts's stand-in (styles.css) goes.
   delete document.documentElement.dataset.folded;
 
@@ -128,12 +101,6 @@ export function mountSections(onChange?: (id: string, expanded: boolean) => void
   /** Opens the folded section holding the element `hash` names; that element if it was folded. */
   const reveal = (hash: string): HTMLElement | null => {
     const target = byHash(hash);
-    // Skills or Projects inside "About me": the About fold is the one to open.
-    const about = folds.get("about");
-    if (target?.closest('main > [data-group="about"]') && document.documentElement.dataset.tech !== "on" && about && !isOpen(about)) {
-      set(about, true, true);
-      return target;
-    }
     const fold = folds.get(target?.closest<HTMLElement>("main > .section")?.id ?? "");
     if (!target || !fold || isOpen(fold)) return null;
     set(fold, true, true);

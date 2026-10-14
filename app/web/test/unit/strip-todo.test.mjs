@@ -88,29 +88,17 @@ describe("stripTodoContent on src/index.html (review 2, item 9)", () => {
   const sectionIds = (html) => [...html.matchAll(/<section[^>]*\sid="([^"]+)"/g)].map((m) => m[1]);
   const navLinks = (html) => [...html.matchAll(/<nav[\s\S]*?<\/nav>/g)].flatMap((n) => [...n[0].matchAll(/href="#([^"]+)"/g)].map((m) => m[1]));
 
-  it("ships no placeholder; the written About stays with its navigation link", () => {
+  it("ships no placeholder; the sections, the nav and the one link to the verify panel stay", () => {
     const out = stripTodoContent(page);
     expect(out).not.toMatch(/todo-content/i);
-    // Everything else stays: the sections, the skills list, the real project card, every other link.
     // ADR 0035, amended 2026-10-05: the attack, its response and the SIEM's correlation come right after
-    // the hero; the evidence, the posture and the verify panel follow How it works, then About, above
-    // the skills; the one link to the verify panel is in the footer, not the hero.
-    expect(sectionIds(out)).toEqual(["top", "attack", "console", "correlation", "how", "evidence", "posture", "verify", "about", "skills", "projects"]);
+    // the hero; the evidence, the posture and the verify panel follow How it works. About me, skills
+    // and projects live on the landing page since 2026-10-14; this page is the project alone.
+    expect(sectionIds(out)).toEqual(["top", "attack", "console", "correlation", "how", "evidence", "posture", "verify"]);
     expect([...out.matchAll(/href="#verify"/g)]).toHaveLength(1);
     expect(out.slice(out.indexOf("<footer"))).toContain('<a href="#verify">Verify the running images</a>');
-    expect(navLinks(out)).toEqual(["attack", "correlation", "how", "evidence", "about"]);
-    expect(out).toContain("<li>Kubernetes (k3s)</li>");
-    expect(out).toContain("self-defending-portfolio</a></h3>");
+    expect(navLinks(out)).toEqual(["attack", "correlation", "how", "evidence"]);
     expect(out).not.toContain("[TODO");
-  });
-
-  it("keeps a project card's written lines and drops its unwritten tag line", () => {
-    const out = stripTodoContent(
-      page.replace("<h3>[TODO-CONTENT: project name]</h3>\n            <p>[TODO-CONTENT: what it does and what you did]</p>", "<h3>edge-proxy</h3>\n            <p>A proxy I wrote.</p>"),
-    );
-    expect(out).toContain("<h3>edge-proxy</h3>");
-    expect(out).toContain("<p>A proxy I wrote.</p>");
-    expect(out).not.toMatch(/todo-content|TODO-CONTENT/i);
   });
 });
 

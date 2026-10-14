@@ -831,3 +831,13 @@ sections as Technical Mode with no card; the incident's facts and its Details (a
 at 320 px); step 5 after the tour's terminal session says "Starting…" at once and then the wait with
 its countdown. Unit: the 429 texts for each reason, the card's headline, facts and folds kept across a
 redraw.
+
+## Amendment 2026-10-14: the page is the project alone
+
+Since the landing page took `/` (HubertMJ/hubertjablon.ski) this page lives at `/cluster/`, and the
+owner decided that what is about him belongs on the landing page, the place every project shares:
+`#about`, `#skills` and `#projects` are gone from here, with their link in the navigation and the
+About grouping of the default view. The page ends with `#verify`; five sections fold (the attack stays
+open), numbered 01..06 in both views. The footer links to the project's repository, the verify panel
+and About on the landing page (`/#about`). Tests: the e2e suite holds the page to those sections and
+that nav, with no About text and the footer's link.

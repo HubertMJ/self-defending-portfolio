@@ -6,7 +6,7 @@
 export const FOLD_KEY = "sdp:collapsed:";
 
 /** The sections folded unless the visitor opened them. #attack stays open: it is the page. */
-export const FOLDED_BY_DEFAULT: readonly string[] = ["correlation", "how", "evidence", "posture", "verify", "about", "skills", "projects"];
+export const FOLDED_BY_DEFAULT: readonly string[] = ["correlation", "how", "evidence", "posture", "verify"];
 
 /** Whether a section starts folded, from its stored choice ("1", "0" or null) and the default. */
 export function startsFolded(id: string, stored: string | null): boolean {

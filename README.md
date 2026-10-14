@@ -66,7 +66,7 @@ web image reaches the cluster in two steps, image first ([`docs/bootstrap.md`](d
 The threat model ([`docs/threat-model.md`](docs/threat-model.md)) lists what these controls do
 *not* cover.
 
-<!-- TODO-CONTENT: optional short "about me" paragraph (role, what I am looking for, contact link). Only facts you want public. -->
+About the author: [hubertjablon.ski](https://hubertjablon.ski/#about).
 
 ---
 
