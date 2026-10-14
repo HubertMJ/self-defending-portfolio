@@ -1,5 +1,5 @@
-# /cluster/api (and, until the cutover, /api) on the portfolio Gateway (ADR 0015). Path-prefix matches are ranked by length before header
-# matches, so this route wins over hello's `/` for everything under /api - which is why it repeats
+# /cluster/api on the portfolio Gateway (ADR 0015). Path-prefix matches are ranked by length before header
+# matches, so this route wins over hello's `/cluster` for everything under /cluster/api - which is why it repeats
 # hello's HTTP-to-HTTPS redirect and sets its own response headers instead of inheriting them.
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
@@ -19,12 +19,6 @@ spec:
     - matches:
         - path:
             type: PathPrefix
-            value: /api
-          headers:
-            - name: X-Forwarded-Proto
-              value: http
-        - path:
-            type: PathPrefix
             value: /cluster/api
           headers:
             - name: X-Forwarded-Proto
@@ -39,11 +33,8 @@ spec:
     # disables it, per the Gateway API spec). The stream is still bounded: the API closes it after
     # 30 minutes, and a 15 s heartbeat keeps Envoy's and Cloudflare's idle timers satisfied.
     - matches:
-        - path:
-            type: Exact
-            value: /api/events
         # The cluster page's own prefix (the landing page took /): the pod still serves /api, so
-        # the Gateway rewrites the path; /api goes once the page calls only /cluster/api.
+        # the Gateway rewrites the path.
         - path:
             type: Exact
             value: /cluster/api/events
@@ -73,31 +64,8 @@ spec:
       backendRefs:
         - name: portfolio-api
           port: 80
-    # Two rules, not one with two matches: the HTTPRoute schema (Gateway API v1.4 CEL) admits a
-    # ReplacePrefixMatch rewrite only on a rule with exactly one PathPrefix match, and the API
-    # server refuses the whole route otherwise. /api goes at the cutover.
-    - matches:
-        - path:
-            type: PathPrefix
-            value: /api
-      filters:
-        - type: ResponseHeaderModifier
-          responseHeaderModifier:
-            set:
-              - name: Strict-Transport-Security
-                value: max-age=63072000; includeSubDomains
-              - name: X-Content-Type-Options
-                value: nosniff
-              - name: Referrer-Policy
-                value: no-referrer
-              # JSON and an event stream: nothing here is ever a document to render, frame or run.
-              - name: Content-Security-Policy
-                value: "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
-              - name: Cross-Origin-Resource-Policy
-                value: same-origin
-      backendRefs:
-        - name: portfolio-api
-          port: 80
+    # A prefix rewrite needs a rule with exactly one PathPrefix match (Gateway API CEL); the bare
+    # /api is not routed since the cutover and falls to hello's nginx, which answers 404.
     - matches:
         - path:
             type: PathPrefix
