@@ -40,6 +40,7 @@ resources:
   - cloudflared.yaml
   - gateway.yaml
   - hello.yaml
+  - site.yaml
   - policy-reporter.yaml
   - trivy-operator.yaml
   - kube-bench.yaml

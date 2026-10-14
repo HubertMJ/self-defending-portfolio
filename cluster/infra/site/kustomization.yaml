@@ -1,0 +1,20 @@
+# The landing page (/) and the detection lab's preview (/lab/): the image built from
+# HubertMJ/hubertjablon.ski. The cluster page (/cluster/) stays in hello.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: site
+
+resources:
+  - namespace.yaml
+  - deployment.yaml
+  - service.yaml
+  - httproute.yaml
+  - networkpolicy.yaml
+  - ciliumnetworkpolicy.yaml
+
+images:
+  - name: ghcr.io/hubertmj/hubertjablon.ski/site
+    newTag: main
+    # HubertMJ/hubertjablon.ski 1b2ae18, build-image run 38595076731.
+    digest: sha256:64c2a0aba06f7d831fd40ef55b871d9249f3906c446c988c5c8d0cee6c4d429c

@@ -103,6 +103,8 @@ spec:
               # kube-system (metrics-server, ADR 0025) stays out: Cilium and CoreDNS run there.
               namespaces:
                 - hello
+                # The landing page (cluster/infra/site), built in HubertMJ/hubertjablon.ski.
+                - site
                 - sandbox
                 # The unguarded twin (ADR 0031): same preventive layers as `sandbox`, so the same
                 # signature and SBOM gate. Only Talon's automatic response is absent there.
@@ -177,6 +179,24 @@ spec:
                       # signature existed at a point in time, which is what makes a later key
                       # compromise detectable rather than retroactive.
                       url: https://rekor.sigstore.dev
+        # The site image (cluster/infra/site): the same checks, signed by its own repository's
+        # workflow on main. Neither repository's workflow can sign for the other's images.
+        - imageReferences:
+            - "ghcr.io/hubertmj/hubertjablon.ski/*"
+          type: SigstoreBundle
+          failureAction: Enforce
+          mutateDigest: true
+          verifyDigest: true
+          required: true
+          attestors:
+            - count: 1
+              entries:
+                - keyless:
+                    subjectRegExp: "^https://github\\.com/HubertMJ/hubertjablon\\.ski/\
+                      \\.github/workflows/build-image\\.yml@refs/heads/main$"
+                    issuer: https://token.actions.githubusercontent.com
+                    rekor:
+                      url: https://rekor.sigstore.dev
 
     - name: verify-sbom-attestation
       # A signature says "we built this". An SBOM attestation says "and this is what is inside it",
@@ -190,6 +210,8 @@ spec:
               # Kept identical to verify-signature's list.
               namespaces:
                 - hello
+                # The landing page (cluster/infra/site), built in HubertMJ/hubertjablon.ski.
+                - site
                 - sandbox
                 # The unguarded twin (ADR 0031): same preventive layers as `sandbox`, so the same
                 # signature and SBOM gate. Only Talon's automatic response is absent there.
@@ -236,6 +258,32 @@ spec:
                     # `|| ''` matters: a bare `{{ spdxVersion }}` against a predicate that has no
                     # such field is a variable-substitution error, which Kyverno reports as a rule
                     # error rather than as the clear "not an SPDX document" failure below.
+                    - key: "{{ spdxVersion || '' }}"
+                      operator: NotEquals
+                      value: ""
+                      message: >-
+                        attestation is not an SPDX document: the predicate has no spdxVersion field
+        # The site image (cluster/infra/site): the same checks, signed by its own repository's
+        # workflow on main. Neither repository's workflow can sign for the other's images.
+        - imageReferences:
+            - "ghcr.io/hubertmj/hubertjablon.ski/*"
+          failureAction: Enforce
+          type: SigstoreBundle
+          mutateDigest: false
+          verifyDigest: false
+          attestations:
+            - type: https://spdx.dev/Document
+              attestors:
+                - count: 1
+                  entries:
+                    - keyless:
+                        subjectRegExp: "^https://github\\.com/HubertMJ/hubertjablon\\.ski/\
+                      \\.github/workflows/build-image\\.yml@refs/heads/main$"
+                        issuer: https://token.actions.githubusercontent.com
+                        rekor:
+                          url: https://rekor.sigstore.dev
+              conditions:
+                - all:
                     - key: "{{ spdxVersion || '' }}"
                       operator: NotEquals
                       value: ""
