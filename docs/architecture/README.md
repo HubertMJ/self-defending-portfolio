@@ -47,8 +47,12 @@ flowchart LR
             GW["Gateway portfolio<br/>listener http :80 (301 only)<br/>listener https :443<br/>cert portfolio-tls"]
             SVC["Service cilium-gateway-portfolio<br/>ClusterIP; LB IP 10.4.1.30 not announced"]
         end
+        subgraph NS_SITE["ns site"]
+            SROUTE["HTTPRoute site<br/>/ (exact), /lab, /site-assets<br/>security headers"]
+            SITE["Deployment site x2<br/>landing page image :8080, uid 101<br/>(built in HubertMJ/hubertjablon.ski)"]
+        end
         subgraph NS_HELLO["ns hello"]
-            ROUTE["HTTPRoute hello<br/>security headers"]
+            ROUTE["HTTPRoute hello<br/>/cluster rewritten to /, every other path<br/>security headers"]
             WEB["Deployment hello x2<br/>web image :8080, uid 101"]
         end
         subgraph NS_API["ns portfolio-api"]
@@ -62,6 +66,7 @@ flowchart LR
     CFD -- "HTTPS :443, SNI hubertjablon.ski,<br/>certificate verified" --> SVC
     SVC --- ENVOY
     ENVOY --- GW
+    GW --> SROUTE --> SITE
     GW --> ROUTE --> WEB
     GW --> AROUTE --> API
 ```
@@ -79,8 +84,10 @@ What the diagram claims, and where it is written down:
 | HTTP is redirected to HTTPS twice: the `:80` listener, and `X-Forwarded-Proto: http` on `:443` | [`httproute-https-redirect.yaml`](../../cluster/infra/gateway/httproute-https-redirect.yaml), [`cluster/infra/hello/httproute.yaml`](../../cluster/infra/hello/httproute.yaml) |
 | HSTS, CSP, nosniff, Referrer-Policy, Permissions-Policy, COOP are set at the Gateway | [`cluster/infra/hello/httproute.yaml`](../../cluster/infra/hello/httproute.yaml) |
 | The route's CSP is exactly the web image's (same-origin scripts/styles/`connect-src`, Trusted Types enforced); CI fails if the two strings differ | [`app/web/security-headers.conf`](../../app/web/security-headers.conf), [`scripts/check-web-csp.sh`](../../scripts/check-web-csp.sh), [ADR 0019](../adr/0019-frontend-stack-and-csp.md) |
+| The landing page is the entry: `/` (exact), `/lab` and `/site-assets` go to the site image; hello keeps every other path and serves the cluster page at `/cluster/`, the prefix cut before nginx so the image is unchanged; an exact match and a longer prefix outrank hello's `/`, and the site route repeats the HTTP-to-HTTPS redirect and hello's headers | [`cluster/infra/site/httproute.yaml`](../../cluster/infra/site/httproute.yaml), [`cluster/infra/hello/httproute.yaml`](../../cluster/infra/hello/httproute.yaml), [`scripts/check-web-csp.sh`](../../scripts/check-web-csp.sh) |
 | `/api` wins over hello's `/` (longer prefix), repeats the HTTP-to-HTTPS redirect and sets its own headers, CSP `default-src 'none'` | [`cluster/infra/portfolio-api/httproute.yaml`](../../cluster/infra/portfolio-api/httproute.yaml), [ADR 0015](../adr/0015-portfolio-api.md) |
 | Envoy trusts exactly one `X-Forwarded-For` hop (cloudflared) | [`cluster/apps/cilium.yaml`](../../cluster/apps/cilium.yaml) (`xffNumTrustedHops: 1`) |
+| `site` is shaped like `hello`: default-deny, ingress only from `ingress`/`host` on 8080, no egress, PSS `restricted` | [`cluster/infra/site/`](../../cluster/infra/site/) |
 | `hello` is default-deny, ingress only from Cilium's `ingress`/`host` identities on 8080, no egress at all | [`cluster/infra/hello/`](../../cluster/infra/hello/) |
 | `portfolio-api` is default-deny; ingress 8080 from `ingress`/`host`, 8081 only from Falcosidekick and Talon; egress only kube-apiserver:6443 and DNS for `*.cluster.local` | [`cluster/infra/portfolio-api/ciliumnetworkpolicy.yaml`](../../cluster/infra/portfolio-api/ciliumnetworkpolicy.yaml), [`networkpolicy.yaml`](../../cluster/infra/portfolio-api/networkpolicy.yaml) |
 | One Service, two audiences: `http` 80->8080 is the route's backend, `internal` 8081 is never routed | [`cluster/infra/portfolio-api/service.yaml`](../../cluster/infra/portfolio-api/service.yaml) |
@@ -123,7 +130,7 @@ flowchart TB
 - `root` points at [`cluster/apps/`](../../cluster/apps/), one file per component. Wave order and the
   list of Applications are in [`cluster/apps/kustomization.yaml`](../../cluster/apps/kustomization.yaml):
   `gateway-api-crds` (-2), `cilium` (-1), `cert-manager` (0), `cert-manager-issuers` and `kyverno` (1),
-  `kyverno-policies` and `cloudflared` (2), `gateway` (3), `hello` (4), in wave 5 `policy-reporter`,
+  `kyverno-policies` and `cloudflared` (2), `gateway` (3), `hello` and `site` (4), in wave 5 `policy-reporter`,
   `trivy-operator`, `kube-bench`, `falco`, `falco-response`, `sandbox`, and `portfolio-api` (6), which
   has two sources: [`cluster/infra/portfolio-api/`](../../cluster/infra/portfolio-api/) and the scenario
   catalogue [`cluster/infra/sandbox/scenarios/`](../../cluster/infra/sandbox/scenarios/) (ConfigMap
@@ -170,7 +177,7 @@ flowchart LR
     B --> GHCR[("GHCR (public)<br/>ghcr.io/hubertmj/self-defending-portfolio/{web,api,scenario,talon}<br/>bundles as OCI referrers")]
     ATT --> GHCR
     HUMAN([operator]) -- "commit digest<br/>(scripts/bump-image-digest.sh)" --> ARGO["Argo CD sync"]
-    ARGO --> ADM{"Kyverno admission<br/>ns hello, sandbox, portfolio-api,<br/>falco-response (Talon)"}
+    ARGO --> ADM{"Kyverno admission<br/>ns hello, site, sandbox, portfolio-api,<br/>falco-response (Talon)"}
     GHCR -. "referrers, bundles<br/>(anonymous pull)" .-> ADM
     ADM -- "signature + SBOM verified,<br/>registry allowed, no :latest" --> POD["Pod runs<br/>image pinned to verified digest"]
     ADM -- "anything else" --> DENY["rejected"]
@@ -182,8 +189,8 @@ flowchart LR
 | Build (e2e gate for web), scan, SBOM, sign, attest, every `app/<name>/Dockerfile` | [`.github/workflows/build-images.yml`](../../.github/workflows/build-images.yml) |
 | Why keyless, why a bundle, why fixable-only | [ADR 0011](../adr/0011-supply-chain.md) (and its 2026-10-01 amendment) |
 | Why one matrix workflow and not a reusable one (the identity must be one file on main) | [ADR 0016](../adr/0016-one-image-workflow.md) |
-| Admission: signature + SBOM by identity, `type: SigstoreBundle`, `mutateDigest`, `failurePolicy: Fail`; identity regex `build-images.yml` (and, until hello's digest is rebuilt, `build-web.yml`) `@refs/heads/main` | [`verify-portfolio-images.yaml`](../../cluster/infra/kyverno-policies/verify-portfolio-images.yaml) |
-| Admission: only `ghcr.io/hubertmj/self-defending-portfolio/*` in `hello`, `sandbox` and `portfolio-api`, and in `falco-response` except the upstream Falcosidekick image (ADR 0023) | [`restrict-image-registries.yaml`](../../cluster/infra/kyverno-policies/restrict-image-registries.yaml) |
+| Admission: signature + SBOM by identity, `type: SigstoreBundle`, `mutateDigest`, `failurePolicy: Fail`; identity regex `build-images.yml` (and, until hello's digest is rebuilt, `build-web.yml`) `@refs/heads/main`; the site image's own entry pins HubertMJ/hubertjablon.ski's `build-image.yml@refs/heads/main` | [`verify-portfolio-images.yaml`](../../cluster/infra/kyverno-policies/verify-portfolio-images.yaml) |
+| Admission: only `ghcr.io/hubertmj/self-defending-portfolio/*` in `hello`, `sandbox` and `portfolio-api`, and in `falco-response` except the upstream Falcosidekick image (ADR 0023); only `ghcr.io/hubertmj/hubertjablon.ski/*` in `site` | [`restrict-image-registries.yaml`](../../cluster/infra/kyverno-policies/restrict-image-registries.yaml) |
 | Admission: no image without a tag or with `:latest` (cluster-wide minus system namespaces) | [`disallow-latest-tag.yaml`](../../cluster/infra/kyverno-policies/disallow-latest-tag.yaml) |
 | The same verdict without a cluster | [`scripts/verify-image.sh`](../../scripts/verify-image.sh) |
 | The negative test (unsigned, foreign, `:latest` all rejected) | [`tests/admission/run.sh`](../../tests/admission/run.sh) |
@@ -283,7 +290,8 @@ it is summarised), [`cluster/infra/portfolio-api/rbac.yaml`](../../cluster/infra
 | `kyverno` | restricted | none (egress open, see threat model) | admission, background, cleanup, reports controllers | [`cluster/apps/kyverno.yaml`](../../cluster/apps/kyverno.yaml) |
 | `cloudflared` | restricted | CNP, explicit egress | tunnel x2 | [`cluster/infra/cloudflared/`](../../cluster/infra/cloudflared/) |
 | `gateway` | restricted | n/a (no pods) | Gateway, redirect route, TLS Secret | [`cluster/infra/gateway/`](../../cluster/infra/gateway/) |
-| `hello` | restricted | default-deny + CNP | the site | [`cluster/infra/hello/`](../../cluster/infra/hello/) |
+| `site` | restricted | default-deny + CNP | the landing page and `/lab/` (image from [hubertjablon.ski](https://github.com/HubertMJ/hubertjablon.ski)) | [`cluster/infra/site/`](../../cluster/infra/site/) |
+| `hello` | restricted | default-deny + CNP | the cluster page (`/cluster/`) | [`cluster/infra/hello/`](../../cluster/infra/hello/) |
 | `policy-reporter` | restricted | default-deny + CNPs | reports UI | [`cluster/infra/policy-reporter/`](../../cluster/infra/policy-reporter/) |
 | `trivy-system` | restricted | default-deny + CNPs (FQDN allow-list) | Trivy operator, server, scan Jobs, adapter | [`cluster/infra/trivy-operator/`](../../cluster/infra/trivy-operator/) |
 | `kube-bench` | privileged (audit restricted) | default-deny, nothing opened | daily CIS CronJob | [`cluster/infra/kube-bench/`](../../cluster/infra/kube-bench/) |
