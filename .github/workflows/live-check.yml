@@ -1,0 +1,23 @@
+name: live-check
+# By hand only: scripts/check-live.sh against https://hubertjablon.ski from a GitHub runner - every
+# page and the API on their paths with the security headers. GETs only; spends no attack quota.
+on:
+  workflow_dispatch:
+    inputs:
+      expect:
+        description: "landing (/ is the landing page) or cluster (/ is still the cluster page)"
+        type: choice
+        options: [landing, cluster]
+        default: landing
+
+permissions:
+  contents: read
+
+jobs:
+  live:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: scripts/check-live.sh
+        env:
+          EXPECT: ${{ inputs.expect }}
