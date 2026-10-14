@@ -17,5 +17,5 @@ resources:
 images:
   - name: ghcr.io/hubertmj/hubertjablon.ski/site
     newTag: main
-    # HubertMJ/hubertjablon.ski 72562a4, build-image run 38601159127.
-    digest: sha256:c44bd6b36c2377cddab8766d6ebe4656d82d0652edb94924159180f7639cab78
+    # HubertMJ/hubertjablon.ski 5e7c8e6, build-image run 38607683813.
+    digest: sha256:affdb57da107986c1eaa26b3f37a229a116fa10d4d438ce43e7e62f7e7142a9e
