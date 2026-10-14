@@ -204,26 +204,55 @@ export interface TourHandle {
   setLaunch(s: LaunchState): void;
 }
 
-/** The side-by-side run in two lines, for the rail: what each pod got. */
-export function twinLines(run: RunView, now: number = Date.now()): { guarded: string; unguarded: string } {
-  const gFalco = run.falco.some((f) => f.arm !== "unguarded");
-  const gTalon = run.talon.some((t) => t.arm !== "unguarded");
-  const ms = run.timings.respondMs;
-  const guarded = gTalon
-    ? `Falco detected it, Talon answered${ms !== undefined ? ` in ${formatDuration(ms)}` : ""}.`
+/**
+ * One pod of the side-by-side run as step 5 says it, live: `state` changes only when something
+ * happened (it is announced), `since` is when the count beside it began (the unguarded pod still
+ * running after its detection: the count ticks every second and is never announced).
+ */
+export interface ArmLine {
+  state: string;
+  since?: number;
+}
+
+/**
+ * The side-by-side run in two lines, for the rail: what each pod has got so far. Without the run
+ * (the press accepted, its first event not in yet) both are starting.
+ */
+export function liveLines(run: RunView | undefined, now: number = Date.now()): { guarded: ArmLine; unguarded: ArmLine } {
+  if (!run) return { guarded: { state: "Starting…" }, unguarded: { state: "Starting…" } };
+  const running = (pods: RunView["pods"]) => pods.some((p) => /running/i.test(p.phase));
+  const gFalco = run.falco.find((f) => f.arm !== "unguarded");
+  const uFalco = run.falco.find((f) => f.arm === "unguarded");
+  const resp = lastResponse(run);
+  const ms = resp?.afterAlertMs ?? run.timings.respondMs;
+  const detected = (at: string) => `Falco detected it at ${plClock(at, now)}`;
+  const guarded: ArmLine = resp
+    ? { state: `${gFalco ? `${detected(gFalco.at)}; ` : ""}Talon ${resp.action === "terminate" ? "deleted" : "quarantined"} the pod${ms !== undefined ? ` in ${formatDuration(ms)}` : ""}.` }
     : gFalco
-      ? "Falco detected it; waiting for Talon."
-      : run.active
-        ? "Running."
-        : "No detection.";
-  const uFalco = run.falco.some((f) => f.arm === "unguarded");
+      ? { state: `${detected(gFalco.at)}; waiting for Talon.` }
+      : !run.active
+        ? { state: "Ended: no detection." }
+        : run.states.pod_ready !== undefined || running(run.pods)
+          ? { state: "Pod running." }
+          : { state: "Starting the pod…" };
+  const uEnded = !run.active || run.unguardedPods.some((p) => p.deleted);
   const held = heldMs(run, now);
-  const unguarded = uFalco
-    ? `Falco detected it, nothing answered${held !== undefined ? `; held for ${formatDuration(held)}` : ""}${run.active ? ", still running" : ""}.`
-    : run.active
-      ? "Running."
-      : "No detection.";
+  const unguarded: ArmLine = uFalco
+    ? uEnded
+      ? { state: `${detected(uFalco.at)}; nothing answered${held !== undefined ? `: held for ${formatDuration(held)}` : ""}.` }
+      : { state: `${detected(uFalco.at)}; nothing answered: still running`, since: ts(uFalco.at) }
+    : uEnded
+      ? { state: "Ended: no detection." }
+      : running(run.unguardedPods)
+        ? { state: "Pod running." }
+        : { state: "Starting the pod…" };
   return { guarded, unguarded };
+}
+
+/** The count beside a still-running pod: whole seconds, so it changes once a second and no faster. */
+export function countText(since: number, now: number): string {
+  const sec = Math.max(0, Math.floor((now - since) / 1000));
+  return `, ${sec < 60 ? `${sec} s` : `${Math.floor(sec / 60)} min ${sec % 60} s`} and counting.`;
 }
 
 export interface TourHooks {
@@ -239,7 +268,7 @@ export interface TourHooks {
   onTimeline(): void;
   /** Whether the terminal shows that run now, so its kill timeline is there to watch. */
   showsRun?(runId: string): boolean;
-  /** The "compare" step's done button: put that run in the live-run console and go there. */
+  /** Step 5's "Watch it side by side": put that run in the live-run console, open it (in the default view too) and go there. */
   onShowRun(runId: string): void;
   /** Where the phone toast lives; document.body in the page. */
   toastParent?: HTMLElement;
@@ -263,8 +292,16 @@ export function mountTour(root: HTMLElement, hooks: TourHooks): TourHandle {
   let pressed: string | undefined;
   /** The commands that have reached their objective in the visitor's runs (which of a step's two to offer). */
   let reached = new Set<string>();
-  /** The visitor's side-by-side run, for step 5's two lines. */
-  let compareRun: RunView | undefined;
+  /**
+   * Step 5's run, shown live under the step once step 5 was pressed in this page view: the newest
+   * side-by-side run since the press. A run launched from a card (Technical Mode) does not grow the
+   * rail under the visitor; after a reload the done step offers its way to the console instead.
+   */
+  let liveRun: RunView | undefined;
+  /** The runs there were when step 5 was pressed: the run it started is the first one not among them. */
+  let launchedFrom: Set<string> | undefined;
+  let lastRuns: readonly RunView[] = [];
+  let liveTimer: ReturnType<typeof setInterval> | undefined;
   let launch: LaunchState = { blocked: null };
   /** The terminal's catalogue (which objective and outcome each command has), and the last update's evidence to re-read with it. */
   let catalogue: readonly CatalogueCommand[] = [];
@@ -299,6 +336,48 @@ export function mountTour(root: HTMLElement, hooks: TourHooks): TourHandle {
     else b.removeAttribute("aria-busy");
     const label = launch.pending ? "Starting…" : (b.dataset.label ?? b.textContent ?? "");
     if (b.textContent !== label) b.textContent = label;
+  };
+  // Step 5's run, live in the rail (2026-10-14): each pod's state in a polite live region kept across
+  // redraws, so a screen reader hears each change once; the count beside a pod still running is a
+  // timer, read on request and never announced every second.
+  const armState = { guarded: h("span", { class: "tour__armstate", "aria-live": "polite", "aria-atomic": "true" }), unguarded: h("span", { class: "tour__armstate", "aria-live": "polite", "aria-atomic": "true" }) };
+  const armCount = { guarded: h("span", { class: "tour__armcount", role: "timer" }), unguarded: h("span", { class: "tour__armcount", role: "timer" }) };
+  // The visitor's own press goes to the side-by-side view; nothing goes there for them.
+  const watchBtn = button("Watch it side by side ↓", () => {
+    if (liveRun) hooks.onShowRun(liveRun.runId);
+  }, "watch", "btn btn--ghost btn--small tour__btn tour__watch", "Watch it side by side");
+  const liveBox = h(
+    "div",
+    { class: "tour__live" },
+    h(
+      "dl",
+      { class: "tour__twin" },
+      h("div", {}, h("dt", {}, "With response"), h("dd", {}, armState.guarded, armCount.guarded)),
+      h("div", {}, h("dt", {}, "Without response"), h("dd", {}, armState.unguarded, armCount.unguarded)),
+    ),
+    h("p", { class: "tour__act" }, watchBtn),
+  );
+  const syncLive = () => {
+    const t = now();
+    const l = liveLines(liveRun, t);
+    let counting = false;
+    for (const arm of ["guarded", "unguarded"] as const) {
+      if (armState[arm].textContent !== l[arm].state) armState[arm].textContent = l[arm].state;
+      const since = l[arm].since;
+      const c = since !== undefined ? countText(since, t) : "";
+      if (armCount[arm].textContent !== c) armCount[arm].textContent = c;
+      if (since !== undefined) counting = true;
+    }
+    watchBtn.hidden = !liveRun;
+    if (counting && !liveTimer) liveTimer = setInterval(syncLive, 1000);
+    if (!counting && liveTimer) {
+      clearInterval(liveTimer);
+      liveTimer = undefined;
+    }
+  };
+  const pickLive = () => {
+    const sides = lastRuns.filter((r) => r.scenario !== "terminal");
+    liveRun = launchedFrom ? sides.find((r) => !launchedFrom?.has(r.runId)) : undefined;
   };
   let shown = skipped();
   let enabled = true;
@@ -436,19 +515,8 @@ export function mountTour(root: HTMLElement, hooks: TourHooks): TourHandle {
         // In Technical Mode the cards and the console say all this where it happens: the rail stays
         // short, but the current step's own press is answered beside its button (2026-10-13 c).
         s.scenario && (isCurrent || isDone) ? tagLaunch(isCurrent) : null,
-        s.scenario && compareRun ? twinBlock(compareRun) : null,
+        s.scenario && (liveRun || launchedFrom) ? liveBox : null,
       ),
-    );
-  };
-
-  /** Step 5's result, both pods, in the rail: the console that shows it whole is in Technical Mode. */
-  const twinBlock = (run: RunView) => {
-    const t = twinLines(run, now());
-    return h(
-      "dl",
-      { class: "tour__twin tech-less" },
-      h("div", {}, h("dt", {}, "Guarded"), h("dd", {}, t.guarded)),
-      h("div", {}, h("dt", {}, "Unguarded"), h("dd", {}, t.unguarded)),
     );
   };
 
@@ -476,9 +544,14 @@ export function mountTour(root: HTMLElement, hooks: TourHooks): TourHandle {
       const b = button(label, () => {
         // Blocked: the line under the step says why; nothing is sent.
         if (launch.blocked) return;
-        // Pressed: the button says so at once, before the launcher's answer redraws it.
+        // Pressed: the button says so at once, before the launcher's answer redraws it; both pods'
+        // lines show under the step from now (on a phone the steps open below the terminal).
         launch = { ...launch, blocked: "Starting…", pending: true, tone: undefined, text: undefined, countdown: undefined };
-        syncLaunch();
+        launchedFrom = new Set(lastRuns.map((r) => r.runId));
+        liveRun = undefined;
+        if (!wide()) expanded = true;
+        syncLive();
+        draw();
         press(() => hooks.onScenario(s.scenario as string, n))();
       }, key);
       b.dataset.scenario = s.scenario;
@@ -493,15 +566,16 @@ export function mountTour(root: HTMLElement, hooks: TourHooks): TourHandle {
   /**
    * A done step's way to where it happened: offered, never taken for the visitor, and only where
    * the target is there to see. The kill timeline is in "This run" beside the terminal, for the
-   * session the terminal shows now (a new session, or a reload, has its own); the side-by-side run
-   * is in the live-run console, as long as the page's feed still holds it (it ticked the step, so it does).
+   * session the terminal shows now (a new session, or a reload, has its own). The side-by-side run's
+   * way there is "Watch it side by side" under the step once pressed, else "Live run" (Technical Mode).
    */
   const doneAction = (s: TourStep): Child => {
     const key = `step:${s.id}`;
     const { caught, compare } = progress.runs;
     // On the done step's one line, short words; the full name for a screen reader, which carries them.
     if (s.id === "caught") return caught && (hooks.showsRun?.(caught) ?? true) ? button("Timeline", () => hooks.onTimeline(), key, "tour__doneact tech-more", "Watch the kill timeline") : null;
-    if (s.id === "compare") return compare ? button("Live run", () => hooks.onShowRun(compare), key, "tour__doneact tech-more", "Show the live run") : null;
+    // Without step 5's lines (a reload, a run from a card), the side-by-side run's way to the console.
+    if (s.id === "compare") return compare && !launchedFrom ? button("Live run", () => hooks.onShowRun(compare), key, "tour__doneact tech-more", "Show the live run") : null;
     if (s.id === "siem") {
       const inc = notices.find((n) => n.kind === "siem");
       return h("a", { class: "tour__doneact", href: inc?.link?.href ?? "#correlation", "data-focus": key, "aria-label": "Show in SIEM" }, "SIEM");
@@ -643,7 +717,9 @@ export function mountTour(root: HTMLElement, hooks: TourHooks): TourHandle {
         hooks.onStepDone?.();
       }
       notices = deriveNotices(runs, incidents, ownRunIds);
-      compareRun = progress.runs.compare ? runs.find((r) => r.runId === progress.runs.compare) : undefined;
+      lastRuns = runs;
+      pickLive();
+      syncLive();
       draw();
       syncNotices();
       syncLaunch();
@@ -654,6 +730,13 @@ export function mountTour(root: HTMLElement, hooks: TourHooks): TourHandle {
     },
     setLaunch(s) {
       launch = s;
+      // The press refused (a limit, an error) and no run started: the lines go, the line above says why.
+      if (launchedFrom && !liveRun && !s.pending && (s.tone === "warn" || s.tone === "error")) {
+        launchedFrom = undefined;
+        pickLive();
+        syncLive();
+        draw();
+      }
       syncLaunch();
     },
   };

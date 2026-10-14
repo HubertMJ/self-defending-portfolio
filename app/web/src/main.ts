@@ -257,6 +257,8 @@ function main(): void {
     onShowRun: (id) => {
       runConsole.select(id);
       timeline.setShown(id);
+      // In the default view the console is one switch away: the visitor's press opens it here.
+      byId("console").dataset.opened = "true";
       runConsole.reveal();
     },
     toastParent: document.body,

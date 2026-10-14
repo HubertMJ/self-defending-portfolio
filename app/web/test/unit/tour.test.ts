@@ -3,7 +3,7 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildTimeline } from "../../src/lib/timeline";
-import { deriveNotices, deriveProgress, mountTour, noticeText, SETTLE_MS, STEPS, twinLines, WIDE_QUERY } from "../../src/ui/tour";
+import { deriveNotices, deriveProgress, mountTour, noticeText, SETTLE_MS, STEPS, liveLines, countText, WIDE_QUERY } from "../../src/ui/tour";
 import { FOLDED_BY_DEFAULT, startsFolded } from "../../src/lib/folds";
 import type { CorrelationIncident, StreamEvent } from "../../src/lib/contract";
 import { TERMINAL_COMMANDS } from "../../src/lib/fixtures";
@@ -146,6 +146,24 @@ function caughtRun(): ReturnType<typeof runOf> {
   return buildTimeline(evs, Date.parse("2026-10-03T18:00:30Z")).runs[0];
 }
 
+/** Steps 1-4 done in one session (the deface, the flag, the DNS trick, a shell caught): step 5 is current. */
+function fourDoneRun(): ReturnType<typeof runOf> {
+  return buildTimeline(
+    [
+      { type: "run", data: { run_id: RUN, scenario: "terminal", state: "started", at: "2026-10-03T18:00:00Z", pod: "p" } },
+      ...(["whoami", "deface", "read-flag", "dns-exfil"] as const).flatMap((id, i): StreamEvent[] => [
+        { type: "command", data: { run_id: RUN, seq: i + 1, id, state: "started", at: `2026-10-03T18:00:0${i + 1}Z` } },
+        { type: "command", data: { run_id: RUN, seq: i + 1, id, state: "exited", at: `2026-10-03T18:00:0${i + 1}.5Z`, exit_code: 0, achieved: true } },
+      ]),
+      { type: "command", data: { run_id: RUN, seq: 5, id: "shell", state: "started", at: "2026-10-03T18:00:06Z" } },
+      { type: "falco", data: { at: "2026-10-03T18:00:06.2Z", rule: "Terminal shell in container", priority: "Critical", namespace: "sandbox", pod: "p", output: "x" } },
+      { type: "talon", data: { at: "2026-10-03T18:00:06.5Z", action: "Terminate Pod", actionner: "kubernetes:terminate", namespace: "sandbox", pod: "p", status: "success" } },
+      { type: "run", data: { run_id: RUN, scenario: "terminal", state: "finished", at: "2026-10-03T18:00:07Z", detail: "killed" } },
+    ],
+    Date.parse("2026-10-03T18:00:30Z"),
+  ).runs[0];
+}
+
 describe("a done step's button goes to its run (2026-10-13)", () => {
   it("names the caught session and the side-by-side run; 'Show the live run' puts that run in the console", () => {
     const compare: StreamEvent[] = [
@@ -163,6 +181,8 @@ describe("a done step's button goes to its run (2026-10-13)", () => {
     const t = mountTour(root, { onCommand: vi.fn(), onScenario: vi.fn(), onTimeline: vi.fn(), onShowRun, matchMedia: ((q: string) => ({ matches: q === WIDE_QUERY, addEventListener() {} }) as unknown as MediaQueryList) });
     t.setCatalogue(TERMINAL_COMMANDS);
     t.update(runs, [], new Set([RUN, "bb22cc33dd44ee55"]));
+    // Not pressed in this page view (a reload, a card's run): no live lines, the done step's way to the console.
+    expect(root.querySelector(".tour__live")).toBeNull();
     const btn = root.querySelector<HTMLButtonElement>('.tour__step[data-id="compare"] button');
     expect(btn?.getAttribute("aria-label")).toBe("Show the live run");
     btn?.click();
@@ -343,19 +363,93 @@ describe("the tour panel never moves the page (amendment 2026-10-13)", () => {
     expect(five().querySelector(".tour__launchcount")?.getAttribute("role")).toBe("timer");
   });
 
-  it("twinLines: the guarded pod answered in N ms, the unguarded one held for N s", () => {
-    const evs: StreamEvent[] = [
-      { type: "run", data: { run_id: RUN, scenario: "shell-in-container", state: "started", at: "2026-10-03T18:00:00Z", pod: "g", pods: { guarded: "g", unguarded: "u" } } },
+  it("liveLines: starting, pod running, Falco detected at HH:MM:SS, then Talon deleted the pod in N ms / still running and counting", () => {
+    const base: StreamEvent[] = [{ type: "run", data: { run_id: RUN, scenario: "shell-in-container", state: "started", at: "2026-10-03T18:00:00Z", pod: "g", pods: { guarded: "g", unguarded: "u" } } }];
+    const pod = (name: string, arm: "guarded" | "unguarded"): StreamEvent => ({ type: "pod", data: { run_id: RUN, pod: name, uid: "x", phase: "Running", reason: "", container_id: "", image: "", labels_delta: {}, deleted: false, at: "2026-10-03T18:00:01Z", arm } });
+    const detect: StreamEvent[] = [
       { type: "run", data: { run_id: RUN, scenario: "shell-in-container", state: "detected", at: "2026-10-03T18:00:02Z" } },
       { type: "falco", data: { at: "2026-10-03T18:00:02Z", rule: "Terminal shell in container", priority: "Critical", namespace: "sandbox", pod: "g", output: "x", arm: "guarded" } },
       { type: "falco", data: { at: "2026-10-03T18:00:02Z", rule: "Terminal shell in container", priority: "Critical", namespace: "sandbox-unguarded", pod: "u", output: "x", arm: "unguarded" } },
+    ];
+    const answer: StreamEvent[] = [
       { type: "talon", data: { at: "2026-10-03T18:00:02.2Z", action: "Terminate Pod", actionner: "kubernetes:terminate", namespace: "sandbox", pod: "g", status: "success" } },
       { type: "run", data: { run_id: RUN, scenario: "shell-in-container", state: "responded", at: "2026-10-03T18:00:02.2Z" } },
     ];
-    const run = buildTimeline(evs, Date.parse("2026-10-03T18:00:10Z")).runs[0];
-    const l = twinLines(run, Date.parse("2026-10-03T18:00:10Z"));
-    expect(l.guarded).toBe("Falco detected it, Talon answered in 200 ms.");
-    expect(l.unguarded).toMatch(/^Falco detected it, nothing answered/);
+    const at = Date.parse("2026-10-03T18:00:10Z");
+    const lines = (evs: StreamEvent[]) => liveLines(buildTimeline(evs, at).runs[0], at);
+    expect(liveLines(undefined, at)).toEqual({ guarded: { state: "Starting…" }, unguarded: { state: "Starting…" } });
+    expect(lines(base).guarded.state).toBe("Starting the pod…");
+    const up = lines([...base, pod("g", "guarded"), pod("u", "unguarded")]);
+    expect([up.guarded.state, up.unguarded.state]).toEqual(["Pod running.", "Pod running."]);
+    const seen = lines([...base, ...detect]);
+    expect(seen.guarded.state).toMatch(/^Falco detected it at \d\d:\d\d:\d\d( CES?T)?; waiting for Talon\.$/);
+    const l = lines([...base, ...detect, ...answer]);
+    expect(l.guarded.state).toMatch(/^Falco detected it at \d\d:\d\d:\d\d( CES?T)?; Talon deleted the pod in 200 ms\.$/);
+    expect(l.guarded.since).toBeUndefined();
+    expect(l.unguarded.state).toMatch(/^Falco detected it at .+; nothing answered: still running$/);
+    expect(l.unguarded.since).toBe(Date.parse("2026-10-03T18:00:02Z"));
+    expect(countText(Date.parse("2026-10-03T18:00:02Z"), at)).toBe(", 8 s and counting.");
+    expect(countText(0, 75_400)).toBe(", 1 min 15 s and counting.");
+  });
+
+  it("step 5's lines show from the press, follow the run, announce a change once (not the count) and 'Watch it side by side' goes there", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(Date.parse("2026-10-03T18:00:10Z"));
+    const root = document.createElement("div");
+    document.body.append(root);
+    const h = hooks(true);
+    const onShowRun = vi.fn();
+    const t = mountTour(root, { ...h, onShowRun, now: () => Date.now() });
+    t.setCatalogue(TERMINAL_COMMANDS);
+    const old = fourDoneRun();
+    t.update([old], [], new Set([RUN]));
+    const five = () => root.querySelector('.tour__step[data-id="compare"]') as HTMLElement;
+    expect(five().querySelector(".tour__live")).toBeNull();
+    (five().querySelector(".tour__btn[data-scenario]") as HTMLButtonElement).click();
+    expect(h.onScenario).toHaveBeenCalledWith("shell-in-container", 5);
+    expect([...five().querySelectorAll(".tour__twin dt")].map((e) => e.textContent)).toEqual(["With response", "Without response"]);
+    const states = () => [...five().querySelectorAll(".tour__armstate")].map((e) => e.textContent);
+    expect(states()).toEqual(["Starting…", "Starting…"]);
+    expect((five().querySelector(".tour__watch") as HTMLElement).hidden).toBe(true);
+    const C = "bb22cc33dd44ee55";
+    const evs: StreamEvent[] = [
+      { type: "run", data: { run_id: C, scenario: "shell-in-container", state: "started", at: "2026-10-03T18:00:00Z", pod: "g", pods: { guarded: "g", unguarded: "u" } } },
+      { type: "falco", data: { at: "2026-10-03T18:00:02Z", rule: "Terminal shell in container", priority: "Critical", namespace: "sandbox-unguarded", pod: "u", output: "x", arm: "unguarded" } },
+    ];
+    const run = buildTimeline(evs, Date.now()).runs[0];
+    t.update([run, old], [], new Set([RUN, C]));
+    const state = five().querySelectorAll(".tour__armstate")[1] as HTMLElement;
+    expect(state.getAttribute("aria-live")).toBe("polite");
+    expect(state.textContent).toMatch(/nothing answered: still running$/);
+    const count = five().querySelectorAll(".tour__armcount")[1] as HTMLElement;
+    expect(count.getAttribute("role")).toBe("timer");
+    expect(count.closest("[aria-live]")).toBeNull();
+    expect(count.textContent).toBe(", 8 s and counting.");
+    // A second later the count moves; the announced state is the same node with the same words.
+    vi.advanceTimersByTime(1000);
+    expect(count.textContent).toBe(", 9 s and counting.");
+    expect(five().querySelectorAll(".tour__armstate")[1]).toBe(state);
+    const watch = five().querySelector(".tour__watch") as HTMLButtonElement;
+    expect(watch.hidden).toBe(false);
+    expect(watch.textContent).toBe("Watch it side by side ↓");
+    watch.click();
+    expect(onShowRun).toHaveBeenCalledWith(C);
+    vi.useRealTimers();
+    document.body.replaceChildren();
+  });
+
+  it("step 5 refused (a limit): the lines go again", () => {
+    const root = document.createElement("div");
+    document.body.append(root);
+    const t = mountTour(root, hooks(true));
+    t.setCatalogue(TERMINAL_COMMANDS);
+    t.update([fourDoneRun()], [], new Set([RUN]));
+    const five = () => root.querySelector('.tour__step[data-id="compare"]') as HTMLElement;
+    (five().querySelector(".tour__btn[data-scenario]") as HTMLButtonElement).click();
+    expect(five().querySelector(".tour__live")).not.toBeNull();
+    t.setLaunch({ blocked: "Rate limited", tone: "warn", text: "Too many attacks." });
+    expect(five().querySelector(".tour__live")).toBeNull();
+    document.body.replaceChildren();
   });
 
   it("a redraw under the keyboard puts the focus back on the same control", () => {

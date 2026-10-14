@@ -6488,7 +6488,7 @@ html.js:not([data-tech="on"]) .attack-stage {
 
 .tour__twin > div {
   display: grid;
-  grid-template-columns: 5.2rem minmax(0, 1fr);
+  grid-template-columns: 7.4rem minmax(0, 1fr);
   gap: 0.4rem;
 }
 
@@ -6500,4 +6500,14 @@ html.js:not([data-tech="on"]) .attack-stage {
 .tour__twin dd {
   margin: 0;
   color: var(--text-muted);
+}
+
+.tour__armcount {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Opened from the tour's step 5 ("Watch it side by side"): the live-run console shows in the default
+   view too, for this page view - the visitor asked to see it. */
+html.js:not([data-tech="on"]) .console.tech-more[data-opened="true"] {
+  display: block !important;
 }
