@@ -42,7 +42,7 @@ describe("ApiClient GETs", () => {
   it("calls same-origin /api paths without credentials", async () => {
     const f = vi.fn<FetchLike>(async () => json(200, []));
     await client(f).scenarios();
-    expect(f).toHaveBeenCalledWith("/api/scenarios", expect.objectContaining({ credentials: "omit", cache: "no-store" }));
+    expect(f).toHaveBeenCalledWith("/cluster/api/scenarios", expect.objectContaining({ credentials: "omit", cache: "no-store" }));
   });
 
   it("accepts a contract-shaped posture", async () => {
@@ -116,7 +116,7 @@ describe("ApiClient.attack", () => {
   it("POSTs to /api/attack/{id} with the id encoded", async () => {
     const f = vi.fn<FetchLike>(async () => json(202, { run_id: "r1", scenario: "a b", state: "queued" }));
     const res = await client(f).attack("a b");
-    expect(f.mock.calls[0][0]).toBe("/api/attack/a%20b");
+    expect(f.mock.calls[0][0]).toBe("/cluster/api/attack/a%20b");
     expect(f.mock.calls[0][1]?.method).toBe("POST");
     expect(res).toEqual({ kind: "accepted", run: { run_id: "r1", scenario: "a b", state: "queued" } });
   });

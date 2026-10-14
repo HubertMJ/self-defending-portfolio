@@ -49,7 +49,7 @@ function makeStream(extra: Partial<ConstructorParameters<typeof EventStream>[0]>
   const events: StreamEvent[] = [];
   const states: { state: ConnectionState; retryInMs?: number }[] = [];
   const stream = new EventStream({
-    url: "/api/events",
+    url: "/cluster/api/events",
     factory: (url) => new FakeSource(url),
     random: () => 0.5,
     onEvent: (e) => events.push(e),
@@ -81,7 +81,7 @@ describe("EventStream", () => {
   it("connects to the url and reports connecting -> open", () => {
     const { stream, states } = makeStream();
     stream.start();
-    expect(last().url).toBe("/api/events");
+    expect(last().url).toBe("/cluster/api/events");
     last().open();
     expect(states.map((s) => s.state)).toEqual(["connecting", "open"]);
   });
@@ -270,7 +270,7 @@ describe("EventStream retry scheduler", () => {
     last().fail();
     expect(states.at(-1)).toEqual({ state: "reconnecting", retryInMs: undefined });
     await vi.advanceTimersByTimeAsync(0);
-    expect(probe).toHaveBeenCalledWith("/api/events");
+    expect(probe).toHaveBeenCalledWith("/cluster/api/events");
     expect(states.at(-1)).toEqual({ state: "reconnecting", retryInMs: 5000 });
     await vi.advanceTimersByTimeAsync(4999);
     expect(FakeSource.all).toHaveLength(1);
@@ -302,7 +302,7 @@ describe("EventStream retry scheduler", () => {
   it("stops after maxAttempts refusals with a stable state, and retryNow starts over", () => {
     const seen: { state: ConnectionState; gaveUp?: boolean }[] = [];
     const stream = new EventStream({
-      url: "/api/events",
+      url: "/cluster/api/events",
       factory: (url) => new FakeSource(url),
       random: () => 0.5,
       maxAttempts: 3,
@@ -337,9 +337,9 @@ describe("EventStream defaults", () => {
     }
     vi.stubGlobal("EventSource", StubEventSource);
     try {
-      const stream = new EventStream({ url: "/api/events", factory: undefined, onEvent: () => {} });
+      const stream = new EventStream({ url: "/cluster/api/events", factory: undefined, onEvent: () => {} });
       stream.start();
-      expect(created).toEqual(["/api/events"]);
+      expect(created).toEqual(["/cluster/api/events"]);
       expect(vi.getTimerCount()).toBe(0); // no retry was scheduled: the connect did not throw
     } finally {
       vi.unstubAllGlobals();

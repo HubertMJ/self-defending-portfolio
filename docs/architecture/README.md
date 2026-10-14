@@ -56,7 +56,7 @@ flowchart LR
             WEB["Deployment hello x2<br/>web image :8080, uid 101"]
         end
         subgraph NS_API["ns portfolio-api"]
-            AROUTE["HTTPRoute portfolio-api<br/>/api, /api/events (timeout off)"]
+            AROUTE["HTTPRoute portfolio-api<br/>/cluster/api, /cluster/api/events (timeout off)<br/>rewritten to /api for the pod"]
             API["Deployment portfolio-api x1<br/>Go, distroless :8080<br/>(:8081 internal, not routed)"]
         end
     end
@@ -85,7 +85,7 @@ What the diagram claims, and where it is written down:
 | HSTS, CSP, nosniff, Referrer-Policy, Permissions-Policy, COOP are set at the Gateway | [`cluster/infra/hello/httproute.yaml`](../../cluster/infra/hello/httproute.yaml) |
 | The route's CSP is exactly the web image's (same-origin scripts/styles/`connect-src`, Trusted Types enforced); CI fails if the two strings differ | [`app/web/security-headers.conf`](../../app/web/security-headers.conf), [`scripts/check-web-csp.sh`](../../scripts/check-web-csp.sh), [ADR 0019](../adr/0019-frontend-stack-and-csp.md) |
 | The landing page is the entry: `/` (exact), `/lab` and `/site-assets` go to the site image; hello keeps every other path and serves the cluster page at `/cluster/`, the prefix cut before nginx so the image is unchanged; an exact match and a longer prefix outrank hello's `/`, and the site route repeats the HTTP-to-HTTPS redirect and hello's headers | [`cluster/infra/site/httproute.yaml`](../../cluster/infra/site/httproute.yaml), [`cluster/infra/hello/httproute.yaml`](../../cluster/infra/hello/httproute.yaml), [`scripts/check-web-csp.sh`](../../scripts/check-web-csp.sh) |
-| `/api` wins over hello's `/` (longer prefix), repeats the HTTP-to-HTTPS redirect and sets its own headers, CSP `default-src 'none'` | [`cluster/infra/portfolio-api/httproute.yaml`](../../cluster/infra/portfolio-api/httproute.yaml), [ADR 0015](../adr/0015-portfolio-api.md) |
+| `/cluster/api` wins over hello's `/cluster` (longer prefix) and reaches the pod as `/api`; the bare `/api` stays routed only until the cutover to the landing page. The route repeats the HTTP-to-HTTPS redirect and sets its own headers, CSP `default-src 'none'` | [`cluster/infra/portfolio-api/httproute.yaml`](../../cluster/infra/portfolio-api/httproute.yaml), [ADR 0015](../adr/0015-portfolio-api.md) |
 | Envoy trusts exactly one `X-Forwarded-For` hop (cloudflared) | [`cluster/apps/cilium.yaml`](../../cluster/apps/cilium.yaml) (`xffNumTrustedHops: 1`) |
 | `site` is shaped like `hello`: default-deny, ingress only from `ingress`/`host` on 8080, no egress, PSS `restricted` | [`cluster/infra/site/`](../../cluster/infra/site/) |
 | `hello` is default-deny, ingress only from Cilium's `ingress`/`host` identities on 8080, no egress at all | [`cluster/infra/hello/`](../../cluster/infra/hello/) |

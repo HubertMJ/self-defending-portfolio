@@ -1,4 +1,4 @@
-# /api on the portfolio Gateway (ADR 0015). Path-prefix matches are ranked by length before header
+# /cluster/api (and, until the cutover, /api) on the portfolio Gateway (ADR 0015). Path-prefix matches are ranked by length before header
 # matches, so this route wins over hello's `/` for everything under /api - which is why it repeats
 # hello's HTTP-to-HTTPS redirect and sets its own response headers instead of inheriting them.
 apiVersion: gateway.networking.k8s.io/v1
@@ -23,6 +23,12 @@ spec:
           headers:
             - name: X-Forwarded-Proto
               value: http
+        - path:
+            type: PathPrefix
+            value: /cluster/api
+          headers:
+            - name: X-Forwarded-Proto
+              value: http
       filters:
         - type: RequestRedirect
           requestRedirect:
@@ -36,9 +42,19 @@ spec:
         - path:
             type: Exact
             value: /api/events
+        # The cluster page's own prefix (the landing page took /): the pod still serves /api, so
+        # the Gateway rewrites the path; /api goes once the page calls only /cluster/api.
+        - path:
+            type: Exact
+            value: /cluster/api/events
       timeouts:
         request: "0s"
       filters:
+        - type: URLRewrite
+          urlRewrite:
+            path:
+              type: ReplaceFullPath
+              replaceFullPath: /api/events
         - type: ResponseHeaderModifier
           responseHeaderModifier:
             # Same set on both API rules; keep them identical.
@@ -61,7 +77,16 @@ spec:
         - path:
             type: PathPrefix
             value: /api
+        - path:
+            type: PathPrefix
+            value: /cluster/api
       filters:
+        # /cluster/api/x reaches the pod as /api/x; on the /api match this replaces /api with /api.
+        - type: URLRewrite
+          urlRewrite:
+            path:
+              type: ReplacePrefixMatch
+              replacePrefixMatch: /api
         - type: ResponseHeaderModifier
           responseHeaderModifier:
             set:

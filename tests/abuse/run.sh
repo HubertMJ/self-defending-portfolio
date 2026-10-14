@@ -26,7 +26,9 @@
 # covered by the Go integration test (app/api/internal/server, TestHammer) with smaller numbers.
 set -euo pipefail
 
-API=${API:-https://hubertjablon.ski}
+# The site publishes the API under the cluster page's prefix (/cluster/api); a port-forward
+# reaches the pod, which serves /api itself.
+API=${API:-https://hubertjablon.ski/cluster}
 API=${API%/}
 FAKE_IPS=${FAKE_IPS:-}
 # The scenario to trigger; defaults to the first one the API lists.

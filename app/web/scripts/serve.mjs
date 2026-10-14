@@ -408,6 +408,9 @@ const base = await securityHeaders();
 
 const server = createServer(async (req, res) => {
   const url = new URL(req.url ?? "/", "http://localhost");
+  // As the Gateway does (cluster/infra/hello and portfolio-api HTTPRoutes): the page lives at
+  // /cluster/ and its API at /cluster/api, the prefix cut before nginx or the API sees the path.
+  if (/^\/cluster(\/|$)/.test(url.pathname)) url.pathname = url.pathname.slice("/cluster".length) || "/";
   const send = (status, body, headers) => {
     res.writeHead(status, { ...base, ...headers });
     res.end(req.method === "HEAD" ? undefined : body);

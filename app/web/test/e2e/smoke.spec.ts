@@ -1837,9 +1837,9 @@ test.describe("against the API deployed today (serve.mjs --live-api: JSON 404 on
     await page.waitForTimeout(3000);
     // Loading the page posts nothing, and asks for the missing endpoints once each, not on a loop.
     expect(requests.filter((r) => r.startsWith("POST"))).toEqual([]);
-    expect(requests.filter((r) => r === "GET /api/stats").length).toBeLessThanOrEqual(1);
-    expect(requests.filter((r) => r === "GET /api/scenarios/terminal/details").length).toBeLessThanOrEqual(1);
-    expect(requests.filter((r) => r.startsWith("GET /api/runs/")).length).toBeLessThanOrEqual(1);
+    expect(requests.filter((r) => r === "GET /cluster/api/stats").length).toBeLessThanOrEqual(1);
+    expect(requests.filter((r) => r === "GET /cluster/api/scenarios/terminal/details").length).toBeLessThanOrEqual(1);
+    expect(requests.filter((r) => r.startsWith("GET /cluster/api/runs/")).length).toBeLessThanOrEqual(1);
     await noHorizontalScroll(page);
     expect(problems).toEqual([]);
   });
@@ -2249,7 +2249,7 @@ test.describe("correlation (ADR 0036; serve.mjs --terminal-api --siem / --no-sie
     await expect(dns.locator(".corr-step").first()).toBeHidden();
     await dns.locator("details.incident__details > summary").click();
     await expect(dns.locator('a[href="https://attack.mitre.org/techniques/T1048/003/"]')).toHaveCount(1);
-    await expect(dns.locator('a[href="/api/runs/7e57000000000001"]')).toHaveCount(1);
+    await expect(dns.locator('a[href="/cluster/api/runs/7e57000000000001"]')).toHaveCount(1);
     const steps = dns.locator(".corr-step");
     await expect(steps).toHaveCount(3);
     await expect(steps.first().locator("time")).toHaveText(/^\d\d:\d\d:\d\d\.\d{3} CES?T$/);
@@ -2303,10 +2303,10 @@ test.describe("correlation (ADR 0036; serve.mjs --terminal-api --siem / --no-sie
 
     // Links only from validated values: the repository, MITRE, the API's own JSON.
     const hrefs = await s.locator("a").evaluateAll((as) => as.map((a) => a.getAttribute("href") ?? ""));
-    for (const href of hrefs) expect(href).toMatch(/^(https:\/\/github\.com\/HubertMJ\/self-defending-portfolio\/(blob|commit)\/[0-9a-f]{40}[\w./#-]*|https:\/\/attack\.mitre\.org\/techniques\/T\d{4}\/(\d{3}\/)?|\/api\/runs\/[0-9a-f]{16}|\/api\/correlation)$/);
+    for (const href of hrefs) expect(href).toMatch(/^(https:\/\/github\.com\/HubertMJ\/self-defending-portfolio\/(blob|commit)\/[0-9a-f]{40}[\w./#-]*|https:\/\/attack\.mitre\.org\/techniques\/T\d{4}\/(\d{3}\/)?|\/cluster\/api\/runs\/[0-9a-f]{16}|\/cluster\/api\/correlation)$/);
 
     // The verify panel lists the two endpoints while they answer.
-    await expect(page.locator("#verify-panel .vraw")).toContainText("curl -s https://hubertjablon.ski/api/correlation/rules");
+    await expect(page.locator("#verify-panel .vraw")).toContainText("curl -s https://hubertjablon.ski/cluster/api/correlation/rules");
     await page.waitForTimeout(10_000);
     expect(nonGet).toEqual([]);
     expect(problems).toEqual([]);
