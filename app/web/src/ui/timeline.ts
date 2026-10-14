@@ -190,7 +190,7 @@ export function renderRun(
     h(
       "p",
       { class: "run__foot" },
-      h("span", {}, "Run ", h("code", {}, run.runId), isRunId(run.runId) ? [" · ", extLink(`/api/runs/${encodeURIComponent(run.runId)}`, "raw JSON")] : null),
+      h("span", {}, "Run ", h("code", {}, run.runId), isRunId(run.runId) ? [" · ", extLink(`/cluster/api/runs/${encodeURIComponent(run.runId)}`, "raw JSON")] : null),
       run.timings.totalMs !== undefined
         ? h(
             "span",

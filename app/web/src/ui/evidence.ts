@@ -43,7 +43,7 @@ export interface EvidenceContext {
   whose?: Whose | "example";
 }
 
-const rawUrl = (runId: string) => `/api/runs/${encodeURIComponent(runId)}`;
+const rawUrl = (runId: string) => `/cluster/api/runs/${encodeURIComponent(runId)}`;
 
 /** Falco and Talon events of the run in time order: the card's first three, #evidence's all. */
 type Answer = { type: "falco"; data: FalcoEvent } | { type: "talon"; data: TalonEvent };

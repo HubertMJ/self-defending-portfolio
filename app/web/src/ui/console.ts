@@ -709,7 +709,7 @@ export function mountConsole(root: HTMLElement, api: ApiClient, onDetails?: (sce
     const det = d && d !== "loading" && d.ok ? d.value : undefined;
     const image = det?.image.ref || run.image || "";
     const rows = hops.filter((hp) => hp.raw);
-    const runUrl = `/api/runs/${encodeURIComponent(run.runId)}`;
+    const runUrl = `/cluster/api/runs/${encodeURIComponent(run.runId)}`;
     const ruleLinks = det
       ? [det.falco_rule, det.talon_rule].flatMap((r) => {
           const url = r ? sourceUrl(det.commit, r.file, r.line) : null;

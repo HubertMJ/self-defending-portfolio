@@ -16,13 +16,13 @@ import { copyButton, extLink } from "./common";
 export const SITE_URL = "https://hubertjablon.ski";
 
 export const RAW_PATHS = [
-  "/api/posture",
-  "/api/stats",
-  "/api/scenarios",
-  "/api/scenarios/terminal/details",
-  "/api/runs",
-  "/api/limits",
-  "/api/provenance",
+  "/cluster/api/posture",
+  "/cluster/api/stats",
+  "/cluster/api/scenarios",
+  "/cluster/api/scenarios/terminal/details",
+  "/cluster/api/runs",
+  "/cluster/api/limits",
+  "/cluster/api/provenance",
   "/build.json",
 ] as const;
 
@@ -36,7 +36,7 @@ export interface VerifyData {
 }
 
 /** Listed only while the correlation section is shown: an API without a SIEM answers them with nothing to see. */
-export const CORRELATION_PATHS = ["/api/correlation", "/api/correlation/rules"] as const;
+export const CORRELATION_PATHS = ["/cluster/api/correlation", "/cluster/api/correlation/rules"] as const;
 
 interface ImageRow {
   name: "api" | "web";
@@ -108,10 +108,10 @@ export function renderVerifyPanel(d: VerifyData, now: number = Date.now()): HTML
       { class: "vraw", role: "list" },
       RAW_PATHS.map((path) => curlLine(path)),
       d.correlation ? CORRELATION_PATHS.map((path) => curlLine(path)) : null,
-      d.latestRunId ? curlLine(`/api/runs/${encodeURIComponent(d.latestRunId)}`) : null,
-      curlLine("/api/events", true),
+      d.latestRunId ? curlLine(`/cluster/api/runs/${encodeURIComponent(d.latestRunId)}`) : null,
+      curlLine("/cluster/api/events", true),
     ),
-    d.latestRunId ? h("p", {}, extLink(`/api/runs/${encodeURIComponent(d.latestRunId)}`, "Latest run raw JSON")) : null,
+    d.latestRunId ? h("p", {}, extLink(`/cluster/api/runs/${encodeURIComponent(d.latestRunId)}`, "Latest run raw JSON")) : null,
   );
 }
 

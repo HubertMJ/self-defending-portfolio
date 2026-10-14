@@ -292,9 +292,9 @@ describe("why a finished run shows no detection (B2-4)", () => {
   it("history rows carry Polish time with ms and a raw JSON link for a valid run id only", () => {
     const { el } = stages(termRun(["whoami"]));
     expect(el.querySelector(".stage__at")?.textContent).toBe("20:01:57.133 CEST");
-    expect(el.querySelector('a[href="/api/runs/0123456789abcdef"]')?.getAttribute("target")).toBe("_blank");
+    expect(el.querySelector('a[href="/cluster/api/runs/0123456789abcdef"]')?.getAttribute("target")).toBe("_blank");
     const bad = renderRun({ ...run(termRun(["whoami"])), runId: "../x" }, "t", new Set(), undefined, undefined, OUTCOMES, T + 6000);
-    expect(bad.querySelector('a[href^="/api/runs/"]')).toBeNull();
+    expect(bad.querySelector('a[href^="/cluster/api/runs/"]')).toBeNull();
   });
 });
 
@@ -314,13 +314,13 @@ describe("the evidence card, the ticker and the hero's last run (B4)", () => {
     const run = buildTimeline(scripted(5), T + 4000).runs[0];
     const card = renderEvidenceCard(run, { title: "Shell in a container", now: T + 4000 });
     expect(card.querySelectorAll(".evlist__item")).toHaveLength(3);
-    const more = card.querySelector('a[href="/api/runs/0f0e0d0c0b0a0908"]');
+    const more = card.querySelector('a[href="/cluster/api/runs/0f0e0d0c0b0a0908"]');
     expect(more?.textContent).toContain("3 more - raw JSON");
     expect(card.textContent).toContain(POD);
     expect(card.textContent).toContain("last attack 20:01:57 CEST");
     expect(card.querySelector("details")).toBeNull();
     // An invalid run id never becomes a link.
-    expect(renderEvidenceCard({ ...run, runId: "a/b" }, { title: "x", now: T }).querySelector('a[href^="/api/runs/"]')).toBeNull();
+    expect(renderEvidenceCard({ ...run, runId: "a/b" }, { title: "x", now: T }).querySelector('a[href^="/cluster/api/runs/"]')).toBeNull();
   });
 
   it("the full record shows only allow-listed Falco fields", () => {
@@ -362,7 +362,7 @@ describe("ApiClient reads the new endpoints, and /build.json outside /api", () =
     const api = new ApiClient({ fetch: async (u) => (asked.push(u), new Response(JSON.stringify({ commit: "", ci_run_id: "" }), { headers: { "Content-Type": "application/json" } })) });
     await api.buildInfo();
     await api.provenance();
-    expect(asked).toEqual(["/build.json", "/api/provenance"]);
+    expect(asked).toEqual(["/build.json", "/cluster/api/provenance"]);
   });
 });
 

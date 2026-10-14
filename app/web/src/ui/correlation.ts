@@ -37,7 +37,7 @@ const SEVERITY_TONE: Record<CorrelationIncident["severity"], Tone> = { critical:
 
 const SOURCE_WORD: Record<CorrelationStep["source"], string> = { falco: "falco", talon: "talon", hubble: "hubble", "k8s-audit": "audit", api: "api" };
 
-const rawRunUrl = (runId: string) => `/api/runs/${encodeURIComponent(runId)}`;
+const rawRunUrl = (runId: string) => `/cluster/api/runs/${encodeURIComponent(runId)}`;
 
 /**
  * Nearest-rank percentile of the values given; undefined for none. Used only for the p95s, which the
@@ -467,7 +467,7 @@ export function renderBoard(c: Correlation, ctx: BoardContext): HTMLElement {
     older.length
       ? h("details", { class: "corr-older" }, h("summary", {}, `${older.length} older incident${older.length === 1 ? "" : "s"}`), h("ol", { class: "corr-older__list" }, older.map((i) => olderItem(i, ctx.now))))
       : null,
-    h("p", { class: "small" }, "The whole board as the API publishes it: ", extLink("/api/correlation", "/api/correlation"), " (JSON)."),
+    h("p", { class: "small" }, "The whole board as the API publishes it: ", extLink("/cluster/api/correlation", "/cluster/api/correlation"), " (JSON)."),
   );
 }
 
@@ -506,7 +506,7 @@ export function renderSessionBoard(c: Correlation, ctx: BoardContext & { live?: 
       : null,
     !shown ? h("p", { class: "empty" }, "No incident in the last 24 hours. The rules run on every event the cluster ships; when one fires for your run, it appears here with its evidence.") : null,
     hiddenNote(rest, "more incident", "more incidents"),
-    h("p", { class: "small" }, "The whole board as the API publishes it: ", extLink("/api/correlation", "/api/correlation"), " (JSON)."),
+    h("p", { class: "small" }, "The whole board as the API publishes it: ", extLink("/cluster/api/correlation", "/cluster/api/correlation"), " (JSON)."),
   );
 }
 

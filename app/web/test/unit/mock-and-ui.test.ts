@@ -26,7 +26,7 @@ describe("MockBackend", () => {
   it("runs a scenario end to end over the real client and emits contract-valid events", async () => {
     const mock = new MockBackend({ speed: 1, history: false });
     const api = new ApiClient({ fetch: mock.fetch });
-    const src = mock.eventSource("/api/events");
+    const src = mock.eventSource("/cluster/api/events");
     const seen: { type: string; data: unknown }[] = [];
     for (const t of ["run", "falco", "talon"]) src.addEventListener(t, (m) => seen.push({ type: t, data: JSON.parse(m.data) }));
     await settle(100);
@@ -75,7 +75,7 @@ describe("MockBackend", () => {
 
   it("replays history to a new subscriber", async () => {
     const mock = new MockBackend({ speed: 0 });
-    const src = mock.eventSource("/api/events");
+    const src = mock.eventSource("/cluster/api/events");
     const types: string[] = [];
     for (const t of ["run", "falco", "talon"]) src.addEventListener(t, () => types.push(t));
     await settle(10);
@@ -273,7 +273,7 @@ describe("MockBackend extension endpoints and events", () => {
   it("emits contract-valid pod, victim and talon events for a quarantine run (no flow events, FIX 1)", async () => {
     const mock = new MockBackend({ speed: 1, history: false });
     const api = new ApiClient({ fetch: mock.fetch });
-    const src = mock.eventSource("/api/events");
+    const src = mock.eventSource("/cluster/api/events");
     const seen: { type: string; raw: string }[] = [];
     for (const t of ["run", "falco", "talon", "pod", "victim", "flow"]) src.addEventListener(t, (m) => seen.push({ type: t, raw: m.data }));
     await vi.advanceTimersByTimeAsync(100);
@@ -302,7 +302,7 @@ describe("MockBackend extension endpoints and events", () => {
     const off = new ApiClient({ fetch: new MockBackend({ speed: 0, noDetails: true }).fetch }).scenarioDetails("shell-in-container");
     await vi.advanceTimersByTimeAsync(10);
     expect((await off).ok).toBe(false);
-    const runs = mock.fetch(`/api/runs/${MOCK_HISTORY_RUN}`);
+    const runs = mock.fetch(`/cluster/api/runs/${MOCK_HISTORY_RUN}`);
     await vi.advanceTimersByTimeAsync(10);
     const body = await (await runs).json();
     const events = parseRunEvents(body);
@@ -326,7 +326,7 @@ describe("MockBackend terminal (ADR 0033)", () => {
   async function start() {
     const mock = new MockBackend({ speed: 1, history: false });
     const api = new ApiClient({ fetch: mock.fetch });
-    const src = mock.eventSource("/api/events");
+    const src = mock.eventSource("/cluster/api/events");
     const seen: { type: string; raw: string }[] = [];
     for (const t of ["run", "falco", "talon", "pod", "victim", "command"]) src.addEventListener(t, (m) => seen.push({ type: t, raw: m.data }));
     await vi.advanceTimersByTimeAsync(100);
@@ -481,7 +481,7 @@ describe("MockBackend terminal (ADR 0033)", () => {
     expect(evs.find((e) => e.type === "run" && e.state === "finished")?.detail).toBe("left");
     // The API's own cleanup is not a `gone` (that is someone else's delete).
     expect(evs.some((e) => e.type === "victim" && e.status === "gone")).toBe(false);
-    const again = mock.fetch(`/api/runs/${runId}`, { method: "DELETE", headers: { Authorization: `Bearer ${token}` } });
+    const again = mock.fetch(`/cluster/api/runs/${runId}`, { method: "DELETE", headers: { Authorization: `Bearer ${token}` } });
     await vi.advanceTimersByTimeAsync(200);
     expect((await again).status).toBe(409);
   });
@@ -489,7 +489,7 @@ describe("MockBackend terminal (ADR 0033)", () => {
   it("with no response, a TTY shell runs into its 10 s bound and exits with no code", async () => {
     const mock = new MockBackend({ speed: 1, history: false, noResponse: true });
     const api = new ApiClient({ fetch: mock.fetch });
-    const src = mock.eventSource("/api/events");
+    const src = mock.eventSource("/cluster/api/events");
     const seen: Record<string, unknown>[] = [];
     for (const t of ["run", "command", "talon"]) src.addEventListener(t, (m) => seen.push({ type: t, ...JSON.parse(m.data) }));
     await vi.advanceTimersByTimeAsync(100);
@@ -508,11 +508,11 @@ describe("MockBackend terminal (ADR 0033)", () => {
   it("the per-run command cap is a 429 whose body says so", async () => {
     const { mock, token, runId } = await start();
     for (let i = 0; i < 30; i++) {
-      const r = mock.fetch(`/api/runs/${runId}/commands`, { method: "POST", headers: { Authorization: `Bearer ${token}` }, body: JSON.stringify({ id: "whoami" }) });
+      const r = mock.fetch(`/cluster/api/runs/${runId}/commands`, { method: "POST", headers: { Authorization: `Bearer ${token}` }, body: JSON.stringify({ id: "whoami" }) });
       await vi.advanceTimersByTimeAsync(400);
       expect((await r).status).toBe(202);
     }
-    const r = mock.fetch(`/api/runs/${runId}/commands`, { method: "POST", headers: { Authorization: `Bearer ${token}` }, body: JSON.stringify({ id: "whoami" }) });
+    const r = mock.fetch(`/cluster/api/runs/${runId}/commands`, { method: "POST", headers: { Authorization: `Bearer ${token}` }, body: JSON.stringify({ id: "whoami" }) });
     await vi.advanceTimersByTimeAsync(200);
     const res = await r;
     expect(res.status).toBe(429);
@@ -527,7 +527,7 @@ describe("MockBackend compare / stats", () => {
   it("a compare run creates two pods and tags per-arm events; only the guarded arm is answered", async () => {
     const mock = new MockBackend({ speed: 1, history: false });
     const api = new ApiClient({ fetch: mock.fetch });
-    const src = mock.eventSource("/api/events");
+    const src = mock.eventSource("/cluster/api/events");
     const seen: { type: string; raw: string }[] = [];
     for (const t of ["run", "falco", "talon", "pod", "victim"]) src.addEventListener(t, (m) => seen.push({ type: t, raw: m.data }));
     await vi.advanceTimersByTimeAsync(100);
@@ -548,7 +548,7 @@ describe("MockBackend compare / stats", () => {
   it("the unguarded pod sends nothing new while held, is deleted compare_hold after the response, then the run finishes", async () => {
     const mock = new MockBackend({ speed: 1, history: false });
     const api = new ApiClient({ fetch: mock.fetch });
-    const src = mock.eventSource("/api/events");
+    const src = mock.eventSource("/cluster/api/events");
     const seen: Record<string, unknown>[] = [];
     for (const t of ["run", "pod", "victim"]) src.addEventListener(t, (m) => seen.push({ type: t, ...JSON.parse(m.data) }));
     await vi.advanceTimersByTimeAsync(100);

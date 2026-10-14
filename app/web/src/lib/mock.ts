@@ -232,7 +232,8 @@ export class MockBackend {
 
   readonly fetch: FetchLike = async (input, init) => {
     const url = new URL(input, "http://mock.invalid");
-    const path = url.pathname;
+    // The page calls /cluster/api (the Gateway strips /cluster); the mock answers as the pod does.
+    const path = url.pathname.replace(/^\/cluster(?=\/api\/)/, "");
     const method = (init?.method ?? "GET").toUpperCase();
     this.calls.push(`${method} ${path}${url.search}`);
     await new Promise((r) => setTimeout(r, 120 * this.speed));
@@ -333,7 +334,7 @@ export class MockBackend {
   }
 
   readonly eventSource = (url: string): EventSourceLike => {
-    if (new URL(url, "http://mock.invalid").pathname !== "/api/events") {
+    if (new URL(url, "http://mock.invalid").pathname.replace(/^\/cluster(?=\/api\/)/, "") !== "/api/events") {
       throw new Error(`mock: no stream at ${url}`);
     }
     const src = new MockEventSource(this);

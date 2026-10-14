@@ -88,19 +88,19 @@ async function harness(opts: { start?: boolean; hooks?: Hooks; details?: () => P
     calls.push({ method, path, body: typeof init?.body === "string" ? init.body : undefined });
     const json = (status: number, body: unknown, headers: Record<string, string> = {}) =>
       new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json", ...headers } });
-    if (path === "/api/scenarios/terminal/details") {
+    if (path === "/cluster/api/scenarios/terminal/details") {
       if (opts.details) {
         const [status, body, type] = await opts.details();
         return new Response(typeof body === "string" ? body : JSON.stringify(body), { status, headers: { "Content-Type": type ?? "application/json" } });
       }
       return json(200, terminalDetails());
     }
-    if (path === "/api/posture") return json(404, { error: "not found" });
-    if (method === "POST" && path === "/api/attack/terminal" && opts.hangAttack) {
+    if (path === "/cluster/api/posture") return json(404, { error: "not found" });
+    if (method === "POST" && path === "/cluster/api/attack/terminal" && opts.hangAttack) {
       // The server takes the request and never answers in time: the client's own timeout aborts it.
       return new Promise<Response>((_, reject) => init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError"))));
     }
-    if (method === "POST" && path === "/api/attack/terminal") {
+    if (method === "POST" && path === "/cluster/api/attack/terminal") {
       if (opts.attackStatus) {
         const [status, body, headers] = opts.attackStatus();
         return json(status, body, headers);
@@ -479,7 +479,7 @@ describe("the start panel between sessions (review 2, item 5)", () => {
     expect(text(t.root.querySelector(".term-start__eta"))).toBe("You can start again in 0:03.");
     vi.advanceTimersByTime(1000);
     expect(text(t.root.querySelector(".term-start__eta"))).toBe("You can start again in 0:02.");
-    expect(t.calls.some((c) => c.path === "/api/attack/terminal")).toBe(false);
+    expect(t.calls.some((c) => c.path === "/cluster/api/attack/terminal")).toBe(false);
     vi.advanceTimersByTime(3100); // no event, no update() call
     expect(text(btn)).toContain("Open the terminal");
     expect(btn.getAttribute("aria-disabled")).toBe("false");
@@ -981,7 +981,7 @@ describe("the session layout (UX stage 1)", () => {
     const t = await harness({ start: false });
     t.term.suggest("dns-exfil");
     await flush();
-    expect(t.calls.filter((c) => c.method === "POST" && c.path === "/api/attack/terminal")).toHaveLength(1);
+    expect(t.calls.filter((c) => c.method === "POST" && c.path === "/cluster/api/attack/terminal")).toHaveLength(1);
   });
 
   it("'A run is in progress' says when that run must end at the latest", async () => {
@@ -1025,7 +1025,7 @@ describe("review LOWs (UX stage 1)", () => {
     t.show(f);
     t.term.suggest("dns-exfil");
     await flush();
-    expect(t.calls.filter((c) => c.method === "POST" && c.path === "/api/attack/terminal")).toHaveLength(2);
+    expect(t.calls.filter((c) => c.method === "POST" && c.path === "/cluster/api/attack/terminal")).toHaveLength(2);
     expect(starting).toEqual([true, false]);
   });
 
@@ -1052,12 +1052,12 @@ describe("visual review D: 'Run again' starts the next session", () => {
     t.show(f);
     t.term.restart();
     await flush();
-    expect(t.calls.filter((c) => c.method === "POST" && c.path === "/api/attack/terminal")).toHaveLength(1);
+    expect(t.calls.filter((c) => c.method === "POST" && c.path === "/cluster/api/attack/terminal")).toHaveLength(1);
     killedBy(f, 1, 5000);
     t.show(f);
     t.term.restart();
     await flush();
-    expect(t.calls.filter((c) => c.method === "POST" && c.path === "/api/attack/terminal")).toHaveLength(2);
+    expect(t.calls.filter((c) => c.method === "POST" && c.path === "/cluster/api/attack/terminal")).toHaveLength(2);
     expect(t.root.querySelector(".term-start")).toBeNull();
   });
 });

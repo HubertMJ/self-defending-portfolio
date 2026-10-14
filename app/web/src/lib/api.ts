@@ -117,7 +117,9 @@ export class ApiClient {
   private readonly timeoutMs: number;
 
   constructor(opts: ApiClientOptions = {}) {
-    this.base = opts.base ?? "/api";
+    // The Gateway publishes the API under the cluster page's prefix and strips /cluster before it
+    // reaches the pod (cluster/infra/portfolio-api/httproute.yaml).
+    this.base = opts.base ?? "/cluster/api";
     this.fetchImpl = opts.fetch ?? ((input, init) => globalThis.fetch(input, init));
     this.timeoutMs = opts.timeoutMs ?? 8000;
   }

@@ -148,7 +148,7 @@ describe("GET /api/runs/{id} (review 2, item 14)", () => {
     for (const bad of ["../limits", "a/b", "x?y", "", "%2e%2e"]) expect((await api.runEvents(bad)).ok).toBe(false);
     expect(urls).toEqual([]);
     expect((await api.runEvents("4f1c2a9e8b7d6c5a")).ok).toBe(true);
-    expect(urls).toEqual(["/api/runs/4f1c2a9e8b7d6c5a"]);
+    expect(urls).toEqual(["/cluster/api/runs/4f1c2a9e8b7d6c5a"]);
   });
 });
 
@@ -327,16 +327,16 @@ describe("degrading against today's API (review 2, items 8 and 13)", () => {
     };
     // Today's API: one plain button, as before; nothing offers the twin.
     const today = await press(old, ".scenario .btn--attack");
-    expect(today.posts).toEqual(["/api/attack/network-tool"]);
+    expect(today.posts).toEqual(["/cluster/api/attack/network-tool"]);
     expect(today.root.querySelector(".scenario__alt")).toBeNull();
     expect(today.root.querySelector(".launcher__note")).toBeNull();
     expect(today.label).toBe("▶Launch attack");
     // The interactive API: the main button runs both pods, the small one the guarded pod alone…
     const both = old.map((s) => ({ ...s, interactive: false }));
     const main = await press(both, ".scenario .btn--attack");
-    expect(main.posts).toEqual(["/api/attack/network-tool?compare=1"]);
+    expect(main.posts).toEqual(["/cluster/api/attack/network-tool?compare=1"]);
     expect(main.label).toBe("▶Launch side by side");
-    expect((await press(both, ".scenario__alt")).posts).toEqual(["/api/attack/network-tool"]);
+    expect((await press(both, ".scenario__alt")).posts).toEqual(["/cluster/api/attack/network-tool"]);
     // …and one explainer above the cards says what each does, tied to both buttons for a screen reader.
     const note = main.root.querySelector(".launcher__note") as HTMLElement;
     expect(note.textContent).toBe("Side by side runs it in two pods at once: one the cluster defends, and an unguarded twin where Falco sees it and nothing answers. Guarded pod only runs the defended pod alone.");

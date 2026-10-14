@@ -9,7 +9,8 @@ resources:
   - namespace.yaml
   - deployment.yaml
   - service.yaml
-  - httproute.yaml
+  # httproute.yaml joins at the cutover: until then the site runs but / still serves the cluster
+  # page (checked by scripts/check-web-csp.sh all the same).
   - networkpolicy.yaml
   - ciliumnetworkpolicy.yaml
 

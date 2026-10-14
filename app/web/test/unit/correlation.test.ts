@@ -121,7 +121,7 @@ describe("publishable: review L3, aligned with the API's redactions", () => {
       "to fd00:10:42::5",
       "from 2001:db8:0:0:0:0:0:1",
       "GET /api/v1/namespaces/kube-system/pods/coredns-1/exec",
-      "/api/v1/namespaces/default/pods/x",
+      "/cluster/api/v1/namespaces/default/pods/x",
     ]) {
       expect(publishable(bad), bad).toBe(false);
     }
@@ -133,7 +133,7 @@ describe("publishable: review L3, aligned with the API's redactions", () => {
   });
 
   it("keeps what only looks close: clock times, loopback, a MAC, short bearer words, sandbox API paths", () => {
-    for (const ok of ["at 12:00:00 UTC", "::1 only", "mac aa:bb:cc:dd:ee:ff", "bearer token missing", "/api/v1/namespaces/sandbox/pods/terminal-7e57000001/exec", "/api/v1/namespaces/sandbox-unguarded/pods/x-u", "Talon: Terminate Pod (kubernetes:terminate) success"]) {
+    for (const ok of ["at 12:00:00 UTC", "::1 only", "mac aa:bb:cc:dd:ee:ff", "bearer token missing", "/cluster/api/v1/namespaces/sandbox/pods/terminal-7e57000001/exec", "/cluster/api/v1/namespaces/sandbox-unguarded/pods/x-u", "Talon: Terminate Pod (kubernetes:terminate) success"]) {
       expect(publishable(ok), ok).toBe(true);
     }
   });
@@ -368,7 +368,7 @@ describe("the section's parts", () => {
     expect(ev?.open).toBe(false);
     expect(ev?.querySelector("summary")?.textContent).toBe("Evidence: 1 finding show IDs");
     expect([...(ev?.querySelectorAll(".idchip") ?? [])].map((c) => c.textContent)).toEqual(["finding f-77ab01c2d3"]);
-    expect(el.querySelector('a[href="/api/runs/7e57000000000001"]')).not.toBeNull();
+    expect(el.querySelector('a[href="/cluster/api/runs/7e57000000000001"]')).not.toBeNull();
   });
 
   it("a stream document without a finding has no rule: its detail stands alone", () => {
@@ -558,7 +558,7 @@ describe("the section's parts", () => {
 
   it("the verify panel lists the endpoints only while the section is shown", () => {
     expect(renderVerifyPanel({ correlation: true }).textContent).toContain(`hubertjablon.ski${CORRELATION_PATHS[1]}`);
-    expect(renderVerifyPanel({ correlation: false }).textContent).not.toContain("/api/correlation");
+    expect(renderVerifyPanel({ correlation: false }).textContent).not.toContain("/cluster/api/correlation");
   });
 });
 
