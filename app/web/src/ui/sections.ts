@@ -167,17 +167,28 @@ export function mountSections(onChange?: (id: string, expanded: boolean) => void
   const hold = (hash: string, ms: number, events: readonly string[]) => {
     if (typeof ResizeObserver !== "function") return;
     let done = false;
+    // Where the hold last put the page: a scroll that moves it further than the layout could (a
+    // scrollbar dragged, a key or a gesture no event above caught) is the visitor's, and ends it.
+    let placed: number | undefined;
     const ro = new ResizeObserver(() => {
       const target = done ? null : byHash(hash);
-      if (target && target.getClientRects().length) target.scrollIntoView({ behavior: "instant" });
+      if (target && target.getClientRects().length) {
+        target.scrollIntoView({ behavior: "instant" });
+        placed = scrollY;
+      }
     });
+    const onScroll = () => {
+      if (placed !== undefined && Math.abs(scrollY - placed) > 40) stop();
+    };
     const stop = () => {
       done = true;
       ro.disconnect();
       for (const ev of events) removeEventListener(ev, stop);
+      removeEventListener("scroll", onScroll);
     };
     ro.observe(document.querySelector("main") ?? document.body);
     for (const ev of events) addEventListener(ev, stop, { passive: true });
+    addEventListener("scroll", onScroll, { passive: true });
     setTimeout(stop, ms);
   };
   if (location.hash.length > 1 && !restoring) hold(location.hash, 10_000, ["wheel", "touchstart", "keydown", "pointerdown"]);

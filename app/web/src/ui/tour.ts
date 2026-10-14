@@ -705,6 +705,11 @@ export function mountTour(root: HTMLElement, hooks: TourHooks): TourHandle {
     setEnabled(next) {
       if (enabled === next) return;
       enabled = next;
+      // Removed: step 5's count stops with it.
+      if (!next && liveTimer) {
+        clearInterval(liveTimer);
+        liveTimer = undefined;
+      }
       draw();
     },
     update(runs, incidents, ownRunIds) {

@@ -1611,6 +1611,19 @@ test.describe("the hero diagram stays inside the page (2026-10-14)", () => {
     });
     expect(r.left).toBeGreaterThan(8);
     expect(r.right).toBeLessThan(r.vw - 8);
+    // As drawn in this browser's fonts: every node's words clear of its frame, the phone's diagram too.
+    const gap = await page.evaluate(() =>
+      Math.min(
+        ...[...document.querySelectorAll(".dg-narrow .dg-node")].flatMap((n) => {
+          const box = (n.querySelector(".dg-box") as SVGGraphicsElement).getBBox();
+          return [...n.querySelectorAll<SVGTextElement>(".dg-label, .dg-sub")].map((t) => {
+            const b = t.getBBox();
+            return Math.min(b.x - box.x, box.x + box.width - (b.x + b.width));
+          });
+        }),
+      ),
+    );
+    expect(gap).toBeGreaterThanOrEqual(6);
   });
 });
 
