@@ -12,13 +12,13 @@
 // notice is a small toast at the bottom that keeps clear of the terminal's input, auto-hides and can
 // be dismissed.
 //
-// The tour costs runs: one terminal session for steps 1-4 (`sh -i` ends it), one side-by-side run for
+// The tour costs runs: one terminal session for steps 1-4 (getting caught ends it), one side-by-side run for
 // step 5, out of the per-visitor limit. It says so.
 
-import type { CorrelationIncident } from "../lib/contract";
+import type { CatalogueCommand, CorrelationIncident } from "../lib/contract";
 import { type Child, h, plClock, replace } from "../lib/dom";
 import { SIEM_COMMAND, lastResponse } from "../lib/runstatus";
-import type { RunView } from "../lib/timeline";
+import type { CommandRun, RunView } from "../lib/timeline";
 import { formatDuration, ts } from "../lib/timeline";
 import type { LaunchState } from "./scenarios";
 import { heldMs } from "./twin";
@@ -41,9 +41,9 @@ export const STEPS: readonly TourStep[] = [
   { id: "look", title: "Look around", hint: "Open the terminal and run id (or any look-around command) — plain recon raises no alarm.", command: "whoami", done: "You looked around: a non-root user in a hardened pod." },
   { id: "tamper", title: "Break something", hint: "Deface the shop, then read the run's flag. Both are allowed — detection is not prevention.", command: "deface", then: "read-flag", done: "You defaced the shop and read the flag; nothing stopped you." },
   { id: "hide", title: "Hide it in DNS", hint: "Smuggle the flag out in a DNS name. Falco has no rule for name lookups.", command: SIEM_COMMAND, done: "You sent the flag out in a DNS query; Falco saw nothing." },
-  { id: "caught", title: "Get caught", hint: "Open a shell with sh -i. Falco detects it and Talon deletes the pod — watch the diagram.", command: "shell", done: "Falco caught the shell and Talon deleted the pod, in milliseconds." },
-  { id: "compare", title: "See what the answer is worth", hint: "Run the same attack with and without the response, side by side. (Costs one more run.)", scenario: "shell-in-container", done: "Side by side: the guarded pod died, the unguarded one stayed owned." },
-  { id: "siem", title: "See it in the SIEM", hint: "A minute or two later the SIEM files the DNS trick Falco missed. A notice here says when it lands.", done: "The SIEM caught the DNS exfiltration that Falco could not." },
+  { id: "caught", title: "Get caught", hint: "Open a shell with sh -i, or run any other command Falco detects. Talon answers on your pod — watch the diagram.", command: "shell", done: "Falco caught you and Talon answered on your pod, in milliseconds." },
+  { id: "compare", title: "See what the answer is worth", hint: "Run the same attack with and without the response, side by side. (Costs one more run.)", scenario: "shell-in-container", done: "You ran it side by side: one pod with the response, one without." },
+  { id: "siem", title: "See it in the SIEM", hint: "A minute or two later the SIEM files your run as an incident — even the DNS trick Falco missed. A notice here says when it lands.", done: "The SIEM filed an incident for your run." },
 ];
 
 export interface TourProgress {
@@ -111,28 +111,47 @@ function setSkipped(v: boolean): void {
 
 /**
  * Which steps are done, from the visitor's own runs (commands they ran, as the timeline assembled
- * them) and the SIEM's incidents for those runs. A later step done implies the terminal ones before
- * it (you cannot reach step 4 without the pod having run), but each is still read from its own
- * evidence where there is any.
+ * them, with Falco's and Talon's events on their pods) and the SIEM's incidents for those runs. Each
+ * step ticks on the outcome its text names, whichever command got there (2026-10-14): the catalogue
+ * (`commands`, the terminal's own) says which objective and outcome a command has; the step's button
+ * only suggests one. Without the catalogue the command steps cannot be read and stay open.
  */
-export function deriveProgress(runs: readonly RunView[], incidents: readonly CorrelationIncident[], ownRunIds: ReadonlySet<string>): TourProgress {
+export function deriveProgress(
+  runs: readonly RunView[],
+  incidents: readonly CorrelationIncident[],
+  ownRunIds: ReadonlySet<string>,
+  commands: readonly CatalogueCommand[] = [],
+): TourProgress {
   const done = new Set<string>();
-  const ran = (cmd: string) => runs.some((r) => r.commands.some((c) => c.id === cmd && c.endedAt !== undefined));
-  const reached = (cmd: string) => runs.some((r) => r.commands.some((c) => c.id === cmd && c.achieved));
-  if (ran("whoami") || ran("hostname") || ran("ps") || ran("ls-shop") || ran("caps")) done.add("look");
-  // Both: the shop defaced and the flag read (the step's done line says so).
-  if (reached("deface") && reached("read-flag")) done.add("tamper");
-  if (reached(SIEM_COMMAND)) done.add("hide");
-  // Caught: a terminal session of the visitor's in which the shell ran and the pod was then
-  // terminated — not any one-click run the cluster killed.
-  const terminated = (r: RunView) => r.detail === "killed" || r.talon.some((t) => t.arm !== "unguarded" && /terminate/i.test(`${t.actionner ?? ""} ${t.action}`));
-  const caught = runs.find((r) => r.scenario === "terminal" && r.commands.some((c) => c.id === "shell") && terminated(r));
+  const own = runs.filter((r) => ownRunIds.has(r.runId));
+  const sessions = own.filter((r) => r.scenario === "terminal");
+  const byId = new Map(commands.map((c) => [c.id, c]));
+  /** A command of the visitor's sessions, with its catalogue entry, that `ok` accepts. */
+  const some = (ok: (c: CommandRun, k: CatalogueCommand) => boolean) =>
+    sessions.some((r) => r.commands.some((c) => {
+      const k = byId.get(c.id);
+      return k !== undefined && ok(c, k);
+    }));
+  // Looked around: any recon command that ran to its end (plain recon raises no alarm).
+  if (some((c, k) => k.objective === "recon" && c.endedAt !== undefined)) done.add("look");
+  // Both: the shop defaced (the tamper objective reached) and the flag read (a credentials command on
+  // the run's .flag that succeeded) - the step's done line says so.
+  const flag = (k: CatalogueCommand) => k.objective === "credentials" && k.command.some((a) => /\/\.flag$/.test(a));
+  if (some((c, k) => c.achieved && k.objective === "tamper") && some((c, k) => c.achieved && flag(k))) done.add("tamper");
+  // Hidden: the flag sent out by a command Falco has no rule for - exfiltration the catalogue calls
+  // allowed (only the SIEM sees it), and it succeeded.
+  if (some((c, k) => c.achieved && k.objective === "exfiltration" && k.outcome === "allowed")) done.add("hide");
+  // Caught: a terminal session of the visitor's in which Falco detected something on its pod and
+  // Talon then acted on that pod (terminate or quarantine), whatever command it was - not any
+  // one-click run the cluster killed.
+  // (Talon acts only on Falco's alerts; their clocks differ, so the order is not compared.)
+  const caught = sessions.find((r) => r.falco.some((f) => f.arm !== "unguarded") && lastResponse(r) !== undefined);
   if (caught) done.add("caught");
-  // Compared: a side-by-side run of the visitor's (two pods).
-  const compare = runs.find((r) => r.armPods !== undefined);
+  // Compared: a side-by-side run of the visitor's, both pods seen.
+  const compare = own.find((r) => r.armPods !== undefined || (r.pods.length > 0 && r.unguardedPods.length > 0));
   if (compare) done.add("compare");
-  // Filed: a SIEM incident of the DNS exfil kind for one of the visitor's runs.
-  if (incidents.some((i) => i.kind === SIEM_COMMAND && ownRunIds.has(i.run_id))) done.add("siem");
+  // Filed: a SIEM incident, of any kind, for one of the visitor's runs.
+  if (incidents.some((i) => ownRunIds.has(i.run_id))) done.add("siem");
   const current = STEPS.find((s) => !done.has(s.id));
   return { done, current, runs: { caught: caught?.runId, compare: compare?.runId } };
 }
@@ -179,6 +198,8 @@ export interface TourHandle {
   update(runs: readonly RunView[], incidents: readonly CorrelationIncident[], ownRunIds: ReadonlySet<string>): void;
   /** The terminal drives the tour; on an API without one it is removed, not merely hidden. */
   setEnabled(enabled: boolean): void;
+  /** The terminal's catalogue: which objective and outcome each command has, read by the steps. */
+  setCatalogue(commands: readonly CatalogueCommand[]): void;
   /** What the one-click launcher says and allows: step 5's button and its line in the rail. */
   setLaunch(s: LaunchState): void;
 }
@@ -245,6 +266,9 @@ export function mountTour(root: HTMLElement, hooks: TourHooks): TourHandle {
   /** The visitor's side-by-side run, for step 5's two lines. */
   let compareRun: RunView | undefined;
   let launch: LaunchState = { blocked: null };
+  /** The terminal's catalogue (which objective and outcome each command has), and the last update's evidence to re-read with it. */
+  let catalogue: readonly CatalogueCommand[] = [];
+  let last: { runs: readonly RunView[]; incidents: readonly CorrelationIncident[]; ownRunIds: ReadonlySet<string> } | undefined;
   // Step 5's line: what the launcher said (a polite live region kept across redraws), and the blocked
   // reason with the cooldown, in the rail where the one-click cards may be hidden (default view).
   const launchText = h("span", {});
@@ -603,7 +627,7 @@ export function mountTour(root: HTMLElement, hooks: TourHooks): TourHandle {
     draw();
   });
 
-  return {
+  const handle: TourHandle = {
     setEnabled(next) {
       if (enabled === next) return;
       enabled = next;
@@ -611,7 +635,8 @@ export function mountTour(root: HTMLElement, hooks: TourHooks): TourHandle {
     },
     update(runs, incidents, ownRunIds) {
       if (!enabled) return;
-      progress = deriveProgress(runs, incidents, ownRunIds);
+      last = { runs, incidents, ownRunIds };
+      progress = deriveProgress(runs, incidents, ownRunIds, catalogue);
       reached = new Set(runs.flatMap((r) => r.commands.filter((c) => c.achieved).map((c) => c.id)));
       if (pressed && progress.done.has(pressed)) {
         pressed = undefined;
@@ -623,11 +648,16 @@ export function mountTour(root: HTMLElement, hooks: TourHooks): TourHandle {
       syncNotices();
       syncLaunch();
     },
+    setCatalogue(commands) {
+      catalogue = commands;
+      if (last) handle.update(last.runs, last.incidents, last.ownRunIds);
+    },
     setLaunch(s) {
       launch = s;
       syncLaunch();
     },
   };
+  return handle;
 }
 
 function button(label: string, onClick: () => void, key?: string, cls?: string, ariaLabel?: string): HTMLButtonElement {

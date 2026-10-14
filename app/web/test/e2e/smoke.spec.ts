@@ -340,6 +340,27 @@ test.describe("layout (ADR 0035, amended 2026-10-05; ?mock=1)", () => {
     expect(problems).toEqual([]);
   });
 
+  test("'Get caught' ticks for any command Falco detects and Talon answers, not only sh -i: cat /etc/shadow (mock)", async ({ page, isMobile }) => {
+    const problems = guardConsole(page);
+    await page.goto("/?mock=1&mock-speed=0.3");
+    const bar = page.locator("#tour .tour");
+    const tour = page.locator("#tour-steps");
+    await expect(tour.locator(".tour__step")).toHaveCount(6);
+    if (isMobile) await bar.getByRole("button", { name: "Show the steps" }).click();
+    // Open the terminal from step 1, then get caught another way: the shadow file read.
+    await tour.locator('.tour__step[data-current="true"] .tour__btn').click();
+    const term = page.locator("#terminal");
+    await expect(term.locator("#term-input")).toHaveValue("id");
+    await term.getByRole("button", { name: "cat /etc/shadow", exact: true }).click();
+    await expect(term.locator(".term__summary")).toBeVisible({ timeout: 15_000 });
+    await expect(tour.locator('.tour__step[data-id="caught"]')).toHaveAttribute("data-done", "true");
+    // Nothing else is ticked for it: the shadow file is not the flag, and no recon command ran.
+    await expect(tour.locator('.tour__step[data-done="true"]')).toHaveCount(1);
+    await expect(tour.locator('.tour__step[data-current="true"] .tour__title')).toHaveText("Look around");
+    await expect(tour.locator(".tour__notice--talon")).toContainText(/^Talon deleted the pod at /);
+    expect(problems).toEqual([]);
+  });
+
   test("nothing scrolls the page but the visitor: steps completing, the SIEM's incident, Falco's alert and Talon's answer leave scrollY alone (desktop and phone)", async ({ page, isMobile }) => {
     test.setTimeout(60_000);
     const problems = guardConsole(page);

@@ -333,6 +333,7 @@ function main(): void {
         // Why a finished terminal run shows no detection is read from its commands' outcomes (ADR 0035).
         timeline.setOutcomes(new Map(commands.map((c) => [c.id, c.outcome])));
         evidence.setCatalogue(commands);
+        tour.setCatalogue(commands);
       }
     },
   });

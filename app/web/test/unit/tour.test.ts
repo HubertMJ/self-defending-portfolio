@@ -6,6 +6,7 @@ import { buildTimeline } from "../../src/lib/timeline";
 import { deriveNotices, deriveProgress, mountTour, noticeText, SETTLE_MS, STEPS, twinLines, WIDE_QUERY } from "../../src/ui/tour";
 import { FOLDED_BY_DEFAULT, startsFolded } from "../../src/lib/folds";
 import type { CorrelationIncident, StreamEvent } from "../../src/lib/contract";
+import { TERMINAL_COMMANDS } from "../../src/lib/fixtures";
 
 const RUN = "aa11bb22cc33dd44";
 
@@ -36,39 +37,85 @@ describe("tour progress is derived from real events", () => {
 
   it("ticks 'look around' from a recon command; 'break something' needs both the deface and the flag", () => {
     const flagOnly = runOf({ id: "whoami", achieved: false }, { id: "read-flag", achieved: true });
-    let p = deriveProgress([flagOnly], [], new Set([RUN]));
+    let p = deriveProgress([flagOnly], [], new Set([RUN]), TERMINAL_COMMANDS);
     expect(p.done.has("look")).toBe(true);
     expect(p.done.has("tamper")).toBe(false);
     expect(p.current?.id).toBe("tamper");
     const both = runOf({ id: "whoami" }, { id: "deface", achieved: true }, { id: "read-flag", achieved: true });
-    p = deriveProgress([both], [], new Set([RUN]));
+    p = deriveProgress([both], [], new Set([RUN]), TERMINAL_COMMANDS);
     expect(p.done.has("tamper")).toBe(true);
     expect(p.current?.id).toBe("hide");
   });
 
-  it("ticks 'get caught' only for a terminal session where the shell ran and the pod was terminated", () => {
-    const killed = (scenario: string, withShell: boolean): StreamEvent[] => [
+  it("ticks 'get caught' for a terminal session where Falco detected something and Talon acted on its pod, whatever the command", () => {
+    const session = (scenario: string, id: string | null, falco: boolean, talon: string | null): StreamEvent[] => [
       { type: "run", data: { run_id: RUN, scenario, state: "started", at: "2026-10-03T18:00:00Z", pod: "p" } },
-      ...(withShell ? [{ type: "command", data: { run_id: RUN, seq: 1, id: "shell", state: "started", at: "2026-10-03T18:00:04Z" } } as StreamEvent] : []),
-      { type: "falco", data: { at: "2026-10-03T18:00:05Z", rule: "Terminal shell in container", priority: "Critical", namespace: "sandbox", pod: "p", output: "x" } },
-      { type: "talon", data: { at: "2026-10-03T18:00:05.5Z", action: "Terminate Pod", actionner: "kubernetes:terminate", namespace: "sandbox", pod: "p", status: "success" } },
-      { type: "run", data: { run_id: RUN, scenario, state: "finished", at: "2026-10-03T18:00:06Z", detail: "killed" } },
+      ...(id ? [{ type: "command", data: { run_id: RUN, seq: 1, id, state: "started", at: "2026-10-03T18:00:04Z" } } as StreamEvent] : []),
+      ...(falco ? [{ type: "falco", data: { at: "2026-10-03T18:00:05Z", rule: "Some rule", priority: "Critical", namespace: "sandbox", pod: "p", output: "x" } } as StreamEvent] : []),
+      ...(talon ? [{ type: "talon", data: { at: "2026-10-03T18:00:05.5Z", action: talon, actionner: talon === "Terminate Pod" ? "kubernetes:terminate" : "kubernetes:label", namespace: "sandbox", pod: "p", status: "success" } } as StreamEvent] : []),
+      { type: "run", data: { run_id: RUN, scenario, state: "finished", at: "2026-10-03T18:00:06Z", detail: talon === "Terminate Pod" ? "killed" : "" } },
     ];
     const at = Date.parse("2026-10-03T18:00:30Z");
-    expect(deriveProgress([buildTimeline(killed("terminal", true), at).runs[0]], [], new Set([RUN])).done.has("caught")).toBe(true);
+    const caught = (evs: StreamEvent[]) => deriveProgress([buildTimeline(evs, at).runs[0]], [], new Set([RUN]), TERMINAL_COMMANDS).done.has("caught");
+    expect(caught(session("terminal", "shell", true, "Terminate Pod"))).toBe(true);
+    // Another detected command: the shadow file read, the busybox copy (both terminate), the beacon (quarantine).
+    expect(caught(session("terminal", "read-shadow", true, "Terminate Pod"))).toBe(true);
+    expect(caught(session("terminal", "drop-run", true, "Terminate Pod"))).toBe(true);
+    expect(caught(session("terminal", "beacon", true, "Quarantine Pod"))).toBe(true);
     // A one-click run the cluster killed is not the visitor getting caught in the terminal.
-    expect(deriveProgress([buildTimeline(killed("shell-in-container", false), at).runs[0]], [], new Set([RUN])).done.has("caught")).toBe(false);
-    // A terminal session killed without the shell having run is not step 4 either.
-    expect(deriveProgress([buildTimeline(killed("terminal", false), at).runs[0]], [], new Set([RUN])).done.has("caught")).toBe(false);
+    expect(caught(session("shell-in-container", null, true, "Terminate Pod"))).toBe(false);
+    // Falco without Talon's answer, or Talon without a detection on the pod, is not "caught".
+    expect(caught(session("terminal", "shell", true, null))).toBe(false);
+    expect(caught(session("terminal", "shell", false, "Terminate Pod"))).toBe(false);
+    // Someone else's session.
+    expect(deriveProgress([buildTimeline(session("terminal", "shell", true, "Terminate Pod"), at).runs[0]], [], new Set(["ffffffffffffffff"]), TERMINAL_COMMANDS).done.has("caught")).toBe(false);
+  });
+
+  it("ticks 'look around' from any recon command that ran, not only id", () => {
+    for (const id of ["hostname", "ps", "ls-shop", "caps"]) expect(deriveProgress([runOf({ id })], [], new Set([RUN]), TERMINAL_COMMANDS).done.has("look")).toBe(true);
+    // Not recon: the deface alone, or a command still running.
+    expect(deriveProgress([runOf({ id: "deface", achieved: true })], [], new Set([RUN]), TERMINAL_COMMANDS).done.has("look")).toBe(false);
+    // Without the catalogue nothing says which command is recon: the step stays open.
+    expect(deriveProgress([runOf({ id: "ps" })], [], new Set([RUN])).done.has("look")).toBe(false);
+  });
+
+  it("'break something' reads the objectives: the tamper objective reached and the flag read, not the shadow file", () => {
+    const tamper = (...cmds: { id: string; achieved?: boolean }[]) => deriveProgress([runOf(...cmds)], [], new Set([RUN]), TERMINAL_COMMANDS).done.has("tamper");
+    expect(tamper({ id: "read-flag", achieved: true }, { id: "deface", achieved: true })).toBe(true);
+    // A credentials objective that is not the flag.
+    expect(tamper({ id: "deface", achieved: true }, { id: "read-shadow", achieved: true })).toBe(false);
+    // The deface that failed (not achieved).
+    expect(tamper({ id: "deface", achieved: false }, { id: "read-flag", achieved: true })).toBe(false);
+  });
+
+  it("'hide it in DNS' ticks for an exfiltration only the SIEM sees, not the beacon Falco catches", () => {
+    const hide = (id: string, achieved: boolean) => deriveProgress([runOf({ id, achieved })], [], new Set([RUN]), TERMINAL_COMMANDS).done.has("hide");
+    expect(hide("dns-exfil", true)).toBe(true);
+    expect(hide("dns-exfil", false)).toBe(false);
+    expect(hide("beacon", true)).toBe(false);
+  });
+
+  it("'see what the answer is worth' ticks for the visitor's own side-by-side run once both pods are seen", () => {
+    const at = Date.parse("2026-10-03T18:11:00Z");
+    const C = "bb22cc33dd44ee55";
+    const withPods: StreamEvent[] = [{ type: "run", data: { run_id: C, scenario: "shell-in-container", state: "started", at: "2026-10-03T18:10:00Z", pod: "g", pods: { guarded: "g", unguarded: "u" } } }];
+    const started: StreamEvent[] = [{ type: "run", data: { run_id: C, scenario: "shell-in-container", state: "started", at: "2026-10-03T18:10:00Z", pod: "g" } }];
+    const compare = (evs: StreamEvent[], own: string[]) => deriveProgress([buildTimeline(evs, at).runs[0]], [], new Set(own), TERMINAL_COMMANDS).done.has("compare");
+    expect(compare(withPods, [C])).toBe(true);
+    expect(compare(withPods, [RUN])).toBe(false);
+    // Started, one pod only: not side by side yet.
+    expect(compare(started, [C])).toBe(false);
   });
 
   it("ticks 'see it in the SIEM' only for an incident of the visitor's own run", () => {
     const run = runOf({ id: "dns-exfil", achieved: true });
     const inc = (runId: string): CorrelationIncident => ({ id: "0123456789abcdef", kind: "dns-exfil", severity: "medium", title: "", run_id: runId, arm: "", first_at: "2026-10-03T18:02:00Z", last_at: "2026-10-03T18:02:00Z", attack: [], falco_events: null, flag_match: null, operator_test: false, ttd_ms: null, tti_ms: null, steps: [], evidence: [] });
-    expect(deriveProgress([run], [inc(RUN)], new Set([RUN])).done.has("siem")).toBe(true);
-    expect(deriveProgress([run], [inc("ffffffffffffffff")], new Set([RUN])).done.has("siem")).toBe(false);
+    expect(deriveProgress([run], [inc(RUN)], new Set([RUN]), TERMINAL_COMMANDS).done.has("siem")).toBe(true);
+    expect(deriveProgress([run], [inc("ffffffffffffffff")], new Set([RUN]), TERMINAL_COMMANDS).done.has("siem")).toBe(false);
+    // Any incident filed for the visitor's run: a contained intrusion (a caught shell) ticks it too.
+    expect(deriveProgress([caughtRun()], [{ ...inc(RUN), kind: "contained-intrusion" }], new Set([RUN]), TERMINAL_COMMANDS).done.has("siem")).toBe(true);
     // The DNS step itself ticks from the command exiting 0, before the SIEM files anything.
-    expect(deriveProgress([run], [], new Set([RUN])).done.has("hide")).toBe(true);
+    expect(deriveProgress([run], [], new Set([RUN]), TERMINAL_COMMANDS).done.has("hide")).toBe(true);
   });
 });
 
@@ -106,7 +153,7 @@ describe("a done step's button goes to its run (2026-10-13)", () => {
       { type: "run", data: { run_id: "bb22cc33dd44ee55", scenario: "shell-in-container", state: "finished", at: "2026-10-03T18:10:09Z", detail: "killed" } },
     ];
     const runs = [caughtRun(), buildTimeline(compare, Date.parse("2026-10-03T18:11:00Z")).runs[0]];
-    const p = deriveProgress(runs, [], new Set([RUN, "bb22cc33dd44ee55"]));
+    const p = deriveProgress(runs, [], new Set([RUN, "bb22cc33dd44ee55"]), TERMINAL_COMMANDS);
     expect(p.runs.caught).toBe(RUN);
     expect(p.runs.compare).toBe("bb22cc33dd44ee55");
     expect(p.done.has("compare")).toBe(true);
@@ -114,6 +161,7 @@ describe("a done step's button goes to its run (2026-10-13)", () => {
     document.body.append(root);
     const onShowRun = vi.fn();
     const t = mountTour(root, { onCommand: vi.fn(), onScenario: vi.fn(), onTimeline: vi.fn(), onShowRun, matchMedia: ((q: string) => ({ matches: q === WIDE_QUERY, addEventListener() {} }) as unknown as MediaQueryList) });
+    t.setCatalogue(TERMINAL_COMMANDS);
     t.update(runs, [], new Set([RUN, "bb22cc33dd44ee55"]));
     const btn = root.querySelector<HTMLButtonElement>('.tour__step[data-id="compare"] button');
     expect(btn?.getAttribute("aria-label")).toBe("Show the live run");
@@ -176,6 +224,7 @@ describe("the tour panel never moves the page (amendment 2026-10-13)", () => {
     const root = document.createElement("div");
     document.body.append(root);
     const t = mountTour(root, hooks(true));
+    t.setCatalogue(TERMINAL_COMMANDS);
     const tour = root.querySelector(".tour") as HTMLElement;
     expect(tour.dataset.layout).toBe("side");
     expect(root.querySelector(".tour__toggle")).toBeNull();
@@ -229,6 +278,7 @@ describe("the tour panel never moves the page (amendment 2026-10-13)", () => {
     const root = document.createElement("div");
     document.body.append(root);
     const t = mountTour(root, hooks(true));
+    t.setCatalogue(TERMINAL_COMMANDS);
     expect(root.querySelector(".tour__head .tour__skip")?.textContent).toBe("Skip the tour");
     t.update([caughtRun()], [INCIDENT], new Set([RUN]));
     const sec = root.querySelector(".tour__nsec") as HTMLElement;
@@ -253,6 +303,7 @@ describe("the tour panel never moves the page (amendment 2026-10-13)", () => {
     document.body.append(root);
     const h = hooks(true);
     const t = mountTour(root, h);
+    t.setCatalogue(TERMINAL_COMMANDS);
     // Steps 1-4 done (a shell caught after the deface, the flag and the DNS trick): step 5 is current.
     const caught = buildTimeline(
       [
@@ -262,6 +313,7 @@ describe("the tour panel never moves the page (amendment 2026-10-13)", () => {
           { type: "command", data: { run_id: RUN, seq: i + 1, id, state: "exited", at: `2026-10-03T18:00:0${i + 1}.5Z`, exit_code: 0, achieved: true } },
         ]),
         { type: "command", data: { run_id: RUN, seq: 5, id: "shell", state: "started", at: "2026-10-03T18:00:06Z" } },
+        { type: "falco", data: { at: "2026-10-03T18:00:06.2Z", rule: "Terminal shell in container", priority: "Critical", namespace: "sandbox", pod: "p", output: "x" } },
         { type: "talon", data: { at: "2026-10-03T18:00:06.5Z", action: "Terminate Pod", actionner: "kubernetes:terminate", namespace: "sandbox", pod: "p", status: "success" } },
         { type: "run", data: { run_id: RUN, scenario: "terminal", state: "finished", at: "2026-10-03T18:00:07Z", detail: "killed" } },
       ],
@@ -310,6 +362,7 @@ describe("the tour panel never moves the page (amendment 2026-10-13)", () => {
     const root = document.createElement("div");
     document.body.append(root);
     const t = mountTour(root, hooks(true));
+    t.setCatalogue(TERMINAL_COMMANDS);
     const step = root.querySelector('.tour__step[data-current="true"] .tour__btn') as HTMLButtonElement;
     step.focus();
     expect(document.activeElement).toBe(step);
@@ -331,6 +384,7 @@ describe("the tour panel never moves the page (amendment 2026-10-13)", () => {
     const below = document.createElement("div");
     document.body.append(root, below);
     const t = mountTour(root, hooks(false, below));
+    t.setCatalogue(TERMINAL_COMMANDS);
     const tour = root.querySelector(".tour") as HTMLElement;
     expect(tour.dataset.layout).toBe("bar");
     const panel = below.querySelector("#tour-steps") as HTMLElement;
@@ -381,6 +435,7 @@ describe("the tour panel never moves the page (amendment 2026-10-13)", () => {
     const below = document.createElement("div");
     document.body.append(root, below);
     const t = mountTour(root, hooks(false, below));
+    t.setCatalogue(TERMINAL_COMMANDS);
     // The feed's replay came at once; the SIEM's answer only well past the settling window.
     t.update([caughtRun()], [], new Set([RUN]));
     clock += SETTLE_MS + 30_000;
