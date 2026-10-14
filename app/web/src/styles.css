@@ -6329,11 +6329,24 @@ html:not(.js) .needs-js {
    summary across both (the terminal's wrappers give up their boxes so their parts sit in the grid).
    The output fills the row "This run" sets, no taller (2026-10-13). */
 @media (min-width: 1400px) {
-  /* The header's wrap widens with the attack section, so the brand and the section's left edge line
-     up; the hero and the other sections keep their reading width, centred as before. */
-  .section--attack > .wrap,
-  .site-header__inner {
+  /* One column for the whole page (2026-10-14): the header, the hero, every section and the footer
+     take the same wide wrap, so each heading starts under the brand. Prose keeps a reading width of
+     its own instead of a narrower wrap. */
+  .wrap {
     max-width: 100rem;
+  }
+
+  /* The diagram keeps the size it had in the narrower wrap: the hero still fits above the fold. */
+  .dg-wrap > .dg-wide {
+    max-width: 74rem;
+  }
+
+  .section__lead,
+  .section__more,
+  .section__body > p,
+  .section__body > .wrap > p,
+  .site-footer p {
+    max-width: 70ch;
   }
 
   .attack-stage {

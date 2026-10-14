@@ -1565,6 +1565,24 @@ test.describe("unguarded twin (mock, ADR 0033)", () => {
   });
 });
 
+test.describe("one left edge (2026-10-14)", () => {
+  for (const width of [1440, 1920, 2560]) {
+    test(`at ${width} px every section's heading, the hero and the footer start under the header's brand`, { tag: "@default" }, async ({ page, isMobile }) => {
+      test.skip(isMobile, "a desktop layout");
+      await page.setViewportSize({ width, height: 1000 });
+      await page.goto("/?mock=1");
+      const brand = await page.locator(".site-header .brand").evaluate((e) => e.getBoundingClientRect().left);
+      const heads = await page.locator("main > .section h2:visible").evaluateAll((els) => els.map((e) => [e.id, e.getBoundingClientRect().left] as const));
+      expect(heads.length).toBeGreaterThanOrEqual(5);
+      for (const [id, x] of heads) expect(Math.abs(x - brand), id).toBeLessThanOrEqual(1);
+      const others = await page.locator("#hero-title, .site-footer__inner > :first-child").evaluateAll((els) => els.map((e) => e.getBoundingClientRect().left));
+      for (const x of others) expect(Math.abs(x - brand)).toBeLessThanOrEqual(1);
+      // Prose keeps a reading width.
+      for (const w of await page.locator(".section__lead:visible").evaluateAll((els) => els.map((e) => e.getBoundingClientRect().width))) expect(w).toBeLessThan(900);
+    });
+  }
+});
+
 test.describe("the live run console reads at a glance (mock, 2026-10-14)", () => {
   test("Technical Mode: each pod a headline and its key steps one line each; the record, the explanations, the ids and the raw data behind Details", { tag: "@default" }, async ({ page }) => {
     const problems = guardConsole(page);
