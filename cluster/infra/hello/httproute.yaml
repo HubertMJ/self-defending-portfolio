@@ -48,11 +48,49 @@ spec:
     # cluster/infra/site, routes `/` exact, /lab and /site-assets; an exact match and a longer
     # prefix outrank this rule's `/`). The prefix is cut before the request reaches nginx, so the
     # image keeps serving index.html at its own / and its assets at /assets/, which no other
-    # backend claims. On the `/` match the rewrite replaces / with /: a no-op.
+    # backend claims. Two rules, not one with two matches: the HTTPRoute schema (Gateway API
+    # v1.4 CEL) admits a ReplacePrefixMatch rewrite only on a rule with exactly one PathPrefix
+    # match, and the API server refuses the whole route otherwise. The header set is the same in
+    # both rules; scripts/check-web-csp.sh holds every rule to it.
     - matches:
         - path:
             type: PathPrefix
             value: /
+      filters:
+        - type: ResponseHeaderModifier
+          responseHeaderModifier:
+            set:
+              # Two years, subdomains included. No `preload`: that is a one-way door and the
+              # subdomains are not all serving HTTPS yet.
+              - name: Strict-Transport-Security
+                value: max-age=63072000; includeSubDomains
+              # No MIME sniffing: a text/plain upload must never be executed as script.
+              - name: X-Content-Type-Options
+                value: nosniff
+              - name: Referrer-Policy
+                value: strict-origin-when-cross-origin
+              # The CSP of the site (ADR 0019), character for character the one in
+              # app/web/security-headers.conf, which nginx sends and the Playwright suite enforces.
+              # `set` replaces the backend's header, so this value is what a visitor gets; if the two
+              # ever differ, the page is tested against one policy and served another, and
+              # `make validate` (scripts/check-web-csp.sh) fails. Same-origin only: scripts, styles,
+              # the /api calls and the event stream ('self'), Trusted Types enforced. Kept at the
+              # route rather than dropped so that any backend attached here gets a policy, as
+              # ADR 0010 intends.
+              - name: Content-Security-Policy
+                value: >-
+                  default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; font-src 'self';
+                  connect-src 'self'; manifest-src 'self'; base-uri 'none'; form-action 'none';
+                  frame-ancestors 'none'; object-src 'none'; require-trusted-types-for 'script';
+                  trusted-types 'none'
+              - name: Permissions-Policy
+                value: accelerometer=(), camera=(), geolocation=(), gyroscope=(), microphone=(), payment=(), usb=()
+              - name: Cross-Origin-Opener-Policy
+                value: same-origin
+      backendRefs:
+        - name: hello
+          port: 80
+    - matches:
         - path:
             type: PathPrefix
             value: /cluster

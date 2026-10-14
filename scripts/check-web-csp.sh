@@ -52,7 +52,9 @@ def headers(route):
     return out
 
 h, s = headers(hello), headers(site)
-if len(h) != 1 or not s or any(x != h[0] for x in s):
+if not h or any(x != h[0] for x in h):
+    sys.exit(f"check-web-csp: every rule of {sys.argv[1]} that sets headers must set the same ones")
+if not s or any(x != h[0] for x in s):
     sys.exit(f"check-web-csp: {sys.argv[2]} must set exactly hello's response headers")
 
 served, redirected = set(), set()

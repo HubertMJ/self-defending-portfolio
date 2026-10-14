@@ -73,15 +73,37 @@ spec:
       backendRefs:
         - name: portfolio-api
           port: 80
+    # Two rules, not one with two matches: the HTTPRoute schema (Gateway API v1.4 CEL) admits a
+    # ReplacePrefixMatch rewrite only on a rule with exactly one PathPrefix match, and the API
+    # server refuses the whole route otherwise. /api goes at the cutover.
     - matches:
         - path:
             type: PathPrefix
             value: /api
+      filters:
+        - type: ResponseHeaderModifier
+          responseHeaderModifier:
+            set:
+              - name: Strict-Transport-Security
+                value: max-age=63072000; includeSubDomains
+              - name: X-Content-Type-Options
+                value: nosniff
+              - name: Referrer-Policy
+                value: no-referrer
+              # JSON and an event stream: nothing here is ever a document to render, frame or run.
+              - name: Content-Security-Policy
+                value: "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
+              - name: Cross-Origin-Resource-Policy
+                value: same-origin
+      backendRefs:
+        - name: portfolio-api
+          port: 80
+    - matches:
         - path:
             type: PathPrefix
             value: /cluster/api
       filters:
-        # /cluster/api/x reaches the pod as /api/x; on the /api match this replaces /api with /api.
+        # /cluster/api/x reaches the pod as /api/x.
         - type: URLRewrite
           urlRewrite:
             path:

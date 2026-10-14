@@ -23,6 +23,7 @@ validate:        ## render every kustomization under cluster/ and validate it ag
 	@scripts/check-secrets-encrypted.sh
 	@scripts/check-cilium-values.sh
 	@scripts/check-web-csp.sh
+	@scripts/check-httproutes.sh
 	@scripts/check-web-identity.sh
 	@scripts/check-image-digests.sh
 	@scripts/check-cis-na.sh
