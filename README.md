@@ -9,7 +9,9 @@ and without the automatic response side by side, and watch Falco detect and Falc
 with a SIEM on its own VM catching even what Falco has no rule for, next to the cluster's security
 posture.
 
-**Live:** [hubertjablon.ski](https://hubertjablon.ski)
+**Live:** [hubertjablon.ski/cluster/](https://hubertjablon.ski/cluster/). The landing page at
+[hubertjablon.ski](https://hubertjablon.ski) and the detection lab preview come from
+[HubertMJ/hubertjablon.ski](https://github.com/HubertMJ/hubertjablon.ski); this repository runs them.
 <!-- TODO-CONTENT: confirm what the live site serves today and update this line when the phase 5/6 demo goes live. -->
 
 **Status:** phases 0-6 are built and running — a hardened host, GitOps, a public site behind a
@@ -49,7 +51,7 @@ web image reaches the cluster in two steps, image first ([`docs/bootstrap.md`](d
 |---------|--------------|------|-----------|
 | Outbound-only exposure | Cloudflare Tunnel, no port-forward, host firewall default-deny input | [`cluster/infra/cloudflared/`](cluster/infra/cloudflared/), [`nftables.conf.j2`](ansible/roles/firewall/templates/nftables.conf.j2) | [0003](docs/adr/0003-cloudflare-tunnel-exposure.md), [0009](docs/adr/0009-nftables-host-firewall.md) |
 | TLS end to end | Let's Encrypt via DNS-01 on the Gateway; the tunnel verifies the origin certificate | [`cluster/infra/gateway/`](cluster/infra/gateway/), [`cluster/infra/cert-manager-issuers/`](cluster/infra/cert-manager-issuers/) | [0010](docs/adr/0010-cilium-gateway-api.md) |
-| Security headers at the edge of the cluster | HSTS, strict CSP with Trusted Types (same policy in the image and at the route, checked in CI), nosniff, Referrer/Permissions policy, COOP | [`cluster/infra/hello/httproute.yaml`](cluster/infra/hello/httproute.yaml), [`app/web/security-headers.conf`](app/web/security-headers.conf) | [0010](docs/adr/0010-cilium-gateway-api.md), [0019](docs/adr/0019-frontend-stack-and-csp.md) |
+| Security headers at the edge of the cluster | HSTS, strict CSP with Trusted Types (same policy in the image and at both page routes, checked in CI), nosniff, Referrer/Permissions policy, COOP | [`cluster/infra/hello/httproute.yaml`](cluster/infra/hello/httproute.yaml), [`cluster/infra/site/httproute.yaml`](cluster/infra/site/httproute.yaml), [`app/web/security-headers.conf`](app/web/security-headers.conf) | [0010](docs/adr/0010-cilium-gateway-api.md), [0019](docs/adr/0019-frontend-stack-and-csp.md) |
 | Default-deny networking | Per-namespace default-deny plus explicit Cilium allow-lists, FQDN-scoped egress | `cluster/infra/*/networkpolicy.yaml`, `ciliumnetworkpolicy.yaml` | [0004](docs/adr/0004-cilium-as-cni.md), [0014](docs/adr/0014-posture-scanning.md) |
 | GitOps | Argo CD app-of-apps, pinned charts, self-heal | [`cluster/apps/`](cluster/apps/), [`cluster/bootstrap/`](cluster/bootstrap/) | [0005](docs/adr/0005-argocd-for-gitops.md), [0008](docs/adr/0008-pinned-versions.md) |
 | Secrets in a public repo | SOPS + age, decrypted only inside Argo CD; CI rejects plaintext Secrets | [`.sops.yaml`](.sops.yaml), [`scripts/check-secrets-encrypted.sh`](scripts/check-secrets-encrypted.sh) | [0006](docs/adr/0006-sops-age-for-secrets.md) |

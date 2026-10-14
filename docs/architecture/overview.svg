@@ -197,8 +197,8 @@
       </g>
       <g class="dg-node dg-node--plain dg-role--entry" id="ov-site" data-node="site" data-state="idle" transform="translate(1308 48)">
         <rect class="dg-box" width="274" height="63" rx="8"/>
-        <text class="dg-label" x="137" y="28.5" text-anchor="middle">This page + its API</text>
-        <text class="dg-sub" x="137" y="43.5" text-anchor="middle">hello · portfolio-api</text>
+        <text class="dg-label" x="137" y="28.5" text-anchor="middle">The pages + this API</text>
+        <text class="dg-sub" x="137" y="43.5" text-anchor="middle">site · hello · portfolio-api</text>
       </g>
       <g class="dg-node dg-node--control dg-role--respond dg-node--sub2" id="ov-kube-apiserver" data-node="kube-apiserver" data-state="idle" transform="translate(1308 476)">
         <rect class="dg-box" width="274" height="63" rx="8"/>
@@ -256,7 +256,7 @@
         <rect class="dg-box" width="274" height="63" rx="8"/>
         <text class="dg-label" x="137" y="21" text-anchor="middle">Argo CD</text>
         <text class="dg-sub" x="137" y="36" text-anchor="middle">ns argocd · KSOPS + age</text>
-        <text class="dg-sub dg-note" x="137" y="51" text-anchor="middle">19 Applications</text>
+        <text class="dg-sub dg-note" x="137" y="51" text-anchor="middle">20 Applications</text>
       </g>
       <g class="dg-node dg-node--plain dg-role--neutral" id="ov-apps" data-node="apps" data-state="idle" transform="translate(664 304.8)">
         <rect class="dg-box" width="274" height="63" rx="8"/>
@@ -266,7 +266,7 @@
       <g class="dg-node dg-node--plain dg-role--neutral" id="ov-build" data-node="build" data-state="idle" transform="translate(986 197.79999999999998)">
         <rect class="dg-box" width="274" height="63" rx="8"/>
         <text class="dg-label" x="137" y="28.5" text-anchor="middle">build-images.yml</text>
-        <text class="dg-sub" x="137" y="43.5" text-anchor="middle">web · api · scenario</text>
+        <text class="dg-sub" x="137" y="43.5" text-anchor="middle">web · api · scenario · + site repo</text>
       </g>
       <g class="dg-node dg-node--control dg-role--neutral" id="ov-trivy" data-node="trivy" data-state="idle" transform="translate(1308 197.79999999999998)">
         <rect class="dg-box" width="274" height="63" rx="8"/>

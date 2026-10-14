@@ -32,3 +32,41 @@ if bad:
     sys.exit(1)
 print(f"ok - hello HTTPRoute CSP matches app/web/security-headers.conf")
 PY
+
+# The landing page's route (cluster/infra/site, image from HubertMJ/hubertjablon.ski) shares the
+# hostname, so it must send hello's headers exactly, and every path it serves over https must also
+# be redirected when it arrives as plain http: its exact `/` and longer prefixes outrank hello's
+# redirect rule.
+python3 - cluster/infra/hello/httproute.yaml cluster/infra/site/httproute.yaml <<'PY'
+import sys, yaml
+
+hello, site = (yaml.safe_load(open(p)) for p in sys.argv[1:3])
+
+def headers(route):
+    out = []
+    for rule in route["spec"]["rules"]:
+        for f in rule.get("filters", []):
+            s = (f.get("responseHeaderModifier") or {}).get("set")
+            if s:
+                out.append({h["name"].lower(): h["value"] for h in s})
+    return out
+
+h, s = headers(hello), headers(site)
+if len(h) != 1 or not s or any(x != h[0] for x in s):
+    sys.exit(f"check-web-csp: {sys.argv[2]} must set exactly hello's response headers")
+
+served, redirected = set(), set()
+for rule in site["spec"]["rules"]:
+    is_redirect = any(f["type"] == "RequestRedirect" for f in rule.get("filters", []))
+    for m in rule["matches"]:
+        key = (m["path"]["type"], m["path"]["value"])
+        if is_redirect:
+            if m.get("headers") != [{"name": "X-Forwarded-Proto", "value": "http"}]:
+                sys.exit(f"check-web-csp: {sys.argv[2]} redirects {key} without matching X-Forwarded-Proto: http")
+            redirected.add(key)
+        else:
+            served.add(key)
+if served != redirected:
+    sys.exit(f"check-web-csp: {sys.argv[2]} serves {sorted(served - redirected)} without an http redirect")
+print(f"ok - site HTTPRoute sends hello's headers and redirects http on all {len(served)} paths")
+PY
