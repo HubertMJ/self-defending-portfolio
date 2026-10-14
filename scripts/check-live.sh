@@ -37,9 +37,15 @@ check /cluster/api/healthz 200
 check /cluster/api/scenarios 200 '"id"'
 case $EXPECT in
   landing)
-    check / 200 'Self-defending cluster'
+    check / 200 'What I work with'
     check /lab/ 200 'Detection lab'
     check /api/healthz 404
+    # About lives on the landing page only (owner decision 2026-10-14).
+    if curl -sS --max-time 20 "$BASE/cluster/" | grep -qF 'id="about"'; then
+      printf '  FAIL  %-26s still carries About\n' /cluster/; failures=$((failures + 1))
+    else
+      printf '  ok    %-26s no About\n' /cluster/
+    fi
     ;;
   cluster)
     check / 200 'id="tour"'
