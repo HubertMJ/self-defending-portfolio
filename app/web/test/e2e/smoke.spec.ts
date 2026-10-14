@@ -500,9 +500,14 @@ test.describe("layout (ADR 0035, amended 2026-10-05; ?mock=1)", () => {
     await expect(page.locator("#console .console__run")).toHaveCount(1);
     // 6: the SIEM's incident; its button opens the correlation on the card.
     await expect(steps.locator('.tour__step[data-id="siem"]')).toHaveAttribute("data-done", "true", { timeout: 20_000 });
-    await steps.locator('.tour__step[data-id="siem"]').getByRole("link", { name: "Show in SIEM" }).click();
+    // Any incident filed for the visitor's run ticks it (the caught shell's may come before the DNS trick's):
+    // the link goes to that card. Once the DNS trick's is filed too, the board stops changing under the jump.
+    await expect(steps.locator(".tour__notice--siem", { hasText: "DNS exfiltration" })).toHaveCount(1, { timeout: 20_000 });
+    const toSiem = steps.locator('.tour__step[data-id="siem"]').getByRole("link", { name: "Show in SIEM" });
+    const href = await toSiem.getAttribute("href");
+    await toSiem.click();
     await expect(page.locator("#correlation .section__toggle")).toHaveAttribute("aria-expanded", "true");
-    await expect(page.locator("#correlation .incident--own").first()).toBeInViewport();
+    await expect(page.locator(href?.startsWith("#incident-") ? href : "#correlation .incident--own")).toBeInViewport();
     // Back on the start panel the session's timeline is gone, and so is the button that would show it.
     await term.getByRole("button", { name: "Run another session" }).click();
     await expect(term.locator(".term-start")).toBeVisible();

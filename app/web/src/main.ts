@@ -475,7 +475,10 @@ function main(): void {
   document.addEventListener("click", (e) => {
     if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
     const a = e.target instanceof Element ? e.target.closest("a[href^='#incident-']") : null;
-    if (a) sections.open("correlation");
+    if (!a) return;
+    sections.open("correlation");
+    // The board's health, metrics and other cards draw after it opens, above the card: the landing holds.
+    sections.hold(a.getAttribute("href") ?? "");
   });
 
   // One open SSE connection per forgotten background tab adds up; the server replays the last 50

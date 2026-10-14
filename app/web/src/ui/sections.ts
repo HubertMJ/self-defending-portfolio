@@ -48,6 +48,12 @@ export function sectionTitle(heading: HTMLElement): HTMLElement {
 export interface SectionsHandle {
   /** Opens a section, as a click on its heading would; the choice is kept like a click's. */
   open(id: string): void;
+  /**
+   * The visitor followed a link to `hash` in a section that draws after it opens (an incident card):
+   * for a few seconds, until they scroll, touch or type, each change of the page's size lands on it
+   * again, so the landing holds while the section's content comes in above the target.
+   */
+  hold(hash: string, ms?: number): void;
 }
 
 export function mountSections(onChange?: (id: string, expanded: boolean) => void): SectionsHandle {
@@ -158,11 +164,11 @@ export function mountSections(onChange?: (id: string, expanded: boolean) => void
   // which moves the target, or shows it, after the browser landed. Until the visitor scrolls, touches
   // or types, or for 10 s, each change of the page's size lands on the hash again. Not on a reload or
   // back/forward, where the browser restores the visitor's own position.
-  if (location.hash.length > 1 && !restoring && typeof ResizeObserver === "function") {
-    const events = ["wheel", "touchstart", "keydown", "pointerdown"] as const;
+  const hold = (hash: string, ms: number, events: readonly string[]) => {
+    if (typeof ResizeObserver !== "function") return;
     let done = false;
     const ro = new ResizeObserver(() => {
-      const target = done ? null : byHash(location.hash);
+      const target = done ? null : byHash(hash);
       if (target && target.getClientRects().length) target.scrollIntoView({ behavior: "instant" });
     });
     const stop = () => {
@@ -172,13 +178,16 @@ export function mountSections(onChange?: (id: string, expanded: boolean) => void
     };
     ro.observe(document.querySelector("main") ?? document.body);
     for (const ev of events) addEventListener(ev, stop, { passive: true });
-    setTimeout(stop, 10_000);
-  }
+    setTimeout(stop, ms);
+  };
+  if (location.hash.length > 1 && !restoring) hold(location.hash, 10_000, ["wheel", "touchstart", "keydown", "pointerdown"]);
 
   return {
     open(id) {
       const f = folds.get(id);
       if (f && !isOpen(f)) set(f, true, true);
     },
+    // The link's own click is a pointerdown already past: only the visitor's next move stops it.
+    hold: (hash, ms = 4_000) => hold(hash, ms, ["wheel", "touchstart", "keydown", "pointerdown"]),
   };
 }
