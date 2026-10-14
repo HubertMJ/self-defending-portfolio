@@ -48,4 +48,12 @@ case $EXPECT in
   *) printf 'check-live.sh: EXPECT is landing or cluster, not %s\n' "$EXPECT" >&2; exit 2 ;;
 esac
 
+# What the cluster runs, as the API sees it (the same data the page's Verify section shows).
+for api in /cluster/api /api; do
+  if curl -sSf --max-time 20 -o "$WORK/prov" "$BASE$api/provenance" 2>/dev/null; then
+    python3 -c 'import json,sys; p=json.load(open(sys.argv[1])); print("  running web:", *p["web"]["images"], "\n  running api:", *p["api"]["images"], "\n  observed:", p.get("images_observed_at"))' "$WORK/prov" || true
+    break
+  fi
+done
+
 if [ "$failures" -ne 0 ]; then printf '%s check(s) failed\n' "$failures" >&2; exit 1; fi
