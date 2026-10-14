@@ -57,7 +57,9 @@ checks = [
     ("identity regexp",
      one(r'^export const COSIGN_IDENTITY_REGEXP = String\.raw`([^`]*)`;', ts, "COSIGN_IDENTITY_REGEXP", web),
      [(script, one(r"^IDENTITY_REGEXP=\$\{IDENTITY_REGEXP:-'([^']*)'\}$", sh, "IDENTITY_REGEXP default", script))]
-     + [(policy, s) for s in subjects]),
+     # The site image (HubertMJ/hubertjablon.ski) is signed by its own repository's workflow;
+     # only this repository's identity is the one the page and verify-image.sh show.
+     + [(policy, s) for s in subjects if "/self-defending-portfolio/" in s]),
     ("OIDC issuer",
      one(r'^export const COSIGN_ISSUER = "([^"]*)";', ts, "COSIGN_ISSUER", web),
      [(script, one(r"^OIDC_ISSUER=\$\{OIDC_ISSUER:-([^}]*)\}$", sh, "OIDC_ISSUER default", script))]

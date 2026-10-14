@@ -73,3 +73,27 @@ spec:
               - image: "ghcr.io/hubertmj/self-defending-portfolio/*"
             =(ephemeralContainers):
               - image: "ghcr.io/hubertmj/self-defending-portfolio/*"
+
+    # The landing page's namespace (cluster/infra/site): one registry path too, the site
+    # repository's, whose images verify-portfolio-images checks against that repository's workflow.
+    - name: validate-site-registry
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+              namespaces:
+                - site
+      validate:
+        failureAction: Enforce
+        message: >-
+          Images in this namespace must come from ghcr.io/hubertmj/hubertjablon.ski/ - the only
+          registry path whose contents the site repository builds and signs.
+        pattern:
+          spec:
+            containers:
+              - image: "ghcr.io/hubertmj/hubertjablon.ski/*"
+            =(initContainers):
+              - image: "ghcr.io/hubertmj/hubertjablon.ski/*"
+            =(ephemeralContainers):
+              - image: "ghcr.io/hubertmj/hubertjablon.ski/*"
