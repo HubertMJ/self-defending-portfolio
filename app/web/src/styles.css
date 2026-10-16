@@ -6585,8 +6585,7 @@ html.js:not([data-tech="on"]) .console.tech-more[data-opened="true"] {
 }
 
 /* Between the landing page and a project the screen slides, like switching desktops on a Mac: the
-   cluster sits left of the landing page, the lab right of it (/cluster/ | / | /lab/). To a page
-   further right everything moves left, to one further left it moves right. The
+   new page always comes in from the right and the old one leaves to the left, the way back too. The
    header stays put above the slide. theme.ts names the direction; a browser without view-transition
    types keeps the cross-fade above. */
 html:active-view-transition-type(forward, backward)::view-transition-old(root),
@@ -6631,10 +6630,10 @@ html:active-view-transition-type(backward)::view-transition-new(root) {
 /* The same slide where the browser cannot animate between documents (Firefox): theme.ts adds these
    classes on <html>, plays the page out before following the link and in on the next page. The
    header stays put; the rest of the page moves. */
-html.slide-in-forward body,
-html.slide-in-backward body,
-html.slide-out-forward body,
-html.slide-out-backward body {
+html.slide-in-forward,
+html.slide-in-backward,
+html.slide-out-forward,
+html.slide-out-backward {
   overflow-x: clip;
 }
 html.slide-in-forward body > :not(.site-header) {

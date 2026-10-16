@@ -27,10 +27,9 @@ try {
   document.documentElement.dataset.folded = FOLDED_BY_DEFAULT.join(" ");
 }
 
-// The pages sit side by side like desktops, as the landing page lays out its cards: the cluster on
-// the left, the landing page (/) in the middle, the lab on the right. A move to a page further right
-// slides the whole screen left, a move to the left slides it right, so a way back always runs the
-// other way: the header's logo and the browser's or mouse's back button alike (styles.css,
+// Moving between the landing page (/), the cluster and the lab slides like switching desktops, and
+// the new page always comes in from the right (owner decision 2026-10-16), the way back included:
+// the header's logo and the browser's or mouse's back button alike (styles.css,
 // :active-view-transition-type). Set here, in the render-blocking script, because pagereveal fires
 // before the first frame of the new page. Any other move keeps the plain cross-fade.
 const DESKTOPS = ["/cluster/", "/", "/lab/"];
@@ -56,13 +55,13 @@ addEventListener("pagereveal", (e) => {
   const nav = (globalThis as { navigation?: { activation?: { from?: { url?: string } | null } } }).navigation;
   const from = desktop(nav?.activation?.from?.url ?? document.referrer);
   const to = desktop(location.href);
-  if (from >= 0 && to >= 0 && from !== to) types.add(to > from ? "forward" : "backward");
+  if (from >= 0 && to >= 0 && from !== to) types.add("forward");
 });
 
 // Firefox (and older Safari) cannot animate between documents, so there the same slide is played by
-// hand: a link to another desktop first slides the page out, then navigates, and the new page slides
-// in from the other side. The way back runs the other way, the back button included, which the
-// previous page records on pagehide. The header stays still: only what follows it in <body> moves.
+// hand: a link to another desktop first slides the page out to the left, then navigates, and the new
+// page slides in from the right. The back button only gets the slide in; the previous page records on
+// pagehide where the visitor came from. The header stays still: only what follows it in <body> moves.
 const nativeSlide = "onpagereveal" in window && "CSSViewTransitionRule" in window;
 const calm = typeof matchMedia === "function" ? matchMedia("(prefers-reduced-motion: reduce)") : null;
 if (!nativeSlide) {
@@ -94,7 +93,7 @@ if (!nativeSlide) {
     const entry = performance.getEntriesByType?.("navigation")[0] as PerformanceNavigationTiming | undefined;
     const followed = desktop(document.referrer) >= 0 || entry?.type === "back_forward";
     const to = desktop(location.href);
-    if (followed && from >= 0 && to >= 0 && from !== to) play(to > from ? "slide-in-forward" : "slide-in-backward", 400);
+    if (followed && from >= 0 && to >= 0 && from !== to) play("slide-in-forward", 400);
   };
   arrive();
   addEventListener("pageshow", (e) => {
@@ -118,7 +117,7 @@ if (!nativeSlide) {
     const to = desktop(a.href);
     if (from < 0 || to < 0 || from === to) return;
     e.preventDefault();
-    play(to > from ? "slide-out-forward" : "slide-out-backward", 220, () => location.assign(a.href));
+    play("slide-out-forward", 220, () => location.assign(a.href));
   });
 }
 
