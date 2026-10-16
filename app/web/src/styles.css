@@ -6583,6 +6583,51 @@ html.js:not([data-tech="on"]) .console.tech-more[data-opened="true"] {
 ::view-transition-new(root) {
   animation-duration: 180ms;
 }
+
+/* Between the landing page and a project the screen slides, like switching desktops on a Mac: the
+   cluster sits left of the landing page, the lab right of it (/cluster/ | / | /lab/). To a page
+   further right everything moves left, to one further left it moves right. The
+   header stays put above the slide. theme.ts names the direction; a browser without view-transition
+   types keeps the cross-fade above. */
+html:active-view-transition-type(forward, backward)::view-transition-old(root),
+html:active-view-transition-type(forward, backward)::view-transition-new(root) {
+  animation-duration: 460ms;
+  animation-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
+  animation-fill-mode: both;
+  mix-blend-mode: normal;
+}
+html:active-view-transition-type(forward)::view-transition-old(root) {
+  animation-name: vt-slide-to-left;
+}
+html:active-view-transition-type(forward)::view-transition-new(root) {
+  animation-name: vt-slide-from-right;
+}
+html:active-view-transition-type(backward)::view-transition-old(root) {
+  animation-name: vt-slide-to-right;
+}
+html:active-view-transition-type(backward)::view-transition-new(root) {
+  animation-name: vt-slide-from-left;
+}
+@keyframes vt-slide-to-left {
+  to {
+    transform: translateX(-100%);
+  }
+}
+@keyframes vt-slide-from-right {
+  from {
+    transform: translateX(100%);
+  }
+}
+@keyframes vt-slide-to-right {
+  to {
+    transform: translateX(100%);
+  }
+}
+@keyframes vt-slide-from-left {
+  from {
+    transform: translateX(-100%);
+  }
+}
 @media (prefers-reduced-motion: reduce) {
   @view-transition {
     navigation: none;
