@@ -54,6 +54,22 @@ case $EXPECT in
   *) printf 'check-live.sh: EXPECT is landing or cluster, not %s\n' "$EXPECT" >&2; exit 2 ;;
 esac
 
+# The pages slide like desktops (2026-10-16): the stylesheets and scripts each page loads carry the
+# slide keyframes and the direction logic, so a page still on an older image shows up here.
+assets_have() {
+  local page=$1 needle=$2 urls
+  urls=$(curl -sS --max-time 20 "$BASE$page" | grep -oE '(href|src)="/[^"]+\.(css|js)"' | sed -E 's/^(href|src)="//; s/"$//' | sort -u)
+  { curl -sS --max-time 20 "$BASE$page"; for u in $urls; do curl -sS --max-time 20 "$BASE$u"; done; } | grep -qF -- "$needle"
+}
+if [ "$EXPECT" = landing ]; then
+  for page in / /lab/ /cluster/; do
+    for needle in vt-slide-from-left pagereveal; do
+      if assets_have "$page" "$needle"; then printf '  ok    %-26s has %s\n' "$page" "$needle"
+      else printf '  FAIL  %-26s lacks %s\n' "$page" "$needle"; failures=$((failures + 1)); fi
+    done
+  done
+fi
+
 # What the cluster runs, as the API sees it (the same data the page's Verify section shows).
 for api in /cluster/api /api; do
   if curl -sSf --max-time 20 -o "$WORK/prov" "$BASE$api/provenance" 2>/dev/null; then
