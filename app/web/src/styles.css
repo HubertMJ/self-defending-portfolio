@@ -6584,8 +6584,8 @@ html.js:not([data-tech="on"]) .console.tech-more[data-opened="true"] {
   animation-duration: 180ms;
 }
 
-/* Between the landing page and a project the screen slides, like switching desktops on a Mac: the
-   new page always comes in from the right and the old one leaves to the left, the way back too. The
+/* Between the landing page and a project the screen slides like an iPhone app: the page opened
+   comes in from the right, and going back (home, or the back button) slides the other way. The
    header stays put above the slide. theme.ts names the direction; a browser without view-transition
    types keeps the cross-fade above. */
 html:active-view-transition-type(forward, backward)::view-transition-old(root),
