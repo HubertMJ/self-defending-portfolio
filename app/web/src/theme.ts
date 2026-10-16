@@ -73,6 +73,7 @@ const calm = typeof matchMedia === "function" ? matchMedia("(prefers-reduced-mot
 if (!nativeSlide) {
   const root = document.documentElement;
   const SLIDE = ["slide-in-forward", "slide-in-backward", "slide-out-forward", "slide-out-backward"];
+  SLIDE.push(...SLIDE.slice(0, 2).map((c) => `${c}-soft`));
   const play = (cls: string, ms: number, then?: () => void): void => {
     root.classList.remove(...SLIDE);
     void root.offsetWidth; // restart the animation when the same class comes back (bfcache)
@@ -88,7 +89,9 @@ if (!nativeSlide) {
     if (document.readyState === "loading") addEventListener("DOMContentLoaded", done, { once: true });
     else done();
   };
-  const arrive = (): void => {
+  // The back and forward buttons leave no time for the old page to slide out, so there the new one
+  // comes in softer, fading in over a shorter way, and the missing exit does not jar.
+  const arrive = (traversed = false): void => {
     if (calm?.matches) return;
     let from = -1;
     try {
@@ -97,15 +100,16 @@ if (!nativeSlide) {
       // Storage blocked: no slide, the page simply appears.
     }
     const entry = performance.getEntriesByType?.("navigation")[0] as PerformanceNavigationTiming | undefined;
-    const followed = desktop(document.referrer) >= 0 || entry?.type === "back_forward";
+    const soft = traversed || entry?.type === "back_forward";
+    const followed = desktop(document.referrer) >= 0 || soft;
     const to = desktop(location.href);
-    if (followed && from >= 0 && to >= 0 && from !== to) play(`slide-in-${way(to)}`, 400);
+    if (followed && from >= 0 && to >= 0 && from !== to) play(`slide-in-${way(to)}${soft ? "-soft" : ""}`, soft ? 520 : 400);
   };
   arrive();
   addEventListener("pageshow", (e) => {
     if (e.persisted) {
       root.classList.remove(...SLIDE);
-      arrive();
+      arrive(true);
     }
   });
   addEventListener("pagehide", () => {

@@ -6628,10 +6628,13 @@ html:active-view-transition-type(backward)::view-transition-new(root) {
   }
 }
 /* The same slide where the browser cannot animate between documents (Firefox): theme.ts adds these
-   classes on <html>, plays the page out before following the link and in on the next page. The
+   classes on <html>, plays the page out before following the link and in on the next page. After
+   the back or forward button the page comes in softer (-soft), as the old one had no time to leave. The
    header stays put; the rest of the page moves. */
 html.slide-in-forward,
 html.slide-in-backward,
+html.slide-in-forward-soft,
+html.slide-in-backward-soft,
 html.slide-out-forward,
 html.slide-out-backward {
   overflow-x: clip;
@@ -6641,6 +6644,24 @@ html.slide-in-forward body > :not(.site-header) {
 }
 html.slide-in-backward body > :not(.site-header) {
   animation: vt-slide-from-left 400ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+html.slide-in-forward-soft body > :not(.site-header) {
+  animation: vt-soft-from-right 520ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+html.slide-in-backward-soft body > :not(.site-header) {
+  animation: vt-soft-from-left 520ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+@keyframes vt-soft-from-right {
+  from {
+    transform: translateX(30%);
+    opacity: 0;
+  }
+}
+@keyframes vt-soft-from-left {
+  from {
+    transform: translateX(-30%);
+    opacity: 0;
+  }
 }
 html.slide-out-forward body > :not(.site-header) {
   animation: vt-slide-to-left 220ms cubic-bezier(0.55, 0, 1, 0.45) both;
