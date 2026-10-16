@@ -65,7 +65,10 @@ if [ "$EXPECT" = landing ]; then
   for page in / /lab/ /cluster/; do
     for needle in vt-slide-from-left pagereveal; do
       if assets_have "$page" "$needle"; then printf '  ok    %-26s has %s\n' "$page" "$needle"
-      else printf '  FAIL  %-26s lacks %s\n' "$page" "$needle"; failures=$((failures + 1)); fi
+      else
+        printf '  FAIL  %-26s lacks %s; it loads:\n' "$page" "$needle"; failures=$((failures + 1))
+        curl -sS --max-time 20 "$BASE$page" | grep -oE '<(link|script)[^>]*>' | sed 's/^/          /'
+      fi
     done
   done
 fi
