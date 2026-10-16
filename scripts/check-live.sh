@@ -66,7 +66,7 @@ assets_have() {
 }
 if [ "$EXPECT" = landing ]; then
   for page in / /lab/ /cluster/; do
-    for needle in vt-slide-from-left pagereveal; do
+    for needle in vt-slide-from-left pagereveal slide-out-backward navigationType; do
       if assets_have "$page" "$needle"; then printf '  ok    %-26s has %s\n' "$page" "$needle"
       else
         printf '  FAIL  %-26s lacks %s; it loads:\n' "$page" "$needle"; failures=$((failures + 1))
