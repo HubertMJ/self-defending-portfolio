@@ -59,7 +59,10 @@ esac
 assets_have() {
   local page=$1 needle=$2 urls
   urls=$(curl -sS --max-time 20 "$BASE$page" | grep -oE '(href|src)="/[^"]+\.(css|js)"' | sed -E 's/^(href|src)="//; s/"$//' | sort -u)
-  { curl -sS --max-time 20 "$BASE$page"; for u in $urls; do curl -sS --max-time 20 "$BASE$u"; done; } | grep -qF -- "$needle"
+  # Into a file first: grep -q stops at the first match, and under pipefail the curl it cut short
+  # would turn a match into a failure.
+  { curl -sS --max-time 20 "$BASE$page"; for u in $urls; do curl -sS --max-time 20 "$BASE$u"; done; } >"$WORK/assets"
+  grep -qF -- "$needle" "$WORK/assets"
 }
 if [ "$EXPECT" = landing ]; then
   for page in / /lab/ /cluster/; do
