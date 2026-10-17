@@ -636,7 +636,8 @@ test.describe("layout (ADR 0035, amended 2026-10-05; ?mock=1)", () => {
     // The mock's request answers in ~30 ms: slow it so the pressed state can be seen.
     await page.evaluate(() => {
       const f = window.fetch;
-      window.fetch = (input, init) => (String(input).includes("/api/attack/") ? new Promise((r) => setTimeout(r, 600)).then(() => f(input, init)) : f(input, init));
+      // Long enough that a slow runner still sees it pending at the next assertion.
+      window.fetch = (input, init) => (String(input).includes("/api/attack/") ? new Promise((r) => setTimeout(r, 2000)).then(() => f(input, init)) : f(input, init));
     });
     await launch.click();
     await expect(launch).toHaveText("Starting…", { timeout: 300 });
@@ -764,9 +765,12 @@ test.describe("layout (ADR 0035, amended 2026-10-05; ?mock=1)", () => {
     await expect(term.locator("#term-input")).toBeEnabled({ timeout: 10_000 });
     await term.getByRole("button", { name: "sh -i", exact: true }).click();
     await expect.poll(() => page.locator("#tour-steps .tour__notice").count(), { timeout: 20_000 }).toBeGreaterThanOrEqual(4);
-    const n = await page.locator("#tour-steps .tour__notice").count();
+    // A notice can still arrive (Talon's after Falco's on a slow runner): the counts below are read
+    // against what is there at each check, not one number taken early.
+    const all = page.locator("#tour-steps .tour__notice");
     await expect(page.locator("#tour-steps .tour__notice:visible")).toHaveCount(2);
-    const more = panel.getByRole("button", { name: `Earlier notices (${n - 2})` });
+    const more = panel.getByRole("button", { name: /^Earlier notices \(\d+\)$/ });
+    await expect.poll(async () => (await more.textContent()) === `Earlier notices (${(await all.count()) - 2})`).toBe(true);
     await expect(more).toHaveAttribute("aria-expanded", "false");
     for (const [width, height] of [
       [1440, 900],
@@ -785,7 +789,7 @@ test.describe("layout (ADR 0035, amended 2026-10-05; ?mock=1)", () => {
     }
     // The earlier one opens in place: the panel grows with the page, still never scrolls inside.
     await more.click();
-    await expect(page.locator("#tour-steps .tour__notice:visible")).toHaveCount(n);
+    await expect.poll(async () => (await page.locator("#tour-steps .tour__notice:visible").count()) === (await all.count())).toBe(true);
     await expect(panel.getByRole("button", { name: "Fewer notices" })).toHaveAttribute("aria-expanded", "true");
     const m = await fits();
     expect(m.sh).toBeLessThanOrEqual(m.ch);
@@ -1657,7 +1661,10 @@ test.describe("the live run console reads at a glance (mock, 2026-10-14)", () =>
     await expect(arms.first().locator(".armsum__steps li")).toHaveText([/Pod started$/, /Falco: Terminal shell in container$/, /Talon deleted the pod$/, /Pod gone$/]);
     await expect(arms.nth(1).locator(".armsum__steps li").nth(2)).toHaveText("Nothing answered");
     // Each step is one line at this width.
-    for (const li of await c.locator(".armsum__steps li span").all()) expect(await li.evaluate((e) => e.getClientRects().length)).toBe(1);
+    // Read in one go: a redraw between finding the spans and measuring them would measure detached ones.
+    const lines = await c.locator(".armsum__steps li span").evaluateAll((els) => els.map((e) => e.getClientRects().length));
+    expect(lines.length).toBeGreaterThan(0);
+    for (const n of lines) expect(n).toBe(1);
     // The long parts are folded: the pod's record, what was executed, the explanation, the ids, the raw data.
     const details = c.locator(".console__details");
     await expect(details).not.toHaveAttribute("open", "");
