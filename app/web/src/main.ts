@@ -479,8 +479,8 @@ function main(): void {
     const a = e.target instanceof Element ? e.target.closest("a[href^='#incident-']") : null;
     if (!a) return;
     sections.open("correlation");
-    // The board's health, metrics and other cards draw after it opens, above the card: the landing holds.
-    sections.hold(a.getAttribute("href") ?? "");
+    // The board's health, metrics and other cards draw after it opens, above the card: the landing
+    // holds (ui/sections.ts holds every in-page link's landing).
   });
 
   // One open SSE connection per forgotten background tab adds up; the server replays the last 50

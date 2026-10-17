@@ -57,12 +57,11 @@ describe("mountSections", () => {
     // The heading keeps its id (the section's aria-labelledby) and its text, now the button's name.
     expect(document.getElementById("posture-title")?.textContent).toBe("Live security posture");
     expect(sectionTitle(document.getElementById("posture-title") as HTMLElement).textContent).toBe("Live security posture");
-    // Site redesign 2026-10-12: the attack section stays open; everything below it folds on a first visit.
-    expect(toggle("attack").getAttribute("aria-expanded")).toBe("true");
-    expect(body("attack").hidden).toBe(false);
-    expect(btn.getAttribute("aria-expanded")).toBe("false");
-    expect(body("posture").hidden).toBe(true);
-    expect(toggle("verify").getAttribute("aria-expanded")).toBe("false");
+    // 2026-10-17: every section starts open on a first visit.
+    for (const id of ["attack", "posture", "verify"]) {
+      expect(toggle(id).getAttribute("aria-expanded")).toBe("true");
+      expect(body(id).hidden).toBe(false);
+    }
     expect(document.querySelectorAll(".section__toggle")).toHaveLength(3);
     expect(document.querySelector("#top button")).toBeNull();
   });
@@ -80,10 +79,8 @@ describe("mountSections", () => {
     toggle("attack").click();
     expect(body("attack").hidden).toBe(false);
     expect(localStorage.getItem("sdp:collapsed:attack")).toBe("0");
-    // posture and verify folded at mount report their restored state once each.
+    // Nothing folded at mount, so only the clicks report.
     expect(changes).toEqual([
-      ["posture", false],
-      ["verify", false],
       ["attack", false],
       ["attack", true],
     ]);
@@ -96,7 +93,7 @@ describe("mountSections", () => {
     mountSections((id, open) => changes.push([id, open]));
     expect(toggle("verify").getAttribute("aria-expanded")).toBe("false");
     expect(body("verify").hidden).toBe(true);
-    // posture was opened by the visitor before (stored "0"): it stays open against the default.
+    // posture was opened by the visitor before (stored "0"): it stays open.
     expect(body("posture").hidden).toBe(false);
     expect(changes).toEqual([["verify", false]]);
   });
@@ -186,31 +183,30 @@ describe("folded at first paint (theme.ts, styles.css)", () => {
     delete document.documentElement.dataset.folded;
   });
 
-  it("theme.ts folds the defaults and the stored folds before first paint, an opened one excepted", async () => {
-    // Site redesign 2026-10-12: every section below the attack folds on a first visit (lib/folds.ts),
-    // so data-folded carries the defaults; a section the visitor opened (stored "0") is left out.
+  it("theme.ts folds only the stored folds before first paint, an opened one and malformed keys excepted", async () => {
+    // 2026-10-17: no section folds by default (lib/folds.ts), so data-folded carries only the
+    // visitor's own folds; a section they opened (stored "0") is left out.
     localStorage.clear();
+    localStorage.setItem("sdp:collapsed:posture", "1");
     localStorage.setItem("sdp:collapsed:how", "0");
     localStorage.setItem("sdp:collapsed:Bad Id", "1");
     localStorage.setItem("collapsed:skills", "1");
     vi.resetModules();
     await import("../../src/theme");
-    expect((document.documentElement.dataset.folded ?? "").split(" ").sort()).toEqual(["correlation", "evidence", "posture", "verify"]);
+    expect(document.documentElement.dataset.folded).toBe("posture");
   });
 
-  it("with no stored choice it folds the defaults; it folds them too when storage throws", async () => {
+  it("with no stored choice nothing folds; nothing folds either when storage throws", async () => {
     localStorage.clear();
-    const defaults = ["correlation", "how", "evidence", "posture", "verify"].sort();
     vi.resetModules();
     await import("../../src/theme");
-    expect((document.documentElement.dataset.folded ?? "").split(" ").sort()).toEqual(defaults);
-    delete document.documentElement.dataset.folded;
+    expect(document.documentElement.dataset.folded).toBeUndefined();
     vi.spyOn(Storage.prototype, "key").mockImplementation(() => {
       throw new Error("SecurityError");
     });
     vi.resetModules();
     await expect(import("../../src/theme")).resolves.toBeDefined();
-    expect((document.documentElement.dataset.folded ?? "").split(" ").sort()).toEqual(defaults);
+    expect(document.documentElement.dataset.folded).toBeUndefined();
     vi.restoreAllMocks();
   });
 

@@ -1,8 +1,8 @@
 // Every section below the hero folds away under its heading (ADR 0035, amended 2026-10-05 and
 // 2026-10-12). The static HTML carries each section's content in a .section__body; without this script
 // nothing folds and everything shows. With it, the h2's text moves into a real <button> (the
-// disclosure pattern: aria-expanded, aria-controls naming the body), every section below the attack
-// starts folded (lib/folds.ts), and a visitor's choice is kept per section in localStorage. A link to
+// disclosure pattern: aria-expanded, aria-controls naming the body), every section starts open
+// (lib/folds.ts, 2026-10-17), and a visitor's choice is kept per section in localStorage. A link to
 // anything inside a folded section opens it first.
 
 import { h, replace } from "../lib/dom";
@@ -48,13 +48,10 @@ export function sectionTitle(heading: HTMLElement): HTMLElement {
 export interface SectionsHandle {
   /** Opens a section, as a click on its heading would; the choice is kept like a click's. */
   open(id: string): void;
-  /**
-   * The visitor followed a link to `hash` in a section that draws after it opens (an incident card):
-   * for a few seconds, until they scroll, touch or type, each change of the page's size lands on it
-   * again, so the landing holds while the section's content comes in above the target.
-   */
-  hold(hash: string, ms?: number): void;
 }
+
+/** What ends a landing's hold: the visitor's own move. */
+const HOLD_STOPS = ["wheel", "touchstart", "keydown", "pointerdown"] as const;
 
 export function mountSections(onChange?: (id: string, expanded: boolean) => void): SectionsHandle {
   const folds = new Map<string, Fold>();
@@ -89,6 +86,9 @@ export function mountSections(onChange?: (id: string, expanded: boolean) => void
   // The folded sections are folded by their buttons now: theme.ts's stand-in (styles.css) goes.
   delete document.documentElement.dataset.folded;
 
+  // The landing being held (hold() below), if any.
+  let held: { hash: string; stop: () => void } | undefined;
+
   const byHash = (hash: string): HTMLElement | null => {
     if (hash.length < 2) return null;
     try {
@@ -113,10 +113,21 @@ export function mountSections(onChange?: (id: string, expanded: boolean) => void
   document.addEventListener("click", (e) => {
     if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
     const a = e.target instanceof Element ? e.target.closest("a[href^='#']") : null;
-    if (a) reveal(a.getAttribute("href") ?? "");
+    if (!a) return;
+    const href = a.getAttribute("href") ?? "";
+    reveal(href);
+    // The sections start open (2026-10-17), so a panel above the target can still be drawing its data
+    // (the SIEM board, shortly after the page opens) while the browser scrolls: the landing holds,
+    // without cutting the browser's own smooth scroll short unless the page's size changes. A target
+    // not drawn yet (an incident card while #correlation was folded, main.ts) is landed on once drawn.
+    if (href.length > 1) hold(href, 4_000, HOLD_STOPS, byHash(href) !== null);
   });
   // Back/forward and a typed hash: the browser has already scrolled, to a section that was folded.
-  window.addEventListener("hashchange", () => reveal(location.hash)?.scrollIntoView());
+  // A landing still held for another hash ends: the visitor went somewhere else.
+  window.addEventListener("hashchange", () => {
+    if (held && byHash(held.hash) !== byHash(location.hash)) held.stop();
+    reveal(location.hash)?.scrollIntoView();
+  });
   // Opened at #anchor: open its section, and land on it again if a section folded above it moved it
   // (at once, as the browser lands on a fragment when a page opens). Not on a reload or back/forward,
   // where the browser restores the visitor's own scroll position, unless a folded section was opened.
@@ -131,41 +142,62 @@ export function mountSections(onChange?: (id: string, expanded: boolean) => void
   // which moves the target, or shows it, after the browser landed. Until the visitor scrolls, touches
   // or types, or for 10 s, each change of the page's size lands on the hash again. Not on a reload or
   // back/forward, where the browser restores the visitor's own position.
-  const hold = (hash: string, ms: number, events: readonly string[]) => {
+  // `afterFirst`: the observer's first report (at once, on observe) is not a change of size; a link's
+  // click leaves it to the browser's own scroll.
+  const hold = (hash: string, ms: number, events: readonly string[], afterFirst = false) => {
     if (typeof ResizeObserver !== "function") return;
+    // One landing at a time: a new one ends the one before.
+    held?.stop();
     let done = false;
+    let first = afterFirst;
     // Where the hold last put the page: a scroll that moves it further than the layout could (a
     // scrollbar dragged, a key or a gesture no event above caught) is the visitor's, and ends it.
     let placed: number | undefined;
     const ro = new ResizeObserver(() => {
+      if (first) {
+        first = false;
+        return;
+      }
       const target = done ? null : byHash(hash);
       if (target && target.getClientRects().length) {
         target.scrollIntoView({ behavior: "instant" });
         placed = scrollY;
       }
     });
+    // Left to the browser's scroll, the hold counts from where that scroll ends (no scroll for
+    // 300 ms): a scrollbar dragged after it (no event above catches one) moves the page further, and
+    // ends the hold.
+    let quiet: ReturnType<typeof setTimeout> | undefined;
+    const settling = () => {
+      if (!afterFirst || placed !== undefined) return;
+      clearTimeout(quiet);
+      quiet = setTimeout(() => (placed ??= scrollY), 300);
+    };
+    settling();
     const onScroll = () => {
+      settling();
       if (placed !== undefined && Math.abs(scrollY - placed) > 40) stop();
     };
     const stop = () => {
       done = true;
+      if (held?.stop === stop) held = undefined;
       ro.disconnect();
       for (const ev of events) removeEventListener(ev, stop);
       removeEventListener("scroll", onScroll);
+      clearTimeout(quiet);
     };
     ro.observe(document.querySelector("main") ?? document.body);
     for (const ev of events) addEventListener(ev, stop, { passive: true });
     addEventListener("scroll", onScroll, { passive: true });
     setTimeout(stop, ms);
+    held = { hash, stop };
   };
-  if (location.hash.length > 1 && !restoring) hold(location.hash, 10_000, ["wheel", "touchstart", "keydown", "pointerdown"]);
+  if (location.hash.length > 1 && !restoring) hold(location.hash, 10_000, HOLD_STOPS);
 
   return {
     open(id) {
       const f = folds.get(id);
       if (f && !isOpen(f)) set(f, true, true);
     },
-    // The link's own click is a pointerdown already past: only the visitor's next move stops it.
-    hold: (hash, ms = 4_000) => hold(hash, ms, ["wheel", "touchstart", "keydown", "pointerdown"]),
   };
 }

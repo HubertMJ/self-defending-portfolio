@@ -80,9 +80,8 @@ async function allActivity(page: Page) {
 }
 
 /**
- * Site redesign 2026-10-12: every section below the attack folds on a first visit. A test that reads a
- * panel's content (not the fold defaults themselves) opens them all first, as a returning visitor who
- * expanded them would — the stored "0" wins over the default (lib/folds.ts).
+ * Every section starts open since 2026-10-17 (lib/folds.ts). A test that reads a panel's content still
+ * stores "0" for each first, so it does not depend on the default: a stored choice wins over it.
  */
 const FOLDABLE = ["correlation", "how", "evidence", "posture", "verify"];
 async function openSections(page: Page) {
@@ -225,8 +224,12 @@ test.describe("layout (ADR 0035, amended 2026-10-05; ?mock=1)", () => {
     await noHorizontalScroll(page);
   });
 
-  test("page-height budgets on a first visit (mock build, the default view): desktop 1440 at most 3200 px, phone 390 at most 5200 px", { tag: "@default" }, async ({ page }) => {
+  test("page-height budgets with every section folded (mock build, the default view): desktop 1440 at most 3200 px, phone 390 at most 5200 px", { tag: "@default" }, async ({ page }) => {
     // ADR 0035 amendment 2026-10-12. Measured with the mock banner in place (the live page has none).
+    // Since 2026-10-17 the sections start open; a visitor who folds them all gets this short page.
+    await page.addInitScript((ids) => {
+      for (const id of ids) localStorage.setItem("sdp:collapsed:" + id, "1");
+    }, FOLDABLE);
     await page.setViewportSize({ width: 1440, height: 900 });
     await page.goto("/?mock=1");
     await expect(page.locator("#hero-stats .herostats__num")).toHaveCount(3);
@@ -942,22 +945,22 @@ test.describe("layout (ADR 0035, amended 2026-10-05; ?mock=1)", () => {
     }
   });
 
-  test("on a first visit everything below the attack folds; the attack and the hero diagram stay open", async ({ page }) => {
-    // Site redesign 2026-10-12 (ADR 0035 amendment): a first-time visitor (no stored choices) sees a
-    // short page — the hero diagram and the attack, the rest folded.
+  test("on a first visit every section is open; one the visitor folds stays folded across a reload", async ({ page }) => {
+    // 2026-10-17 (the owner): a first-time visitor (no stored choices) does not have to open each
+    // section by hand.
     await page.goto("/?mock=1");
     await expect(page.locator("#diagram")).toBeVisible();
-    await expect(page.locator("#attack-body")).toBeVisible();
-    for (const id of ["correlation", "how", "evidence", "posture", "verify"]) {
-      await expect(page.locator(`#${id}-title > button.section__toggle`), id).toHaveAttribute("aria-expanded", "false");
-      await expect(page.locator(`#${id}-body`), id).toBeHidden();
+    for (const id of ["attack", "correlation", "how", "evidence", "posture", "verify"]) {
+      await expect(page.locator(`#${id}-title > button.section__toggle`), id).toHaveAttribute("aria-expanded", "true");
+      await expect(page.locator(`#${id}-body`), id).toBeVisible();
     }
-    // Opening one and reloading keeps it open (the stored choice wins over the default).
+    expect(await page.evaluate(() => document.documentElement.dataset.folded)).toBeUndefined();
+    // Folding one and reloading keeps it folded (the stored choice wins over the default).
     await page.locator("#posture-title > button").click();
-    await expect(page.locator("#posture-body")).toBeVisible();
+    await expect(page.locator("#posture-body")).toBeHidden();
     await page.reload();
-    await expect(page.locator("#posture-body")).toBeVisible();
-    await expect(page.locator("#how-body")).toBeHidden();
+    await expect(page.locator("#posture-body")).toBeHidden();
+    await expect(page.locator("#how-body")).toBeVisible();
   });
 
   test("a section's heading folds it: the body hides, aria-expanded flips, the choice survives a reload; by keyboard too", async ({ page }) => {
@@ -1627,7 +1630,7 @@ test.describe("one left edge (2026-10-14)", () => {
       await page.setViewportSize({ width, height: 1000 });
       await page.goto("/?mock=1");
       const brand = await page.locator(".site-header .brand").evaluate((e) => e.getBoundingClientRect().left);
-      const heads = await page.locator("main > .section h2:visible").evaluateAll((els) => els.map((e) => [e.id, e.getBoundingClientRect().left] as const));
+      const heads = await page.locator("main > .section .section__head > h2:visible").evaluateAll((els) => els.map((e) => [e.id, e.getBoundingClientRect().left] as const));
       expect(heads.length).toBeGreaterThanOrEqual(5);
       for (const [id, x] of heads) expect(Math.abs(x - brand), id).toBeLessThanOrEqual(1);
       const others = await page.locator("#hero-title, .site-footer__inner > :first-child").evaluateAll((els) => els.map((e) => e.getBoundingClientRect().left));
@@ -1710,18 +1713,18 @@ test.describe("technical mode", () => {
     expect(problems).toEqual([]);
   });
 
-  test("the default view is short: the hero, the terminal with the tour, then folded sections numbered as in Technical Mode; Technical Mode shows the rest", { tag: "@default" }, async ({ page, isMobile }) => {
+  test("the default view is short: the hero, the terminal with the tour, then the open sections numbered as in Technical Mode; Technical Mode shows the rest", { tag: "@default" }, async ({ page, isMobile }) => {
     const problems = guardConsole(page);
     await page.goto("/?mock=1");
     const hidden = ["#console", "#timeline", ".launcher", "#objectives-fold", ".hero__secondary"];
     for (const sel of hidden) await expect(page.locator(sel).first(), sel).toBeHidden();
     await expect(page.locator(".site-nav a:visible")).toHaveText(["Attack it", "SIEM", /^How( it works)?$/, "Evidence"], { useInnerText: true });
-    // Evidence, Posture and Verify are folded sections like the others: one numbering, 01..06,
-    // the same in both views (no card, no jump).
+    // Evidence, Posture and Verify are sections like the others, open on a first visit: one
+    // numbering, 01..06, the same in both views (no card, no jump).
     await expect(page.locator("#correlation")).toBeVisible();
     for (const id of ["#evidence", "#posture", "#verify"]) {
       await expect(page.locator(id)).toBeVisible();
-      await expect(page.locator(`${id} .section__toggle`)).toHaveAttribute("aria-expanded", "false");
+      await expect(page.locator(`${id} .section__toggle`)).toHaveAttribute("aria-expanded", "true");
     }
     // The stylesheet's counter steps on each shown eyebrow of an ungrouped section (a computed style
     // does not resolve counter()), so the sections it numbers, in order, are these.
@@ -1996,9 +1999,8 @@ test.describe("credibility on the production bundle (ADR 0035; serve.mjs --termi
     if (!isMobile) expect(box.diagram).toBeLessThan(720);
     // The diagram's status line reports the last real run (its path lit on load), not a JSON dump.
     await expect(page.locator("#diagram-status")).toContainText(/answered|detected|no detection|attack in progress/);
-    // The page order is unchanged, and the full evidence record lives in #evidence (folded on a first visit).
+    // The page order is unchanged, and the full evidence record lives in #evidence (open on a first visit).
     expect(await page.evaluate(() => [...document.querySelectorAll("main > section")].map((el) => el.id))).toEqual(PAGE_ORDER);
-    await page.locator("#evidence-title > button").click();
     const card = page.locator("#evidence-card .evcard");
     await expect(card).toBeVisible();
     await expect(card.locator(".evlist__item").first()).toContainText(/\d\d:\d\d:\d\d\.\d{3} CES?T/);

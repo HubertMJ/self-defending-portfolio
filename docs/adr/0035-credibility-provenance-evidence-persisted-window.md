@@ -841,3 +841,20 @@ About grouping of the default view. The page ends with `#verify`; five sections 
 open), numbered 01..06 in both views. The footer links to the project's repository, the verify panel
 and About on the landing page (`/#about`). Tests: the e2e suite holds the page to those sections and
 that nav, with no About text and the footer's link.
+
+## Amendment 2026-10-17: every section starts open
+
+The owner: a visitor should not have to open each section by hand. `FOLDED_BY_DEFAULT` in
+`app/web/src/lib/folds.ts` is now empty, so on a first visit every section is open; the headings stay
+disclosures, and a section the visitor folds stays folded (the stored `sdp:collapsed:<id>` still wins,
+read before first paint by `theme.ts`). This reverses only the "sections fold by default" part of the
+amendment of 2026-10-12; the short default view keeps leaving the raw run data, the palette, the
+one-click cards and the history to Technical Mode. Nothing scrolls the page on load (amendment
+2026-10-13 stands).
+
+With every section open, a panel above a link's target can still be drawing its data (the SIEM board,
+just after the page opens) while the browser scrolls to it, and the landing missed. An in-page link's
+click now holds its landing the way a page opened at a hash does (`ui/sections.ts`): for 4 s, each
+change of the page's size lands on the target again; the browser's own smooth scroll runs untouched
+unless the size changes, and the hold ends on the visitor's next wheel, touch, key or pointer, or a
+scroll of more than 40 px from where the page settled. One hold at a time; going to another hash ends it.

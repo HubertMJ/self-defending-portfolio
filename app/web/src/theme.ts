@@ -23,8 +23,8 @@ try {
   if (folded.length) document.documentElement.dataset.folded = folded.join(" ");
 } catch {
   // Storage blocked (private mode, sandboxed preview): the OS preference applies, and the defaults
-  // fold at first paint all the same.
-  document.documentElement.dataset.folded = FOLDED_BY_DEFAULT.join(" ");
+  // (none since 2026-10-17) fold at first paint all the same.
+  if (FOLDED_BY_DEFAULT.length) document.documentElement.dataset.folded = FOLDED_BY_DEFAULT.join(" ");
 }
 
 // Moving between the landing page (/), the cluster and the lab slides like an iPhone app (owner

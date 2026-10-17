@@ -120,16 +120,14 @@ describe("tour progress is derived from real events", () => {
 });
 
 describe("fold defaults", () => {
-  it("everything below the attack folds on a first visit; the attack stays open", () => {
-    expect(FOLDED_BY_DEFAULT).not.toContain("attack");
-    for (const id of ["correlation", "how", "evidence", "posture", "verify"]) expect(FOLDED_BY_DEFAULT).toContain(id);
+  it("every section starts open on a first visit", () => {
+    expect(FOLDED_BY_DEFAULT).toEqual([]);
   });
 
   it("a stored choice wins over the default either way", () => {
-    expect(startsFolded("posture", null)).toBe(true);
+    expect(startsFolded("posture", null)).toBe(false);
+    expect(startsFolded("posture", "1")).toBe(true);
     expect(startsFolded("posture", "0")).toBe(false);
-    expect(startsFolded("attack", null)).toBe(false);
-    expect(startsFolded("attack", "1")).toBe(true);
   });
 });
 
