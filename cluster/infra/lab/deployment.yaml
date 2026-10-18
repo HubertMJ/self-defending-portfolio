@@ -1,0 +1,99 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lab
+  namespace: lab
+  labels:
+    app.kubernetes.io/name: lab
+spec:
+  replicas: 2
+  # Two old ReplicaSets are enough to roll back with (as in cluster/infra/site).
+  revisionHistoryLimit: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: lab
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: lab
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        # 101 is the `nginx` user of the nginx-unprivileged base that the lab's Dockerfile builds on.
+        runAsNonRoot: true
+        runAsUser: 101
+        runAsGroup: 101
+        fsGroup: 101
+        seccompProfile:
+          type: RuntimeDefault
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: lab
+      containers:
+        - name: nginx
+          # The detection lab preview served at /lab/, built and signed by
+          # HubertMJ/detection-lab's .github/workflows/build-image.yml. The same nginx-unprivileged
+          # shape as site and hello: port 8080 as uid 101 from the start, as PSS `restricted`
+          # requires. The page is served at /lab/index.html with its assets under /lab/assets/, so
+          # the Gateway passes the /lab prefix through unchanged (cluster/infra/lab/httproute.yaml).
+          # The tag here is informational: kustomization.yaml's `images:` pins the digest that is
+          # actually pulled (ADR 0008).
+          image: ghcr.io/hubertmj/detection-lab/lab:main
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 200m
+              memory: 64Mi
+          livenessProbe:
+            # The page lives at /lab/, not /: the probe hits the pod directly on 8080, so it must
+            # ask for a path the image serves.
+            httpGet:
+              path: /lab/
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /lab/
+              port: http
+            initialDelaySeconds: 1
+            periodSeconds: 10
+          volumeMounts:
+            # readOnlyRootFilesystem means nginx's three writable paths have to be provided. They
+            # are the only writable bytes in the pod, they are per-pod, and they vanish on restart.
+            - name: cache
+              mountPath: /var/cache/nginx
+            - name: run
+              mountPath: /var/run
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: cache
+          emptyDir:
+            sizeLimit: 16Mi
+        - name: run
+          emptyDir:
+            sizeLimit: 1Mi
+        - name: tmp
+          emptyDir:
+            sizeLimit: 16Mi

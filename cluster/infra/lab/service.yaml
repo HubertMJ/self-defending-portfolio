@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: lab
+  namespace: lab
+  labels:
+    app.kubernetes.io/name: lab
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: lab
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+      protocol: TCP

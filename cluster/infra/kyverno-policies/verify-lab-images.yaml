@@ -1,0 +1,122 @@
+# The detection lab preview's image policy (cluster/infra/lab, HubertMJ/detection-lab), the `lab`
+# namespace only. The exact same supply-chain checks as verify-portfolio-images.yaml - a cosign
+# keyless signature and an SPDX SBOM attestation made by the repository's own build-image.yml
+# workflow on refs/heads/main, discovered through the cosign v3 Sigstore bundle referrers - but in
+# its own ClusterPolicy, and in Audit for now. See verify-portfolio-images.yaml's header for the
+# mechanics (keyless/Fulcio/Rekor, SigstoreBundle, the two-field Audit<->Enforce switch); this file
+# only records what is different for the lab.
+#
+# ---- why a separate policy, not two more entries in verify-portfolio-images.yaml ----
+#
+# A verifyImages rule's failureAction is resolved for the whole policy: when an Audit rule and an
+# Enforce rule share one ClusterPolicy, Kyverno (and `kyverno apply`) apply the stricter action to
+# both, so an Audit lab rule dropped next to the Enforce site/hello rules would still reject the lab
+# Deployment. The lab needs Audit on its own while its image does not exist, so it gets its own
+# policy. verify-portfolio-images.yaml stays Enforce for the images that are built and signed.
+#
+# ---- TODO-for-lead-at-merge: flip to Enforce ----
+#
+# This policy is Audit because the first lab image has not been built or signed yet and
+# cluster/infra/lab pins the all-zero placeholder digest: an Enforce rule would reject the lab
+# Deployment and `make validate`'s `kyverno apply` would fail. In Audit the placeholder is reported
+# as an audit warning and is never admitted as verified. In the SAME commit that pins the real
+# digest, flip both rules Audit -> Enforce and verify-signature-lab's mutateDigest false -> true (the
+# same two-field switch verify-portfolio-images.yaml documents for hello); verify-sbom-attestation-lab
+# keeps mutateDigest/verifyDigest false. The lab may instead be folded into verify-portfolio-images.yaml
+# at that point (add `lab` to its two namespace lists and a detection-lab entry to each rule); the
+# effect is identical once everything is Enforce.
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: verify-lab-images
+  annotations:
+    policies.kyverno.io/title: Verify detection lab image signature and SBOM
+    policies.kyverno.io/category: Supply Chain Security
+    policies.kyverno.io/severity: high
+    policies.kyverno.io/subject: Pod
+    policies.kyverno.io/description: >-
+      Every container image in the `lab` namespace must carry a cosign keyless signature made by
+      HubertMJ/detection-lab's build-image.yml workflow on refs/heads/main, and an SPDX SBOM
+      attestation signed by the same identity. Audit until the first lab image is built and the
+      digest pinned (see the header), then Enforce.
+spec:
+  # Fail, not Ignore: once this is Enforce, "we could not check" and "it is signed" are not the same
+  # answer for a Pod in `lab`. Bounded to the one namespace below, as verify-portfolio-images.yaml is.
+  failurePolicy: Fail
+  # A network round trip to GHCR and the Sigstore TUF root; the same 30 s ceiling as
+  # verify-portfolio-images.yaml so a cold verification is not cut off mid-flight.
+  webhookTimeoutSeconds: 30
+  # Admission only, same reasoning as verify-portfolio-images.yaml: nothing to re-verify in the
+  # background for an immutable digest, and a background rule cannot mutate the digest.
+  background: false
+  rules:
+    - name: verify-signature-lab
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+              namespaces:
+                - lab
+      verifyImages:
+        - imageReferences:
+            - "ghcr.io/hubertmj/detection-lab/*"
+          type: SigstoreBundle
+          # Audit for now; see the header's TODO-for-lead-at-merge. mutateDigest must be false while
+          # auditing (Kyverno refuses an Audit rule that rewrites the image reference), and flips to
+          # true with the action.
+          failureAction: Audit
+          mutateDigest: false
+          verifyDigest: true
+          required: true
+          attestors:
+            - count: 1
+              entries:
+                - keyless:
+                    # HubertMJ/detection-lab's build-image.yml on main, anchored at both ends so no
+                    # fork, pull_request run or other workflow in that repository satisfies it. The
+                    # two-line YAML double-quoted continuation keeps it one unbroken regex under the
+                    # column limit, as in verify-portfolio-images.yaml.
+                    subjectRegExp: "^https://github\\.com/HubertMJ/detection-lab/\
+                      \\.github/workflows/build-image\\.yml@refs/heads/main$"
+                    issuer: https://token.actions.githubusercontent.com
+                    rekor:
+                      url: https://rekor.sigstore.dev
+
+    - name: verify-sbom-attestation-lab
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+              namespaces:
+                - lab
+      verifyImages:
+        - imageReferences:
+            - "ghcr.io/hubertmj/detection-lab/*"
+          failureAction: Audit
+          type: SigstoreBundle
+          # Stay false in both states, as verify-portfolio-images.yaml's SBOM rule explains:
+          # verify-signature-lab already pins and verifies the digest.
+          mutateDigest: false
+          verifyDigest: false
+          attestations:
+            - type: https://spdx.dev/Document
+              attestors:
+                - count: 1
+                  entries:
+                    - keyless:
+                        subjectRegExp: "^https://github\\.com/HubertMJ/detection-lab/\
+                          \\.github/workflows/build-image\\.yml@refs/heads/main$"
+                        issuer: https://token.actions.githubusercontent.com
+                        rekor:
+                          url: https://rekor.sigstore.dev
+              conditions:
+                - all:
+                    # Shallow on purpose, as in verify-portfolio-images.yaml: a signed SPDX document
+                    # exists and is ours; package-level judgement is Trivy's job.
+                    - key: "{{ spdxVersion || '' }}"
+                      operator: NotEquals
+                      value: ""
+                      message: >-
+                        attestation is not an SPDX document: the predicate has no spdxVersion field

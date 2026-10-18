@@ -1,0 +1,28 @@
+# The detection lab preview (/lab/): the image built from HubertMJ/detection-lab. The landing page
+# (/) stays in cluster/infra/site and the cluster page (/cluster/) in hello.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: lab
+
+resources:
+  - namespace.yaml
+  - deployment.yaml
+  - service.yaml
+  - httproute.yaml
+  - networkpolicy.yaml
+  - ciliumnetworkpolicy.yaml
+
+images:
+  - name: ghcr.io/hubertmj/detection-lab/lab
+    newTag: main
+    # TODO-for-lead-at-merge: placeholder (all-zero) digest. The first lab image has not been built
+    # and signed yet. Pin the real digest here by hand once HubertMJ/detection-lab's build-image.yml
+    # has run on main and the image is public, BEFORE this branch merges - edit the line below to the
+    # digest from that run (scripts/bump-image-digest.sh only rewrites this project's own
+    # self-defending-portfolio images, so it does not touch this foreign-repo ref, the same as
+    # cluster/infra/site's hubertjablon.ski pin). scripts/check-image-digests.sh refuses this
+    # placeholder on main (run the branch gates with ALLOW_PLACEHOLDER_DIGESTS=1 until then), and
+    # Kyverno's signature check would reject an unsigned/absent image at admission, so an un-pinned
+    # lab Deployment can never pull.
+    digest: sha256:0000000000000000000000000000000000000000000000000000000000000000

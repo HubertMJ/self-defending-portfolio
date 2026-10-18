@@ -97,3 +97,28 @@ spec:
               - image: "ghcr.io/hubertmj/hubertjablon.ski/*"
             =(ephemeralContainers):
               - image: "ghcr.io/hubertmj/hubertjablon.ski/*"
+
+    # The detection lab preview's namespace (cluster/infra/lab): one registry path too, the
+    # detection-lab repository's, whose images verify-portfolio-images checks against that
+    # repository's workflow.
+    - name: validate-lab-registry
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+              namespaces:
+                - lab
+      validate:
+        failureAction: Enforce
+        message: >-
+          Images in this namespace must come from ghcr.io/hubertmj/detection-lab/ - the only
+          registry path whose contents the detection-lab repository builds and signs.
+        pattern:
+          spec:
+            containers:
+              - image: "ghcr.io/hubertmj/detection-lab/*"
+            =(initContainers):
+              - image: "ghcr.io/hubertmj/detection-lab/*"
+            =(ephemeralContainers):
+              - image: "ghcr.io/hubertmj/detection-lab/*"

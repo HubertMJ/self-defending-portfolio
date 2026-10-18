@@ -1,4 +1,5 @@
-# Wave 4, beside hello: the landing page and /lab/ (image from HubertMJ/hubertjablon.ski).
+# Wave 4, beside hello: the landing page (image from HubertMJ/hubertjablon.ski). The detection lab
+# preview at /lab/ moved to its own Application (cluster/apps/lab.yaml).
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:

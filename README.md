@@ -10,8 +10,11 @@ with a SIEM on its own VM catching even what Falco has no rule for, next to the 
 posture.
 
 **Live:** [hubertjablon.ski/cluster/](https://hubertjablon.ski/cluster/). The landing page at
-[hubertjablon.ski](https://hubertjablon.ski) and the detection lab preview come from
-[HubertMJ/hubertjablon.ski](https://github.com/HubertMJ/hubertjablon.ski); this repository runs them.
+[hubertjablon.ski](https://hubertjablon.ski) comes from
+[HubertMJ/hubertjablon.ski](https://github.com/HubertMJ/hubertjablon.ski), and the detection lab
+preview at [/lab/](https://hubertjablon.ski/lab/) from its own repository
+[HubertMJ/detection-lab](https://github.com/HubertMJ/detection-lab) and image; this repository runs
+all three (plus the cluster page at `/cluster/`).
 <!-- TODO-CONTENT: confirm what the live site serves today and update this line when the phase 5/6 demo goes live. -->
 
 **Status:** phases 0-6 are built and running — a hardened host, GitOps, a public site behind a
