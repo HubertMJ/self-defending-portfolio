@@ -34,9 +34,9 @@ fluent_bit_profiles:
     opensearch_host: 127.0.0.1
     # The CA key and the admin key sit here; CAP_DAC_READ_SEARCH would read them otherwise.
     sandbox_sentinels: [/etc/sdp-siem/pki/admin.key]
-    # On top of the common list below: siem01's CA and identity keys (no "-": they must exist here)
-    # and the snapshots, a full copy of the evidence.
-    inaccessible_paths: [/etc/sdp-siem/pki, -/var/lib/opensearch-snapshots]
+    # On top of the common list below: siem01's CA and identity keys (no "-": they must exist here),
+    # the snapshots, a full copy of the evidence, and the detection lab's keys (role lab_identities).
+    inaccessible_paths: [/etc/sdp-siem/pki, -/var/lib/opensearch-snapshots, -/etc/sdp-lab]
     ip_allow: [127.0.0.0/8]
     own_stream: siem01
 

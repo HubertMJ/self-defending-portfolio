@@ -1,0 +1,26 @@
+# The detection lab (ADR 0034 amendment 2026-10-18), variant A: behaviour, not identity - whatever the
+# copy is called and whatever its hash, a program running from the user's temp directory that writes
+# itself into the Run key persists.
+title: Lab - Run key set by a program in the temp directory
+id: 1ee26ef6-5232-4036-9134-f5cb465a2b9a
+status: experimental
+level: high
+description: >-
+  A registry value under the Run key (HKCU or HKLM ...\CurrentVersion\Run\) was set by a process whose
+  executable is in a user's AppData\Local\Temp. Legitimate installers rarely persist from a temp path.
+author: Hubert Jabłoński
+date: 2026/10/18
+logsource:
+  product: sdp
+  service: lab
+detection:
+  selection:
+    event.code: '13'
+    registry.path|contains: '\CurrentVersion\Run\'
+    process.executable|contains: '\AppData\Local\Temp\'
+  condition: selection
+tags:
+  - attack.persistence
+  - attack.t1547.001
+falsepositives:
+  - "An installer or updater that runs from the temp directory and registers itself for logon"

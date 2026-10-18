@@ -4,8 +4,9 @@ alert (siem contract P3; canaries.yaml kind "synthetic").
 
 The documents look exactly like what sdp.lua ships (shapes of tests/siem/expected/lua-output.jsonl),
 written the way Fluent Bit writes them (bulk create, no id) with a shipper identity. Every document
-carries a marker of this pass - a pod ref sandbox_p3c-<tag>-<name> or a host pseudonym hm1:<hex> - so
-findings of other passes and of real traffic are never mistaken for these. Negative documents must
+carries a marker of this pass - a pod ref sandbox_p3c-<tag>-<name>, a host pseudonym hm1:<hex> or, in
+sdp-lab, a lab run id and copy number lab-<tag>-...#<n> - so findings of other passes and of real
+traffic are never mistaken for these. Negative documents must
 NOT produce a finding (an exec by the API, DNS names that only look like the flag label).
 
 Used offline by tests/siem/sync-it.sh against a throwaway OpenSearch, and live on siem01 by
@@ -38,6 +39,8 @@ TERMINAL = {  # catalogue command -> (technique, objective, outcome) as in scena
     "shell": ("T1059.004", "execution", "detected"), "drop-run": ("T1105", "execution", "detected"),
     "touch-bin": ("T1543", "", "prevented"),
 }
+# The SHA-256 of the detection lab sample's copy 1: the value of siem/rules/ioc-lab-known-hash.yml.
+LAB_KNOWN_HASH = "4850c01e9e5cdb54b604908952b56f246e661dbec01ed85c19e349ce1ba92f2e"
 FALCO = {  # slug -> (rule name, priority)
     "terminal-shell-in-container": ("Terminal shell in container", "Notice"),
     "read-sensitive-file-untrusted": ("Read sensitive file untrusted", "Warning"),
@@ -153,6 +156,50 @@ def build(tag, now):
         ssh(stream, f"{stream}-accepted", "accepted")
         ssh(stream, f"{stream}-refused", "invalid-user")
 
+    # The detection lab (sdp-lab, shaped like its generator's run): copy 1 with the known hash, copies 2
+    # and 3 with new hashes, all from the temp directory into the Run key and to one beacon address; a
+    # second address only one binary talks to (no incident); and variant B's user unit written from /tmp,
+    # next to a file a /tmp program writes elsewhere (no finding).
+    run_id = f"lab-p3c-{hashlib.sha256(tag.encode()).hexdigest()[:6]}"
+    octets = hashlib.sha256(f"{tag}-beacon".encode()).digest()
+    beacon, lone = f"198.18.{octets[0]}.{octets[1]}", f"198.19.{octets[0]}.{octets[1]}"
+    lab_ref = lambda n: f"{run_id}#{n}"  # noqa: E731
+
+    def lab(n, code, action, off, extra, mode="generated", host="ws1.lab.local"):
+        # Nested objects, as the lab's generator writes them: Security Analytics finds nothing in a document
+        # with flat dotted keys ("event.code": ...) although the stream maps them (sync-it, 2026-10-18).
+        d = {"@timestamp": ts(off), "event.kind": "event", "event.dataset": "lab", "event.code": code,
+             "event.action": action, "lab.run_id": run_id, "lab.mode": mode, "lab.variant": n, "host.name": host}
+        d.update(extra)
+        nested = {"@timestamp": d.pop("@timestamp")}
+        for key, value in d.items():
+            node = nested
+            *path, leaf = key.split(".")
+            for part in path:
+                node = node.setdefault(part, {})
+            node[leaf] = value
+        d = nested
+        docs.append(("sdp-lab", d))
+
+    for n in (1, 2, 3):
+        name = "update-helper.exe" if n == 1 else f"svc-{hashlib.sha256(f'{tag}-{n}'.encode()).hexdigest()[:8]}.exe"
+        sha = LAB_KNOWN_HASH if n == 1 else hashlib.sha256(f"{tag}-copy-{n}".encode()).hexdigest()
+        exe = "C:\\Users\\labuser\\AppData\\Local\\Temp\\" + name
+        proc = {"process.pid": 4000 + n, "process.name": name}
+        lab(n, "1", "process-create", 0.1 * n, dict(proc, **{"process.executable": exe, "process.hash.sha256": sha,
+                                                             "process.parent.name": "explorer.exe"}))
+        lab(n, "13", "registry-value-set", 0.1 * n + 0.02, dict(proc, **{
+            "process.executable": exe, "registry.path": "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run\\" + name[:-4]}))
+        lab(n, "3", "network-connection", 0.1 * n + 0.04, dict(proc, **{
+            "process.hash.sha256": sha, "destination.ip": beacon, "destination.port": 8080}))
+        if n == 2:
+            lab(n, "3", "network-connection", 0.25, dict(proc, **{
+                "process.hash.sha256": sha, "destination.ip": lone, "destination.port": 8443}))
+    for n, path in ((11, "/home/labuser/.config/systemd/user/svc-update.service"), (12, "/home/labuser/notes.txt")):
+        lab(n, "11", "file-create", 0.5, {"process.pid": 5000 + n, "process.name": "svc-update",
+                                         "process.executable": "/tmp/svc-update", "file.path": path},
+            mode="isolated-vm", host="lab-vm")
+
     expect = {
         "rules": {
             "api-recon-user": [ref("whoami")], "api-recon-system": [ref("hostname")], "api-recon-process": [ref("ps")],
@@ -167,20 +214,28 @@ def build(tag, now):
             "k8s-admission-denied": [ref("deny1"), ref("deny2"), ref("deny3"), ref("early1")],
             "host-ssh-accepted": [hm("sdp-host-accepted")], "host-ssh-failed": [hm("sdp-host-refused")],
             "siem-host-ssh-accepted": [hm("sdp-siem01-accepted")], "siem-host-ssh-failed": [hm("sdp-siem01-refused")],
+            "ioc-lab-known-hash": [lab_ref(1)],
+            "lab-persistence-run-key-from-temp": [lab_ref(1), lab_ref(2), lab_ref(3)],
+            "lab-persistence-user-unit-from-tmp": [lab_ref(11)],
         },
-        "not": {"hubble-dns-exfil": [ref("dnsneg1"), ref("dnsneg2"), ref("dnsstale")], "k8s-exec-outside-api": [ref("execapi")]},
+        "not": {"hubble-dns-exfil": [ref("dnsneg1"), ref("dnsneg2"), ref("dnsstale")], "k8s-exec-outside-api": [ref("execapi")],
+                "ioc-lab-known-hash": [lab_ref(2), lab_ref(3)], "lab-persistence-user-unit-from-tmp": [lab_ref(12)]},
         "correlations": {"contained-intrusion": [ref("shell"), ref("beacon")], "dns-exfil": [ref("dnsexfil")]},
         "monitors": {
             "sdp-git: policy-probing": ([prober], [early]),
             "sdp-git: prevented-not-detected": ([ref("pnd")], []),
             "sdp-git: detection-missing": ([ref("dm")], [ref("shadow"), ref("shell"), ref("beacon"), ref("droprun")]),
+            "sdp-git: lab-polymorphic-beacon": ([beacon], [lone]),
         },
-        "marker_prefix": (f"sandbox_p3c-{tag}-", prober),
+        "bucket_keys": {"sdp-k8s-audit": [prober], "sdp-lab": [beacon, lone]},
     }
     return docs, expect
 
 
 def marker(doc):
+    lab = doc.get("lab") or {}
+    if lab.get("run_id"):
+        return f"{lab['run_id']}#{lab.get('variant')}"
     return ((doc.get("k8s") or {}).get("pod") or {}).get("ref") or (doc.get("source") or {}).get("ip")
 
 
@@ -230,8 +285,9 @@ def main():
         if code != 200 or bad or out.get("errors"):
             fails.append(f"write {stream}: {code} {json.dumps(bad or out)[:300]}")
     written = {marker(d) for s, d in docs if s in streams}
-    if "sdp-k8s-audit" in streams:
-        written.add(expect["marker_prefix"][1])  # the probing principal, the policy-probing bucket key
+    for stream, keys in expect["bucket_keys"].items():
+        if stream in streams:
+            written |= set(keys)  # bucket keys of the monitors: the probing principal, the beacon addresses
 
     # Sigma id -> SA id, from SA's stored rules.
     code, out = admin.req("POST", "/_plugins/_security_analytics/rules/_search?pre_packaged=false",

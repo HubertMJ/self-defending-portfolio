@@ -27,12 +27,16 @@ import sys
 import yaml
 
 MONITOR_PREFIX = "sdp-git: "
-# The seven sources of ADR 0034. A fields file or log type for anything else is refused, so a commit
-# cannot point a detector or a correlation at an index of its own choosing.
-KNOWN_SOURCES = {"falco", "talon", "hubble", "k8s-audit", "api", "host", "siem01"}
-# Monitors' alerts are readable by the portfolio API, so a monitor may read only what the API may read
-# (sdp_api_read): the six k3s01 streams, never sdp-siem01, never a pattern.
-MONITOR_STREAMS = {"sdp-falco", "sdp-talon", "sdp-hubble", "sdp-k8s-audit", "sdp-api", "sdp-host"}
+# The seven sources of ADR 0034 and the detection lab's (amendment 2026-10-18). A fields file or log type
+# for anything else is refused, so a commit cannot point a detector or a correlation at an index of its
+# own choosing.
+KNOWN_SOURCES = {"falco", "talon", "hubble", "k8s-audit", "api", "host", "siem01", "lab"}
+# Monitors' alerts are readable by the portfolio API, so a monitor may read only what may be published:
+# the six k3s01 streams and sdp-lab (synthetic or lab-VM events only), never sdp-siem01, never a pattern.
+MONITOR_STREAMS = {"sdp-falco", "sdp-talon", "sdp-hubble", "sdp-k8s-audit", "sdp-api", "sdp-host", "sdp-lab"}
+# The detection lab's stream is never combined with the cluster's data (ADR 0034 amendment 2026-10-18):
+# a lab event must not count towards a cluster alert or correlation, nor a cluster event towards a lab run.
+LAB_STREAM = "sdp-lab"
 # Mapped in every template besides the allow-list (opensearch_config, F1).
 COMMON_FIELDS = {"@timestamp", "event.kind", "event.dataset", "event.ingested", "event.overwrite"}
 # Published on the page (ADR 0036, gen-siem-index.sh): titles, file names, canaries. ADR 0021 never
@@ -603,6 +607,56 @@ def check_monitors(t):
                     or set(script) != {"source", "lang"} or not want.match(source):
                 errs.append((rel, "each trigger is a query- or bucket-level trigger whose painless condition only"
                                   " compares counts (e.g. params.a > 0 && params.b == 0)"))
+    return errs
+
+
+@check
+def check_lab_isolation(t):
+    errs = []
+    for rel, d in t.monitors.items():
+        indices = set()
+        for inp in d.get("inputs") if isinstance(d.get("inputs"), list) else []:
+            search = (inp or {}).get("search") if isinstance(inp, dict) else None
+            if isinstance(search, dict) and isinstance(search.get("indices"), list):
+                indices |= {i for i in search["indices"] if isinstance(i, str)}
+        if LAB_STREAM in indices and indices != {LAB_STREAM}:
+            errs.append((rel, f"a monitor reading {LAB_STREAM} reads nothing else (the lab never mixes with the cluster's data)"))
+    for rel, d in t.correlations.items():
+        entries = d.get("correlate") if isinstance(d.get("correlate"), list) else []
+        if any(isinstance(e, dict) and e.get("source") == LAB_STREAM[len("sdp-"):] for e in entries):
+            errs.append((rel, "the lab source is never correlated (the lab never mixes with the cluster's data)"))
+    return errs
+
+
+# The lab's ground truth (copy number, run, host label): a detection that read it would know the answer.
+LAB_GROUND_TRUTH = re.compile(r"^(lab\..+|host\.name)$")
+
+
+@check
+def check_lab_ground_truth(t):
+    errs = []
+    for rel, d in t.rules.items():
+        det, ls = d.get("detection"), d.get("logsource")
+        if not isinstance(det, dict) or not isinstance(ls, dict) or ls.get("service") != LAB_STREAM[len("sdp-"):]:
+            continue
+        for name, maps in _selections(det):
+            for m in maps or []:
+                for key in m:
+                    field = str(key).split("|")[0]
+                    if LAB_GROUND_TRUTH.match(field):
+                        errs.append((rel, f"selection {name}: field {field!r} is the lab's ground truth; a lab rule"
+                                          " detects behaviour only"))
+    for rel, d in t.monitors.items():
+        for node in _walk(d.get("inputs")):
+            indices = node.get("indices")
+            if not (isinstance(indices, list) and LAB_STREAM in indices):
+                continue
+            # A field is named as a key (term, range, exists) or as the value of "field" (aggregations).
+            for sub in _walk(node):
+                for k, v in sub.items():
+                    for f in (k, v if k == "field" else None):
+                        if isinstance(f, str) and LAB_GROUND_TRUTH.match(f):
+                            errs.append((rel, f"field {f!r} is the lab's ground truth; a lab monitor detects behaviour only"))
     return errs
 
 

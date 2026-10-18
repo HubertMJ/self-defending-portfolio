@@ -1,0 +1,26 @@
+---
+# The detection lab's run documents (ADR 0034 amendment 2026-10-18): one document per run, the shape the
+# API publishes (LabReplay schema 1). dynamic: false - only the fields the API sorts and filters on are
+# indexed; the rest of the document is kept in _source. Created once; this role never changes or
+# deletes the index afterwards (a mapping change is a new field added by hand, or a new index).
+- name: Read the index {{ opensearch_config_lab_runs_index }}
+  ansible.builtin.uri:
+    url: "{{ opensearch_config_url }}/{{ opensearch_config_lab_runs_index }}"
+    ca_path: "{{ opensearch_config_ca }}"
+    client_cert: "{{ opensearch_config_admin_cert }}"
+    client_key: "{{ opensearch_config_admin_key }}"
+    status_code: [200, 404]
+  register: opensearch_config_lab_runs_live
+  check_mode: false
+
+- name: Create the index {{ opensearch_config_lab_runs_index }}
+  ansible.builtin.uri:
+    url: "{{ opensearch_config_url }}/{{ opensearch_config_lab_runs_index }}"
+    method: PUT
+    body: "{{ lookup('ansible.builtin.file', 'lab-runs.json') }}"
+    body_format: json
+    ca_path: "{{ opensearch_config_ca }}"
+    client_cert: "{{ opensearch_config_admin_cert }}"
+    client_key: "{{ opensearch_config_admin_key }}"
+  changed_when: true
+  when: opensearch_config_lab_runs_live.status == 404

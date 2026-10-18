@@ -54,6 +54,10 @@ argument_specs:
         description: Ops monitors that are enabled; every other ops monitor is created disabled.
         type: list
         elements: str
+      opensearch_config_lab_runs_index:
+        description: Index of the detection lab's run documents (created once, never changed by this role).
+        type: str
+        default: lab-runs
       opensearch_config_state_dir:
         description: Directory of the hashes of the last written request bodies.
         type: path

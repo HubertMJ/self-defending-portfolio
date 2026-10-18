@@ -164,6 +164,9 @@
   loop_control:
     loop_var: opensearch_config_source
 
+- name: Create the detection lab's run index
+  ansible.builtin.include_tasks: lab_runs.yml
+
 # Snapshots (ADR 0034 amendment): hourly to the data disk, kept 7 days and never fewer than 24.
 - name: Read the snapshot repository
   ansible.builtin.uri:
@@ -210,7 +213,9 @@
     opensearch_config_monitor_enabled: >-
       {{ ('ingest silent ' ~ opensearch_config_monitor_source) in opensearch_config_ops_monitors_enabled }}
     opensearch_config_monitor_body: "{{ lookup('ansible.builtin.template', 'monitors/ingest_silent.json.j2') }}"
-  loop: "{{ opensearch_config_sources }}"
+  # The lab writes once a day, by schedule: silence there is normal, and the live check watches the
+  # age of the latest run instead (ADR 0034 amendment 2026-10-18).
+  loop: "{{ opensearch_config_sources | difference(['lab']) }}"
   loop_control:
     loop_var: opensearch_config_monitor_source
 

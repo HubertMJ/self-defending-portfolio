@@ -1,0 +1,43 @@
+# Allow-list of the sdp-lab data stream: the detection lab (ADR 0034 amendment 2026-10-18,
+# detection-lab repository). Synthetic events (variant A, the generator run on siem01 with the
+# lab-writer identity) or the events of one isolated lab VM (variant B, its Fluent Bit with the
+# lab-vm-shipper identity) - never anything from k3s01 or the homelab. Sysmon-shaped: event.code is the
+# Sysmon EventID. Values are case-sensitive and never contain a space (SA, S0-b).
+# The generator writes records in this final shape (bulk create, no _id), so no field has a `from`:
+# there is no sdp.lua projection on this path. Documents are nested objects ({"event": {"code": ...}}):
+# Security Analytics finds nothing in a document with flat dotted keys ("event.code": ...), although
+# the stream maps both alike (measured in tests/siem/sync-it.sh, 2026-10-18). Rules use behaviour only - never lab.*, host.name or
+# lab.variant (the ground truth the validator compares against).
+owner: lab
+source: lab
+stream: sdp-lab
+log_type: sdp_lab
+input: >-
+  The detection lab's generator on siem01 (variant A), or Fluent Bit on the isolated lab VM (variant B),
+  writing documents of exactly these fields to sdp-lab; one lab.run_id per run, copies 1..N of the sample.
+fixture: tests/siem/fixtures/lab.jsonl
+fields:
+  "@timestamp": {type: date, note: event time}
+  event.kind: {type: keyword, value: event}
+  event.dataset: {type: keyword, value: lab}
+  event.code:
+    type: keyword
+    note: "Sysmon EventID as a string: 1 process create, 3 network connection, 11 file create (B), 13 registry value set (A)"
+  event.action:
+    type: keyword
+    note: "process-create | network-connection | file-create | registry-value-set"
+  lab.run_id: {type: keyword, note: "lab-<UTC yyyymmddThhmmssZ>-<6 hex>"}
+  lab.mode: {type: keyword, note: "generated (A) | isolated-vm (B)"}
+  lab.variant: {type: integer, note: "copy number 1..N; ground truth for the validator, never used by a rule"}
+  host.name: {type: keyword, note: "lab host label (A: ws1.lab.local / ws2.lab.local; B: the VM's name)"}
+  process.pid: {type: long}
+  process.name: {type: keyword, note: file name of the copy}
+  process.executable: {type: keyword, note: full path}
+  process.hash.sha256: {type: keyword, note: lower-case hex}
+  process.parent.name: {type: keyword}
+  registry.path:
+    type: keyword
+    note: 'A only: HKCU\Software\Microsoft\Windows\CurrentVersion\Run\<value>'
+  file.path: {type: keyword, note: "B only: the persistence file (systemd user unit or crontab spool)"}
+  destination.ip: {type: keyword, note: the lab beacon receiver (A a fixed synthetic lab address)}
+  destination.port: {type: integer}

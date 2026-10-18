@@ -209,6 +209,7 @@ expect 403 "3 ISM remove on the write index" shipper POST "/_plugins/_ism/remove
 expect 403 "3 ISM change_policy on the write index" shipper POST "/_plugins/_ism/change_policy/$w" '{"policy_id":"sdp-30d"}'
 expect 403 "3 write to sdp-siem01" shipper POST /sdp-siem01/_doc "$(doc "$mark-3-siem01")"
 expect_item "3 _bulk create into sdp-siem01" shipper /_bulk "$(printf '{"create":{"_index":"sdp-siem01"}}\n%s\n' "$(doc "$mark-3b")")"
+expect 403 "3 write to sdp-lab (the lab's stream is the lab writers' only)" shipper POST /sdp-lab/_doc "$(doc "$mark-3-lab")"
 
 # --- 8 (setup) + 4: snapshot holds the original; no rewrite of the current write index either -------
 bulk_create shipper sdp-falco "$mark-4-original" || { bad "4 setup: create failed"; exit 1; }
@@ -286,7 +287,7 @@ req admin GET "/_plugins/_performanceanalyzer/config" >/dev/null
 req admin GET "/_index_template/sdp-*" >/dev/null
 bad_tpl=$(j "[t['name'] for t in d['index_templates'] if t['index_template']['index_patterns'] != [t['name']] or t['index_template'].get('composed_of', []) != [] or 'data_stream' not in t['index_template']]")
 n_tpl=$(j "len(d['index_templates'])")
-[ "$bad_tpl" = "[]" ] && [ "$n_tpl" = 7 ] && ok "9 seven templates: index_patterns [<stream>], composed_of [], data stream" || bad "9 templates: $n_tpl, drifted $bad_tpl"
+[ "$bad_tpl" = "[]" ] && [ "$n_tpl" = 8 ] && ok "9 eight templates: index_patterns [<stream>], composed_of [], data stream" || bad "9 templates: $n_tpl, drifted $bad_tpl"
 got=$(req admin GET "/_component_template/.opensearch-sap-alias-mappings-component-*")
 if [ "$got" = 404 ] || [ "$(j "len(d.get('component_templates', []))")" = 0 ]; then ok "9 no .opensearch-sap-alias-mappings-component-*"
 else bad "9 SA alias components exist: $(head -c 300 "$T/body")"; fi
@@ -307,6 +308,7 @@ code() { # <want> <description> <METHOD> <path> [body]
 }
 code 200 "api read: search the six k3s01 streams by name" GET "/sdp-falco,sdp-talon,sdp-hubble,sdp-k8s-audit,sdp-api,sdp-host/_search?size=0"
 code 403 "api read: search sdp-siem01" GET "/sdp-siem01/_search?size=0"
+code 403 "api read: search sdp-lab (the API reads the lab's run documents only)" GET "/sdp-lab/_search?size=0"
 code 403 "api read: search sdp-* (a future stream is not readable by accident)" GET "/sdp-*/_search?size=0"
 code 403 "api read: write to sdp-falco" POST /sdp-falco/_doc '{"@timestamp":"2026-10-04T00:00:00Z"}'
 code 200 "api read: Alerting alerts" GET /_plugins/_alerting/monitors/alerts

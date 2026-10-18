@@ -517,6 +517,10 @@
         - /etc/sdp-siem/pki/rules-sync.crt
         - /etc/sdp-siem/pki/shipper-siem01.crt
         - /etc/opensearch-dashboards/certs/dashboards.crt
+        # The detection lab's (role lab_identities; ADR 0034 amendment 2026-10-18).
+        - /etc/sdp-siem/pki/lab-writer.crt
+        - /etc/sdp-siem/pki/lab-vm-shipper.crt
+        - /etc/sdp-siem/pki/lab-validator.crt
       register: verify_certs
 
     - name: Assert every certificate is valid for more than 30 days

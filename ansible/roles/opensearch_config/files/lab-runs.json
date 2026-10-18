@@ -1,0 +1,52 @@
+{
+  "settings": {
+    "index": {
+      "number_of_shards": 1,
+      "number_of_replicas": 0
+    }
+  },
+  "mappings": {
+    "_meta": {
+      "managed_by": "ansible role opensearch_config",
+      "what": "detection lab run documents (LabReplay schema 1), ADR 0034 amendment 2026-10-18"
+    },
+    "dynamic": false,
+    "properties": {
+      "schema": {
+        "type": "integer"
+      },
+      "sample": {
+        "type": "boolean"
+      },
+      "run": {
+        "properties": {
+          "id": {
+            "type": "keyword"
+          },
+          "mode": {
+            "type": "keyword"
+          },
+          "started_at": {
+            "type": "date"
+          },
+          "finished_at": {
+            "type": "date"
+          }
+        }
+      },
+      "incident": {
+        "properties": {
+          "opened_at_variant": {
+            "type": "integer"
+          },
+          "delay_s": {
+            "type": "float"
+          },
+          "key": {
+            "type": "keyword"
+          }
+        }
+      }
+    }
+  }
+}

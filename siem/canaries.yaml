@@ -9,6 +9,9 @@
 # kind synthetic documents written by tests/siem/canaries.sh with the temporary shipper-test identity
 #                (tests/siem/canary_docs.py, by name), for a check whose trigger is a failure of the demo
 #                itself - a detection that does not happen cannot be caused through the public API.
+#                The detection lab's (docs: lab-run, lab-run-isolated-vm) go to sdp-lab, written by the lab's
+#                writer identities: every scheduled lab run is the canary of its rules and monitor, and
+#                canary_docs.py writes the same shapes offline (ADR 0034 amendment 2026-10-18).
 # Canaries are published on the page (ADR 0036): no address, host name or credential in them.
 rules:
   c688437b-f1eb-4c1b-af13-13738b0fce91:  # api-credentials-flag
@@ -70,6 +73,9 @@ rules:
   1c543e7e-a886-43fa-9e75-6c93368d3f1a:  # hubble-sandbox-policy-drop
     kind: api
     terminal: [beacon, whoami]
+  daefd3d6-c180-41f1-96be-a9ecdc66b67e:  # ioc-lab-known-hash
+    kind: synthetic
+    docs: lab-run
   b1b84b49-2ff5-4245-b753-69e1da48de20:  # k8s-admission-denied
     kind: exec
     run: "tests/admission/run.sh"
@@ -78,6 +84,12 @@ rules:
     kind: exec
     run: "tests/scenarios/run.sh"
     step: "kubectl exec into each scenario pod (ONLY=shell-in-container is enough)"
+  1ee26ef6-5232-4036-9134-f5cb465a2b9a:  # lab-persistence-run-key-from-temp
+    kind: synthetic
+    docs: lab-run
+  1c34da41-643f-4979-9d33-be68ab49cdc0:  # lab-persistence-user-unit-from-tmp
+    kind: synthetic
+    docs: lab-run-isolated-vm
   be0a7f61-9416-4b12-a6bb-e597485e9538:  # siem-host-ssh-accepted
     kind: exec
     run: "ssh to the SIEM host"
@@ -110,3 +122,6 @@ monitors:
   "sdp-git: detection-missing":
     kind: synthetic
     docs: detection-missing
+  "sdp-git: lab-polymorphic-beacon":
+    kind: synthetic
+    docs: lab-run

@@ -308,6 +308,30 @@ CASES = [
     ("monitor carries ui_metadata", lambda t: edit_json(os.path.join(t, "monitors/policy-probing.json"),
                                                         lambda d: set_in(d, "ui_metadata", {})),
      r"keys not allowed in git: ui_metadata"),
+    # the detection lab (ADR 0034 amendment 2026-10-18)
+    ("monitor on the lab and a cluster stream", lambda t: edit_json(os.path.join(t, "monitors/lab-polymorphic-beacon.json"),
+                                                                    lambda d: d["inputs"][0]["search"].update(indices=["sdp-lab", "sdp-api"])),
+     r"lab-polymorphic-beacon.json: a monitor reading sdp-lab reads nothing else"),
+    ("cluster monitor gains a lab input", lambda t: edit_json(os.path.join(t, "monitors/policy-probing.json"),
+                                                              lambda d: d["inputs"].append({"search": {"indices": ["sdp-lab"], "query": {"size": 0}}})),
+     r"policy-probing.json: a monitor reading sdp-lab reads nothing else"),
+    ("correlation with the lab", lambda t: edit_yaml(os.path.join(t, "correlations/dns-exfil.yaml"),
+                                                     lambda d: d["correlate"][0].update(source="lab")),
+     r"dns-exfil.yaml: the lab source is never correlated"),
+    ("lab rule reads the copy number", lambda t: sel(t, "ioc-lab-known-hash", lambda d: d["selection"].update({"lab.variant": 1})),
+     r"ioc-lab-known-hash.yml: selection selection: field 'lab.variant' is the lab's ground truth"),
+    ("lab rule reads the host label", lambda t: sel(t, "lab-persistence-run-key-from-temp",
+                                                    lambda d: d["selection"].update({"host.name|endswith": ".lab.local"})),
+     r"field 'host.name' is the lab's ground truth"),
+    ("lab monitor groups by the run", lambda t: edit_json(
+        os.path.join(t, "monitors/lab-polymorphic-beacon.json"),
+        lambda d: d["inputs"][0]["search"]["query"]["aggregations"]["composite_agg"]["composite"]["sources"][0]["beacon_ip"]["terms"]
+        .update(field="lab.run_id")),
+     r"lab-polymorphic-beacon.json: field 'lab.run_id' is the lab's ground truth"),
+    ("lab monitor filters on a copy", lambda t: edit_json(
+        os.path.join(t, "monitors/lab-polymorphic-beacon.json"),
+        lambda d: d["inputs"][0]["search"]["query"]["query"]["bool"]["filter"].append({"term": {"lab.variant": 2}})),
+     r"field 'lab.variant' is the lab's ground truth"),
     # check_canaries
     ("rule without a canary", lambda t: edit_yaml(os.path.join(t, "canaries.yaml"),
                                                   lambda d: d["rules"].pop(yaml.safe_load(open(rule(t, "talon-terminate")))["id"])),

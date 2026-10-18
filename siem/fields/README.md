@@ -17,7 +17,7 @@ removing or retyping one needs a rollover and an amendment note.
 ## Schema
 
 ```yaml
-owner: host | ingest | api-events   # area that edits this file
+owner: host | ingest | api-events | lab   # area that edits this file
 source: falco                  # source name
 stream: sdp-falco              # data stream (hyphen)
 log_type: sdp_falco            # Security Analytics log type (no hyphen, S0-#2)

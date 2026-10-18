@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # The rules sync end to end, offline (siem contract P3 tests, (M) sync). Containers on a private network:
 #   - a throwaway OpenSearch (the pinned image) with siem01's certificate-only security, the sdp roles
-#     (rules-sync as on siem01) and the seven data streams from the opensearch_config role;
+#     (rules-sync as on siem01) and the eight data streams (the seven of ADR 0034 and sdp-lab) from the
+#     opensearch_config role;
 #   - a "siem01" systemd container the siem_sync role is applied to, twice (the second run must change
 #     nothing), serving the test repository as file:// (on siem01 it is GitHub over HTTPS).
 # Each step commits to the test repository, starts sdp-siem-sync.service and checks the siem-sync
@@ -76,6 +77,8 @@ sdp_shipper_k3s01:
   users: ["shipper-test-g1"]
 sdp_shipper_siem01:
   users: ["shipper-test-g1"]
+sdp_lab_writer:
+  users: ["shipper-test-g1"]
 EOF
 cat > "$work/opensearch.yml" <<'EOF'
 cluster.name: sync-it
@@ -133,7 +136,7 @@ tooling() { # <command...> in the tooling container on the test network
       $*"
 }
 
-step "initialise security, then pipeline, templates and the seven data streams"
+step "initialise security, then pipeline, templates and the eight data streams"
 for _ in $(seq 1 90); do
   code=$(curl -s -o /dev/null -w '%{http_code}' --cacert "$pki/ca.crt" --cert "$pki/admin.crt" --key "$pki/admin.key" "$URL/" || true)
   [ "$code" != 000 ] && break; sleep 2
@@ -198,12 +201,12 @@ rc=$(sync_run)
 { [ "$(last "['status']")" = applied ] && [ "$(last "['commit']")" = "$c1" ] && [ "$(last "['previous']")" = "" ]; } \
   || fail "first record: $(head -c 400 "$work/rec.json")"
 snap s1
-[ "$(j "$work/s1.json" 'len([x for x in d["log_types"] if x.startswith("sdp_")])')" = 7 ] || fail "log types: $(j "$work/s1.json" 'd["log_types"]')"
-[ "$(j "$work/s1.json" 'sum(1 for v in d["rules"].values() if len(v) == 1)')" = 25 ] || fail "rules: $(j "$work/s1.json" 'd["rules"]')"
-[ "$(j "$work/s1.json" 'len(d["detectors"])')" = 7 ] || fail "detectors"
+[ "$(j "$work/s1.json" 'len([x for x in d["log_types"] if x.startswith("sdp_")])')" = 8 ] || fail "log types: $(j "$work/s1.json" 'd["log_types"]')"
+[ "$(j "$work/s1.json" 'sum(1 for v in d["rules"].values() if len(v) == 1)')" = 28 ] || fail "rules: $(j "$work/s1.json" 'd["rules"]')"
+[ "$(j "$work/s1.json" 'len(d["detectors"])')" = 8 ] || fail "detectors"
 [ "$(j "$work/s1.json" 'd["correlations"]')" = "['contained-intrusion', 'dns-exfil']" ] || fail "correlations"
-[ "$(j "$work/s1.json" 'sorted(k for k in d["monitors"] if k.startswith("sdp-git: "))')" = "['sdp-git: detection-missing', 'sdp-git: policy-probing', 'sdp-git: prevented-not-detected']" ] || fail "monitors"
-ok "first run applied $c1: 7 log types, 25 rules, 7 detectors, 2 correlations, 3 monitors; record status applied, no previous"
+[ "$(j "$work/s1.json" 'sorted(k for k in d["monitors"] if k.startswith("sdp-git: "))')" = "['sdp-git: detection-missing', 'sdp-git: lab-polymorphic-beacon', 'sdp-git: policy-probing', 'sdp-git: prevented-not-detected']" ] || fail "monitors"
+ok "first run applied $c1: 8 log types, 28 rules, 8 detectors, 2 correlations, 4 monitors; record status applied, no previous"
 chk guard || fail "template guard after the sync"
 $DOCKER exec "$H" test ! -e /var/lib/sdp-siem-sync/EXECUTED || fail "siem/x.sh was executed"
 ok "siem/x.sh in the tree was not executed"

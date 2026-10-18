@@ -1,0 +1,93 @@
+{
+  "type": "monitor",
+  "monitor_type": "bucket_level_monitor",
+  "name": "sdp-git: lab-polymorphic-beacon",
+  "enabled": true,
+  "schedule": {
+    "period": {
+      "interval": 1,
+      "unit": "MINUTES"
+    }
+  },
+  "inputs": [
+    {
+      "search": {
+        "indices": [
+          "sdp-lab"
+        ],
+        "query": {
+          "size": 0,
+          "query": {
+            "bool": {
+              "filter": [
+                {
+                  "term": {
+                    "event.code": "3"
+                  }
+                },
+                {
+                  "range": {
+                    "@timestamp": {
+                      "gte": "{{period_end}}||-15m",
+                      "lte": "{{period_end}}",
+                      "format": "epoch_millis"
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          "aggregations": {
+            "composite_agg": {
+              "composite": {
+                "size": 50,
+                "sources": [
+                  {
+                    "beacon_ip": {
+                      "terms": {
+                        "field": "destination.ip"
+                      }
+                    }
+                  },
+                  {
+                    "beacon_port": {
+                      "terms": {
+                        "field": "destination.port"
+                      }
+                    }
+                  }
+                ]
+              },
+              "aggregations": {
+                "hashes": {
+                  "cardinality": {
+                    "field": "process.hash.sha256"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "triggers": [
+    {
+      "bucket_level_trigger": {
+        "name": "one beacon address, two or more distinct binaries",
+        "severity": "2",
+        "condition": {
+          "buckets_path": {
+            "hashes": "hashes"
+          },
+          "parent_bucket_path": "composite_agg",
+          "script": {
+            "source": "params.hashes >= 2",
+            "lang": "painless"
+          }
+        },
+        "actions": []
+      }
+    }
+  ]
+}

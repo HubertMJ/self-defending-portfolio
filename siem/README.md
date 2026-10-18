@@ -66,8 +66,8 @@ Proven in the S0 spike (siem contract S0-b, S0-k); the lint enforces what it can
   heartbeat's `kind` is searchable also in an index an older version made. A run with nothing to do
   writes only the heartbeat, so an old `applied_at` with a fresh
   `checked_at` is an idle sync and a stale `checked_at` a dead one.
-- Monitors may read only the six k3s01 streams (the API reads their alerts); sources are the seven of
-  ADR 0034 - both pinned in `siem_lint.py`. A monitor's search may use only term, terms (no lookup),
+- Monitors may read only the six k3s01 streams and `sdp-lab` (the API reads their alerts); sources are
+  the seven of ADR 0034 and the detection lab's `lab` - both pinned in `siem_lint.py`. A monitor's search may use only term, terms (no lookup),
   range, exists, match_all and bool, and the aggregations composite (terms sources), terms, filter
   and min/max/avg/sum/value_count/cardinality; no script, query_string or top_hits. Every field it
   names must be in the allow-list of one of its streams. Those allow-lists come from `siem/fields` in
@@ -78,6 +78,14 @@ Proven in the S0 spike (siem contract S0-b, S0-k); the lint enforces what it can
   trigger conditions only compare counts in the forms in use (`params.a > 0 && params.b == 0`). That
   does not make a monitor impossible to blunt - a filter that matches nothing still lints - so the
   change cap and the record of every change (`changed`) are what limit a commit that does so.
+
+## The detection lab
+
+`sdp-lab` (ADR 0034 amendment 2026-10-18) holds synthetic or isolated-VM events only and is never
+combined with the cluster's data: a monitor that reads it reads nothing else, no correlation names the
+`lab` source, and a lab rule or monitor never reads `lab.*` or `host.name` - the ground truth the lab's
+validator scores against (`check_lab_isolation`, `check_lab_ground_truth`). The API builds no cluster
+incident from its findings or alerts; the lab's results reach the page through the `lab-runs` index.
 
 ## Canaries
 
