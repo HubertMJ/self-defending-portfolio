@@ -249,19 +249,6 @@
       "canary": "api:terminal:beacon,whoami"
     },
     {
-      "id": "daefd3d6-c180-41f1-96be-a9ecdc66b67e",
-      "title": "Lab - process from a known sample hash",
-      "level": "high",
-      "status": "experimental",
-      "attack": [
-        "T1204.002"
-      ],
-      "file": "siem/rules/ioc-lab-known-hash.yml",
-      "line": 5,
-      "source": "lab",
-      "canary": "synthetic:lab-run"
-    },
-    {
       "id": "b1b84b49-2ff5-4245-b753-69e1da48de20",
       "title": "Kubernetes - pod refused by admission",
       "level": "low",
@@ -286,33 +273,6 @@
       "line": 4,
       "source": "k8s-audit",
       "canary": "exec:tests/scenarios/run.sh"
-    },
-    {
-      "id": "1ee26ef6-5232-4036-9134-f5cb465a2b9a",
-      "title": "Lab - Run key set by a program in the temp directory",
-      "level": "high",
-      "status": "experimental",
-      "attack": [
-        "T1547.001"
-      ],
-      "file": "siem/rules/lab-persistence-run-key-from-temp.yml",
-      "line": 4,
-      "source": "lab",
-      "canary": "synthetic:lab-run"
-    },
-    {
-      "id": "1c34da41-643f-4979-9d33-be68ab49cdc0",
-      "title": "Lab - user unit or crontab written by a program in /tmp",
-      "level": "high",
-      "status": "experimental",
-      "attack": [
-        "T1053.003",
-        "T1543.002"
-      ],
-      "file": "siem/rules/lab-persistence-user-unit-from-tmp.yml",
-      "line": 3,
-      "source": "lab",
-      "canary": "synthetic:lab-run-isolated-vm"
     },
     {
       "id": "be0a7f61-9416-4b12-a6bb-e597485e9538",
@@ -368,11 +328,6 @@
       "name": "sdp-git: detection-missing",
       "file": "siem/monitors/detection-missing.json",
       "canary": "synthetic:detection-missing"
-    },
-    {
-      "name": "sdp-git: lab-polymorphic-beacon",
-      "file": "siem/monitors/lab-polymorphic-beacon.json",
-      "canary": "synthetic:lab-run"
     },
     {
       "name": "sdp-git: policy-probing",

@@ -859,7 +859,9 @@ def index(tree):
             "attack": sorted(x[len("attack."):].upper() for x in d.get("tags") or [] if TECHNIQUE_RE.match(x)),
             "file": f"siem/{rel}", "line": line, "canary": (canaries.get("rules") or {}).get(d["id"]),
         })
-    monitors = [{"name": d["name"], "file": f"siem/{rel}", "canary": (canaries.get("monitors") or {}).get(d["name"])}
+    monitors = [{"name": d["name"], "file": f"siem/{rel}", "canary": (canaries.get("monitors") or {}).get(d["name"]),
+                 "streams": sorted({idx for inp in (d.get("inputs") or []) if isinstance(inp, dict)
+                                    for idx in (((inp.get("search") or {}).get("indices")) or [])})}
                 for rel, d in sorted(tree.monitors.items())]
     correlations = [{"name": d["name"], "sources": [e["source"] for e in d["correlate"]], "file": f"siem/{rel}",
                      "canary": (canaries.get("correlations") or {}).get(d["name"])}
