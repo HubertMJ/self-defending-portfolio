@@ -54,6 +54,9 @@
       tags: [opensearch_dashboards]
     - role: opensearch_config
       tags: [opensearch_config]
+    # The detection lab's identities (ADR 0034 amendment 2026-10-18), after the PKI the opensearch role made.
+    - role: lab_identities
+      tags: [lab_identities]
     # After opensearch: it renews the shipper-siem01 certificate this role publishes to the unit.
     - role: fluent_bit
       tags: [fluent_bit]

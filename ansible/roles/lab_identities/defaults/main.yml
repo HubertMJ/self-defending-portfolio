@@ -1,0 +1,11 @@
+---
+# The detection lab's identities on siem01 (ADR 0034 amendment 2026-10-18). Made like the other local
+# identities (role opensearch, tasks/local_cert.yml): key and certificate in the PKI directory, root
+# only; then handed to the system user that runs the lab, in its own directory. They never leave
+# siem01 through this role; no key is in git.
+lab_identities_user: sdp-lab
+lab_identities_dir: /etc/sdp-lab
+# siem01's PKI directory (role opensearch), where every local identity is made.
+lab_identities_pki_dir: "{{ opensearch_pki_dir | default('/etc/sdp-siem/pki') }}"
+# Generations come from opensearch_cert_generations (group_vars/siem_nodes.yml), as for every identity.
+lab_identities_names: [lab-writer, lab-vm-shipper, lab-validator]

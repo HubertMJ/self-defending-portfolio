@@ -1,0 +1,29 @@
+# The detection lab (ADR 0034 amendment 2026-10-18), variant B: the Linux counterpart of the Run key -
+# a program started from /tmp writes a systemd user unit or a crontab, whatever its name or hash.
+title: Lab - user unit or crontab written by a program in /tmp
+id: 1c34da41-643f-4979-9d33-be68ab49cdc0
+status: experimental
+level: high
+description: >-
+  A file was created in a systemd user unit directory (~/.config/systemd/user/) or the crontab spool
+  (/var/spool/cron/) by a process whose executable is under /tmp: persistence from a dropped binary.
+author: Hubert Jabłoński
+date: 2026/10/18
+logsource:
+  product: sdp
+  service: lab
+detection:
+  selection_dropped:
+    event.code: '11'
+    process.executable|startswith: /tmp/
+  selection_unit:
+    file.path|contains: /.config/systemd/user/
+  selection_cron:
+    file.path|startswith: /var/spool/cron/
+  condition: selection_dropped and (selection_unit or selection_cron)
+tags:
+  - attack.persistence
+  - attack.t1543.002
+  - attack.t1053.003
+falsepositives:
+  - "A user installing a timer or crontab with a tool they unpacked in /tmp"

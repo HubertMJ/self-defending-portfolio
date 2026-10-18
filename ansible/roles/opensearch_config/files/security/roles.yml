@@ -102,3 +102,32 @@ sdp_analyst:
       allowed_actions: ["indices_all"]
     - index_patterns: ["*"]                # S0-j: Dashboards resolves aliases across indices (read-only metadata)
       allowed_actions: ["indices:admin/aliases/get"]
+# The detection lab (ADR 0034 amendment 2026-10-18). Its stream holds synthetic or lab-VM events only and
+# is never combined with the cluster's data; these roles reach nothing of the cluster's streams.
+sdp_lab_writer:
+  # The generator (lab-writer, A) and the lab VM's Fluent Bit (lab-vm-shipper, B): create documents in
+  # sdp-lab, as the shippers do (no read, no update: sdp-final refuses a client id).
+  cluster_permissions: ["indices:data/write/bulk"]
+  index_permissions:
+    - index_patterns: ["sdp-lab"]
+      allowed_actions: ["indices:data/write/index", "indices:data/write/bulk*"]
+sdp_lab_validator:
+  # Reads a run's events, the findings of sdp-lab-rules and the alerts of the lab monitor, and writes
+  # the run document. The SA and Alerting read actions are cluster-wide (as for sdp_api_read); the
+  # validator's fixed queries name detector type sdp_lab and the lab monitor only.
+  cluster_permissions:
+    - "cluster:admin/opensearch/securityanalytics/findings/get"
+    - "cluster:admin/opensearch/securityanalytics/detector/search"
+    - "cluster:admin/opendistro/alerting/alerts/get"
+    - "cluster:admin/opendistro/alerting/monitor/search"
+    - "indices:data/write/bulk"            # S0: single-doc writes run as bulk
+  index_permissions:
+    - index_patterns: ["sdp-lab"]
+      allowed_actions: ["read"]
+    - index_patterns: ["lab-runs"]
+      allowed_actions: ["read", "indices:data/write/index", "indices:data/write/bulk*"]
+sdp_lab_read:
+  # The portfolio API's one addition for GET /api/lab/latest: the run documents, nothing else.
+  index_permissions:
+    - index_patterns: ["lab-runs"]
+      allowed_actions: ["read"]

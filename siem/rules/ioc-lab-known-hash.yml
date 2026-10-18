@@ -1,0 +1,26 @@
+# The detection lab (ADR 0034 amendment 2026-10-18): an indicator of compromise, the SHA-256 of the
+# sample's copy 1, which is deterministic in both variants (A: fixed bytes; B: a reproducible build with
+# marker byte 0). Copies 2..N carry a fresh random marker, so their hash is new each time: this rule is
+# expected to catch 1 copy of 4 - the point of the lab is what catches the others.
+title: Lab - process from a known sample hash
+id: daefd3d6-c180-41f1-96be-a9ecdc66b67e
+status: experimental
+level: high
+description: >-
+  A process started whose SHA-256 is that of the lab sample's copy 1, a known-bad hash on an indicator
+  list. A hash indicator catches exactly that file: a copy with one byte changed is a new hash.
+author: Hubert Jabłoński
+date: 2026/10/18
+logsource:
+  product: sdp
+  service: lab
+detection:
+  selection:
+    event.code: '1'
+    process.hash.sha256: 4850c01e9e5cdb54b604908952b56f246e661dbec01ed85c19e349ce1ba92f2e
+  condition: selection
+tags:
+  - attack.execution
+  - attack.t1204.002
+falsepositives:
+  - "None: synthetic lab events only"

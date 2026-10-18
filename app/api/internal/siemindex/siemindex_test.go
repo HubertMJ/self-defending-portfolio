@@ -45,6 +45,55 @@ func TestLoadEmbeddedIndex(t *testing.T) {
 	}
 }
 
+// TestDetectionLabExcluded proves the published /cluster/ index carries only the cluster project: the
+// detection lab's content (source `lab`, log type sdp_lab, stream sdp-lab) syncs to siem01 but is kept
+// out of the index by scripts/gen-siem-index.sh, while the cluster sources are untouched.
+func TestDetectionLabExcluded(t *testing.T) {
+	ix, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The three lab Sigma rules (ADR 0034 amendment): a known hash, a Run key from Temp, a user unit
+	// or crontab from /tmp. None may appear on the cluster page.
+	labRuleIDs := map[string]bool{
+		"daefd3d6-c180-41f1-96be-a9ecdc66b67e": true,
+		"1ee26ef6-5232-4036-9134-f5cb465a2b9a": true,
+		"1c34da41-643f-4979-9d33-be68ab49cdc0": true,
+	}
+	for _, r := range ix.Rules {
+		if r.Source == "lab" {
+			t.Errorf("rule %s (%q) has source lab in the published index", r.ID, r.Title)
+		}
+		if labRuleIDs[r.ID] {
+			t.Errorf("lab rule %s (%q) present in the published index", r.ID, r.Title)
+		}
+	}
+	for _, m := range ix.Monitors {
+		if m.Name == "sdp-git: lab-polymorphic-beacon" {
+			t.Errorf("lab monitor %q present in the published index", m.Name)
+		}
+	}
+	// The cluster sources are unaffected: exactly these remain, lab is gone.
+	wantSources := map[string]bool{
+		"api": true, "falco": true, "host": true, "hubble": true,
+		"k8s-audit": true, "siem-host": true, "talon": true,
+	}
+	got := map[string]bool{}
+	for _, r := range ix.Rules {
+		got[r.Source] = true
+	}
+	for s := range wantSources {
+		if !got[s] {
+			t.Errorf("cluster source %q missing from the published index", s)
+		}
+	}
+	for s := range got {
+		if !wantSources[s] {
+			t.Errorf("unexpected source %q in the published index", s)
+		}
+	}
+}
+
 func TestRuleIDByTitle(t *testing.T) {
 	ix, err := parse([]byte(`{"rules":[{"id":"9c41d2e7-8b3a-4f60-a1c5-0e7d6b2f9a48","title":"DNS query carries an exfil label"}]}`))
 	if err != nil {

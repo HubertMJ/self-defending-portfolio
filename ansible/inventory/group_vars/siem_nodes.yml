@@ -45,6 +45,7 @@ auditd_extra_watches:
   - {path: /etc/sdp-siem, key: siem_config}
   - {path: /usr/share/opensearch/plugins, key: siem_plugins}
   - {path: /usr/local/lib/sdp-siem-sync, key: siem_sync}
+  - {path: /etc/sdp-lab, key: siem_config}
 
 # --- pinned versions (bump deliberately, see docs/adr/0008 and the ADR 0034 amendment) ---
 opensearch_version: "3.9.0"
@@ -85,6 +86,10 @@ opensearch_cert_generations:
   shipper-siem01: 1
   shipper-k3s01: 1
   portfolio-api: 1
+  # The detection lab (ADR 0034 amendment 2026-10-18; role lab_identities).
+  lab-writer: 1
+  lab-vm-shipper: 1
+  lab-validator: 1
 
 # --- rules from git (P3): the sync timer applies siem/ of main (role siem_sync; rollback:
 # siem_sync_timer_enabled: false) ---

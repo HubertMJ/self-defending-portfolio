@@ -1,0 +1,7 @@
+# Security Analytics log type of the sdp-lab data stream (ADR 0034 "Rules from git", amendment
+# 2026-10-18). The name has no hyphen: SA's correlation list truncates hyphenated log-type names (siem
+# contract S0-#2); the data stream keeps its hyphen. No correlation rule may use it (siem_lint.py
+# check_lab_isolation): the lab never mixes with the cluster's data.
+name: sdp_lab
+source: lab
+description: Synthetic and isolated-VM events of the detection lab, data stream sdp-lab

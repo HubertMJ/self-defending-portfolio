@@ -17,8 +17,17 @@ generate() {
   python3 ansible/roles/siem_sync/files/siem_lint.py --index siem | python3 -c '
 import json, sys
 sys.path.insert(0, "ansible/roles/siem_sync/files")
-from siem_lint import UNPUBLISHABLE  # one definition: IPv4, IPv6, node and cluster names, any case
+from siem_lint import UNPUBLISHABLE, LAB_STREAM  # one definition: IPv4, IPv6, node and cluster names, any case
 ix = json.load(sys.stdin)
+
+# The detection lab (ADR 0034 amendment) syncs to siem01 but is not part of the /cluster/ project: its
+# rules, monitor and any correlation are kept out of the published index so the Correlation page and its
+# ATT&CK matrix show the cluster only. siem/ is unchanged (the lab still syncs). Lab objects are the ones
+# whose source / log type is the lab (stream sdp-lab = LAB_STREAM).
+LAB_SOURCE = LAB_STREAM[len("sdp-"):]
+ix["rules"] = [r for r in ix["rules"] if r["source"] != LAB_SOURCE]
+ix["monitors"] = [m for m in ix["monitors"] if LAB_STREAM not in (m.get("streams") or [])]
+ix["correlations"] = [c for c in ix["correlations"] if LAB_SOURCE not in (c.get("sources") or [])]
 
 def canary(c):
     c = c or {}

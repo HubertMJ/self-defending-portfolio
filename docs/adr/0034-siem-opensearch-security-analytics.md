@@ -654,3 +654,75 @@ host's. The second run must change nothing, and `systemd-analyze verify` must pr
 
 **Not done.** This limits what an OutOfMemoryError costs, not what causes it: the correlation fan-out
 itself is not bounded here.
+
+## Amendment 2026-10-18: the detection lab's stream `sdp-lab`
+
+**Context.** The detection lab (the `detection-lab` repository, page `/lab/`) shows what the cluster's
+demo cannot: a known-bad hash catches one copy of a sample and misses the rebuilt ones, while rules on
+behaviour and a monitor keyed on the beacon address catch them all. The owner wanted the detection to
+be real - the same SIEM, the same Sigma-from-git path - with events that are either generated
+(variant A) or come from one isolated lab VM (variant B), never from k3s01 or the homelab.
+
+**Decision.**
+- **One more source, `lab`, with its own data stream `sdp-lab`** (log type `sdp_lab`, allow-list
+  `siem/fields/lab.yaml`, owner `lab`). The template, ISM policy (`sdp-30d`), `sdp-final` pipeline and
+  `dynamic: false` mapping are the same as every other stream's; `opensearch_config` renders it from
+  the allow-list like the others. The events are Sysmon-shaped (`event.code` is the Sysmon EventID:
+  1, 3, 11, 13). Documents must be nested objects: Security Analytics found nothing in the same
+  documents written with flat dotted keys (`"event.code": "13"`), while the bucket monitor counted both
+  (offline sync test, 2026-10-18). The stream gets no "ingest silent" monitor: the lab writes once a day by schedule, and
+  the live check watches the age of the latest run instead.
+- **Detection content in git, applied by the sync like everything else:** `ioc-lab-known-hash` (the
+  SHA-256 of copy 1, which is deterministic in both variants), `lab-persistence-run-key-from-temp` (A),
+  `lab-persistence-user-unit-from-tmp` (B), detector `sdp-lab-rules`, and the bucket-level monitor
+  `sdp-git: lab-polymorphic-beacon` (network connections of the last 15 minutes grouped by
+  `destination.ip` + `destination.port`, an alert when two or more distinct `process.hash.sha256` talk
+  to one address: one incident per beacon address, keyed on behaviour, never on a name or a hash).
+- **Isolated from the cluster's data, by the lint and by the roles.** A lab event must never count
+  towards a cluster alert or correlation, and a cluster event never towards a lab run. `siem_lint.py`
+  (check `check_lab_isolation`) refuses a monitor that reads `sdp-lab` together with any other stream
+  and any correlation rule that names the lab source; `check_lab_ground_truth` refuses a lab rule or
+  monitor that reads `lab.*` or `host.name`, the ground truth the validator compares against (a
+  detection that read the copy number would know the answer). The identities that write cluster
+  streams cannot write `sdp-lab`, and the lab's writers can write nothing else. The portfolio API's
+  incident builder reads findings only of the six k3s01 log types and alerts only of the monitor kinds
+  it knows, so lab findings and lab alerts never become cluster incidents or appear in the Streams;
+  the lab's results reach the page only through the run document (below).
+- **Identities** (certificates from siem01's CA, made on siem01 like the other local identities by
+  the role `lab_identities`; keys never leave the host and are never in git):
+  - `lab-writer` and `lab-vm-shipper`, role `sdp_lab_writer`: create documents in `sdp-lab` only, as
+    a shipper does (no read, no update; `sdp-final` refuses a client id). The generator (A) runs on
+    siem01; the lab VM's Fluent Bit (B) gets its own certificate so either can be revoked alone.
+  - `lab-validator`, role `sdp_lab_validator`: reads `sdp-lab`, the findings and alerts (the
+    Security Analytics and Alerting read actions are cluster-wide, as for `sdp_api_read`; its fixed
+    queries name log type `sdp_lab` and the lab monitor only) and writes the index `lab-runs`.
+  - `portfolio-api` additionally holds `sdp_lab_read`: read `lab-runs`, nothing else. It still cannot
+    read `sdp-lab` itself.
+  The copies the lab runs with sit in `/etc/sdp-lab/` (0600, the system user `sdp-lab`), hidden from
+  Fluent Bit's sandbox like the PKI directory; the CSR entry point refuses the three names.
+- **`lab-runs`**: one document per run (the page's `LabReplay` shape, schema 1, with `sample: false`
+  and the run's id, mode and times), `dynamic: false` with only the fields the API sorts and filters
+  on indexed. Not a data stream and not `sdp-*`: no ISM policy and no detector reads it. The role
+  creates it once and never changes it.
+- **Lab alerts are publishable.** Every lab event is synthetic (A) or comes from a disposable VM on
+  an isolated network (B); host names are lab labels and the beacon is a documentation address
+  (TEST-NET). The run document still replaces hosts and the beacon with labels before anything is
+  published (detection-lab contract), and the rules' titles and canaries pass the same publication
+  check as every other rule's.
+- **Canaries**: the lab's rules and monitor are `synthetic` canaries (`docs: lab-run`,
+  `lab-run-isolated-vm`): every scheduled lab run is their canary, and `tests/siem/canary_docs.py`
+  writes the same shapes in the offline sync test (copy 1 caught by the hash, copies 2 and 3 not; one
+  alert for the beacon address two binaries share and none for an address only one binary uses).
+
+**Verified on siem01** (2026-10-18, before merge, with temporary `labtest-` copies of the rules,
+detector and monitor, deleted afterwards - the sync owns the `sdp-git:` names): one generated run
+(4 copies, 34 events) written by lab-writer at 13:57:46Z gave, 37 s later, 1 hash finding (copy 1
+only), 4 Run-key findings (copies 1-4), 1 user-unit finding (the positive variant-B event, not the
+negative), and one monitor alert at 13:58:26Z for the one beacon address with 2 distinct hashes in
+its window, completed when the window moved on. The identities were probed: the writers cannot read
+any stream or write a cluster one; the validator reads `sdp-lab` and `lab-runs` and nothing of the
+cluster's.
+
+**Consequences.** The rule library and ATT&CK matrix on the page list the lab's rules under the
+source `lab` (the index is every rule in `siem/`). The ADR's "seven sources" are eight for the lint,
+the template assertion and the acceptance tests.

@@ -1,0 +1,15 @@
+---
+galaxy_info:
+  role_name: lab_identities
+  author: self-defending-portfolio
+  description: The detection lab's certificate identities on siem01, handed to the sdp-lab system user.
+  license: MIT
+  min_ansible_version: "2.17"
+  platforms:
+    - name: Debian
+      versions:
+        - trixie
+  galaxy_tags:
+    - opensearch
+    - siem
+dependencies: []

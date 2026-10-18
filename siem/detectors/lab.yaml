@@ -1,0 +1,10 @@
+# The Security Analytics detector of the sdp-lab data stream (ADR 0034 amendment 2026-10-18): every rule
+# of log type sdp_lab runs here once a minute. Its findings are the lab's only (the API's incident
+# builder never reads log type sdp_lab); the lab validator reads them into the run document.
+name: sdp-lab-rules
+source: lab
+interval_minutes: 1
+rules:
+  - daefd3d6-c180-41f1-96be-a9ecdc66b67e  # ioc-lab-known-hash
+  - 1ee26ef6-5232-4036-9134-f5cb465a2b9a  # lab-persistence-run-key-from-temp
+  - 1c34da41-643f-4979-9d33-be68ab49cdc0  # lab-persistence-user-unit-from-tmp

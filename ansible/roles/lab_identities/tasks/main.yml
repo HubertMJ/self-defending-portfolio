@@ -1,0 +1,53 @@
+---
+# The detection lab's certificate identities (ADR 0034 amendment 2026-10-18): lab-writer (the generator,
+# variant A), lab-vm-shipper (the lab VM's Fluent Bit, variant B) and lab-validator. Their OpenSearch
+# roles and role mapping are opensearch_config's (sdp_lab_writer, sdp_lab_validator).
+- name: Create the system group the lab runs as
+  ansible.builtin.group:
+    name: "{{ lab_identities_user }}"
+    system: true
+
+- name: Create the system user the lab runs as
+  ansible.builtin.user:
+    name: "{{ lab_identities_user }}"
+    group: "{{ lab_identities_user }}"
+    system: true
+    shell: /usr/sbin/nologin
+    home: /nonexistent
+    create_home: false
+
+- name: Create the lab's key directory
+  ansible.builtin.file:
+    path: "{{ lab_identities_dir }}"
+    state: directory
+    owner: "{{ lab_identities_user }}"
+    group: "{{ lab_identities_user }}"
+    mode: "0700"
+
+- name: Make the lab identities in the PKI directory
+  ansible.builtin.include_role:
+    name: opensearch
+    tasks_from: local_cert
+  vars:
+    opensearch_cert_name: "{{ lab_identities_name }}"
+    opensearch_cert_dir: "{{ lab_identities_pki_dir }}"
+    opensearch_cert_kind: client
+    opensearch_cert_subject:
+      - {O: sdp}
+      - {OU: siem}
+      - {CN: "{{ lab_identities_name }}-g{{ opensearch_cert_generations[lab_identities_name] }}"}
+  loop: "{{ lab_identities_names }}"
+  loop_control:
+    loop_var: lab_identities_name
+
+# Copied, not linked: the PKI directory stays root-only (0700). A renewed certificate is copied again
+# by the next run.
+- name: Hand the CA certificate, the lab certificates and keys to the lab user
+  ansible.builtin.copy:
+    src: "{{ lab_identities_pki_dir }}/{{ item }}"
+    dest: "{{ lab_identities_dir }}/{{ item }}"
+    remote_src: true
+    owner: "{{ lab_identities_user }}"
+    group: "{{ lab_identities_user }}"
+    mode: "0600"
+  loop: "{{ ['ca.crt'] + lab_identities_names | product(['.crt', '.key']) | map('join') | list }}"

@@ -160,3 +160,9 @@ only the listed paths of `.flow`.
 rewritten by the package's postinst), captured read-only with `sudo -n cat` before the role first
 changed it. tests/smoke.sh puts it under a stand-in unit so the role's JVM options and unit tasks
 (tag `opensearch_service`) run without the package.
+
+## lab (detection lab, 2026-10-18)
+
+| file | lines | what each line is |
+|---|---|---|
+| lab.jsonl | 12 | SYNTHETIC documents of one variant-A run as the detection lab's generator writes them to sdp-lab (siem/fields/lab.yaml; nested objects - Security Analytics finds nothing in flat dotted keys): four copies of the sample on ws1/ws2.lab.local, each a process create (Sysmon 1), a Run-key value set from `\AppData\Local\Temp\` (13) and a connection to the synthetic beacon 198.51.100.10:8080 (3, TEST-NET-2). Copy 1 carries the fixed SHA-256 of ioc-lab-known-hash; copies 2-4 stand-in hashes (sha256 of `lab-fixture-copy-<n>`) and `svc-<8 hex>.exe` names. Expected: the hash rule fires for copy 1 only, the Run-key rule for all four, the beacon monitor once for 198.51.100.10:8080 with 4 distinct hashes |

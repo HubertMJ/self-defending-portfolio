@@ -1,0 +1,29 @@
+---
+argument_specs:
+  main:
+    short_description: The detection lab's identities on siem01
+    description:
+      - Creates the sdp-lab system user and its key directory, makes the client identities lab-writer, lab-vm-shipper and
+        lab-validator with siem01's CA (like the other local identities, keys never leave the host) and copies their
+        certificates and keys, with the CA certificate, into the lab user's directory (0600).
+    options:
+      lab_identities_user:
+        description: System user (and group) that runs the lab and owns its keys.
+        type: str
+        default: sdp-lab
+      lab_identities_dir:
+        description: Directory of the lab's certificates and keys.
+        type: path
+        default: /etc/sdp-lab
+      lab_identities_pki_dir:
+        description: siem01's PKI directory, where the identities are made (root only).
+        type: path
+      lab_identities_names:
+        description: The lab's client identities; each needs a generation in opensearch_cert_generations.
+        type: list
+        elements: str
+        default: [lab-writer, lab-vm-shipper, lab-validator]
+      opensearch_cert_generations:
+        description: Current generation per client identity.
+        type: dict
+        required: true

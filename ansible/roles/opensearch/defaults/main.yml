@@ -37,7 +37,8 @@ opensearch_cert_renew_before: +45d
 # Identities made on siem01 by this role (dashboards by opensearch_dashboards); they never pass
 # through the remote entry point.
 opensearch_local_identities: [admin, rules-sync, shipper-siem01]
-opensearch_local_identity_names: [admin, rules-sync, dashboards, shipper-siem01]
+# The detection lab's (role lab_identities) are made here as well, so no CSR from elsewhere can claim them.
+opensearch_local_identity_names: [admin, rules-sync, dashboards, shipper-siem01, lab-writer, lab-vm-shipper, lab-validator]
 # The ONLY names tasks/sign_client_csr.yml signs for a CSR made elsewhere (C1).
 opensearch_remote_identities: [shipper-k3s01, portfolio-api, shipper-test]
 

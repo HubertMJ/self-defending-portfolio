@@ -6,10 +6,11 @@ opensearch_config_url: https://127.0.0.1:9200
 # Field allow-lists, read on the controller from the repository checkout (siem/fields/README.md).
 opensearch_config_fields_dir: "{{ playbook_dir }}/../../siem/fields"
 
-# The seven data streams, one per source (ADR 0034). A source without a fields file yet (hubble and
-# api arrive with P2) gets the common fields only; its fields are added by the next run after the
-# file lands (template + PUT <stream>/_mapping, additive only).
-opensearch_config_sources: [falco, talon, hubble, k8s-audit, api, host, siem01]
+# The data streams, one per source (ADR 0034): the seven of the cluster and the SIEM host, and the
+# detection lab's sdp-lab (amendment 2026-10-18). A source without a fields file yet (hubble and api
+# arrived with P2) gets the common fields only; its fields are added by the next run after the file
+# lands (template + PUT <stream>/_mapping, additive only).
+opensearch_config_sources: [falco, talon, hubble, k8s-audit, api, host, siem01, lab]
 # The only sources allowed to have no fields file yet (their allow-lists are P2's).
 opensearch_config_sources_pending: [hubble, api]
 
@@ -37,6 +38,10 @@ opensearch_config_sm_policy: sdp-hourly
 # shipper and are on from P1 (with "ism stalled").
 opensearch_config_ops_monitors_enabled: [evidence rewritten, disk watermark, snapshot failing, ism stalled]
 
+# The detection lab's run documents, one per run (written by lab-validator, read by the API). Not a
+# data stream and not sdp-*: no ISM policy, no Security Analytics detector reads it.
+opensearch_config_lab_runs_index: lab-runs
+
 # State of what this role applied last (hashes of request bodies), so an unchanged object is not
 # re-sent on every run.
 opensearch_config_state_dir: /var/lib/sdp-siem/state
@@ -54,6 +59,12 @@ opensearch_config_role_identities:
   sdp_api_read: [portfolio-api]
   sdp_rules_sync: [rules-sync]
   sdp_analyst: [dashboards]
+  # The detection lab (ADR 0034 amendment 2026-10-18): the generator (A) and the lab VM's Fluent Bit (B)
+  # write sdp-lab only; the validator reads the lab's stream, findings and alerts and writes lab-runs;
+  # the portfolio API additionally reads lab-runs only.
+  sdp_lab_writer: [lab-writer, lab-vm-shipper]
+  sdp_lab_validator: [lab-validator]
+  sdp_lab_read: [portfolio-api]
 
 # Persistent cluster settings (values as strings, the way _cluster/settings returns them).
 opensearch_config_cluster_settings:
