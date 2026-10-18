@@ -57,6 +57,13 @@ type CorrelationReader interface {
 	JSON() []byte
 }
 
+// LabReader is what GET /api/lab/latest needs from internal/lab: the newest detection-lab run as
+// projected JSON, or false when there is none to show. A nil Config.Lab answers 404, as an
+// unconfigured lab does, so the /lab/ page falls back to its bundled sample.
+type LabReader interface {
+	Latest(ctx context.Context) ([]byte, bool)
+}
+
 // Poster is what the server needs from internal/posture.
 type Poster interface {
 	Get(ctx context.Context) posture.Snapshot
@@ -100,6 +107,9 @@ type Config struct {
 	// available:false, as an unconfigured SIEM does.
 	Correlation CorrelationReader
 	SiemIndex   *siemindex.Index
+	// Lab is the newest detection-lab run behind GET /api/lab/latest (ADR 0034 amendment). A nil Lab
+	// answers 404, as an unconfigured lab does.
+	Lab LabReader
 
 	// AllowedOrigin is the only Origin a browser may POST from (the site itself).
 	AllowedOrigin string
@@ -181,11 +191,12 @@ func (s *Server) Public() http.Handler {
 	mux.HandleFunc("GET /api/provenance", s.provenance)
 	mux.HandleFunc("GET /api/correlation", s.correlation)
 	mux.HandleFunc("GET /api/correlation/rules", s.correlationRules)
+	mux.HandleFunc("GET /api/lab/latest", s.labLatest)
 	// The same paths without a method: a wrong method gets a JSON 405 instead of net/http's plain
 	// text one, so every /api answer is JSON (the page parses errors too).
 	for _, p := range []string{"/api/healthz", "/api/scenarios", "/api/attack/{id}", "/api/events", "/api/posture",
 		"/api/scenarios/{id}/details", "/api/runs", "/api/runs/{id}", "/api/runs/{id}/commands", "/api/stats", "/api/limits",
-		"/api/provenance", "/api/correlation", "/api/correlation/rules"} {
+		"/api/provenance", "/api/correlation", "/api/correlation/rules", "/api/lab/latest"} {
 		mux.HandleFunc(p, methodNotAllowed)
 	}
 	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
@@ -359,6 +370,25 @@ func (s *Server) correlationRules(w http.ResponseWriter, _ *http.Request) {
 		ix, _ = siemindex.Load()
 	}
 	writeJSON(w, http.StatusOK, ix)
+}
+
+// labLatest answers the newest detection-lab run, already projected to the fixed LabReplay shape and
+// served from internal/lab's short cache (so a visitor's request rarely queries OpenSearch). A 404
+// means "no run yet" - no lab configured, an empty index, or a document that failed the allow-list
+// or size cap - on which the /lab/ page falls back to its bundled sample (ADR 0034 amendment).
+func (s *Server) labLatest(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.Lab == nil {
+		writeError(w, http.StatusNotFound, "no run yet")
+		return
+	}
+	body, ok := s.cfg.Lab.Latest(r.Context())
+	if !ok {
+		writeError(w, http.StatusNotFound, "no run yet")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(append(body, '\n'))
 }
 
 // maxWebhookBody: a Falco alert with every output field is a few KiB.

@@ -27,6 +27,7 @@ import (
 	"github.com/hubertmj/self-defending-portfolio/app/api/internal/clientip"
 	"github.com/hubertmj/self-defending-portfolio/app/api/internal/events"
 	"github.com/hubertmj/self-defending-portfolio/app/api/internal/incidents"
+	"github.com/hubertmj/self-defending-portfolio/app/api/internal/lab"
 	"github.com/hubertmj/self-defending-portfolio/app/api/internal/limits"
 	"github.com/hubertmj/self-defending-portfolio/app/api/internal/posture"
 	"github.com/hubertmj/self-defending-portfolio/app/api/internal/ruleindex"
@@ -136,14 +137,19 @@ func run(log *slog.Logger) error {
 	// certificate are both there. Without them - or with a file missing or unreadable - the API starts
 	// as before and GET /api/correlation answers available:false, so the page hides the section.
 	var siemSource incidents.Source
+	var labSource lab.Source
 	if u := os.Getenv("SIEM_URL"); u != "" {
 		client, err := siem.New(siem.Config{URL: u, CertDir: env("SIEM_CERT_DIR", "/etc/portfolio-api/siem")})
 		if err != nil {
 			log.Warn("SIEM part off", "err", err)
 		} else {
 			siemSource = client
+			labSource = client
 		}
 	}
+	// GET /api/lab/latest reads the lab-runs index through the same read-only client, with its own
+	// short cache (ADR 0034 amendment). A nil source answers 404 and the page uses its bundled sample.
+	labReader := lab.New(lab.Config{Source: labSource})
 	siemRules, err := siemindex.Load()
 	if err != nil {
 		return fmt.Errorf("siem index: %w", err)
@@ -201,6 +207,7 @@ func run(log *slog.Logger) error {
 		StartedAt:   startedAt,
 		Correlation: tracker,
 		SiemIndex:   siemRules,
+		Lab:         labReader,
 	})
 
 	errc := make(chan error, 2)
@@ -212,7 +219,7 @@ func run(log *slog.Logger) error {
 	}()
 	log.Info("listening", "public", env("LISTEN_ADDR", ":8080"), "internal", env("INTERNAL_LISTEN_ADDR", ":8081"),
 		"sandbox", sandbox, "attacks_per_ip", attackCfg.PerKey, "attacks_global", attackCfg.Global, "commit", os.Getenv("GIT_SHA"),
-		"siem", tracker.Enabled())
+		"siem", tracker.Enabled(), "lab", labReader.Enabled())
 
 	var first error
 	select {
