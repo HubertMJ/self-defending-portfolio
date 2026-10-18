@@ -37,6 +37,11 @@ MONITOR_STREAMS = {"sdp-falco", "sdp-talon", "sdp-hubble", "sdp-k8s-audit", "sdp
 # The detection lab's stream is never combined with the cluster's data (ADR 0034 amendment 2026-10-18):
 # a lab event must not count towards a cluster alert or correlation, nor a cluster event towards a lab run.
 LAB_STREAM = "sdp-lab"
+# Reserved cluster incident-kind slugs (app/api/internal/incidents/build.go monitorIncidents): the API
+# strips the "sdp-git: " prefix and slugifies a monitor's name, and an alert whose slug starts with one
+# of these becomes a cluster incident on /cluster/. A sdp-lab monitor so named would inject lab data
+# into the cluster view, so the lab stays out by name as well as by stream.
+CLUSTER_INCIDENT_KINDS = ("policy-probing", "prevented-not-detected", "detection-missing")
 # Mapped in every template besides the allow-list (opensearch_config, F1).
 COMMON_FIELDS = {"@timestamp", "event.kind", "event.dataset", "event.ingested", "event.overwrite"}
 # Published on the page (ADR 0036, gen-siem-index.sh): titles, file names, canaries. ADR 0021 never
@@ -621,6 +626,13 @@ def check_lab_isolation(t):
                 indices |= {i for i in search["indices"] if isinstance(i, str)}
         if LAB_STREAM in indices and indices != {LAB_STREAM}:
             errs.append((rel, f"a monitor reading {LAB_STREAM} reads nothing else (the lab never mixes with the cluster's data)"))
+        if LAB_STREAM in indices:
+            name = d.get("name") if isinstance(d.get("name"), str) else ""
+            after = name[len(MONITOR_PREFIX):] if name.startswith(MONITOR_PREFIX) else name
+            slug = re.sub(r"[^a-z0-9]+", "-", after.lower()).strip("-")
+            if any(slug.startswith(k) for k in CLUSTER_INCIDENT_KINDS):
+                errs.append((rel, f"a {LAB_STREAM} monitor must not be named like a cluster incident kind "
+                                  f"({', '.join(CLUSTER_INCIDENT_KINDS)}): the API would render its alert as a cluster incident on /cluster/"))
     for rel, d in t.correlations.items():
         entries = d.get("correlate") if isinstance(d.get("correlate"), list) else []
         if any(isinstance(e, dict) and e.get("source") == LAB_STREAM[len("sdp-"):] for e in entries):

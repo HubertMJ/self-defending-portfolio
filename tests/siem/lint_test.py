@@ -318,6 +318,10 @@ CASES = [
     ("correlation with the lab", lambda t: edit_yaml(os.path.join(t, "correlations/dns-exfil.yaml"),
                                                      lambda d: d["correlate"][0].update(source="lab")),
      r"dns-exfil.yaml: the lab source is never correlated"),
+    ("lab monitor named like a cluster incident kind", lambda t: edit_json(
+        os.path.join(t, "monitors/lab-polymorphic-beacon.json"),
+        lambda d: d.update(name="sdp-git: policy-probing-lab")),
+     r"lab-polymorphic-beacon.json: a sdp-lab monitor must not be named like a cluster incident kind"),
     ("lab rule reads the copy number", lambda t: sel(t, "ioc-lab-known-hash", lambda d: d["selection"].update({"lab.variant": 1})),
      r"ioc-lab-known-hash.yml: selection selection: field 'lab.variant' is the lab's ground truth"),
     ("lab rule reads the host label", lambda t: sel(t, "lab-persistence-run-key-from-temp",
