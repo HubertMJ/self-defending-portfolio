@@ -41,6 +41,7 @@ resources:
   - gateway.yaml
   - hello.yaml
   - site.yaml
+  - lab.yaml
   - policy-reporter.yaml
   - trivy-operator.yaml
   - kube-bench.yaml

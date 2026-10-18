@@ -105,6 +105,13 @@ spec:
                 - hello
                 # The landing page (cluster/infra/site), built in HubertMJ/hubertjablon.ski.
                 - site
+                # The detection lab preview (cluster/infra/lab, HubertMJ/detection-lab) is NOT here:
+                # its image is still a placeholder until the first build, so an Enforce rule would
+                # reject it and fail `make validate`. Its trust lives in its own policy,
+                # verify-lab-images.yaml (Audit while the image does not exist), scoped to the `lab`
+                # namespace only - a separate policy, not two rules here, because a verifyImages
+                # Audit rule and an Enforce rule in one ClusterPolicy resolve to the stricter action
+                # for the whole policy. The lead flips it to Enforce when the digest is pinned.
                 - sandbox
                 # The unguarded twin (ADR 0031): same preventive layers as `sandbox`, so the same
                 # signature and SBOM gate. Only Talon's automatic response is absent there.
@@ -212,6 +219,13 @@ spec:
                 - hello
                 # The landing page (cluster/infra/site), built in HubertMJ/hubertjablon.ski.
                 - site
+                # The detection lab preview (cluster/infra/lab, HubertMJ/detection-lab) is NOT here:
+                # its image is still a placeholder until the first build, so an Enforce rule would
+                # reject it and fail `make validate`. Its trust lives in its own policy,
+                # verify-lab-images.yaml (Audit while the image does not exist), scoped to the `lab`
+                # namespace only - a separate policy, not two rules here, because a verifyImages
+                # Audit rule and an Enforce rule in one ClusterPolicy resolve to the stricter action
+                # for the whole policy. The lead flips it to Enforce when the digest is pinned.
                 - sandbox
                 # The unguarded twin (ADR 0031): same preventive layers as `sandbox`, so the same
                 # signature and SBOM gate. Only Talon's automatic response is absent there.

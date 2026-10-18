@@ -40,7 +40,7 @@ spec:
               app.kubernetes.io/name: site
       containers:
         - name: nginx
-          # The landing page and /lab/, built and signed by HubertMJ/hubertjablon.ski's
+          # The landing page, built and signed by HubertMJ/hubertjablon.ski's
           # .github/workflows/build-image.yml. The same nginx-unprivileged shape as hello: port 8080
           # as uid 101 from the start, as PSS `restricted` requires. The tag here is informational:
           # kustomization.yaml's `images:` pins the digest that is actually pulled (ADR 0008).

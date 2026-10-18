@@ -1,7 +1,8 @@
-# The landing page's route: `/` exactly, /lab and /site-assets go to the site image; everything
-# else (the cluster page at /cluster/, its /assets/, /favicon.svg, /robots.txt, /build.json) stays
-# on hello's `/` prefix and /api on portfolio-api. Gateway API ranks an exact match and a longer
-# prefix above hello's `/`, so the two routes never compete for a path.
+# The landing page's route: `/` exactly and /site-assets go to the site image; the detection lab
+# preview at /lab/ moved to its own route and image (cluster/infra/lab); everything else (the
+# cluster page at /cluster/, its /assets/, /favicon.svg, /robots.txt, /build.json) stays on hello's
+# `/` prefix and /api on portfolio-api. Gateway API ranks an exact match and a longer prefix above
+# hello's `/`, so the routes never compete for a path.
 #
 # The same headers as hello, character for character: one hostname, one policy. The site image's
 # own security-headers.conf carries the same CSP.
@@ -29,12 +30,6 @@ spec:
               value: http
         - path:
             type: PathPrefix
-            value: /lab
-          headers:
-            - name: X-Forwarded-Proto
-              value: http
-        - path:
-            type: PathPrefix
             value: /site-assets
           headers:
             - name: X-Forwarded-Proto
@@ -48,9 +43,6 @@ spec:
         - path:
             type: Exact
             value: /
-        - path:
-            type: PathPrefix
-            value: /lab
         - path:
             type: PathPrefix
             value: /site-assets

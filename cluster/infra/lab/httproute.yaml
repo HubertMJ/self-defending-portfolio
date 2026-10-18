@@ -1,0 +1,77 @@
+# The detection lab preview's route: the /lab subtree goes to the lab image (cluster/infra/lab,
+# built in HubertMJ/detection-lab). The landing page keeps `/` (exact) and /site-assets on the
+# site image (cluster/infra/site); the cluster page at /cluster/ and the rest stay on hello's `/`
+# prefix, and /api on portfolio-api. One PathPrefix `/lab` covers every path the lab image serves -
+# the page at /lab/ (index.html), its /lab/assets/ bundle and /lab/favicon.svg - and the image
+# serves them at that prefix, so nothing is rewritten. Gateway API ranks a longer prefix above
+# hello's `/`, so the routes never compete for a path; the former /lab match lived on the site
+# route and was moved here in the same change, so there is no gap and no double match.
+#
+# The same headers as hello and site, character for character: one hostname, one policy. The lab
+# image's own security-headers.conf carries the same CSP (connect-src 'self' for its same-origin
+# /cluster/api/lab/latest call).
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: lab
+  namespace: lab
+spec:
+  parentRefs:
+    - name: portfolio
+      namespace: gateway
+      sectionName: https
+  hostnames:
+    - hubertjablon.ski
+  rules:
+    # Plain http still arrives on the https listener (see hello); this prefix outranks hello's
+    # redirect rule, so it redirects here.
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /lab
+          headers:
+            - name: X-Forwarded-Proto
+              value: http
+      filters:
+        - type: RequestRedirect
+          requestRedirect:
+            scheme: https
+            statusCode: 301
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /lab
+      filters:
+        - type: ResponseHeaderModifier
+          responseHeaderModifier:
+            set:
+              # Two years, subdomains included. No `preload`: that is a one-way door and the
+              # subdomains are not all serving HTTPS yet.
+              - name: Strict-Transport-Security
+                value: max-age=63072000; includeSubDomains
+              # No MIME sniffing: a text/plain upload must never be executed as script.
+              - name: X-Content-Type-Options
+                value: nosniff
+              - name: Referrer-Policy
+                value: strict-origin-when-cross-origin
+              # The CSP of the site (ADR 0019), character for character the one in
+              # app/web/security-headers.conf, which nginx sends and the Playwright suite enforces.
+              # `set` replaces the backend's header, so this value is what a visitor gets; if the two
+              # ever differ, the page is tested against one policy and served another, and
+              # `make validate` (scripts/check-web-csp.sh) fails. Same-origin only: scripts, styles,
+              # the /api calls and the event stream ('self'), Trusted Types enforced. Kept at the
+              # route rather than dropped so that any backend attached here gets a policy, as
+              # ADR 0010 intends.
+              - name: Content-Security-Policy
+                value: >-
+                  default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; font-src 'self';
+                  connect-src 'self'; manifest-src 'self'; base-uri 'none'; form-action 'none';
+                  frame-ancestors 'none'; object-src 'none'; require-trusted-types-for 'script';
+                  trusted-types 'none'
+              - name: Permissions-Policy
+                value: accelerometer=(), camera=(), geolocation=(), gyroscope=(), microphone=(), payment=(), usb=()
+              - name: Cross-Origin-Opener-Policy
+                value: same-origin
+      backendRefs:
+        - name: lab
+          port: 80

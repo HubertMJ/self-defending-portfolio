@@ -1,0 +1,23 @@
+# The detection lab preview (/lab/): the image built from HubertMJ/detection-lab. The landing page
+# (/) stays in cluster/infra/site and the cluster page (/cluster/) in hello.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: lab
+
+resources:
+  - namespace.yaml
+  - deployment.yaml
+  - service.yaml
+  - httproute.yaml
+  - networkpolicy.yaml
+  - ciliumnetworkpolicy.yaml
+
+images:
+  - name: ghcr.io/hubertmj/detection-lab/lab
+    newTag: main
+    # HubertMJ/detection-lab main (fix/libexpat merged, commit 1bb318a), build-image on main.
+    # Pinned by hand, like cluster/infra/site's hubertjablon.ski pin: scripts/bump-image-digest.sh
+    # only rewrites this project's own images, not this foreign-repo ref. Verified signed with a
+    # verified SPDX SBOM attestation (scripts/verify-image.sh, the detection-lab workflow identity).
+    digest: sha256:8a4f758b2bdafa25aac4e62d313d76bb5826f3abe9a4cbad06a3a12c0c430178

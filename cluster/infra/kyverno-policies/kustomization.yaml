@@ -11,6 +11,9 @@ resources:
   # Ordering is cosmetic (Kyverno evaluates all applicable policies for every request), so these are
   # listed strongest claim first.
   - verify-portfolio-images.yaml
+  # The detection lab preview's image (cluster/infra/lab, HubertMJ/detection-lab), lab namespace
+  # only; its own policy, and Audit until the first lab image is built - see its header.
+  - verify-lab-images.yaml
   - restrict-image-registries.yaml
   - disallow-latest-tag.yaml
   # Phase 4, Enforce since plan commit 9 (see the switch marker in each file).

@@ -45,8 +45,9 @@ spec:
             scheme: https
             statusCode: 301
     # The cluster page lives at /cluster/ since the landing page took / (the site image,
-    # cluster/infra/site, routes `/` exact, /lab and /site-assets; an exact match and a longer
-    # prefix outrank this rule's `/`). The prefix is cut before the request reaches nginx, so the
+    # cluster/infra/site, routes `/` exact and /site-assets; the detection lab preview at /lab/ is
+    # its own route, cluster/infra/lab; an exact match and a longer prefix outrank this rule's `/`).
+    # The prefix is cut before the request reaches nginx, so the
     # image keeps serving index.html at its own / and its assets at /assets/, which no other
     # backend claims. Two rules, not one with two matches: the HTTPRoute schema (Gateway API
     # v1.4 CEL) admits a ReplacePrefixMatch rewrite only on a rule with exactly one PathPrefix

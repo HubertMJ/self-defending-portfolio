@@ -1,0 +1,111 @@
+# The detection lab preview's image policy (cluster/infra/lab, HubertMJ/detection-lab), the `lab`
+# namespace only. The exact same supply-chain checks as verify-portfolio-images.yaml - a cosign
+# keyless signature and an SPDX SBOM attestation made by the repository's own build-image.yml
+# workflow on refs/heads/main, discovered through the cosign v3 Sigstore bundle referrers - but in
+# its own ClusterPolicy, and in Enforce. See verify-portfolio-images.yaml's header for the
+# mechanics (keyless/Fulcio/Rekor, SigstoreBundle, the two-field Audit<->Enforce switch); this file
+# only records what is different for the lab.
+#
+# ---- why a separate policy, not two more entries in verify-portfolio-images.yaml ----
+#
+# A verifyImages rule's failureAction is resolved for the whole policy: when an Audit rule and an
+# Enforce rule share one ClusterPolicy, Kyverno (and `kyverno apply`) apply the stricter action to
+# both. This policy started as Audit on its own while the first lab image did not exist, so it could
+# not weaken the Enforce site/hello rules. The lab image is now built, signed and pinned, so both
+# rules here are Enforce too. The lab may instead be folded into verify-portfolio-images.yaml (add
+# `lab` to its two namespace lists and a detection-lab entry to each rule); the effect is identical
+# now that everything is Enforce.
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: verify-lab-images
+  annotations:
+    policies.kyverno.io/title: Verify detection lab image signature and SBOM
+    policies.kyverno.io/category: Supply Chain Security
+    policies.kyverno.io/severity: high
+    policies.kyverno.io/subject: Pod
+    policies.kyverno.io/description: >-
+      Every container image in the `lab` namespace must carry a cosign keyless signature made by
+      HubertMJ/detection-lab's build-image.yml workflow on refs/heads/main, and an SPDX SBOM
+      attestation signed by the same identity.
+spec:
+  # Fail, not Ignore: once this is Enforce, "we could not check" and "it is signed" are not the same
+  # answer for a Pod in `lab`. Bounded to the one namespace below, as verify-portfolio-images.yaml is.
+  failurePolicy: Fail
+  # A network round trip to GHCR and the Sigstore TUF root; the same 30 s ceiling as
+  # verify-portfolio-images.yaml so a cold verification is not cut off mid-flight.
+  webhookTimeoutSeconds: 30
+  # Admission only, same reasoning as verify-portfolio-images.yaml: nothing to re-verify in the
+  # background for an immutable digest, and a background rule cannot mutate the digest.
+  background: false
+  rules:
+    - name: verify-signature-lab
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+              namespaces:
+                - lab
+      verifyImages:
+        - imageReferences:
+            - "ghcr.io/hubertmj/detection-lab/*"
+          type: SigstoreBundle
+          # Enforce: the first lab image is built, signed and pinned by digest in cluster/infra/lab.
+          # mutateDigest true now that the action is Enforce (an Audit rule may not rewrite the image
+          # reference).
+          failureAction: Enforce
+          mutateDigest: true
+          verifyDigest: true
+          required: true
+          attestors:
+            - count: 1
+              entries:
+                - keyless:
+                    # HubertMJ/detection-lab's build-image.yml on main, anchored at both ends so no
+                    # fork, pull_request run or other workflow in that repository satisfies it. The
+                    # two-line YAML double-quoted continuation keeps it one unbroken regex under the
+                    # column limit, as in verify-portfolio-images.yaml.
+                    subjectRegExp: "^https://github\\.com/HubertMJ/detection-lab/\
+                      \\.github/workflows/build-image\\.yml@refs/heads/main$"
+                    issuer: https://token.actions.githubusercontent.com
+                    rekor:
+                      url: https://rekor.sigstore.dev
+
+    - name: verify-sbom-attestation-lab
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+              namespaces:
+                - lab
+      verifyImages:
+        - imageReferences:
+            - "ghcr.io/hubertmj/detection-lab/*"
+          failureAction: Enforce
+          type: SigstoreBundle
+          # Stay false in both states, as verify-portfolio-images.yaml's SBOM rule explains:
+          # verify-signature-lab already pins and verifies the digest.
+          mutateDigest: false
+          verifyDigest: false
+          attestations:
+            - type: https://spdx.dev/Document
+              attestors:
+                - count: 1
+                  entries:
+                    - keyless:
+                        subjectRegExp: "^https://github\\.com/HubertMJ/detection-lab/\
+                          \\.github/workflows/build-image\\.yml@refs/heads/main$"
+                        issuer: https://token.actions.githubusercontent.com
+                        rekor:
+                          url: https://rekor.sigstore.dev
+              conditions:
+                - all:
+                    # Shallow on purpose, as in verify-portfolio-images.yaml: a signed SPDX document
+                    # exists and is ours; package-level judgement is Trivy's job.
+                    - key: "{{ spdxVersion || '' }}"
+                      operator: NotEquals
+                      value: ""
+                      message: >-
+                        attestation is not an SPDX document: the predicate has no spdxVersion field
