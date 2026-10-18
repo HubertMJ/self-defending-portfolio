@@ -90,6 +90,8 @@ opensearch_cert_generations:
   lab-writer: 1
   lab-vm-shipper: 1
   lab-validator: 1
+  # The detection lab's cluster CronJob: a remote identity, signed through the CSR entry point.
+  lab-runner: 1
 
 # --- rules from git (P3): the sync timer applies siem/ of main (role siem_sync; rollback:
 # siem_sync_timer_enabled: false) ---

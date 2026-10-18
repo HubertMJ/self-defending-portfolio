@@ -50,6 +50,13 @@ spec:
       verifyImages:
         - imageReferences:
             - "ghcr.io/hubertmj/detection-lab/*"
+          # lab-runner (cluster/infra/lab/cronjob.yaml) is not built yet: its digest is the all-zero
+          # PLACEHOLDER and its CronJob is suspended, so there is no signature to fetch and nothing to
+          # admit. Skip it here exactly as this whole policy was Audit while the web image did not
+          # exist (see header). Remove this skip when the lab-runner image is built, signed and pinned,
+          # at which point detection-lab/* enforces it like the web image.
+          skipImageReferences:
+            - "ghcr.io/hubertmj/detection-lab/lab-runner*"
           type: SigstoreBundle
           # Enforce: the first lab image is built, signed and pinned by digest in cluster/infra/lab.
           # mutateDigest true now that the action is Enforce (an Audit rule may not rewrite the image
@@ -83,6 +90,9 @@ spec:
       verifyImages:
         - imageReferences:
             - "ghcr.io/hubertmj/detection-lab/*"
+          # Skip the unbuilt lab-runner placeholder here too; see verify-signature-lab above.
+          skipImageReferences:
+            - "ghcr.io/hubertmj/detection-lab/lab-runner*"
           failureAction: Enforce
           type: SigstoreBundle
           # Stay false in both states, as verify-portfolio-images.yaml's SBOM rule explains:

@@ -12,6 +12,10 @@ resources:
   - httproute.yaml
   - networkpolicy.yaml
   - ciliumnetworkpolicy.yaml
+  # The daily real run (ADR 0034 amendment 2026-10-18): the CronJob, its own egress policy to siem01,
+  # and the KSOPS generator for its SIEM client certificate.
+  - cronjob.yaml
+  - lab-runner-ciliumnetworkpolicy.yaml
 
 images:
   - name: ghcr.io/hubertmj/detection-lab/lab
@@ -21,3 +25,8 @@ images:
     # only rewrites this project's own images, not this foreign-repo ref. Verified signed with a
     # verified SPDX SBOM attestation (scripts/verify-image.sh, the detection-lab workflow identity).
     digest: sha256:8a4f758b2bdafa25aac4e62d313d76bb5826f3abe9a4cbad06a3a12c0c430178
+
+# The lab-runner CronJob's SIEM client certificate (KSOPS, ADR 0034), made and encrypted by
+# scripts/siem-lab-runner-cert.sh. The CronJob's own image digest is pinned in cronjob.yaml.
+generators:
+  - ksops.yaml

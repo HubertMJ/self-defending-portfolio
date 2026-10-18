@@ -1,0 +1,45 @@
+# The detection lab CronJob's only network flow (ADR 0034 amendment 2026-10-18). Separate from
+# allow-gateway-ingress (the visitor-facing web pods): this policy selects the lab-runner pod by its
+# own label, so the web pods are untouched and keep their no-egress posture from networkpolicy.yaml.
+#
+#   out :9200  the SIEM, siem01 10.4.2.10, mutual TLS with the lab-runner client certificate
+#              (lab-runner-siem.sops.yaml) - to index the run's events to sdp-lab, poll the findings of
+#              sdp-lab-rules and the alerts of the lab monitor, and write the run document to lab-runs.
+#   out :53    cluster DNS only, *.cluster.local - the job dials siem01 by IP, so this exists only so a
+#              stray lookup fails visibly in Hubble at the name rather than as a silent timeout, as in
+#              cluster/infra/portfolio-api/ciliumnetworkpolicy.yaml.
+#
+# No ingress: the CronJob is driven by the schedule, nothing connects to it. Nothing else outbound.
+# The clusterwide siem-egress deny (cluster/infra/siem-egress/ccnp.yaml) would otherwise win over this
+# allow, so the `lab` namespace is left out of that deny's selector, exactly as portfolio-api is - the
+# only two workloads in the cluster that may open 9200. siem01's nftables still accepts 9200 from k3s01
+# only, which is where this pod's connection comes from after masquerading.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: lab-runner-egress
+  namespace: lab
+spec:
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: lab-runner
+  egress:
+    - toEndpoints:
+        - matchLabels:
+            io.kubernetes.pod.namespace: kube-system
+            k8s-app: kube-dns
+      toPorts:
+        - ports:
+            - port: "53"
+              protocol: UDP
+            - port: "53"
+              protocol: TCP
+          rules:
+            dns:
+              - matchPattern: "*.cluster.local"
+    - toCIDR:
+        - 10.4.2.10/32
+      toPorts:
+        - ports:
+            - port: "9200"
+              protocol: TCP

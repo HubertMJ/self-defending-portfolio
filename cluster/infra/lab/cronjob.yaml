@@ -1,0 +1,113 @@
+# The detection lab's daily real run (ADR 0034 amendment 2026-10-18; detection-lab contract
+# "Schedule"). Once a day, inside the cluster, the signed lab-runner image generates variant A's
+# events, indexes them to sdp-lab over mutual TLS to siem01, polls the findings of sdp-lab-rules and
+# the alerts of the lab monitor, and writes one run document to lab-runs. A visitor never starts it;
+# the page only reads the latest run through GET /api/lab/latest. siem01 is the only address this pod
+# may reach (lab-runner-ciliumnetworkpolicy.yaml), and it authenticates as the lab-runner identity, a
+# client certificate signed by siem01's CA and kept as a KSOPS Secret (lab-runner-siem.sops.yaml) -
+# not the siem01-local lab-writer/validator.
+#
+# SUSPENDED on purpose until both halves are real:
+#   1. the lab-runner certificate is signed (scripts/siem-lab-runner-cert.sh finalize, after the
+#      combined siem01 run in .omc/plans/lab-runner-deploy-cmd.txt). Until then tls.crt/ca.crt in the
+#      Secret are PLACEHOLDERs and the run could not authenticate.
+#   2. the lab-runner image digest below is pinned to a real build. Until then it is the all-zero
+#      PLACEHOLDER, which `make validate` accepts only under ALLOW_PLACEHOLDER_DIGESTS=1, and which
+#      Kyverno's verify-lab-images (Enforce, `lab` namespace, ghcr.io/hubertmj/detection-lab/*) would
+#      reject at admission.
+# Suspended, the scheduler creates no Jobs, so neither gap can produce a failing (red) pod. To go
+# live: finalize the cert, pin the digest (replace the TODO below), set spec.suspend to false.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: lab-runner
+  namespace: lab
+  labels:
+    app.kubernetes.io/name: lab-runner
+spec:
+  # Once a day, 03:30 in the cluster's configured zone. The window is arbitrary; the run takes a few
+  # minutes (generate, index, let the 1-minute detector and monitor fire, poll, write).
+  schedule: "30 3 * * *"
+  # No overlap: a run must finish before the next starts; a missed run is skipped, not backfilled.
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 300
+  # Keep nothing running or scheduled until the cert and image are real.
+  suspend: true
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 1
+  jobTemplate:
+    spec:
+      # One attempt per day; a failed run is visible in the next live-check (< 36 h old), not retried
+      # into a storm. activeDeadline bounds a hung run; ttl reaps finished Jobs so none linger.
+      backoffLimit: 0
+      activeDeadlineSeconds: 900
+      ttlSecondsAfterFinished: 86400
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: lab-runner
+        spec:
+          restartPolicy: Never
+          # Nothing in the pod talks to the API server, so it carries no token (ADR 0015 posture).
+          automountServiceAccountToken: false
+          securityContext:
+            # distroless `nonroot`: the lab-runner image must run as a non-root uid. 65532 is the
+            # distroless-nonroot convention, also the group of the mounted certificate (mode 0440).
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+            fsGroup: 65532
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: lab-runner
+              # The detection lab runner, built and signed by HubertMJ/detection-lab's build-image.yml
+              # (same workflow identity as the /lab/ web image, so Kyverno's verify-lab-images already
+              # covers ghcr.io/hubertmj/detection-lab/*). Pinned by digest like every image here.
+              # TODO(lab-runner-digest): replace the all-zero PLACEHOLDER with the real build digest
+              # from the detection-lab build-image run, then unsuspend. Until then `make validate`
+              # needs ALLOW_PLACEHOLDER_DIGESTS=1.
+              image: ghcr.io/hubertmj/detection-lab/lab-runner@sha256:0000000000000000000000000000000000000000000000000000000000000000
+              env:
+                # siem01, which its node certificate names (IP SAN); mutual TLS with the volume below.
+                - name: SIEM_URL
+                  value: "https://10.4.2.10:9200"
+                # The lab-runner client certificate, key and siem01's CA (lab-runner-siem.sops.yaml).
+                - name: SIEM_CLIENT_CERT
+                  value: /etc/lab-runner/siem/tls.crt
+                - name: SIEM_CLIENT_KEY
+                  value: /etc/lab-runner/siem/tls.key
+                - name: SIEM_CA_CERT
+                  value: /etc/lab-runner/siem/ca.crt
+                # Variant A: generated events, real detection (detection-lab contract "Schedule").
+                - name: LAB_MODE
+                  value: generated
+              securityContext:
+                allowPrivilegeEscalation: false
+                privileged: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
+                limits:
+                  cpu: 500m
+                  memory: 256Mi
+              volumeMounts:
+                # The SIEM client certificate, read-only, group-readable only (key never world-readable).
+                - name: siem
+                  mountPath: /etc/lab-runner/siem
+                  readOnly: true
+                # readOnlyRootFilesystem: the only writable bytes in the pod, per-run, gone on exit.
+                - name: tmp
+                  mountPath: /tmp
+          volumes:
+            - name: siem
+              secret:
+                secretName: lab-runner-siem
+                defaultMode: 288  # 0440, group = fsGroup
+            - name: tmp
+              emptyDir:
+                sizeLimit: 32Mi
