@@ -636,12 +636,21 @@ test.describe("layout (ADR 0035, amended 2026-10-05; ?mock=1)", () => {
     // The mock's request answers in ~30 ms: slow it so the pressed state can be seen.
     await page.evaluate(() => {
       const f = window.fetch;
-      // Long enough that a slow runner still sees it pending at the next assertion.
-      window.fetch = (input, init) => (String(input).includes("/api/attack/") ? new Promise((r) => setTimeout(r, 2000)).then(() => f(input, init)) : f(input, init));
+      window.fetch = (input, init) => (String(input).includes("/api/attack/") ? new Promise((r) => setTimeout(r, 600)).then(() => f(input, init)) : f(input, init));
+    });
+    // What the button showed while pressed, recorded as it happens: a slow runner can read it only
+    // after the launcher's answer has redrawn it.
+    // (The rail redraws its steps: the observer watches the rail, and reads whichever button is in it.)
+    await steps.evaluate((rail) => {
+      const seen: string[] = ((window as unknown as { __launchSeen: string[] }).__launchSeen = []);
+      const note = () => {
+        const b = rail.querySelector('.tour__step[data-id="compare"] .tour__btn[data-scenario]');
+        if (b) seen.push(`${b.textContent}|${b.getAttribute("aria-busy")}`);
+      };
+      new MutationObserver(note).observe(rail, { attributes: true, childList: true, characterData: true, subtree: true });
     });
     await launch.click();
-    await expect(launch).toHaveText("Starting…", { timeout: 300 });
-    await expect(launch).toHaveAttribute("aria-busy", "true");
+    await expect.poll(() => page.evaluate(() => (window as unknown as { __launchSeen: string[] }).__launchSeen)).toContain("Starting…|true");
     const line = five.locator(".tour__launch");
     await expect(line).toContainText("After a terminal session the next run waits as long as the session held the cluster (yours: ", { timeout: 10_000 });
     await expect(line).not.toContainText("a few attacks per 10 minutes");
@@ -2598,10 +2607,17 @@ test.describe("the visitor's run, told back (mock, ADR 0035 amendment: UX stage 
 
   test("opened at #correlation or #attack, the page lands there once the live parts have rendered", async ({ page }) => {
     await openSections(page);
+    // Each scroll of the page, kept so a miss on a slow runner says what moved it (scrollY, the
+    // title's top, the page's height, ms since the document started).
+    await page.addInitScript(() => {
+      const log: string[] = ((window as unknown as { __scrolls: string[] }).__scrolls = []);
+      addEventListener("scroll", () => log.push(`${Math.round(performance.now())}:${Math.round(scrollY)}/${Math.round(document.getElementById("correlation-title")?.getBoundingClientRect().top ?? NaN)}/${document.documentElement.scrollHeight}`), { passive: true });
+    });
     await page.goto("/?mock=1#correlation");
     await expect(page.locator("#correlation-title")).toBeInViewport({ timeout: 10_000 });
     await page.waitForTimeout(1500);
-    await expect(page.locator("#correlation-title")).toBeInViewport();
+    const scrolls = await page.evaluate(() => (window as unknown as { __scrolls: string[] }).__scrolls.slice(-12).join(" "));
+    await expect(page.locator("#correlation-title"), `scrolls: ${scrolls}`).toBeInViewport();
     await page.goto("/?mock=1#attack");
     await page.waitForTimeout(1500);
     await expect(page.locator("#attack-title")).toBeInViewport();

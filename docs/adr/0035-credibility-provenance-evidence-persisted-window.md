@@ -858,3 +858,6 @@ click now holds its landing the way a page opened at a hash does (`ui/sections.t
 change of the page's size lands on the target again; the browser's own smooth scroll runs untouched
 unless the size changes, and the hold ends on the visitor's next wheel, touch, key or pointer, or a
 scroll of more than 40 px from where the page settled. One hold at a time; going to another hash ends it.
+A scroll while the page is still loading (the browser retrying its own landing on the fragment) or
+after the page's height changed (scroll anchoring) is the layout's, not the visitor's: it no longer
+ends a hold, which had left a page opened at `#correlation` short of it when a panel above drew late.

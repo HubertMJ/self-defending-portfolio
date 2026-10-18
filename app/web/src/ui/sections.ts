@@ -150,9 +150,17 @@ export function mountSections(onChange?: (id: string, expanded: boolean) => void
     held?.stop();
     let done = false;
     let first = afterFirst;
-    // Where the hold last put the page: a scroll that moves it further than the layout could (a
-    // scrollbar dragged, a key or a gesture no event above caught) is the visitor's, and ends it.
+    // Where the hold last put the page, and how tall the page was then: a scroll that moves it further
+    // than the layout could (a scrollbar dragged, a key or a gesture no event above caught) is the
+    // visitor's, and ends it. A scroll while the page is still loading (the browser retries its own
+    // landing on the fragment) or after the page's height changed (scroll anchoring keeping what is on
+    // screen in place) is the layout's: the observer lands on the target again.
     let placed: number | undefined;
+    let placedHeight = 0;
+    const place = () => {
+      placed = scrollY;
+      placedHeight = document.documentElement.scrollHeight;
+    };
     const ro = new ResizeObserver(() => {
       if (first) {
         first = false;
@@ -161,7 +169,7 @@ export function mountSections(onChange?: (id: string, expanded: boolean) => void
       const target = done ? null : byHash(hash);
       if (target && target.getClientRects().length) {
         target.scrollIntoView({ behavior: "instant" });
-        placed = scrollY;
+        place();
       }
     });
     // Left to the browser's scroll, the hold counts from where that scroll ends (no scroll for
@@ -171,12 +179,15 @@ export function mountSections(onChange?: (id: string, expanded: boolean) => void
     const settling = () => {
       if (!afterFirst || placed !== undefined) return;
       clearTimeout(quiet);
-      quiet = setTimeout(() => (placed ??= scrollY), 300);
+      quiet = setTimeout(() => {
+        if (placed === undefined) place();
+      }, 300);
     };
     settling();
     const onScroll = () => {
       settling();
-      if (placed !== undefined && Math.abs(scrollY - placed) > 40) stop();
+      if (placed === undefined || document.readyState !== "complete" || document.documentElement.scrollHeight !== placedHeight) return;
+      if (Math.abs(scrollY - placed) > 40) stop();
     };
     const stop = () => {
       done = true;
