@@ -43,13 +43,18 @@ const (
 // SyncIndex is the rules sync's record of what it applied (ADR 0034 amendment, F6).
 const SyncIndex = "siem-sync"
 
+// LabRunsIndex holds the detection-lab run documents (ADR 0034 amendment 2026-10-18): the API's role
+// `sdp_lab_read` may read it, and GET /api/lab/latest publishes the newest run read-only. Not a data
+// stream and never correlated: it is the lab's own, sanitised output, not the cluster's telemetry.
+const LabRunsIndex = "lab-runs"
+
 // Streams are k3s01's data streams, the ones the API's role `sdp_api_read` names. Never `sdp-*` (the
 // role refuses a pattern) and never `sdp-siem01` (the SIEM host's own records are not the page's).
 var Streams = []string{"sdp-falco", "sdp-talon", "sdp-hubble", "sdp-k8s-audit", "sdp-api", "sdp-host"}
 
 // readable is every index a search may name.
 var readable = func() map[string]bool {
-	m := map[string]bool{SyncIndex: true}
+	m := map[string]bool{SyncIndex: true, LabRunsIndex: true}
 	for _, s := range Streams {
 		m[s] = true
 	}

@@ -128,6 +128,7 @@ func TestAllowList(t *testing.T) {
 	ok := []struct{ method, path string }{
 		{"GET", PathFindings}, {"GET", PathCorrelations}, {"GET", PathMonitorAlerts},
 		{"POST", "/sdp-falco/_search"}, {"POST", "/sdp-api/_search"}, {"POST", "/siem-sync/_search"},
+		{"POST", "/lab-runs/_search"},
 		{"POST", "/sdp-falco,sdp-talon,sdp-hubble,sdp-k8s-audit,sdp-api,sdp-host/_search"},
 	}
 	refused := []struct{ method, path string }{
