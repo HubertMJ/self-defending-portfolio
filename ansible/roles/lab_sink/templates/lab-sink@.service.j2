@@ -1,0 +1,16 @@
+# {{ ansible_managed }}
+# One accepted beacon connection: accept and close (ExecStart=/bin/true). No privileges, no files.
+[Unit]
+Description=detection lab beacon sink connection
+
+[Service]
+ExecStart=/bin/true
+StandardInput=socket
+DynamicUser=yes
+CapabilityBoundingSet=
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+RestrictAddressFamilies=AF_INET

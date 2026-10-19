@@ -57,6 +57,10 @@
     # The detection lab's identities (ADR 0034 amendment 2026-10-18), after the PKI the opensearch role made.
     - role: lab_identities
       tags: [lab_identities]
+    # The lab VM's beacon sink (variant B): a systemd socket that accepts and closes the copies'
+    # connections, so beaconing has a real listener. Reachable only from the lab VM (host firewall).
+    - role: lab_sink
+      tags: [lab_sink]
     # After opensearch: it renews the shipper-siem01 certificate this role publishes to the unit.
     - role: fluent_bit
       tags: [fluent_bit]

@@ -1,0 +1,4 @@
+---
+# The detection lab beacon sink (variant B, ADR 0034 amendment). The isolated VM's copies connect
+# here a few times each; the socket accepts and immediately closes the connection.
+lab_sink_port: 8080

@@ -1,0 +1,28 @@
+---
+# A systemd socket on siem01 that accepts the lab VM's beacon connections and closes them, so the
+# beaconing the monitor detects goes to a real listener and leaves no connection-refused noise. The
+# host firewall (siem_nodes.yml) already limits :{{ lab_sink_port }} to the lab VM only.
+- name: Install the lab beacon sink socket unit
+  ansible.builtin.template:
+    src: lab-sink.socket.j2
+    dest: /etc/systemd/system/lab-sink.socket
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reload systemd for the lab sink
+
+- name: Install the lab beacon sink connection service
+  ansible.builtin.template:
+    src: lab-sink@.service.j2
+    dest: /etc/systemd/system/lab-sink@.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reload systemd for the lab sink
+
+- name: Enable and start the lab beacon sink socket
+  ansible.builtin.systemd_service:
+    name: lab-sink.socket
+    enabled: true
+    state: started
+    daemon_reload: true

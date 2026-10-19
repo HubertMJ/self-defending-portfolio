@@ -371,6 +371,28 @@ def check_rule_source(t):
 
 
 @check
+def check_lab_rules_require_event_code(t):
+    """A sdp-lab rule must constrain event.code, so a variant-B lifecycle marker document
+    (event.action=lifecycle, no event.code - pure timeline for the /lab/ view) can never match a
+    detection rule and be mistaken for malicious behaviour."""
+    errs = []
+    for rel, d in t.rules.items():
+        ls = d.get("logsource")
+        if not isinstance(ls, dict) or ls.get("service") != "lab":
+            continue
+        det = d.get("detection")
+        if not isinstance(det, dict):
+            continue
+        has_code = any(
+            "event.code" == str(key).split("|")[0]
+            for _, maps in _selections(det) for m in (maps or []) for key in m
+        )
+        if not has_code:
+            errs.append((rel, "a sdp-lab rule must constrain event.code (so lifecycle markers never match)"))
+    return errs
+
+
+@check
 def check_rule_fields(t):
     errs = []
     for rel, d in t.rules.items():
