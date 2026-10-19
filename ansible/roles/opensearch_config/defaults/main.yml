@@ -65,6 +65,10 @@ opensearch_config_role_identities:
   sdp_lab_writer: [lab-writer, lab-vm-shipper]
   sdp_lab_validator: [lab-validator]
   sdp_lab_read: [portfolio-api]
+  # lab-runner is the cluster CronJob (ADR 0034 amendment 2026-10-18): unlike the two above it is a
+  # remote identity (opensearch_remote_identities), its certificate signed through the CSR entry point
+  # and kept as a KSOPS Secret in the cluster (cluster/infra/lab/lab-runner-siem.sops.yaml).
+  sdp_lab_runner: [lab-runner]
 
 # Persistent cluster settings (values as strings, the way _cluster/settings returns them).
 opensearch_config_cluster_settings:

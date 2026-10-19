@@ -39,8 +39,10 @@ opensearch_cert_renew_before: +45d
 opensearch_local_identities: [admin, rules-sync, shipper-siem01]
 # The detection lab's (role lab_identities) are made here as well, so no CSR from elsewhere can claim them.
 opensearch_local_identity_names: [admin, rules-sync, dashboards, shipper-siem01, lab-writer, lab-vm-shipper, lab-validator]
-# The ONLY names tasks/sign_client_csr.yml signs for a CSR made elsewhere (C1).
-opensearch_remote_identities: [shipper-k3s01, portfolio-api, shipper-test]
+# The ONLY names tasks/sign_client_csr.yml signs for a CSR made elsewhere (C1). lab-runner (ADR 0034
+# amendment 2026-10-18) is the detection lab's cluster CronJob: the one lab identity a cluster pod
+# holds, so its certificate is signed here, unlike lab-writer/validator which stay local to siem01.
+opensearch_remote_identities: [shipper-k3s01, portfolio-api, shipper-test, lab-runner]
 
 # DNs the security plugin treats as super admin and as cluster nodes.
 opensearch_admin_dn: "CN=admin-g{{ opensearch_cert_generations['admin'] }},OU=siem,O=sdp"

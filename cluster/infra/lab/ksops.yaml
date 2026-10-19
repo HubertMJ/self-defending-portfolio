@@ -1,0 +1,13 @@
+# See cluster/infra/portfolio-api/ksops.yaml for the pattern and the fail-loud rationale.
+# lab-runner-siem.sops.yaml is made and encrypted by scripts/siem-lab-runner-cert.sh (ADR 0034, ADR 0006):
+# the lab CronJob's SIEM client certificate, the one lab identity a cluster pod holds.
+apiVersion: viaduct.ai/v1
+kind: ksops
+metadata:
+  name: lab-runner-siem-generator
+  annotations:
+    config.kubernetes.io/function: |
+      exec:
+        path: ksops
+files:
+  - lab-runner-siem.sops.yaml

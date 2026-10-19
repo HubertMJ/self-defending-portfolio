@@ -131,3 +131,24 @@ sdp_lab_read:
   index_permissions:
     - index_patterns: ["lab-runs"]
       allowed_actions: ["read"]
+sdp_lab_runner:
+  # The cluster CronJob (identity lab-runner) that drives a whole generated run once a day from inside
+  # k3s01: it indexes the run's events to sdp-lab, polls the findings of sdp-lab-rules and the alerts of
+  # the lab monitor, and writes the run document to lab-runs. Unlike lab-writer/validator (local to
+  # siem01) its certificate is signed through the remote entry point, so this is the one lab identity a
+  # cluster pod holds; its permissions are therefore the narrowest union of writer + validator and
+  # nothing more. It never reads sdp-lab (it holds the events it just generated in memory) and never
+  # reads lab-runs (it only appends its own run). The SA and Alerting read actions are cluster-wide, as
+  # the platform has no per-detector ACL (same as sdp_lab_validator and sdp_api_read); the job's fixed
+  # queries name detector type sdp_lab and the lab monitor only.
+  cluster_permissions:
+    - "cluster:admin/opensearch/securityanalytics/findings/get"
+    - "cluster:admin/opensearch/securityanalytics/detector/search"
+    - "cluster:admin/opendistro/alerting/alerts/get"
+    - "cluster:admin/opendistro/alerting/monitor/search"
+    - "indices:data/write/bulk"            # S0: single-doc writes run as bulk
+  index_permissions:
+    - index_patterns: ["sdp-lab"]
+      allowed_actions: ["indices:data/write/index", "indices:data/write/bulk*"]
+    - index_patterns: ["lab-runs"]
+      allowed_actions: ["indices:data/write/index", "indices:data/write/bulk*"]

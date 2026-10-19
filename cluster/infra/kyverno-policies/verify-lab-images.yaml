@@ -1,6 +1,6 @@
 # The detection lab preview's image policy (cluster/infra/lab, HubertMJ/detection-lab), the `lab`
 # namespace only. The exact same supply-chain checks as verify-portfolio-images.yaml - a cosign
-# keyless signature and an SPDX SBOM attestation made by the repository's own build-image.yml
+# keyless signature and an SPDX SBOM attestation made by the repository's own build-image.yml / build-runner.yml
 # workflow on refs/heads/main, discovered through the cosign v3 Sigstore bundle referrers - but in
 # its own ClusterPolicy, and in Enforce. See verify-portfolio-images.yaml's header for the
 # mechanics (keyless/Fulcio/Rekor, SigstoreBundle, the two-field Audit<->Enforce switch); this file
@@ -26,7 +26,7 @@ metadata:
     policies.kyverno.io/subject: Pod
     policies.kyverno.io/description: >-
       Every container image in the `lab` namespace must carry a cosign keyless signature made by
-      HubertMJ/detection-lab's build-image.yml workflow on refs/heads/main, and an SPDX SBOM
+      HubertMJ/detection-lab's build-image.yml or build-runner.yml workflow on refs/heads/main, and an SPDX SBOM
       attestation signed by the same identity.
 spec:
   # Fail, not Ignore: once this is Enforce, "we could not check" and "it is signed" are not the same
@@ -62,12 +62,12 @@ spec:
             - count: 1
               entries:
                 - keyless:
-                    # HubertMJ/detection-lab's build-image.yml on main, anchored at both ends so no
+                    # HubertMJ/detection-lab's build-image.yml or build-runner.yml on main, anchored at both ends so no
                     # fork, pull_request run or other workflow in that repository satisfies it. The
                     # two-line YAML double-quoted continuation keeps it one unbroken regex under the
                     # column limit, as in verify-portfolio-images.yaml.
                     subjectRegExp: "^https://github\\.com/HubertMJ/detection-lab/\
-                      \\.github/workflows/build-image\\.yml@refs/heads/main$"
+                      \\.github/workflows/(build-image|build-runner)\\.yml@refs/heads/main$"
                     issuer: https://token.actions.githubusercontent.com
                     rekor:
                       url: https://rekor.sigstore.dev
@@ -96,7 +96,7 @@ spec:
                   entries:
                     - keyless:
                         subjectRegExp: "^https://github\\.com/HubertMJ/detection-lab/\
-                          \\.github/workflows/build-image\\.yml@refs/heads/main$"
+                          \\.github/workflows/(build-image|build-runner)\\.yml@refs/heads/main$"
                         issuer: https://token.actions.githubusercontent.com
                         rekor:
                           url: https://rekor.sigstore.dev
