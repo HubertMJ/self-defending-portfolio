@@ -47,8 +47,9 @@ DEBIAN_SUMS_URL="${DEBIAN_SUMS_URL:-https://cloud.debian.org/images/cloud/trixie
 # detection-lab at a pinned commit (must contain vm/): the VM clones it during setup and builds the
 # canary itself, so copy 1's hash is the VM toolchain's. Required.
 DETLAB_REPO="${DETLAB_REPO:-https://github.com/HubertMJ/detection-lab.git}"
-# detection-lab main merge of the VM side (feat/vm-scenario -> #12/#13/#14). Bump deliberately.
-DETLAB_REF="${DETLAB_REF:-caff27b23f753f19fe26c4f8b64b15bcc063f63c}"
+# detection-lab main merge of the VM side (#12/#13/#14, nested shipping #15). Bump deliberately;
+# a VM built from another ref is rebuilt (step 3).
+DETLAB_REF="${DETLAB_REF:-6175e9d2f2b6945c74b86101d5162c65224b6301}"
 SHIPPER_CERT_DIR="${SHIPPER_CERT_DIR:-}"      # tls.crt, tls.key, ca.crt (lab-vm-shipper); required unless --dry-run
 # Dry-run prints the pve writes instead of running them. Honoured from the environment (DRY_RUN=1) as
 # well as the --dry-run flag, so an env-var invocation never falls through to a real run by surprise.
@@ -219,12 +220,15 @@ else
 fi
 
 # ---- 3. create or reconcile the VM (idempotent) ----
-# A VM with a clean snapshot is a good one: migrate its VLAN tag / IP in place and force cloud-init to
-# re-run (new NoCloud instance id via a fresh system uuid), then drop the snapshot so it is recaptured
-# after the isolation check. A VM with no snapshot is incomplete (e.g. cloud-init failed on a wrong
-# network): destroy it and recreate clean. Either way the end state is the same (idempotent).
+# A VM with a clean snapshot built from this DETLAB_REF is a good one: migrate its VLAN tag / IP in
+# place and force cloud-init to re-run (new NoCloud instance id via a fresh system uuid), then drop the
+# snapshot so it is recaptured after the isolation check. A VM with no snapshot is incomplete (e.g.
+# cloud-init failed on a wrong network), and one built from another DETLAB_REF holds old scenario code
+# (a cloud-init re-run cannot re-clone /opt/lab-src): destroy either and recreate clean. The ref is
+# recorded in the VM description. Either way the end state is the same (idempotent).
 say "VM ${VMID} (${VM_NAME})"
-if vm_exists && snap_exists; then
+ref_matches() { [[ $DRY_RUN == 1 ]] && return 1; pveq qm config "$VMID" | grep -q "^description:.*detection-lab ${DETLAB_REF}"; }
+if vm_exists && snap_exists && ref_matches; then
   echo "VMID ${VMID} is provisioned; migrating net0 tag=${VM_VLAN} and ipconfig0 ${VM_IP}, re-running setup"
   if [[ $DRY_RUN == 1 ]]; then
     echo "would: qm stop ${VMID}; set net0 tag=${VM_VLAN}; set ipconfig0 ip=${VM_IP},gw=${VM_GW}; set nameserver ${VM_DNS}; refresh cicustom; new smbios uuid; qm cloudinit update; delete snapshot ${SNAPSHOT}"
@@ -240,7 +244,11 @@ if vm_exists && snap_exists; then
     pveq qm delsnapshot "$VMID" "$SNAPSHOT" >/dev/null 2>&1 || true
   fi
 elif vm_exists; then
-  echo "VMID ${VMID} exists but has no ${SNAPSHOT} snapshot (incomplete); destroying and recreating"
+  if snap_exists; then
+    echo "VMID ${VMID} was built from another detection-lab ref (want ${DETLAB_REF}); destroying and recreating"
+  else
+    echo "VMID ${VMID} exists but has no ${SNAPSHOT} snapshot (incomplete); destroying and recreating"
+  fi
   pve "qm stop ${VMID}; sleep 2; qm destroy ${VMID} --purge --destroy-unreferenced-disks 1"
 fi
 if ! vm_exists; then
@@ -254,12 +262,26 @@ if ! vm_exists; then
     --ciuser ${VM_USER} --ipconfig0 ip=${VM_IP},gw=${VM_GW} --nameserver ${VM_DNS} \
     --cicustom user=${SNIPPET_STORAGE}:snippets/${SNIPPET_NAME} \
     --ciupgrade 0 --onboot 0 \
-    --description 'detection-lab variant B isolated VM. Managed by scripts/lab-vm-provision.sh.'"
+    --description 'detection-lab variant B isolated VM, built from detection-lab ${DETLAB_REF}. Managed by scripts/lab-vm-provision.sh.'"
   pve "qm resize ${VMID} scsi0 ${VM_DISK_GB}G"
 fi
 
-# ---- 4. first boot with SETUP egress (firewall not yet enabled) so apt+git can run ----
+# ---- 4. first boot with SETUP egress so apt+git can run ----
+# The VM's own firewall (step 7) must not apply yet: on a re-run it already exists and, with the
+# datacenter firewall on, would block the setup. Drop it here; step 7 writes it again and step 8
+# proves it is back. LAB_EGRESS_ON_CMD (optional) reopens the lab network's setup internet upstream,
+# the counterpart of LAB_EGRESS_OFF_CMD.
+LAB_EGRESS_ON_CMD="${LAB_EGRESS_ON_CMD:-}"
 say "first boot (setup)"
+pve "rm -f /etc/pve/firewall/${VMID}.fw"
+if [[ -n "$LAB_EGRESS_ON_CMD" ]]; then
+  if [[ $DRY_RUN == 1 ]]; then
+    echo "would run: ${LAB_EGRESS_ON_CMD}"
+  else
+    echo "opening upstream setup egress: ${LAB_EGRESS_ON_CMD}"
+    bash -c "$LAB_EGRESS_ON_CMD" </dev/null || die "LAB_EGRESS_ON_CMD failed"
+  fi
+fi
 pve "qm start ${VMID}"
 echo "waiting for cloud-init to finish on the guest (apt + git clone + build)..."
 if [[ $DRY_RUN == 1 ]]; then
