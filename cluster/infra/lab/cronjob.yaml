@@ -66,9 +66,10 @@ spec:
               # already covers ghcr.io/hubertmj/detection-lab/*). Pinned by digest like every image here;
               # this is the foreign-repo pin scripts/bump-image-digest.sh leaves alone, bumped by hand
               # from the build-runner run on the matching detection-lab main commit.
-              # detection-lab main a90da77 (PR #9: the findings search drops the detector_id filter so
-              # the lab-runner identity needs no securityanalytics/detector/get).
-              image: ghcr.io/hubertmj/detection-lab/lab-runner@sha256:84fe1e44ea9ab74056f50d480d682635fc00e1d125328668051a345ebcd3ec67
+              # detection-lab main 933ede1 (PR #10: the generator anchors its timeline to end at now,
+              # so no event is future-dated and every finding/incident delay is >= 0; builds on PR #9
+              # which dropped the findings detector_id filter so the identity needs no detector/get).
+              image: ghcr.io/hubertmj/detection-lab/lab-runner@sha256:69f7f1aacae9f7e1f3595f843b097852cf811be5e57ed170024bece81e420922
               env:
                 # siem01, which its node certificate names (IP SAN); mutual TLS with the volume below.
                 - name: SIEM_URL
