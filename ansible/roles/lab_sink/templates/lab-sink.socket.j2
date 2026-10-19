@@ -1,0 +1,13 @@
+# {{ ansible_managed }}
+# The detection lab beacon sink (variant B). Reachable only from the lab VM (the host firewall allows
+# 10.4.2.20 -> :{{ lab_sink_port }}); every accepted connection is handed to lab-sink@.service, which
+# closes it at once. It receives nothing and stores nothing.
+[Unit]
+Description=detection lab beacon sink socket
+
+[Socket]
+ListenStream={{ siem_node_ip }}:{{ lab_sink_port }}
+Accept=yes
+
+[Install]
+WantedBy=sockets.target

@@ -19,7 +19,12 @@ firewall_admin_cidrs: "{{ admin_cidrs }}"
 firewall_services:
   # The cap keeps a node attacker from filling the disk at line rate; Fluent Bit ships far less
   # (L13 budget: <= 300 MB a day), and recovery from a hit cap is the operator's (bootstrap 9.6).
-  - {name: opensearch, port: 9200, proto: tcp, sources: [10.4.1.20/32], rate_limit: 4 mbytes/second}
+  # k3s01 ships the cluster's data; the detection lab VM (variant B, 10.4.2.20, ADR 0034 amendment)
+  # ships sdp-lab events with the lab-vm-shipper identity and nothing else.
+  - {name: opensearch, port: 9200, proto: tcp, sources: [10.4.1.20/32, 10.4.2.20/32], rate_limit: 4 mbytes/second}
+  # The lab beacon sink: the isolated VM's four copies connect here a few times each (the beaconing the
+  # monitor detects). A systemd socket accepts the connection and closes it; nothing else may reach it.
+  - {name: lab-sink, port: 8080, proto: tcp, sources: [10.4.2.20/32]}
 # Dashboards listens on 127.0.0.1 and is reached only through an SSH tunnel
 # (ssh -N -L 5601:127.0.0.1:5601 ansible@10.4.2.10); sshd permits that one destination.
 ssh_hardening_allow_tcp_forwarding: local

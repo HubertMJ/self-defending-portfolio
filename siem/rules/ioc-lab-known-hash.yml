@@ -17,7 +17,13 @@ logsource:
 detection:
   selection:
     event.code: '1'
-    process.hash.sha256: 4850c01e9e5cdb54b604908952b56f246e661dbec01ed85c19e349ce1ba92f2e
+    process.hash.sha256:
+      # Copy 1's hash per variant. A: the generator's fixed bytes. B: the reproducible build's copy 1
+      # (marker byte 0), whose value is the VM toolchain's and is pinned after the first real B run -
+      # until then the all-zero placeholder below matches nothing (hash catches 0/4 on the first B run,
+      # 1/4 once pinned), exactly as a real IOC list behaves before the sample is known.
+      - 4850c01e9e5cdb54b604908952b56f246e661dbec01ed85c19e349ce1ba92f2e  # variant A copy 1
+      - '0000000000000000000000000000000000000000000000000000000000000000'  # variant B copy 1 (placeholder)
   condition: selection
 tags:
   - attack.execution

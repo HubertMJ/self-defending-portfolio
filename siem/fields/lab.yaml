@@ -25,16 +25,23 @@ fields:
     note: "Sysmon EventID as a string: 1 process create, 3 network connection, 11 file create (B), 13 registry value set (A)"
   event.action:
     type: keyword
-    note: "process-create | network-connection | file-create | registry-value-set"
+    note: "process-create | network-connection | file-create | registry-value-set | lifecycle (B timeline marker, no event.code)"
   lab.run_id: {type: keyword, note: "lab-<UTC yyyymmddThhmmssZ>-<6 hex>"}
   lab.mode: {type: keyword, note: "generated (A) | isolated-vm (B)"}
   lab.variant: {type: integer, note: "copy number 1..N; ground truth for the validator, never used by a rule"}
+  lab.marker:
+    type: keyword
+    note: >-
+      B only, on an event.action=lifecycle doc (no event.code): rollback | start | booted |
+      sysmon_up | shipper_up | run_start | drained | poweroff_requested
+  lab.offset_s: {type: long, note: "B only: seconds from the run's t0 (the rollback marker); for the /lab/ live timeline"}
   host.name: {type: keyword, note: "lab host label (A: ws1.lab.local / ws2.lab.local; B: the VM's name)"}
   process.pid: {type: long}
   process.name: {type: keyword, note: file name of the copy}
   process.executable: {type: keyword, note: full path}
   process.hash.sha256: {type: keyword, note: lower-case hex}
   process.parent.name: {type: keyword}
+  process.parent.pid: {type: long, note: "B: Sysmon ParentProcessId (pid/ppid for the /lab/ evidence)"}
   registry.path:
     type: keyword
     note: 'A only: HKCU\Software\Microsoft\Windows\CurrentVersion\Run\<value>'
