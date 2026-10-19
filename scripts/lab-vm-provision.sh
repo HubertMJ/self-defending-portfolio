@@ -26,9 +26,10 @@ VM_STORAGE="${VM_STORAGE:-local-lvm}"         # the VM disk (lvmthin)
 IMPORT_STORAGE="${IMPORT_STORAGE:-local}"     # advertises 'import' content
 SNIPPET_STORAGE="${SNIPPET_STORAGE:-Lexar}"   # advertises 'snippets' content
 VM_BRIDGE="${VM_BRIDGE:-vmbr0}"
-VM_VLAN="${VM_VLAN:-42}"
-VM_IP="${VM_IP:-10.4.2.20/24}"
-VM_GW="${VM_GW:-10.4.2.1}"
+# The VM sits on its own lab VLAN (43) and reaches siem01 (10.4.2.10, VLAN 42) across the router.
+VM_VLAN="${LAB_VLAN:-${VM_VLAN:-43}}"
+VM_IP="${VM_IP:-10.4.3.20/24}"
+VM_GW="${VM_GW:-10.4.3.1}"
 SIEM_IP="${SIEM_IP:-10.4.2.10}"
 SIEM_PORT="${SIEM_PORT:-9200}"
 SINK_PORT="${SINK_PORT:-8080}"
@@ -185,11 +186,31 @@ else
   printf '%s\n' "$USERDATA" | ssh "$PVE_SSH" "mkdir -p '${SNIPPET_DIR}' && cat > '${SNIPPET_DIR}/${SNIPPET_NAME}'"
 fi
 
-# ---- 3. create the VM (skip if it exists) ----
+# ---- 3. create or reconcile the VM (idempotent) ----
+# A VM with a clean snapshot is a good one: migrate its VLAN tag / IP in place and force cloud-init to
+# re-run (new NoCloud instance id via a fresh system uuid), then drop the snapshot so it is recaptured
+# after the isolation check. A VM with no snapshot is incomplete (e.g. cloud-init failed on a wrong
+# network): destroy it and recreate clean. Either way the end state is the same (idempotent).
 say "VM ${VMID} (${VM_NAME})"
-if vm_exists; then
-  echo "VMID ${VMID} already exists; leaving its definition in place"
-else
+if vm_exists && snap_exists; then
+  echo "VMID ${VMID} is provisioned; migrating net0 tag=${VM_VLAN} and ipconfig0 ${VM_IP}, re-running setup"
+  if [[ $DRY_RUN == 1 ]]; then
+    echo "would: qm stop ${VMID}; set net0 tag=${VM_VLAN}; set ipconfig0 ip=${VM_IP},gw=${VM_GW}; refresh cicustom; new smbios uuid; qm cloudinit update; delete snapshot ${SNAPSHOT}"
+  else
+    pveq qm stop "$VMID" >/dev/null 2>&1 || true
+    MAC="$(pveq qm config "$VMID" | sed -n 's/^net0:.*virtio=\([0-9A-Fa-f:]*\).*/\1/p')"
+    [[ -n "$MAC" ]] && pveq qm set "$VMID" --net0 "virtio=${MAC},bridge=${VM_BRIDGE},tag=${VM_VLAN},firewall=1"
+    pveq qm set "$VMID" --ipconfig0 "ip=${VM_IP},gw=${VM_GW}"
+    pveq qm set "$VMID" --cicustom "user=${SNIPPET_STORAGE}:snippets/${SNIPPET_NAME}"
+    pveq qm set "$VMID" --smbios1 "uuid=$(cat /proc/sys/kernel/random/uuid 2>/dev/null || uuidgen)"
+    pveq qm cloudinit update "$VMID" >/dev/null 2>&1 || true
+    pveq qm delsnapshot "$VMID" "$SNAPSHOT" >/dev/null 2>&1 || true
+  fi
+elif vm_exists; then
+  echo "VMID ${VMID} exists but has no ${SNAPSHOT} snapshot (incomplete); destroying and recreating"
+  pve "qm stop ${VMID}; sleep 2; qm destroy ${VMID} --purge --destroy-unreferenced-disks 1"
+fi
+if ! vm_exists; then
   pve "qm create ${VMID} --name ${VM_NAME} --ostype l26 --machine q35 --bios ovmf \
     --cpu host --cores ${VM_CORES} --memory ${VM_MEMORY_MB} --balloon 0 \
     --scsihw virtio-scsi-single --agent 1 --serial0 socket --vga serial0 \
@@ -251,7 +272,7 @@ policy_out: DROP
 ipfilter: 1
 
 [IPSET ipfilter-net0]
-${VM_IP}
+${VM_IP%%/*}/32
 
 [RULES]
 OUT ACCEPT -dest ${SIEM_IP} -p tcp -dport ${SIEM_PORT} -log nolog
@@ -341,7 +362,9 @@ fi
 # ---- 9. clean snapshot (what every run is reverted to) ----
 say "snapshot ${SNAPSHOT}"
 pve "qm shutdown ${VMID} --timeout 120 || qm stop ${VMID}"
-if snap_exists; then echo "snapshot ${SNAPSHOT} already exists"; else pve "qm snapshot ${VMID} ${SNAPSHOT} --description 'clean lab state; reverted before each run'"; fi
+# Always take a fresh snapshot of the verified-isolated state: drop any stale one first.
+if snap_exists; then pve "qm delsnapshot ${VMID} ${SNAPSHOT}"; fi
+pve "qm snapshot ${VMID} ${SNAPSHOT} --description 'clean lab state; reverted before each run'"
 
 # ---- 10. the daily timer on the PVE host: markers -> rollback -> start -> inject markers ----
 say "daily rollback/run timer on the Proxmox node"
