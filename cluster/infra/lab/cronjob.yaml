@@ -67,7 +67,7 @@ spec:
               # TODO(lab-runner-digest): replace the all-zero PLACEHOLDER with the real build digest
               # from the detection-lab build-image run, then unsuspend. Until then `make validate`
               # needs ALLOW_PLACEHOLDER_DIGESTS=1.
-              image: ghcr.io/hubertmj/detection-lab/lab-runner@sha256:fea26b5bb48edb5e8723e66e251654afce9758c21710fb3a6f68c7e90f562fb0
+              image: ghcr.io/hubertmj/detection-lab/lab-runner@sha256:2d14299ca69a10890060bf05544655f23f3944f447e3c15bbb15508e483e69cb
               env:
                 # siem01, which its node certificate names (IP SAN); mutual TLS with the volume below.
                 - name: SIEM_URL
