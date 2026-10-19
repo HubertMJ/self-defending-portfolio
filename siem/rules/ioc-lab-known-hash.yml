@@ -19,11 +19,10 @@ detection:
     event.code: '1'
     process.hash.sha256:
       # Copy 1's hash per variant. A: the generator's fixed bytes. B: the reproducible build's copy 1
-      # (marker byte 0), whose value is the VM toolchain's and is pinned after the first real B run -
-      # until then the all-zero placeholder below matches nothing (hash catches 0/4 on the first B run,
-      # 1/4 once pinned), exactly as a real IOC list behaves before the sample is known.
+      # (marker byte 0) in the VM toolchain, read by scripts/lab-vm-provision.sh (COPY1_SHA256) and
+      # pinned after the first real B runs (2026-10-19); a toolchain bump changes it and must re-pin.
       - 4850c01e9e5cdb54b604908952b56f246e661dbec01ed85c19e349ce1ba92f2e  # variant A copy 1
-      - '0000000000000000000000000000000000000000000000000000000000000000'  # variant B copy 1 (placeholder)
+      - f876f3ff0694f1dad661d2e63d4c65709dde4499f2f4c5cd3068990127f3e332  # variant B copy 1
   condition: selection
 tags:
   - attack.execution
