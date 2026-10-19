@@ -66,6 +66,17 @@ pve() { if [[ $DRY_RUN == 1 ]]; then printf 'ssh %s %q ' "$PVE_SSH" "$*"; printf
 # Run and always capture output (for existence checks); never printed in dry-run.
 # shellcheck disable=SC2029
 pveq() { ssh "$PVE_SSH" "$@" 2>/dev/null; }
+# Run a shell script INSIDE the guest via the agent, immune to re-parsing by the PVE login shell.
+# pveq/pve send args over ssh, which flattens them into one string the PVE shell re-parses, so any
+# pipe/redirect/&&/quote/newline meant for the guest would be interpreted on the Proxmox host instead
+# (that is how the cert write and the egress-probe failed). Here the script is base64'd on this side
+# and decoded inside the guest, so only safe base64 and the VMID ever reach the PVE shell; every shell
+# operator in "$2" is the guest shell's. Echoes `qm guest exec` JSON (exitcode/out-data) for the caller.
+guest_sh() {
+  local b; b="$(printf '%s' "$2" | base64 -w0)"
+  # shellcheck disable=SC2029  # $1/$b expand client-side; the guest command is single-quoted PVE-side
+  ssh "$PVE_SSH" "qm guest exec $1 -- /bin/sh -c 'echo $b | base64 -d | /bin/sh'"
+}
 
 vm_exists() { [[ $DRY_RUN == 1 ]] && return 1; pveq qm status "$VMID" >/dev/null 2>&1; }
 snap_exists() { [[ $DRY_RUN == 1 ]] && return 1; pveq qm listsnapshot "$VMID" 2>/dev/null | grep -q " ${SNAPSHOT} "; }
@@ -250,11 +261,12 @@ say "inject shipper certificate"
 if [[ $DRY_RUN == 1 ]]; then
   echo "qm guest exec ${VMID} -- install -d -m0750 /etc/lab/siem   # then write tls.crt/tls.key/ca.crt (base64 via guest exec)"
 else
-  pveq qm guest exec "$VMID" -- install -d -m0750 /etc/lab/siem
+  guest_sh "$VMID" "install -d -m0750 /etc/lab/siem" >/dev/null
   for f in ca.crt tls.crt tls.key; do
     mode=0644; [[ "$f" == tls.key ]] && mode=0600
     b64="$(base64 -w0 "$SHIPPER_CERT_DIR/$f")"
-    pveq qm guest exec "$VMID" -- /bin/sh -c "echo '$b64' | base64 -d > /etc/lab/siem/$f && chmod $mode /etc/lab/siem/$f"
+    # The decode + chmod run inside the guest (see guest_sh); the pipe/redirect/&& are the guest's.
+    guest_sh "$VMID" "echo ${b64} | base64 -d > /etc/lab/siem/${f} && chmod ${mode} /etc/lab/siem/${f}" >/dev/null
   done
 fi
 
@@ -355,7 +367,10 @@ def ok(h,p):
 siem=ok("'"$SIEM_IP"'",'"$SIEM_PORT"')
 leak=ok("1.1.1.1",443) or ok("'"$VM_GW"'",53)
 sys.exit(0 if (siem and not leak) else 1)'
-  RES="$(pveq qm guest exec "$VMID" -- python3 -c "$PROBE" || true)"
+  # Run the probe in the guest via guest_sh: feeding the source on python3's stdin keeps the multi-line
+  # script (spaces, quotes, parens, sys.exit) intact; piping it through the PVE shell would shred it.
+  PROBE_B64="$(printf '%s' "$PROBE" | base64 -w0)"
+  RES="$(guest_sh "$VMID" "echo ${PROBE_B64} | base64 -d | python3" || true)"
   CODE="$(printf '%s' "$RES" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("exitcode",99))' 2>/dev/null || echo 99)"
   if [[ "$CODE" != "0" ]]; then
     echo "FIREWALL VERIFICATION FAILED (code ${CODE}): the VM is NOT correctly isolated." >&2
