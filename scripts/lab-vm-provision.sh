@@ -452,10 +452,16 @@ sys.exit(0 if (siem and not leak) else 1)'
   # Run the probe in the guest via guest_sh: feeding the source on python3's stdin keeps the multi-line
   # script (spaces, quotes, parens, sys.exit) intact; piping it through the PVE shell would shred it.
   PROBE_B64="$(printf '%s' "$PROBE" | base64 -w0)"
+  # pve-firewall applies a changed .fw on its next update cycle (each takes ~6-15 s here), so a probe
+  # right after step 7 can run before the VM's rules exist. Retry for ~60 s; only a real lock passes.
   probe() {
-    local res code
-    res="$(guest_sh "$VMID" "echo ${PROBE_B64} | base64 -d | python3" || true)"
-    code="$(printf '%s' "$res" | gx_code)"
+    local res code try
+    for try in 1 2 3 4 5 6; do
+      res="$(guest_sh "$VMID" "echo ${PROBE_B64} | base64 -d | python3" || true)"
+      code="$(printf '%s' "$res" | gx_code)"
+      [[ "$code" == "0" ]] && break
+      [[ $try -lt 6 ]] && { echo "probe ($1) attempt ${try}/6: not isolated yet (code ${code}); waiting for pve-firewall" >&2; sleep 10; }
+    done
     if [[ "$code" != "0" ]]; then
       echo "FIREWALL VERIFICATION FAILED ($1, code ${code}): the VM is NOT correctly isolated." >&2
       echo "Refusing to snapshot. Leaving the VM stopped for inspection; fix the firewall and re-run." >&2
