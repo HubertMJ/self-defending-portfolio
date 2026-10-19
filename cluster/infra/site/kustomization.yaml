@@ -16,6 +16,8 @@ resources:
 images:
   - name: ghcr.io/hubertmj/hubertjablon.ski/site
     newTag: main
-    # HubertMJ/hubertjablon.ski 1a67aa8 (the /lab/ page moved to the detection-lab image; its route
-    # left this site's HTTPRoute). cosign-verified signed + SPDX SBOM (scripts/verify-image.sh).
-    digest: sha256:9de8c2b61bd467242146fd286333f10786002b92fd5d04ad759c1e656f4d338b
+    # HubertMJ/hubertjablon.ski 870aada (PR #4: the Detection lab card is "live", not a design
+    # preview -- green dot/top border, "Open the lab", hero says both projects run live; plus PR #5
+    # which upgrades libx11 for Trivy CVE-2026-88806). cosign-verified signed + SPDX SBOM
+    # (scripts/verify-image.sh).
+    digest: sha256:30c4cd2871789539ba9a544db9e373e2a47afe5cc69caf137d49e1d99e4a454b
