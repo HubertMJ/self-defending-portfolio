@@ -343,15 +343,22 @@ fi
 
 # Per-VM rules only take effect when the Proxmox DATACENTER firewall is on. Enabling it is host-wide,
 # so do it the lockout-safe way: datacenter policy ACCEPT in/out leaves the node and every other guest
-# accepting everything exactly as today — only VM ${VMID}'s own .fw (policy DROP) bites. Refuse if
-# another guest already has a NIC firewall that would suddenly start applying, and revert if the node
-# stops answering. Hubert pasting this script is the OK for this host change.
+# accepting everything exactly as today — only VM ${VMID}'s own .fw (policy DROP) bites. A guest NIC
+# with firewall=1 but no enabled <id>.fw of its own is not filtered (its fwbr bridge already exists),
+# so refuse only if another guest has a .fw with `enable: 1`. Note it still loads conntrack and turns
+# on bridge-nf-call-iptables, so every bridged frame meets PVEFW-FORWARD (INVALID dropped, rest
+# accepted). Revert if the node stops answering or the resolver guest (GUARD_DNS, lxc/103 here) stops
+# resolving: a dead-man timer ON THE NODE removes cluster.fw unless this side cancels it, so the
+# revert happens even if ssh is what broke. Hubert pasting this script is the OK for this host change.
 PVE_ADDR="${PVE_ADDR:-10.2.1.2}"
-mgmt_ok() { ssh -o ConnectTimeout=8 "$PVE_SSH" true >/dev/null 2>&1 \
+GUARD_DNS="${GUARD_DNS:-10.2.1.6}"            # a DNS guest on this node that must never drop; empty = skip
+GUARD_DNS_QUERY="${GUARD_DNS_QUERY:-.}"       # NS query it answers today
+mgmt_ok() { timeout 15 ssh -o ConnectTimeout=8 -o BatchMode=yes "$PVE_SSH" true >/dev/null 2>&1 \
   && timeout 5 bash -c "echo > /dev/tcp/${PVE_ADDR}/8006" 2>/dev/null; }
+dns_ok() { [[ -z "$GUARD_DNS" ]] || host -W 3 -t NS "$GUARD_DNS_QUERY" "$GUARD_DNS" >/dev/null 2>&1; }
 if [[ $DRY_RUN == 1 ]]; then
-  echo "would enable the datacenter firewall (policy ACCEPT in/out) only after checking no other guest"
-  echo "has a NIC firewall, then verify ssh+:8006 and revert cluster.fw on failure"
+  echo "would enable the datacenter firewall (policy ACCEPT in/out) only if no other guest has an enabled"
+  echo "<id>.fw, then verify ssh+:8006 and DNS @${GUARD_DNS:-<skip>} and remove cluster.fw on failure"
 elif pveq pve-firewall status 2>/dev/null | grep -qi "enabled"; then
   echo "datacenter firewall already enabled"
 elif pveq test -f /etc/pve/firewall/cluster.fw; then
@@ -359,39 +366,57 @@ elif pveq test -f /etc/pve/firewall/cluster.fw; then
   echo "Add to its [OPTIONS]:  enable: 1 / policy_in: ACCEPT / policy_out: ACCEPT  then re-run." >&2
   exit 2
 else
-  # No cluster.fw yet: with the firewall off, no guest's NIC firewall bites. Turning it on makes every
-  # NIC with firewall=1 start applying its rules, so refuse if any OTHER guest has one.
-  OTHERS="$(ssh "$PVE_SSH" '
-    for id in $(qm list 2>/dev/null | awk "NR>1{print \$1}"); do
+  # No cluster.fw yet: with the firewall off, no guest's rules bite. Turning it on applies every
+  # guest's enabled <id>.fw, so refuse if any OTHER guest has one (a bare NIC firewall=1 stays open).
+  # shellcheck disable=SC2016  # the $vars are the PVE shell's; only $VMID is spliced in here
+  OTHERS="$(timeout 30 ssh -o BatchMode=yes "$PVE_SSH" '
+    for f in /etc/pve/firewall/*.fw; do
+      [ -e "$f" ] || continue
+      id=$(basename "$f" .fw)
       [ "$id" = "'"$VMID"'" ] && continue
-      qm config "$id" 2>/dev/null | grep -q "firewall=1" && echo "qemu/$id"
-    done
-    for id in $(pct list 2>/dev/null | awk "NR>1{print \$1}"); do
-      pct config "$id" 2>/dev/null | grep -q "firewall=1" && echo "lxc/$id"
-    done' 2>/dev/null || true)"
+      grep -Eq "^[[:space:]]*enable:[[:space:]]*1" "$f" && echo "guest/$id"
+    done; exit 0' 2>/dev/null)" || { echo "STOP: could not list guest firewall files on ${PVE_SSH}" >&2; exit 2; }
+  [[ -z "$GUARD_DNS" ]] || command -v host >/dev/null || { echo "STOP: 'host' (bind9-host) is needed for the DNS guard" >&2; exit 2; }
+  dns_ok || { echo "STOP: DNS @${GUARD_DNS} does not answer even before the change; not touching the firewall" >&2; exit 2; }
   if [[ -n "$OTHERS" ]]; then
-    echo "STOP: these guests already have a NIC firewall and would be affected by enabling it:" >&2
+    echo "STOP: these guests have their own enabled firewall and would start being filtered:" >&2
     # shellcheck disable=SC2086  # intentional word-split: one id per line
     printf '  %s\n' $OTHERS >&2
     echo "Review them first; aborting without changing the datacenter firewall." >&2
     exit 2
   fi
   echo "enabling the datacenter firewall (policy ACCEPT in/out; only VM ${VMID} is filtered)"
+  # Arm the node-side revert first (fires in 180 s unless cancelled below), then write cluster.fw.
+  ssh "$PVE_SSH" "systemctl stop lab-fw-deadman.timer 2>/dev/null; systemctl reset-failed lab-fw-deadman.service 2>/dev/null; \
+    systemd-run --quiet --unit=lab-fw-deadman --on-active=180 /bin/rm -f /etc/pve/firewall/cluster.fw" \
+    || { echo "STOP: could not arm the dead-man revert on ${PVE_SSH}; not enabling the firewall" >&2; exit 2; }
   printf '[OPTIONS]\nenable: 1\npolicy_in: ACCEPT\npolicy_out: ACCEPT\n' \
     | ssh "$PVE_SSH" "cat > /etc/pve/firewall/cluster.fw"
-  sleep 3
-  if ! mgmt_ok; then
-    echo "node stopped answering after enabling the firewall; reverting cluster.fw" >&2
-    ssh "$PVE_SSH" "rm -f /etc/pve/firewall/cluster.fw" 2>/dev/null || true
-    exit 3
-  fi
-  echo "datacenter firewall enabled; ssh + :8006 still answer"
+  # pve-firewall picks the change up within ~10 s; watch ~60 s, not once.
+  for _ in $(seq 1 12); do
+    sleep 5
+    if ! mgmt_ok || ! dns_ok; then
+      echo "node or DNS @${GUARD_DNS} stopped answering after enabling the firewall; reverting cluster.fw" >&2
+      timeout 15 ssh -o ConnectTimeout=8 -o BatchMode=yes "$PVE_SSH" "rm -f /etc/pve/firewall/cluster.fw" 2>/dev/null \
+        || echo "could not reach ${PVE_SSH}; the node's dead-man timer removes cluster.fw within 180 s of enabling" >&2
+      echo "manual recovery on the node console: rm /etc/pve/firewall/cluster.fw" >&2
+      exit 3
+    fi
+  done
+  timeout 15 ssh -o BatchMode=yes "$PVE_SSH" "systemctl stop lab-fw-deadman.timer" \
+    || { echo "could not cancel the dead-man revert; it will turn the datacenter firewall back off" >&2; exit 3; }
+  echo "datacenter firewall enabled; ssh + :8006${GUARD_DNS:+ + DNS @${GUARD_DNS}} still answer"
 fi
 
 # ---- 8. verify the lock REALLY took effect (from inside the VM) before trusting the snapshot ----
+# Optional second layer: LAB_EGRESS_OFF_CMD runs here (on this host) to close the lab network's setup
+# internet upstream, e.g. at the router. The probe runs on the Proxmox firewall alone first, then again
+# after the hook (which must not break the siem01 path). Re-enable upstream yourself before a re-run.
+LAB_EGRESS_OFF_CMD="${LAB_EGRESS_OFF_CMD:-}"
 say "verify egress lock (siem01 reachable, everything else blocked)"
 if [[ $DRY_RUN == 1 ]]; then
   echo "qm guest exec ${VMID} -- python3 -c '<connect siem01:9200 ok AND 1.1.1.1:443 / gw:53 blocked, else exit 1>'"
+  if [[ -n "$LAB_EGRESS_OFF_CMD" ]]; then echo "then: ${LAB_EGRESS_OFF_CMD}; and the same probe again"; fi
 else
   PROBE='import socket,sys
 def ok(h,p):
@@ -405,15 +430,24 @@ sys.exit(0 if (siem and not leak) else 1)'
   # Run the probe in the guest via guest_sh: feeding the source on python3's stdin keeps the multi-line
   # script (spaces, quotes, parens, sys.exit) intact; piping it through the PVE shell would shred it.
   PROBE_B64="$(printf '%s' "$PROBE" | base64 -w0)"
-  RES="$(guest_sh "$VMID" "echo ${PROBE_B64} | base64 -d | python3" || true)"
-  CODE="$(printf '%s' "$RES" | gx_code)"
-  if [[ "$CODE" != "0" ]]; then
-    echo "FIREWALL VERIFICATION FAILED (code ${CODE}): the VM is NOT correctly isolated." >&2
-    echo "Refusing to snapshot. Leaving the VM stopped for inspection; fix the firewall and re-run." >&2
-    pveq qm stop "$VMID" >/dev/null 2>&1 || true
-    exit 3
+  probe() {
+    local res code
+    res="$(guest_sh "$VMID" "echo ${PROBE_B64} | base64 -d | python3" || true)"
+    code="$(printf '%s' "$res" | gx_code)"
+    if [[ "$code" != "0" ]]; then
+      echo "FIREWALL VERIFICATION FAILED ($1, code ${code}): the VM is NOT correctly isolated." >&2
+      echo "Refusing to snapshot. Leaving the VM stopped for inspection; fix the firewall and re-run." >&2
+      pveq qm stop "$VMID" >/dev/null 2>&1 || true
+      exit 3
+    fi
+    echo "verified ($1): siem01:${SIEM_PORT} reachable, 1.1.1.1:443 and ${VM_GW}:53 blocked"
+  }
+  probe "Proxmox firewall"
+  if [[ -n "$LAB_EGRESS_OFF_CMD" ]]; then
+    echo "closing upstream setup egress: ${LAB_EGRESS_OFF_CMD}"
+    bash -c "$LAB_EGRESS_OFF_CMD" </dev/null || { pveq qm stop "$VMID" >/dev/null 2>&1 || true; echo "LAB_EGRESS_OFF_CMD failed" >&2; exit 3; }
+    probe "Proxmox firewall + upstream"
   fi
-  echo "verified: siem01:${SIEM_PORT} reachable, other egress blocked"
 fi
 
 # ---- 9. clean snapshot (what every run is reverted to) ----
