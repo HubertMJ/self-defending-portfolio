@@ -32,7 +32,7 @@ spec:
   concurrencyPolicy: Forbid
   startingDeadlineSeconds: 300
   # Keep nothing running or scheduled until the cert and image are real.
-  suspend: true
+  suspend: false
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 1
   jobTemplate:
