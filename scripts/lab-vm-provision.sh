@@ -30,6 +30,10 @@ VM_BRIDGE="${VM_BRIDGE:-vmbr0}"
 VM_VLAN="${LAB_VLAN:-${VM_VLAN:-43}}"
 VM_IP="${VM_IP:-10.4.3.20/24}"
 VM_GW="${VM_GW:-10.4.3.1}"
+# Public resolver (mirrors pve-create-vm.sh): the lab VLAN is intentionally not allowed to reach the
+# internal resolver, and the gateway resolver would leak internal names. Set explicitly so cloud-init
+# never falls back to the Proxmox host's DNS (10.2.1.x), which the VM cannot reach from the lab VLAN.
+VM_DNS="${LAB_DNS:-${VM_DNS:-1.1.1.1}}"
 SIEM_IP="${SIEM_IP:-10.4.2.10}"
 SIEM_PORT="${SIEM_PORT:-9200}"
 SINK_PORT="${SINK_PORT:-8080}"
@@ -46,7 +50,9 @@ DETLAB_REPO="${DETLAB_REPO:-https://github.com/HubertMJ/detection-lab.git}"
 # detection-lab main merge of the VM side (feat/vm-scenario -> #12/#13/#14). Bump deliberately.
 DETLAB_REF="${DETLAB_REF:-caff27b23f753f19fe26c4f8b64b15bcc063f63c}"
 SHIPPER_CERT_DIR="${SHIPPER_CERT_DIR:-}"      # tls.crt, tls.key, ca.crt (lab-vm-shipper); required unless --dry-run
-DRY_RUN=0
+# Dry-run prints the pve writes instead of running them. Honoured from the environment (DRY_RUN=1) as
+# well as the --dry-run flag, so an env-var invocation never falls through to a real run by surprise.
+DRY_RUN="${DRY_RUN:-0}"
 [[ "${1:-}" == "--dry-run" ]] && DRY_RUN=1
 
 IMG_NAME="$(basename "$DEBIAN_IMAGE_URL")"
@@ -195,12 +201,13 @@ say "VM ${VMID} (${VM_NAME})"
 if vm_exists && snap_exists; then
   echo "VMID ${VMID} is provisioned; migrating net0 tag=${VM_VLAN} and ipconfig0 ${VM_IP}, re-running setup"
   if [[ $DRY_RUN == 1 ]]; then
-    echo "would: qm stop ${VMID}; set net0 tag=${VM_VLAN}; set ipconfig0 ip=${VM_IP},gw=${VM_GW}; refresh cicustom; new smbios uuid; qm cloudinit update; delete snapshot ${SNAPSHOT}"
+    echo "would: qm stop ${VMID}; set net0 tag=${VM_VLAN}; set ipconfig0 ip=${VM_IP},gw=${VM_GW}; set nameserver ${VM_DNS}; refresh cicustom; new smbios uuid; qm cloudinit update; delete snapshot ${SNAPSHOT}"
   else
     pveq qm stop "$VMID" >/dev/null 2>&1 || true
     MAC="$(pveq qm config "$VMID" | sed -n 's/^net0:.*virtio=\([0-9A-Fa-f:]*\).*/\1/p')"
     [[ -n "$MAC" ]] && pveq qm set "$VMID" --net0 "virtio=${MAC},bridge=${VM_BRIDGE},tag=${VM_VLAN},firewall=1"
     pveq qm set "$VMID" --ipconfig0 "ip=${VM_IP},gw=${VM_GW}"
+    pveq qm set "$VMID" --nameserver "${VM_DNS}"
     pveq qm set "$VMID" --cicustom "user=${SNIPPET_STORAGE}:snippets/${SNIPPET_NAME}"
     pveq qm set "$VMID" --smbios1 "uuid=$(cat /proc/sys/kernel/random/uuid 2>/dev/null || uuidgen)"
     pveq qm cloudinit update "$VMID" >/dev/null 2>&1 || true
@@ -218,7 +225,7 @@ if ! vm_exists; then
     --efidisk0 ${VM_STORAGE}:0,efitype=4m,pre-enrolled-keys=0 \
     --scsi0 ${VM_STORAGE}:0,import-from=${IMPORT_STORAGE}:import/${IMG_NAME},discard=on,ssd=1 \
     --ide2 ${VM_STORAGE}:cloudinit --boot order=scsi0 \
-    --ciuser ${VM_USER} --ipconfig0 ip=${VM_IP},gw=${VM_GW} \
+    --ciuser ${VM_USER} --ipconfig0 ip=${VM_IP},gw=${VM_GW} --nameserver ${VM_DNS} \
     --cicustom user=${SNIPPET_STORAGE}:snippets/${SNIPPET_NAME} \
     --ciupgrade 0 --onboot 0 \
     --description 'detection-lab variant B isolated VM. Managed by scripts/lab-vm-provision.sh.'"
