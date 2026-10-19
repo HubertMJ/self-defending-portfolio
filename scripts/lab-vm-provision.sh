@@ -52,9 +52,12 @@ IMG_NAME="$(basename "$DEBIAN_IMAGE_URL")"
 SNIPPET_NAME="lab-vm-user.yaml"
 
 say() { printf '\n== %s ==\n' "$*"; }
-# Run a command on the Proxmox node (or print it under --dry-run).
+# Run a command on the Proxmox node (or print it under --dry-run). The command string is built on
+# this side on purpose (it carries this run's VMID, paths, etc.), so client-side expansion is wanted.
+# shellcheck disable=SC2029
 pve() { if [[ $DRY_RUN == 1 ]]; then printf 'ssh %s %q ' "$PVE_SSH" "$*"; printf '\n'; else ssh "$PVE_SSH" "$@"; fi; }
 # Run and always capture output (for existence checks); never printed in dry-run.
+# shellcheck disable=SC2029
 pveq() { ssh "$PVE_SSH" "$@" 2>/dev/null; }
 
 vm_exists() { [[ $DRY_RUN == 1 ]] && return 1; pveq qm status "$VMID" >/dev/null 2>&1; }
@@ -73,7 +76,11 @@ SSH_PUBKEY="$(cat "$SSH_PUBKEY_FILE")"
 # ---- 1. image on the node (skip if already imported) ----
 say "image ${IMG_NAME} on ${IMPORT_STORAGE}"
 if [[ $DRY_RUN == 1 ]] || ! pveq test -f "/var/lib/vz/import/${IMG_NAME}"; then
-  SHA512="$([[ $DRY_RUN == 1 ]] && echo '<sha512>' || curl -sS --fail "$DEBIAN_SUMS_URL" | awk -v f="$IMG_NAME" '$2==f{print $1}')"
+  if [[ $DRY_RUN == 1 ]]; then
+    SHA512='<sha512>'
+  else
+    SHA512="$(curl -sS --fail "$DEBIAN_SUMS_URL" | awk -v f="$IMG_NAME" '$2==f{print $1}')"
+  fi
   pve "mkdir -p /var/lib/vz/import && cd /var/lib/vz/import && \
     curl -fsSL -o ${IMG_NAME}.part '${DEBIAN_IMAGE_URL}' && \
     echo '${SHA512}  ${IMG_NAME}.part' | sha512sum -c - && mv ${IMG_NAME}.part ${IMG_NAME}"
@@ -174,6 +181,7 @@ YAML
 if [[ $DRY_RUN == 1 ]]; then
   echo "--- would write ${SNIPPET_DIR}/${SNIPPET_NAME}:"; printf '%s\n' "$USERDATA" | sed 's/^/  | /'
 else
+  # shellcheck disable=SC2029  # the snippet path is built here and must expand on this side
   printf '%s\n' "$USERDATA" | ssh "$PVE_SSH" "mkdir -p '${SNIPPET_DIR}' && cat > '${SNIPPET_DIR}/${SNIPPET_NAME}'"
 fi
 
@@ -253,31 +261,56 @@ EOF
 if [[ $DRY_RUN == 1 ]]; then
   echo "--- would write /etc/pve/firewall/${VMID}.fw:"; printf '%s\n' "$FW" | sed 's/^/  | /'
 else
+  # shellcheck disable=SC2029  # the VMID in the remote path is built here and must expand on this side
   printf '%s\n' "$FW" | ssh "$PVE_SSH" "cat > /etc/pve/firewall/${VMID}.fw"
   pveq pve-firewall compile >/dev/null 2>&1 || true
 fi
 
-# Per-VM rules only take effect when the Proxmox DATACENTER firewall is on. Turning it on is a
-# host-wide change that can lock the node out if host.fw has no management rule, so this script will
-# NOT enable it for you — it refuses to go further while it is off. Other VMs are unaffected: only a
-# NIC with firewall=1 (just this VM's) is ever filtered.
-if [[ $DRY_RUN == 0 ]]; then
-  if ! pveq pve-firewall status 2>/dev/null | grep -qi "enabled"; then
-    cat >&2 <<MSG
-
-STOP: the Proxmox datacenter firewall is OFF, so VM ${VMID}'s egress lock would not apply and the VM
-would not be isolated. Enabling it is host-wide — do it deliberately:
-  1. Make sure management stays reachable, e.g. /etc/pve/firewall/cluster.fw:
-       [OPTIONS]
-       enable: 1
-       [RULES]
-       IN ACCEPT -p tcp -dport 22 -source 10.2.1.0/24    # ssh to the node
-       IN ACCEPT -p tcp -dport 8006 -source 10.2.1.0/24  # the web UI
-  2. Confirm the node and the other VMs (none have firewall=1) stay reachable.
-  3. Re-run this script; it will verify the lock and only then snapshot.
-MSG
+# Per-VM rules only take effect when the Proxmox DATACENTER firewall is on. Enabling it is host-wide,
+# so do it the lockout-safe way: datacenter policy ACCEPT in/out leaves the node and every other guest
+# accepting everything exactly as today — only VM ${VMID}'s own .fw (policy DROP) bites. Refuse if
+# another guest already has a NIC firewall that would suddenly start applying, and revert if the node
+# stops answering. Hubert pasting this script is the OK for this host change.
+PVE_ADDR="${PVE_ADDR:-10.2.1.2}"
+mgmt_ok() { ssh -o ConnectTimeout=8 "$PVE_SSH" true >/dev/null 2>&1 \
+  && timeout 5 bash -c "echo > /dev/tcp/${PVE_ADDR}/8006" 2>/dev/null; }
+if [[ $DRY_RUN == 1 ]]; then
+  echo "would enable the datacenter firewall (policy ACCEPT in/out) only after checking no other guest"
+  echo "has a NIC firewall, then verify ssh+:8006 and revert cluster.fw on failure"
+elif pveq pve-firewall status 2>/dev/null | grep -qi "enabled"; then
+  echo "datacenter firewall already enabled"
+elif pveq test -f /etc/pve/firewall/cluster.fw; then
+  echo "STOP: /etc/pve/firewall/cluster.fw exists but the firewall is not enabled; not mangling it." >&2
+  echo "Add to its [OPTIONS]:  enable: 1 / policy_in: ACCEPT / policy_out: ACCEPT  then re-run." >&2
+  exit 2
+else
+  # No cluster.fw yet: with the firewall off, no guest's NIC firewall bites. Turning it on makes every
+  # NIC with firewall=1 start applying its rules, so refuse if any OTHER guest has one.
+  OTHERS="$(ssh "$PVE_SSH" '
+    for id in $(qm list 2>/dev/null | awk "NR>1{print \$1}"); do
+      [ "$id" = "'"$VMID"'" ] && continue
+      qm config "$id" 2>/dev/null | grep -q "firewall=1" && echo "qemu/$id"
+    done
+    for id in $(pct list 2>/dev/null | awk "NR>1{print \$1}"); do
+      pct config "$id" 2>/dev/null | grep -q "firewall=1" && echo "lxc/$id"
+    done' 2>/dev/null || true)"
+  if [[ -n "$OTHERS" ]]; then
+    echo "STOP: these guests already have a NIC firewall and would be affected by enabling it:" >&2
+    # shellcheck disable=SC2086  # intentional word-split: one id per line
+    printf '  %s\n' $OTHERS >&2
+    echo "Review them first; aborting without changing the datacenter firewall." >&2
     exit 2
   fi
+  echo "enabling the datacenter firewall (policy ACCEPT in/out; only VM ${VMID} is filtered)"
+  printf '[OPTIONS]\nenable: 1\npolicy_in: ACCEPT\npolicy_out: ACCEPT\n' \
+    | ssh "$PVE_SSH" "cat > /etc/pve/firewall/cluster.fw"
+  sleep 3
+  if ! mgmt_ok; then
+    echo "node stopped answering after enabling the firewall; reverting cluster.fw" >&2
+    ssh "$PVE_SSH" "rm -f /etc/pve/firewall/cluster.fw" 2>/dev/null || true
+    exit 3
+  fi
+  echo "datacenter firewall enabled; ssh + :8006 still answer"
 fi
 
 # ---- 8. verify the lock REALLY took effect (from inside the VM) before trusting the snapshot ----
