@@ -72,11 +72,26 @@ pveq() { ssh "$PVE_SSH" "$@" 2>/dev/null; }
 # (that is how the cert write and the egress-probe failed). Here the script is base64'd on this side
 # and decoded inside the guest, so only safe base64 and the VMID ever reach the PVE shell; every shell
 # operator in "$2" is the guest shell's. Echoes `qm guest exec` JSON (exitcode/out-data) for the caller.
+# --timeout 120: qm's default 30 s returns just {"pid":..} while the command keeps running in the guest,
+# and qm itself exits 0 either way, so callers must judge the JSON (gx_code/gx_out), not $?.
 guest_sh() {
   local b; b="$(printf '%s' "$2" | base64 -w0)"
   # shellcheck disable=SC2029  # $1/$b expand client-side; the guest command is single-quoted PVE-side
-  ssh "$PVE_SSH" "qm guest exec $1 -- /bin/sh -c 'echo $b | base64 -d | /bin/sh'"
+  ssh -o ConnectTimeout=10 -o BatchMode=yes "$PVE_SSH" \
+    "qm guest exec $1 --timeout 120 -- /bin/sh -c 'echo $b | base64 -d | /bin/sh'"
 }
+# From guest_sh JSON on stdin: the guest exit code (99 if it did not exit in time or no JSON), or out-data.
+gx_code() { python3 -c 'import sys,json
+try: d=json.load(sys.stdin)
+except Exception: d={}
+print(d.get("exitcode",99) if d.get("exited") else 99)' 2>/dev/null || echo 99; }
+gx_out() { python3 -c 'import sys,json
+try: print(json.load(sys.stdin).get("out-data","").strip())
+except Exception: pass' 2>/dev/null || true; }
+# True only if the guest script really ran to completion with exit 0.
+guest_ok() { [[ "$(guest_sh "$1" "$2" 2>/dev/null | gx_code)" == 0 ]]; }
+# Fatal error: say so loudly and stop the VM (before step 7 it still has setup egress).
+die() { echo "FATAL: $*" >&2; pveq qm stop "$VMID" >/dev/null 2>&1 || true; exit 4; }
 
 vm_exists() { [[ $DRY_RUN == 1 ]] && return 1; pveq qm status "$VMID" >/dev/null 2>&1; }
 snap_exists() { [[ $DRY_RUN == 1 ]] && return 1; pveq qm listsnapshot "$VMID" 2>/dev/null | grep -q " ${SNAPSHOT} "; }
@@ -250,36 +265,56 @@ echo "waiting for cloud-init to finish on the guest (apt + git clone + build)...
 if [[ $DRY_RUN == 1 ]]; then
   echo "ssh ${PVE_SSH} 'until qm guest exec ${VMID} -- test -f /run/lab/cloud-init-done; do sleep 10; done'"
 else
-  for _ in $(seq 1 90); do
-    pveq qm guest exec "$VMID" -- test -f /run/lab/cloud-init-done >/dev/null 2>&1 && break
+  # qm exits 0 whenever the agent answers, even if `test` fails, so judge the guest exit code.
+  CI_DONE=0
+  for _ in $(seq 1 180); do
+    guest_ok "$VMID" "test -f /run/lab/cloud-init-done" && { CI_DONE=1; break; }
     sleep 10
   done
+  [[ $CI_DONE == 1 ]] || die "cloud-init did not finish within 30 min (no /run/lab/cloud-init-done in VM ${VMID})"
 fi
 
 # ---- 5. inject the shipper certificate (the only secret; not stored on Proxmox storage) ----
 say "inject shipper certificate"
 if [[ $DRY_RUN == 1 ]]; then
-  echo "qm guest exec ${VMID} -- install -d -m0750 /etc/lab/siem   # then write tls.crt/tls.key/ca.crt (base64 via guest exec)"
+  echo "qm guest exec ${VMID} --timeout 120 -- install -d -m0750 /etc/lab/siem   # then write ca.crt/tls.crt/tls.key, each checked by sha256 in the guest (3 attempts)"
 else
-  guest_sh "$VMID" "install -d -m0750 /etc/lab/siem" >/dev/null
+  guest_ok "$VMID" "install -d -m0750 /etc/lab/siem" || die "could not create /etc/lab/siem in VM ${VMID}"
   for f in ca.crt tls.crt tls.key; do
     mode=0644; [[ "$f" == tls.key ]] && mode=0600
     b64="$(base64 -w0 "$SHIPPER_CERT_DIR/$f")"
-    # The decode + chmod run inside the guest (see guest_sh); the pipe/redirect/&& are the guest's.
-    guest_sh "$VMID" "echo ${b64} | base64 -d > /etc/lab/siem/${f} && chmod ${mode} /etc/lab/siem/${f}" >/dev/null
+    want="$(sha256sum "$SHIPPER_CERT_DIR/$f" | awk '{print $1}')"
+    got=""
+    # Write, then prove it landed: the guest's sha256 must equal the local file's (3 attempts).
+    for try in 1 2 3; do
+      # The decode + chmod run inside the guest (see guest_sh); the pipe/redirect/&& are the guest's.
+      guest_sh "$VMID" "echo ${b64} | base64 -d > /etc/lab/siem/${f} && chmod ${mode} /etc/lab/siem/${f}" >/dev/null 2>&1 || true
+      got="$(guest_sh "$VMID" "sha256sum /etc/lab/siem/${f}" 2>/dev/null | gx_out | awk '{print $1}' || true)"
+      [[ "$got" == "$want" ]] && break
+      echo "${f}: guest sha256 '${got:-<none>}' != local ${want} (attempt ${try}/3)" >&2
+      [[ $try -lt 3 ]] && sleep 5
+    done
+    [[ "$got" == "$want" ]] || die "${f} did not reach VM ${VMID} intact after 3 attempts"
+    echo "${f}: sha256 ${want} verified in the guest"
   done
 fi
 
 # ---- 6. report copy-1 hash (for the ioc-lab-known-hash rule), then enable the run for next boot ----
 say "copy-1 hash + enable run"
 if [[ $DRY_RUN == 1 ]]; then
-  echo "qm guest exec ${VMID} -- cat /opt/lab/lab-canary.sha256   # -> pin into siem/rules/ioc-lab-known-hash"
+  echo "qm guest exec ${VMID} --timeout 120 -- cat /opt/lab/lab-canary.sha256   # -> COPY1_SHA256, fatal if unreadable"
 else
-  HASH="$(pveq qm guest exec "$VMID" -- cat /opt/lab/lab-canary.sha256 | python3 -c 'import sys,json;print(json.load(sys.stdin).get("out-data","").strip())' 2>/dev/null || true)"
-  echo "COPY1_SHA256=${HASH:-<read it from the guest>}"
+  HASH="$(guest_sh "$VMID" "cat /opt/lab/lab-canary.sha256" 2>/dev/null | gx_out | awk '{print $1}' || true)"
+  [[ "$HASH" =~ ^[0-9a-f]{64}$ ]] || die "could not read copy-1 sha256 from VM ${VMID} (got '${HASH}')"
+  echo "COPY1_SHA256=${HASH}"
 fi
-pveq qm guest exec "$VMID" -- systemctl enable lab-run.service >/dev/null 2>&1 || \
-  [[ $DRY_RUN == 1 ]] && echo "qm guest exec ${VMID} -- systemctl enable lab-run.service"
+# The shipper (its cert is now in place) and the run both start on the next boot, i.e. after rollback.
+if [[ $DRY_RUN == 1 ]]; then
+  echo "qm guest exec ${VMID} -- systemctl enable fluent-bit.service lab-run.service"
+else
+  guest_ok "$VMID" "systemctl enable fluent-bit.service lab-run.service" \
+    || die "could not enable fluent-bit.service + lab-run.service in VM ${VMID}"
+fi
 
 # ---- 7. lock the VM's egress (DROP in/out except siem01:9200 and the sink:8080), ipfilter on ----
 say "per-VM firewall (egress = siem01 only)"
@@ -371,7 +406,7 @@ sys.exit(0 if (siem and not leak) else 1)'
   # script (spaces, quotes, parens, sys.exit) intact; piping it through the PVE shell would shred it.
   PROBE_B64="$(printf '%s' "$PROBE" | base64 -w0)"
   RES="$(guest_sh "$VMID" "echo ${PROBE_B64} | base64 -d | python3" || true)"
-  CODE="$(printf '%s' "$RES" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("exitcode",99))' 2>/dev/null || echo 99)"
+  CODE="$(printf '%s' "$RES" | gx_code)"
   if [[ "$CODE" != "0" ]]; then
     echo "FIREWALL VERIFICATION FAILED (code ${CODE}): the VM is NOT correctly isolated." >&2
     echo "Refusing to snapshot. Leaving the VM stopped for inspection; fix the firewall and re-run." >&2
@@ -435,4 +470,4 @@ fi
 say "done"
 echo "VM ${VMID} is provisioned, locked down and snapshotted as ${SNAPSHOT}."
 echo "First run: it fires at 03:00 UTC, or now with:  ssh ${PVE_SSH} 'systemctl start lab-vm-run.service'"
-echo "Pin COPY1_SHA256 above into siem/rules/ioc-lab-known-hash (placeholder until the first run)."
+echo "Pin COPY1_SHA256 above into siem/rules/ioc-lab-known-hash (replacing the all-zero placeholder)."
