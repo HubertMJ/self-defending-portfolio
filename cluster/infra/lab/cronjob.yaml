@@ -61,13 +61,14 @@ spec:
               type: RuntimeDefault
           containers:
             - name: lab-runner
-              # The detection lab runner, built and signed by HubertMJ/detection-lab's build-image.yml
-              # (same workflow identity as the /lab/ web image, so Kyverno's verify-lab-images already
-              # covers ghcr.io/hubertmj/detection-lab/*). Pinned by digest like every image here.
-              # TODO(lab-runner-digest): replace the all-zero PLACEHOLDER with the real build digest
-              # from the detection-lab build-image run, then unsuspend. Until then `make validate`
-              # needs ALLOW_PLACEHOLDER_DIGESTS=1.
-              image: ghcr.io/hubertmj/detection-lab/lab-runner@sha256:4b5341bc85a66e6010aef651720be5e6dd4186f93488b74fe9a35a84f2b8ccbd
+              # The detection lab runner, built and signed by HubertMJ/detection-lab's build-runner.yml
+              # (a workflow identity Kyverno's verify-lab-images trusts alongside build-image.yml, so it
+              # already covers ghcr.io/hubertmj/detection-lab/*). Pinned by digest like every image here;
+              # this is the foreign-repo pin scripts/bump-image-digest.sh leaves alone, bumped by hand
+              # from the build-runner run on the matching detection-lab main commit.
+              # detection-lab main a90da77 (PR #9: the findings search drops the detector_id filter so
+              # the lab-runner identity needs no securityanalytics/detector/get).
+              image: ghcr.io/hubertmj/detection-lab/lab-runner@sha256:84fe1e44ea9ab74056f50d480d682635fc00e1d125328668051a345ebcd3ec67
               env:
                 # siem01, which its node certificate names (IP SAN); mutual TLS with the volume below.
                 - name: SIEM_URL
