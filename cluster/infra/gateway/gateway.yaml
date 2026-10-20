@@ -1,9 +1,9 @@
 # The single entry point for hubertjablon.ski.
 #
 # Cilium materialises this as a LoadBalancer Service named cilium-gateway-portfolio in this
-# namespace. On a single node with no LB IP provider its EXTERNAL-IP stays <pending> forever and
-# that is intentional (ADR 0010): cloudflared reaches it by ClusterIP from inside the cluster, and
-# an externally reachable address would contradict ADR 0003.
+# namespace (its address comes from lb-ip-pool.yaml and is never announced, ADR 0010 amendment).
+# cloudflared reaches it by ClusterIP from inside the cluster; an externally reachable address would
+# contradict ADR 0003.
 apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
 metadata:
@@ -16,6 +16,18 @@ metadata:
     cert-manager.io/cluster-issuer: letsencrypt-prod
 spec:
   gatewayClassName: cilium
+  # Copied by Cilium onto the generated Service. A LoadBalancer Service also gets NodePorts, and the
+  # eBPF load balancer (kube-proxy replacement) answers those on every node address before nftables'
+  # input drop sees the packet: the Gateway was reachable from the LAN on k3s01:<nodePort>, without
+  # Cloudflare in front (ADR 0010 amendment 2026-10-20). With this annotation Cilium installs the
+  # ClusterIP frontend only - no NodePort, no LoadBalancer address in the datapath - which is the one
+  # cloudflared uses. The Service stays type LoadBalancer, so LB IPAM still gives it its address and
+  # the Gateway still reports Programmed. (The GatewayClass's CiliumGatewayClassConfig could only set
+  # allocateLoadBalancerNodePorts: false, which still serves the LB address and needs a GatewayClass
+  # of our own; this is one field on the Gateway.)
+  infrastructure:
+    annotations:
+      service.cilium.io/type: ClusterIP
   listeners:
     # Port 80 exists only to redirect. Cloudflare already forces HTTPS to the visitor; this covers
     # anything that reaches the tunnel on plain HTTP.

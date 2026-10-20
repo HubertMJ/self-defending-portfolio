@@ -91,3 +91,40 @@ reaches the Gateway by its ClusterIP Service name; the public path is unchanged.
   It would get the same routes, certificate and headers the tunnel gets, without Cloudflare in front.
 - Turning on L2 announcements or BGP later would publish the Gateway on the LAN; that is a decision
   for a new ADR, not a values change.
+
+## Amendment 2026-10-20: the Gateway's Service exposes its ClusterIP only
+
+**Context.** The amendment above guarded the LoadBalancer address and missed the NodePorts a
+LoadBalancer Service also gets (`allocateLoadBalancerNodePorts` defaults to true; here 30525 for
+:80 and 30572 for :443). With kube-proxy replacement, Cilium's eBPF load balancer answers a NodePort
+on every node address before the nftables input chain sees the packet, so the host firewall's
+default-deny did not apply: `curl -sk --resolve hubertjablon.ski:30572:10.4.1.20
+https://hubertjablon.ski:30572/cluster/api/healthz` answered 200 from docker01. A request that way
+skips Cloudflare's WAF, and since the API keys its per-visitor limits on `CF-Connecting-IP`, a LAN
+client could set that header itself.
+
+**Decision.** The Gateway carries `spec.infrastructure.annotations: service.cilium.io/type:
+ClusterIP`. Cilium copies infrastructure annotations onto the Service it generates, and with that
+annotation its load balancer installs the ClusterIP frontend only: no NodePort and no LoadBalancer
+address in the datapath. cloudflared already reaches the Gateway by its ClusterIP Service name, so
+the public path is unchanged. The Service stays type LoadBalancer, so LB IPAM still assigns
+10.4.1.30 and the Gateway still reports `Programmed=True` (the reason for the amendment above).
+`scripts/check-gateway-exposure.sh` (in `make validate`) fails when a Gateway lacks the annotation
+or a Service in `cluster/` is of type NodePort or LoadBalancer.
+
+Not chosen: a `CiliumGatewayClassConfig` (Cilium 1.19) can set `allocateLoadBalancerNodePorts:
+false`, but the chart-made `cilium` GatewayClass has no `parametersRef`, so it would need a
+GatewayClass of our own, and the LoadBalancer address would still be served. A Cilium host firewall
+policy would cover every NodePort on the node, at the price of enabling the host firewall in the
+agent, a CNI-wide change on a single node.
+
+**Consequences.**
+- The NodePort numbers stay allocated in the Service object (Kubernetes still assigns them); nothing
+  answers them. The same holds for 10.4.1.30.
+- Cilium merges annotations into the existing Service, it does not remove them: reverting means
+  deleting the annotation from the Gateway *and* from `gateway/cilium-gateway-portfolio`.
+- The `host` entity in the backends' ingress rules (hello, site, lab, portfolio-api) is not what
+  admits the kubelet's probes: with Kubernetes, Cilium's `allow-localhost` resolves to `always`, so
+  the node always reaches its local endpoints whatever the policy says. Removing `host` would not
+  close anything in the datapath; whether Envoy's check of the original client still matches it
+  after this change needs Hubble on the live node, so the entries stay until that is looked at.
