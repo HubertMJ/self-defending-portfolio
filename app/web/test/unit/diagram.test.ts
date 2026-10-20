@@ -89,7 +89,7 @@ describe("diagram layout", () => {
     const docs = serialise(layout("full", { interactive: false }, FULL_MODEL));
     expect(docs).not.toMatch(/dg-dot|dg-glow/);
     const css = trafficCss();
-    for (const p of ["dg", "dgn"]) for (const l of ["req", "loop"]) expect(css).toMatch(new RegExp(`#${p}-dot-${l} \\{ offset-path: path\\("M[\\d. L]+"\\); --tr-name: dg-tr-${p}-${l}; --tr-period: \\d+s; \\}`));
+    for (const p of ["dg", "dgn"]) for (const l of ["req", "loop"]) expect(css).toMatch(new RegExp(`#${p}-dot-${l} \\{ offset-path: path\\("M[\\d. L]+"\\); --tr-name: dg-tr-${p}-${l}; --tr-period: [\\d.]+s; \\}`));
     expect(css).toContain("@keyframes dg-tr-dg-gateway-site");
   });
 

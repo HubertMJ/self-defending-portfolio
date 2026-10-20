@@ -295,8 +295,8 @@ function route(e: DiagramEdge, a: Box, b: Box, m: Metrics): { pts: Pt[]; label: 
  * the page's CSP allows no style attribute, and offset-path needs the route.
  */
 export const TRAFFIC = {
-  req: { edges: ["visitor-cloudflare", "cloudflare-cloudflared", "cloudflared-gateway", "gateway-site"], period: 6, start: 0, travel: 2.4 },
-  loop: { edges: ["pod-falco", "falco-talon", "talon-kube-apiserver", "kube-apiserver-pod"], period: 18, start: 3.2, travel: 2.6 },
+  req: { edges: ["visitor-cloudflare", "cloudflare-cloudflared", "cloudflared-gateway", "gateway-site"], period: 3.2, start: 0, travel: 2.4 },
+  loop: { edges: ["pod-falco", "falco-talon", "talon-kube-apiserver", "kube-apiserver-pod"], period: 9, start: 3.2, travel: 2.6 },
 } as const;
 type Lane = keyof typeof TRAFFIC;
 

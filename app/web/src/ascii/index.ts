@@ -255,8 +255,9 @@ function frame(v: View, still: boolean): void {
     }
     if (e.el) v.wasLit.set(e.el, lit);
   }
-  // Now and then a packet rides an edge on its own, so the drawing breathes between runs.
-  if (!still && edges.length && v.t % 24 === 0 && Math.random() < 0.8) v.packets.push({ e: edges[Math.floor(Math.random() * edges.length)], pos: 0 });
+  // Packets ride the edges on their own, so the drawing keeps moving between runs: each edge about
+  // once every 90 frames (6 s), at random, the pace the owner settled on in the mock-up.
+  if (!still) for (const e of edges) if (Math.random() < 1 / 90) v.packets.push({ e, pos: 0 });
   for (const [id, n] of v.fx) {
     if (n <= 0) { v.fx.delete(id); continue; }
     v.fx.set(id, n - 1);
@@ -342,9 +343,12 @@ export function setupAscii(title: string): void {
     typed = (typed + e.key.toLowerCase()).slice(-5);
     if (typed === "ascii") { typed = ""; set(!root.classList.contains("ascii")); }
   });
-  // On a phone: five quick taps on the page's title.
+  // On a phone: five quick taps on the page's title, or on the banner that stands in for it in ASCII
+  // mode (on the landing page it hides the title), so the way back is where the way in was.
   let taps: number[] = [];
-  document.querySelector("main h1")?.addEventListener("click", () => {
+  addEventListener("click", (e) => {
+    const t = e.target as Element | null;
+    if (!t?.closest?.("main h1, .ascii-banner")) return;
     const now = Date.now();
     taps = [...taps.filter((x) => now - x < 2500), now];
     if (taps.length >= 5) { taps = []; set(!root.classList.contains("ascii")); }
