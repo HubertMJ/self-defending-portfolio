@@ -308,7 +308,7 @@ code() { # <want> <description> <METHOD> <path> [body]
 }
 code 200 "api read: search the six k3s01 streams by name" GET "/sdp-falco,sdp-talon,sdp-hubble,sdp-k8s-audit,sdp-api,sdp-host/_search?size=0"
 code 403 "api read: search sdp-siem01" GET "/sdp-siem01/_search?size=0"
-code 403 "api read: search sdp-lab (the API reads the lab's run documents only)" GET "/sdp-lab/_search?size=0"
+code 403 "api read: search sdp-lab (sdp_api_read names no lab stream; the lab reads are sdp_lab_read's)" GET "/sdp-lab/_search?size=0"
 code 403 "api read: search sdp-* (a future stream is not readable by accident)" GET "/sdp-*/_search?size=0"
 code 403 "api read: write to sdp-falco" POST /sdp-falco/_doc '{"@timestamp":"2026-10-04T00:00:00Z"}'
 code 200 "api read: Alerting alerts" GET /_plugins/_alerting/monitors/alerts

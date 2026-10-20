@@ -127,9 +127,13 @@ sdp_lab_validator:
     - index_patterns: ["lab-runs"]
       allowed_actions: ["read", "indices:data/write/index", "indices:data/write/bulk*"]
 sdp_lab_read:
-  # The portfolio API's one addition for GET /api/lab/latest: the run documents, nothing else.
+  # The portfolio API's lab reads: the run documents for GET /api/lab/latest, and sdp-lab for the
+  # /lab/ page's VM status and raw records (GET /api/lab/vm, /api/lab/raw) - synthetic and lab-VM
+  # events only, never a cluster stream. Nothing else.
   index_permissions:
     - index_patterns: ["lab-runs"]
+      allowed_actions: ["read"]
+    - index_patterns: ["sdp-lab"]
       allowed_actions: ["read"]
 sdp_lab_runner:
   # The cluster CronJob (identity lab-runner) that drives a whole generated run once a day from inside

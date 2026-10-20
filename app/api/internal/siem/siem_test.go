@@ -128,7 +128,7 @@ func TestAllowList(t *testing.T) {
 	ok := []struct{ method, path string }{
 		{"GET", PathFindings}, {"GET", PathCorrelations}, {"GET", PathMonitorAlerts},
 		{"POST", "/sdp-falco/_search"}, {"POST", "/sdp-api/_search"}, {"POST", "/siem-sync/_search"},
-		{"POST", "/lab-runs/_search"},
+		{"POST", "/lab-runs/_search"}, {"POST", "/sdp-lab/_search"},
 		{"POST", "/sdp-falco,sdp-talon,sdp-hubble,sdp-k8s-audit,sdp-api,sdp-host/_search"},
 	}
 	refused := []struct{ method, path string }{
@@ -136,7 +136,7 @@ func TestAllowList(t *testing.T) {
 		{"DELETE", PathMonitorAlerts}, {"PATCH", "/sdp-api/_search"}, {"HEAD", PathFindings},
 		{"POST", "/sdp-falco/_doc"}, {"POST", "/sdp-falco/_bulk"}, {"POST", "/_bulk"}, {"POST", "/sdp-falco/_update/x"},
 		{"POST", "/sdp-falco/_delete_by_query"}, {"POST", "/sdp-*/_search"}, {"POST", "/sdp-siem01/_search"},
-		{"POST", "/sdp-api,sdp-siem01/_search"}, {"POST", "/_search"}, {"POST", "//_search"}, {"POST", "/sdp-api/../_bulk/_search"},
+		{"POST", "/sdp-api,sdp-siem01/_search"}, {"PUT", "/sdp-lab/_search"}, {"POST", "/sdp-lab/_doc"}, {"POST", "/sdp-lab/_bulk"}, {"POST", "/_search"}, {"POST", "//_search"}, {"POST", "/sdp-api/../_bulk/_search"},
 		{"POST", "/.opendistro_security/_search"}, {"POST", "/sdp-api/_search/x"}, {"POST", "sdp-api/_search"},
 		{"GET", "/_plugins/_security_analytics/alerts"}, {"GET", "/_cluster/settings"}, {"GET", "/sdp-falco/_doc/x"},
 		{"GET", "/_plugins/_security/authinfo"}, {"POST", "/_plugins/_security_analytics/rules"},

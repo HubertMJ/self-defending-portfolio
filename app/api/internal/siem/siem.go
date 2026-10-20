@@ -48,13 +48,19 @@ const SyncIndex = "siem-sync"
 // stream and never correlated: it is the lab's own, sanitised output, not the cluster's telemetry.
 const LabRunsIndex = "lab-runs"
 
+// LabStream is the detection lab's data stream (ADR 0034 amendment 2026-10-18): synthetic events (A)
+// and the isolated lab VM's events and lifecycle markers (B), never the cluster's telemetry. The role
+// `sdp_lab_read` may read it; GET /api/lab/vm derives the VM's state from its markers and
+// GET /api/lab/raw publishes the newest VM run's records through an allow-list of fields.
+const LabStream = "sdp-lab"
+
 // Streams are k3s01's data streams, the ones the API's role `sdp_api_read` names. Never `sdp-*` (the
 // role refuses a pattern) and never `sdp-siem01` (the SIEM host's own records are not the page's).
 var Streams = []string{"sdp-falco", "sdp-talon", "sdp-hubble", "sdp-k8s-audit", "sdp-api", "sdp-host"}
 
 // readable is every index a search may name.
 var readable = func() map[string]bool {
-	m := map[string]bool{SyncIndex: true, LabRunsIndex: true}
+	m := map[string]bool{SyncIndex: true, LabRunsIndex: true, LabStream: true}
 	for _, s := range Streams {
 		m[s] = true
 	}
