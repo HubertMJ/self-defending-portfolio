@@ -1,0 +1,10 @@
+# {{ ansible_managed }}
+[Unit]
+Description=detection lab variant B validator, after the isolated VM's daily run
+
+[Timer]
+OnCalendar={{ lab_validator_on_calendar }}
+Persistent=true
+
+[Install]
+WantedBy=timers.target

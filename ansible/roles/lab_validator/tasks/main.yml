@@ -1,0 +1,43 @@
+---
+# The variant B validator: detection-lab's lab/ at a pinned commit, run by a timer as sdp-lab with the
+# lab-validator certificate (role lab_identities). It talks to OpenSearch on loopback only.
+- name: Assert the validator ref is a full commit
+  ansible.builtin.assert:
+    that:
+      - lab_validator_ref is match('^[0-9a-f]{40}$')
+      - lab_validator_ref != '0000000000000000000000000000000000000000'
+    fail_msg: lab_validator_ref must pin a detection-lab commit (40 hex).
+
+- name: Install git
+  ansible.builtin.apt:
+    name: git
+    state: present
+
+- name: Check out detection-lab at the pinned commit
+  ansible.builtin.git:
+    repo: "{{ lab_validator_repo_url }}"
+    dest: "{{ lab_validator_dir }}"
+    version: "{{ lab_validator_ref }}"
+    depth: 1
+    single_branch: false
+    force: true
+    umask: "0022"
+
+- name: Install the validator unit and timer
+  ansible.builtin.template:
+    src: "{{ item }}.j2"
+    dest: /etc/systemd/system/{{ item }}
+    owner: root
+    group: root
+    mode: "0644"
+  loop: [lab-validator.service, lab-validator.timer]
+  notify: Reload systemd for the lab validator
+
+- name: Load the unit files before the timer is touched
+  ansible.builtin.meta: flush_handlers
+
+- name: Enable and start the validator timer
+  ansible.builtin.systemd_service:
+    name: lab-validator.timer
+    enabled: true
+    state: started
