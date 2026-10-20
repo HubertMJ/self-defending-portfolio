@@ -69,6 +69,7 @@ html.ascii :is(.card, .panel, .project, .lab-vm-tile, .li-rulecard) { border-sty
 .ascii-banner { margin: 0 0 1rem; font: 700 var(--fs, 12px)/1.17 "LabMono", monospace;
   color: var(--accent); white-space: pre; overflow: hidden; user-select: none; text-shadow: 0 0 12px rgba(126 224 143 / 0.35); }
 .ascii-glitch { color: var(--role-entry); }
+html.ascii .ascii-said { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 
 /* The drawings. The SVG they are read from stays for screen readers and keyboards, visually hidden
  * but still laid out (its wide or phone variant decides which drawing shows). */

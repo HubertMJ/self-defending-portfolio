@@ -139,6 +139,13 @@ function mount(): void {
     };
     h1.before(pre);
     draw();
+    // When the banner spells the title itself (the landing page's name), the title steps back for
+    // screen readers only, rather than saying it twice on screen.
+    const plain = (x: string): string => x.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/ł/gi, "l").toLowerCase().trim();
+    if (plain(h1.textContent ?? "") === plain(banner)) {
+      h1.classList.add("ascii-said");
+      cleanups.push(() => h1.classList.remove("ascii-said"));
+    }
     added.push(pre);
     if (!still) timers.push(window.setInterval(() => { if (!document.hidden) draw(); }, 320));
     const onResize = (): void => draw();
