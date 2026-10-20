@@ -1,5 +1,6 @@
 # See cluster/infra/cert-manager-issuers/ksops.yaml for the pattern and the fail-loud rationale.
-# siem-client.sops.yaml is made and encrypted by scripts/siem-api-cert.sh (ADR 0034, ADR 0006).
+# siem-client.sops.yaml is made and encrypted by scripts/siem-api-cert.sh (ADR 0034, ADR 0006);
+# lab-trigger.sops.yaml holds the lab trigger agent's token (ADR 0034 amendment 2026-10-20 (b)).
 apiVersion: viaduct.ai/v1
 kind: ksops
 metadata:
@@ -10,3 +11,4 @@ metadata:
         path: ksops
 files:
   - siem-client.sops.yaml
+  - lab-trigger.sops.yaml

@@ -13,6 +13,10 @@
 # siem-client.sops.yaml, made by scripts/siem-api-cert.sh: the key is generated on the operator's
 # host, only its CSR goes to siem01, which signs it for portfolio-api-g<N> through the remote entry
 # point. Its volume is optional too: without it the API runs with the SIEM part off.
+#
+# The lab trigger token (lab-trigger.sops.yaml, ADR 0034 amendment 2026-10-20 (b)) is the second KSOPS
+# Secret: the bearer token the trigger agent on the hypervisor polls POST /api/lab/run/claim with.
+# Optional as well: without it the on-demand run is unavailable and the claim path does not exist.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
@@ -22,6 +26,7 @@ resources:
   - ciliumnetworkpolicy.yaml
   - rbac.yaml
   - configmap-stats.yaml
+  - configmap-lab-run.yaml
   - deployment.yaml
   - service.yaml
   - httproute.yaml

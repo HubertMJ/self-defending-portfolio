@@ -1,0 +1,16 @@
+# The on-demand lab run's state (ADR 0034 amendment 2026-10-20 (b)): the newest visitor request
+# (id, requested_at, claimed_at) and the day's count of visitor-started runs. The API writes it with
+# optimistic concurrency (the resourceVersion of its read), so the trigger agent's claim is atomic
+# even across replicas. It ships empty - the API fills it - and Argo CD ignores its /data
+# (cluster/apps/portfolio-api.yaml), like portfolio-stats. No visitor data: no IP, no user agent.
+#
+# A plain manifest with a fixed name: the API reads it by name. The RBAC to write it is the
+# `portfolio-api-lab-run` Role in rbac.yaml (get/update on this one object, no create).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: lab-run-state
+  namespace: portfolio-api
+  labels:
+    app.kubernetes.io/name: portfolio-api
+    app.kubernetes.io/component: lab-run

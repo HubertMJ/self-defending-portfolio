@@ -102,6 +102,10 @@ spec:
             - name: siem
               mountPath: /etc/portfolio-api/siem
               readOnly: true
+            # The lab trigger agent's bearer token (lab-trigger.sops.yaml), read once at start.
+            - name: lab-trigger
+              mountPath: /etc/portfolio-api/lab-trigger
+              readOnly: true
       volumes:
         - name: scenarios
           configMap:
@@ -119,3 +123,13 @@ spec:
             secretName: portfolio-api-siem
             optional: true
             defaultMode: 288  # 0440, group = fsGroup
+        # The lab trigger token (KSOPS, ADR 0034 amendment 2026-10-20 (b)). Optional: without it the
+        # on-demand lab run is unavailable and POST /api/lab/run/claim answers 404.
+        - name: lab-trigger
+          secret:
+            secretName: portfolio-api-lab-trigger
+            optional: true
+            defaultMode: 288  # 0440, group = fsGroup
+            items:
+              - key: token
+                path: token
