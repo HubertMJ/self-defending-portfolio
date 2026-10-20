@@ -166,6 +166,13 @@ const GAP = 7;
  * sublabel is shown only in Technical Mode, and styles.css moves a lone label down by 7.5 units
  * (half the block's second line) so it sits in the middle then too.
  */
+/** A blurb's first sentence (two when the first is a word or two). */
+function firstSentence(s: string): string {
+  let out = "";
+  for (const x of s.match(/.*?[.!?](?=\s|$)/g) ?? [s]) { out += x; if (out.trim().length >= 30) break; }
+  return out.trim() || s;
+}
+
 function nodeTree(n: DiagramNode, b: Box, opts: LayoutOptions, subs: string[] = [n.sub]): Tree {
   const id = `${opts.idPrefix ?? "dg"}-${n.id}`;
   // A wrapped sublabel: styles.css moves a lone label down by half the block's extra lines.
@@ -175,6 +182,8 @@ function nodeTree(n: DiagramNode, b: Box, opts: LayoutOptions, subs: string[] = 
     attrs.role = "button";
     attrs["aria-label"] = n.label;
     attrs["aria-expanded"] = "false";
+    // The blurb's first sentence, for ASCII mode's popup beside the box (src/ascii).
+    attrs["data-tip"] = firstSentence(n.blurb);
   }
   const note = opts.notes?.[n.id];
   // Baselines: the label, the sublabel's lines and the note centred as a block, LINE units apart.

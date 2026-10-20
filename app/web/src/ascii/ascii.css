@@ -110,6 +110,15 @@ html:not(.ascii) .ascii-dg { display: none; }
 .ascii-dg .inv:is(.b-attack, .b-incident) { background: var(--attack); } .ascii-dg .inv.b-detect { background: var(--detect); }
 .ascii-dg .inv.b-entry { background: var(--role-entry); } .ascii-dg .inv:is(.b-record, .b-respond) { background: var(--respond); }
 
+/* The popup beside a box: the node's short words in a small frame, over the page, never in its flow. */
+.ascii-tip { position: fixed; z-index: 2147482000; margin: 0; padding: 0; font: 13px/1.17 "LabMono", monospace; white-space: pre;
+  color: var(--text); background: rgba(7 9 10 / 0.97); pointer-events: none; user-select: none; text-shadow: none; }
+.ascii-tip[hidden] { display: none; }
+.ascii-tip__f { color: var(--accent); }
+.ascii-tip__t { color: var(--accent); font-weight: 700; }
+.ascii-dg--over { cursor: pointer; }
+html:not(.ascii) .ascii-tip { display: none; }
+
 .ascii-toast { position: fixed; left: 16px; bottom: 16px; z-index: 2147483001; margin: 0; padding: 6px 12px; font: 13px "LabMono", monospace;
   color: var(--accent, #7ee08f); background: #07090a; border: 1px dashed currentColor; pointer-events: none; animation: ascii-toast 4.2s steps(1) forwards; }
 @keyframes ascii-toast { 0% { opacity: 1; } 95% { opacity: 1; } 100% { opacity: 0; } }
