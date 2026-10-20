@@ -1,4 +1,4 @@
-# The API's identity and every permission it has (ADR 0015). Five grants, each where the objects
+# The API's identity and every permission it has (ADR 0015). Six grants, each where the objects
 # live, and cluster-scoped only where the objects are spread across every namespace:
 #
 #   Role in sandbox            pods create/get/list/watch/delete, pods/exec create - run a scenario,
@@ -11,14 +11,16 @@
 #   Role in portfolio-api      configmaps get/update on `portfolio-stats` only - persist the public
 #                              counters across restarts (ADR 0030). No create (the empty ConfigMap is in
 #                              git), no other ConfigMap (resourceNames pins the one).
+#   Role in portfolio-api      configmaps get/update on `lab-run-state` only - the on-demand lab run's
+#                              request and daily count (ADR 0034 amendment 2026-10-20 (b)), same shape.
 #   ClusterRole (read)      list PolicyReports, ClusterPolicyReports, VulnerabilityReports - they are
 #                           written into every namespace that has workloads; list pods - which
 #                           images run now, so reports of scaled-to-0 ReplicaSets are not counted
 #                           (ADR 0015, amendment 2026-10-02)
 #
 # Narrower than the contract's maximum on purpose: no `get` on the reports (only listed), no Jobs
-# (the pods carry the result), no secrets, no ConfigMaps beyond the one stats counter it writes in its
-# own namespace (the scenarios are a mounted volume). It creates, execs, watches and deletes pods only in
+# (the pods carry the result), no secrets, no ConfigMaps beyond the stats counter and the lab run state
+# it writes in its own namespace (the scenarios are a mounted volume). It creates, execs, watches and deletes pods only in
 # the two sandbox namespaces - `sandbox` and the unguarded twin `sandbox-unguarded` (ADR 0031) - and
 # nowhere else; in kube-bench it only reads pod logs. `watch` on pods is scoped to those two namespaces
 # and used on one pod at a time: the runner opens it with a field selector on the run's pod name and
@@ -154,6 +156,36 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
   name: portfolio-api-stats
+subjects:
+  - kind: ServiceAccount
+    name: portfolio-api
+    namespace: portfolio-api
+---
+# The on-demand lab run's state (ADR 0034 amendment 2026-10-20 (b)): one ConfigMap, lab-run-state, in
+# this namespace. get to read the request, update to queue one or mark it claimed - the update carries
+# the resourceVersion that was read, which is what makes the claim atomic. resourceNames pins this one
+# object; no create (configmap-lab-run.yaml creates it), no delete, no others. The API never reaches
+# the hypervisor: the trigger agent there polls the API.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: portfolio-api-lab-run
+  namespace: portfolio-api
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames: ["lab-run-state"]
+    verbs: ["get", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: portfolio-api-lab-run
+  namespace: portfolio-api
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: portfolio-api-lab-run
 subjects:
   - kind: ServiceAccount
     name: portfolio-api

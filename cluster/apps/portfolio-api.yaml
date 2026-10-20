@@ -40,6 +40,13 @@ spec:
       namespace: portfolio-api
       jsonPointers:
         - /data
+    # The on-demand lab run's state (ADR 0034 amendment 2026-10-20 (b)): written by the API, the same.
+    - group: ""
+      kind: ConfigMap
+      name: lab-run-state
+      namespace: portfolio-api
+      jsonPointers:
+        - /data
   syncPolicy:
     automated:
       prune: true

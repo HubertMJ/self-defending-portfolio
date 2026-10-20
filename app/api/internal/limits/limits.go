@@ -337,3 +337,56 @@ func (c *Conns) Acquire(key string) (bool, func()) {
 		})
 	}
 }
+
+// Accepted is a sliding-window quota per key that counts only what the caller confirms with Add -
+// a refused attempt costs nothing - for actions far rarer than requests (the on-demand lab run:
+// a few a day). In memory only, like every limit here: a restart forgets it.
+type Accepted struct {
+	mu     sync.Mutex
+	limit  int
+	window time.Duration
+	now    func() time.Time
+	byKey  map[string][]time.Time
+}
+
+// NewAccepted allows limit accepted actions per key in any window.
+func NewAccepted(limit int, window time.Duration, now func() time.Time) *Accepted {
+	if now == nil {
+		now = time.Now
+	}
+	return &Accepted{limit: limit, window: window, now: now, byKey: map[string][]time.Time{}}
+}
+
+// Check reports whether key has room for one more, and if not, when the oldest counted one leaves
+// the window.
+func (a *Accepted) Check(key string) (bool, time.Time) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	now := a.now()
+	ts := prune(a.byKey[key], now.Add(-a.window))
+	if len(ts) == 0 {
+		delete(a.byKey, key)
+	} else {
+		a.byKey[key] = ts
+	}
+	if len(ts) < a.limit {
+		return true, time.Time{}
+	}
+	return false, ts[0].Add(a.window)
+}
+
+// Add counts one accepted action for key, dropping every key whose window has emptied.
+func (a *Accepted) Add(key string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	now := a.now()
+	cutoff := now.Add(-a.window)
+	for k, ts := range a.byKey {
+		if ts = prune(ts, cutoff); len(ts) == 0 {
+			delete(a.byKey, k)
+		} else {
+			a.byKey[k] = ts
+		}
+	}
+	a.byKey[key] = append(a.byKey[key], now)
+}

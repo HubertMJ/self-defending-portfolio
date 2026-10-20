@@ -20,11 +20,13 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/hubertmj/self-defending-portfolio/app/api/internal/clientip"
 	"github.com/hubertmj/self-defending-portfolio/app/api/internal/events"
 	"github.com/hubertmj/self-defending-portfolio/app/api/internal/incidents"
+	"github.com/hubertmj/self-defending-portfolio/app/api/internal/labrun"
 	"github.com/hubertmj/self-defending-portfolio/app/api/internal/limits"
 	"github.com/hubertmj/self-defending-portfolio/app/api/internal/posture"
 	"github.com/hubertmj/self-defending-portfolio/app/api/internal/ruleindex"
@@ -65,6 +67,17 @@ type LabReader interface {
 	Latest(ctx context.Context) ([]byte, bool)
 	VM(ctx context.Context) ([]byte, bool)
 	Raw(ctx context.Context) ([]byte, bool)
+}
+
+// LabRunner is what GET/POST /api/lab/run and POST /api/lab/run/claim need from internal/labrun: the
+// on-demand VM run's status, a visitor's request, and the trigger agent's claim. A nil
+// Config.LabRun answers 404 on all three.
+type LabRunner interface {
+	Status(ctx context.Context) labrun.Status
+	Request(ctx context.Context) (labrun.Queued, *labrun.Refusal)
+	ClaimEnabled() bool
+	Authorized(header string) bool
+	Claim(ctx context.Context) (labrun.Claim, error)
 }
 
 // Poster is what the server needs from internal/posture.
@@ -113,6 +126,14 @@ type Config struct {
 	// Lab is the detection lab behind GET /api/lab/latest, /api/lab/vm and /api/lab/raw (ADR 0034
 	// amendment). A nil Lab answers 404, as an unconfigured lab does.
 	Lab LabReader
+	// LabRun is the on-demand VM run behind /api/lab/run (ADR 0034 amendment 2026-10-20 (b)). Its
+	// POST has budgets of its own on top of Requests, all keyed by the visitor's address block
+	// (clientip.Group): LabRunRequests (nil: 3 a minute), LabRunGlobal for everyone together (nil:
+	// 60 a minute) and LabRunQuota, which counts only accepted requests (nil: 2 a day).
+	LabRun         LabRunner
+	LabRunRequests *limits.Requests
+	LabRunGlobal   *limits.Requests
+	LabRunQuota    *limits.Accepted
 
 	// AllowedOrigin is the only Origin a browser may POST from (the site itself).
 	AllowedOrigin string
@@ -130,6 +151,10 @@ type Config struct {
 // Server holds both handlers.
 type Server struct {
 	cfg Config
+	// claimLogMu guards claimLogAt, when a refused trigger-agent claim was last logged (at most one
+	// warning a minute, so a token-guessing loop cannot flood the log).
+	claimLogMu sync.Mutex
+	claimLogAt time.Time
 	// policyFiles maps a Kyverno policy name to its file in the repository (the rule index), for
 	// /api/posture's violations.
 	policyFiles map[string]string
@@ -154,6 +179,15 @@ func New(cfg Config) *Server {
 	}
 	if cfg.WriteTimeout <= 0 {
 		cfg.WriteTimeout = 10 * time.Second
+	}
+	if cfg.LabRunRequests == nil {
+		cfg.LabRunRequests = limits.NewRequests(3, time.Minute, 10000, nil)
+	}
+	if cfg.LabRunGlobal == nil {
+		cfg.LabRunGlobal = limits.NewRequests(60, time.Minute, 1, nil)
+	}
+	if cfg.LabRunQuota == nil {
+		cfg.LabRunQuota = limits.NewAccepted(2, 24*time.Hour, nil)
 	}
 	if !commitPattern.MatchString(cfg.Commit) {
 		cfg.Commit = ""
@@ -197,12 +231,17 @@ func (s *Server) Public() http.Handler {
 	mux.HandleFunc("GET /api/lab/latest", s.labLatest)
 	mux.HandleFunc("GET /api/lab/vm", s.labVM)
 	mux.HandleFunc("GET /api/lab/raw", s.labRaw)
+	mux.HandleFunc("GET /api/lab/run", s.labRunStatus)
+	mux.HandleFunc("POST /api/lab/run", s.labRunRequest)
+	// The trigger agent's endpoint. Not in the 405 list below: any other method gets the plain 404 of
+	// an unknown path, and so does POST while no token is configured.
+	mux.HandleFunc("POST /api/lab/run/claim", s.labRunClaim)
 	// The same paths without a method: a wrong method gets a JSON 405 instead of net/http's plain
 	// text one, so every /api answer is JSON (the page parses errors too).
 	for _, p := range []string{"/api/healthz", "/api/scenarios", "/api/attack/{id}", "/api/events", "/api/posture",
 		"/api/scenarios/{id}/details", "/api/runs", "/api/runs/{id}", "/api/runs/{id}/commands", "/api/stats", "/api/limits",
 		"/api/provenance", "/api/correlation", "/api/correlation/rules", "/api/lab/latest",
-		"/api/lab/vm", "/api/lab/raw"} {
+		"/api/lab/vm", "/api/lab/raw", "/api/lab/run"} {
 		mux.HandleFunc(p, methodNotAllowed)
 	}
 	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
@@ -238,7 +277,7 @@ func (s *Server) publicMiddleware(next http.Handler) http.Handler {
 		h.Set("Cache-Control", "no-store")
 		h.Set("X-Content-Type-Options", "nosniff")
 
-		if r.URL.Path != "/api/healthz" && s.cfg.Requests != nil {
+		if r.URL.Path != "/api/healthz" && s.cfg.Requests != nil && !s.agentClaim(r) {
 			if ok, retry := s.cfg.Requests.Allow(clientip.Key(r)); !ok {
 				tooMany(w, retry, "too many requests")
 				return
@@ -258,6 +297,14 @@ func (s *Server) publicMiddleware(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// agentClaim reports whether r is the lab trigger agent's claim with a valid token (checked in
+// constant time). Only that request skips the per-visitor budget: whoever shares the agent's address
+// cannot make it look offline by spending the budget. A wrong token is counted like any request.
+func (s *Server) agentClaim(r *http.Request) bool {
+	return r.Method == http.MethodPost && r.URL.Path == "/api/lab/run/claim" && s.cfg.LabRun != nil &&
+		s.cfg.LabRun.ClaimEnabled() && s.cfg.LabRun.Authorized(r.Header.Get("Authorization"))
 }
 
 func methodNotAllowed(w http.ResponseWriter, _ *http.Request) {

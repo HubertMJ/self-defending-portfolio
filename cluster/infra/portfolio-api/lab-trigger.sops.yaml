@@ -1,0 +1,27 @@
+# The trigger agent's bearer token (ADR 0034 amendment 2026-10-20 (b)): the agent on the hypervisor
+# sends it to POST /api/lab/run/claim, the API compares it in constant time. 32 random bytes,
+# base64url; the plaintext lives only on the operator's host and the hypervisor, never in git.
+# Rotate: write a new token there and here (sops), restart the API, restart the agent.
+apiVersion: v1
+kind: Secret
+metadata:
+    name: portfolio-api-lab-trigger
+    namespace: portfolio-api
+type: Opaque
+stringData:
+    token: ENC[AES256_GCM,data:QWyPEGQD2XbLw0sqBMbL2XMuOnB3FHgLxl+lNmU7fLbcjMi1pA9ahA2gEQ==,iv:XYr+erftk7XUhRJCUijn3iv1oJZsxYnG7N4Cx1fZTq0=,tag:t602niIJDDpra/MPLz7POw==,type:str]
+sops:
+    age:
+        - recipient: age1xvnwzadpkqlre6r2yn78wrhshr6eurzxmqknw3xpd203xh9pkckqwladry
+          enc: |
+            -----BEGIN AGE ENCRYPTED FILE-----
+            YWdlLWVuY3J5cHRpb24ub3JnL3YxCi0+IFgyNTUxOSA4SkNwNEsxaSt5UWJidE1K
+            N1VjbEFoVzdFVmhMb1YwcmdrN1NNSk1FalQ0CjByZG9VN3VJQ3AyM011bVN1Nk1F
+            VU1DdStkbFhmNG5OVUNCNk9lSmJsZU0KLS0tIEZrUjdpZHIwV0o3WjIxZkFJYURk
+            c0VsajdqQ2pPMmduUnhGYTM1T3E0dG8KTfpKp7GJ0WY3pktOix5z/4omJB9CKfQA
+            Pfb97RWqffuoSMm//+esE4Gqa2qPtM1eT7tk++HRRr6TS4oUiNJbxQ==
+            -----END AGE ENCRYPTED FILE-----
+    lastmodified: "2026-10-20T08:26:25Z"
+    mac: ENC[AES256_GCM,data:LBgkmvVOGZ6pUFwhLBVxtn0tKZ9xmC1jfL4t9MqkAqkdzx+QpIN2XbjOkUo1yxPSBse711OMmX7fz2ZFVny8KrbetXj6VemhTgTBAg+66c/pLY4btP4PgYXJcWHkAiCcN8vxYv9y2k/hDsJmrHpwuGhcoZaZUp0lYLcIdmVx2pQ=,iv:DKDFXgAqNYfd7OF7WOtnujQtoTw+m5fBEDFFP0fheCY=,tag:x5jKH9CuaLE2KV45F9LT+Q==,type:str]
+    encrypted_regex: ^(data|stringData)$
+    version: 3.10.2

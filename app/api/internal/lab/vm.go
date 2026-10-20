@@ -44,11 +44,12 @@ type vmRun struct {
 	FinishedAt string `json:"finished_at,omitempty"` // when it requested poweroff; absent until then
 }
 
-// lifecycleMarker is one marker document of sdp-lab, as the search's _source filter returns it.
-type lifecycleMarker struct {
-	at    time.Time
-	runID string
-	name  string
+// Marker is one lifecycle marker document of sdp-lab (event.action=lifecycle, lab.mode isolated-vm):
+// when it was written, the run it belongs to, and which step (rollback, start, ..., poweroff_requested).
+type Marker struct {
+	At    time.Time
+	RunID string
+	Name  string
 }
 
 // VM returns the lab VM's status as JSON, or false when no lifecycle marker is in the window (or the
@@ -57,7 +58,39 @@ func (r *Reader) VM(ctx context.Context) ([]byte, bool) {
 	return r.vm.get(ctx, r, r.fetchVM)
 }
 
+// Markers reads the VM runs' lifecycle markers of the last three days, uncached, and whether the
+// newest run counts as running by the rule GET /api/lab/vm uses. It is what the on-demand run
+// trigger (internal/labrun) decides on; an error when no source is configured or the query fails.
+func (r *Reader) Markers(ctx context.Context) ([]Marker, bool, error) {
+	if r.src == nil {
+		return nil, false, errNoSource
+	}
+	markers, err := r.markers(ctx)
+	if err != nil {
+		return nil, false, err
+	}
+	st, ok := vmState(markers, r.now().UTC(), r.runningFor, r.dailyStart)
+	return markers, ok && st.State == "running", nil
+}
+
 func (r *Reader) fetchVM(ctx context.Context) ([]byte, error) {
+	markers, err := r.markers(ctx)
+	if err != nil {
+		return nil, err
+	}
+	st, ok := vmState(markers, r.now().UTC(), r.runningFor, r.dailyStart)
+	if !ok {
+		return nil, nil
+	}
+	out, err := json.Marshal(st)
+	if err != nil {
+		return nil, nil
+	}
+	return out, nil
+}
+
+// markers runs the fixed marker search and keeps the markers with a well-formed run id and time.
+func (r *Reader) markers(ctx context.Context) ([]Marker, error) {
 	now := r.now().UTC()
 	res, err := r.src.Search(ctx, []string{siem.LabStream}, siem.Query{
 		TimeField: "@timestamp",
@@ -71,7 +104,7 @@ func (r *Reader) fetchVM(ctx context.Context) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	var markers []lifecycleMarker
+	var markers []Marker
 	for _, h := range res.Hits {
 		src := nest(h.Source)
 		var doc struct {
@@ -88,54 +121,46 @@ func (r *Reader) fetchVM(ctx context.Context) ([]byte, error) {
 		if err != nil {
 			continue
 		}
-		markers = append(markers, lifecycleMarker{at: at.UTC(), runID: id, name: doc.Lab.Marker})
+		markers = append(markers, Marker{At: at.UTC(), RunID: id, Name: doc.Lab.Marker})
 	}
-	st, ok := vmState(markers, now, r.runningFor, r.dailyStart)
-	if !ok {
-		return nil, nil
-	}
-	out, err := json.Marshal(st)
-	if err != nil {
-		return nil, nil
-	}
-	return out, nil
+	return markers, nil
 }
 
 // vmState derives the status from the markers in any order: the newest run is the run of the newest
 // marker; it is running while it has not requested poweroff and its newest marker is younger than
 // runningFor. False when there is no marker.
-func vmState(markers []lifecycleMarker, now time.Time, runningFor, dailyStart time.Duration) (vmStatus, bool) {
+func vmState(markers []Marker, now time.Time, runningFor, dailyStart time.Duration) (vmStatus, bool) {
 	if len(markers) == 0 {
 		return vmStatus{}, false
 	}
 	newest := markers[0]
 	var restore time.Time
 	for _, m := range markers {
-		if m.at.After(newest.at) {
+		if m.At.After(newest.At) {
 			newest = m
 		}
-		if m.name == "rollback" && m.at.After(restore) {
-			restore = m.at
+		if m.Name == "rollback" && m.At.After(restore) {
+			restore = m.At
 		}
 	}
 	first := newest
 	var poweroff time.Time
 	for _, m := range markers {
-		if m.runID != newest.runID {
+		if m.RunID != newest.RunID {
 			continue
 		}
 		// Markers are written to the second: a rollback in the same second as another is still first.
-		if m.at.Before(first.at) || (m.at.Equal(first.at) && m.name == "rollback") {
+		if m.At.Before(first.At) || (m.At.Equal(first.At) && m.Name == "rollback") {
 			first = m
 		}
-		if m.name == "poweroff_requested" {
-			poweroff = m.at
+		if m.Name == "poweroff_requested" {
+			poweroff = m.At
 		}
 	}
 	st := vmStatus{
 		State:         "off",
-		LastRun:       vmRun{ID: newest.runID, StartedAt: first.at.Format(stamp)},
-		SnapshotClean: first.name == "rollback",
+		LastRun:       vmRun{ID: newest.RunID, StartedAt: first.At.Format(stamp)},
+		SnapshotClean: first.Name == "rollback",
 		NextRun:       nextRun(now, dailyStart).Format(stamp),
 		CheckedAt:     now.Format(stamp),
 	}
@@ -144,7 +169,7 @@ func vmState(markers []lifecycleMarker, now time.Time, runningFor, dailyStart ti
 	}
 	if !poweroff.IsZero() {
 		st.LastRun.FinishedAt = poweroff.Format(stamp)
-	} else if now.Sub(newest.at) < runningFor {
+	} else if now.Sub(newest.At) < runningFor {
 		st.State = "running"
 	}
 	return st, true

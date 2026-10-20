@@ -9,9 +9,11 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"os"
@@ -28,6 +30,7 @@ import (
 	"github.com/hubertmj/self-defending-portfolio/app/api/internal/events"
 	"github.com/hubertmj/self-defending-portfolio/app/api/internal/incidents"
 	"github.com/hubertmj/self-defending-portfolio/app/api/internal/lab"
+	"github.com/hubertmj/self-defending-portfolio/app/api/internal/labrun"
 	"github.com/hubertmj/self-defending-portfolio/app/api/internal/limits"
 	"github.com/hubertmj/self-defending-portfolio/app/api/internal/posture"
 	"github.com/hubertmj/self-defending-portfolio/app/api/internal/ruleindex"
@@ -151,6 +154,16 @@ func run(log *slog.Logger) error {
 	// through the same read-only client, with their own short cache (ADR 0034 amendment). A nil source
 	// answers 404 and the page uses its bundled sample.
 	labReader := lab.New(lab.Config{Source: labSource, Log: log})
+	// The on-demand VM run (ADR 0034 amendment 2026-10-20 (b)): requests in the ConfigMap
+	// lab-run-state, claimed by the trigger agent on the hypervisor with the token of the optional
+	// Secret lab-trigger. Without the token the page shows the button as unavailable and the claim
+	// path does not exist.
+	labRun := labrun.New(labrun.Config{
+		Store: labrun.NewConfigMapStore(kube, env("POD_NAMESPACE", "portfolio-api"), env("LAB_RUN_CONFIGMAP", "lab-run-state")),
+		VM:    labReader,
+		Token: readToken(env("LAB_TRIGGER_TOKEN_FILE", "/etc/portfolio-api/lab-trigger/token"), log),
+		Log:   log,
+	})
 	siemRules, err := siemindex.Load()
 	if err != nil {
 		return fmt.Errorf("siem index: %w", err)
@@ -209,6 +222,7 @@ func run(log *slog.Logger) error {
 		Correlation: tracker,
 		SiemIndex:   siemRules,
 		Lab:         labReader,
+		LabRun:      labRun,
 	})
 
 	errc := make(chan error, 2)
@@ -242,6 +256,21 @@ func run(log *slog.Logger) error {
 		return first
 	}
 	return nil
+}
+
+// readToken reads a mounted secret file. A missing file is "not configured" (the Secret is optional);
+// any other read error is a fault worth a warning. Either way the trigger is off.
+func readToken(path string, log *slog.Logger) []byte {
+	b, err := os.ReadFile(path)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		log.Info("lab run trigger off", "reason", "no token file")
+		return nil
+	case err != nil:
+		log.Warn("lab run trigger off: token file unreadable", "err", err)
+		return nil
+	}
+	return bytes.TrimSpace(b)
 }
 
 func env(key, def string) string {
