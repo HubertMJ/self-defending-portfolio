@@ -1,6 +1,7 @@
 name: live-check
 # By hand only: scripts/check-live.sh against https://hubertjablon.ski from a GitHub runner - every
-# page and the API on their paths with the security headers. GETs only; spends no attack quota.
+# page and the API on their paths with the security headers, /lab/ with the landing page's CSP and
+# its run document at /cluster/api/lab/latest (schema 1). GETs only; spends no attack quota.
 on:
   workflow_dispatch:
     inputs:
