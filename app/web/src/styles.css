@@ -9,6 +9,8 @@
 
 /* The hero diagram's ambient traffic routes, generated from src/diagram at build time (scripts/build.mjs). */
 @import "diagram-traffic.css";
+/* ASCII mode, the hidden terminal look (src/ascii): inert unless html.ascii is set. */
+@import "./ascii/ascii.css";
 
 :root {
   color-scheme: dark;

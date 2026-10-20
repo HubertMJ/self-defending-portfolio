@@ -1,0 +1,116 @@
+/* ASCII mode (src/ascii/index.ts): the site as a terminal, behind html.ascii. Off unless the visitor
+ * turns it on; nothing here applies otherwise. One font for every character, so box drawing lines up
+ * on any machine (LabMono, a subset of DejaVu Sans Mono, fonts/LICENSE.txt); the palette is the same
+ * tokens the site already uses, redefined, so every component follows without its own rule. */
+
+@font-face { font-family: "LabMono"; src: url("./fonts/labmono-regular.woff2") format("woff2"); font-weight: 400; font-display: swap; }
+@font-face { font-family: "LabMono"; src: url("./fonts/labmono-bold.woff2") format("woff2"); font-weight: 700; font-display: swap; }
+
+/* html:root.ascii outranks both the light-preference block and data-theme: the mode is dark only. */
+html.ascii:root, html.ascii:root[data-theme] {
+  color-scheme: dark;
+  --bg: #07090a;
+  --bg-grid: transparent;
+  --surface: rgba(11 15 13 / 0.92);
+  --surface-2: #10150f;
+  --border: #26302a;
+  --border-strong: #3a463e;
+  --text: #c9d4c5;
+  --text-muted: #8f9c90;
+  --text-faint: #6b7a6e;
+  --accent: #7ee08f;
+  --accent-ink: #07090a;
+  --attack: #ff6a5f;
+  --detect: #f5bd4f;
+  --respond: #7ee08f;
+  --role-entry: #6fd3e8;
+  --role-record: #7ee08f;
+  --good: #7ee08f;
+  --warning: #f5bd4f;
+  --serious: #ff9a5f;
+  --critical: #ff6a5f;
+  --neutral: #9aa59c;
+  --shadow: none;
+  --font-sans: "LabMono", ui-monospace, monospace;
+  --font-mono: "LabMono", ui-monospace, monospace;
+  --radius: 0;
+  --radius-sm: 0;
+  background: var(--bg);
+}
+html.ascii body { background: transparent; font-family: var(--font-mono); }
+html.ascii *, html.ascii *::before, html.ascii *::after { border-radius: 0 !important; box-shadow: none !important; font-family: var(--font-mono); }
+
+/* The field behind the page, and faint scanlines over it. */
+.ascii-bg { position: fixed; inset: 0; z-index: -1; margin: 0; font: 14px/1.2 "LabMono", monospace; color: var(--accent);
+  opacity: 0.08; white-space: pre; overflow: hidden; pointer-events: none; user-select: none; }
+html.ascii body::after { content: ""; position: fixed; inset: 0; z-index: 2147483000; pointer-events: none;
+  background: repeating-linear-gradient(to bottom, transparent 0 2px, rgba(0 0 0 / 0.2) 2px 3px); }
+
+/* Words as a terminal writes them. */
+html.ascii h1::before { content: "# "; color: var(--text-faint); }
+html.ascii h2::before { content: "## "; color: var(--text-faint); }
+html.ascii h3::before { content: "### "; color: var(--text-faint); }
+html.ascii h1, html.ascii h2, html.ascii h3 { letter-spacing: 0; font-weight: 700; }
+html.ascii .eyebrow { color: var(--detect); letter-spacing: 0.06em; }
+html.ascii .eyebrow::before { content: "┌─[ "; color: var(--text-faint); }
+html.ascii .eyebrow::after { content: " ]──"; color: var(--text-faint); }
+html.ascii a:not(.btn):not(.brand) { text-decoration: none; }
+html.ascii a:not(.btn):not(.brand):hover { background: var(--accent); color: var(--accent-ink); }
+html.ascii .btn::before { content: "[ "; } html.ascii .btn::after { content: " ]"; }
+html.ascii .brand__mark { color: var(--accent); }
+html.ascii .site-nav a::before { content: "["; color: var(--text-faint); }
+html.ascii .site-nav a::after { content: "]"; color: var(--text-faint); }
+html.ascii .site-header { background: rgba(7 9 10 / 0.9); border-bottom: 1px dashed var(--border); backdrop-filter: none; }
+html.ascii .site-footer { border-top: 1px dashed var(--border); }
+html.ascii .theme-toggle { display: none; }
+html.ascii :is(.card, .panel, .project, .lab-vm-tile, .li-rulecard) { border-style: dashed; }
+
+/* The banner over the title. */
+.ascii-banner { margin: 0 0 1rem; font: 700 var(--fs, 12px)/1.17 "LabMono", monospace;
+  color: var(--accent); white-space: pre; overflow: hidden; user-select: none; text-shadow: 0 0 12px rgba(126 224 143 / 0.35); }
+.ascii-glitch { color: var(--role-entry); }
+html.ascii .ascii-said { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+
+/* The drawings. The SVG they are read from stays for screen readers and keyboards, visually hidden
+ * but still laid out (its wide or phone variant decides which drawing shows). */
+html.ascii svg.ascii-src { position: absolute !important; width: 1px !important; height: 1px !important; overflow: hidden; clip-path: inset(50%);
+  opacity: 0; pointer-events: none; }
+html:not(.ascii) .ascii-dg { display: none; }
+.ascii-dg { display: block; margin: 0; width: max-content; max-width: 100%; font: var(--fs, 10px)/1.17 "LabMono", monospace;
+  white-space: pre; overflow: hidden; color: var(--text-faint); background: rgba(7 9 10 / 0.88); cursor: default; user-select: none; -webkit-user-select: none; }
+.ascii-dg[hidden] { display: none; }
+.ascii-dg .z { color: #3a463e; } .ascii-dg .z-t { color: var(--neutral); font-weight: 700; } .ascii-dg .z-s { color: var(--text-faint); }
+.ascii-dg .lbl { color: var(--text-faint); }
+.ascii-dg .pk { font-weight: 700; text-shadow: 0 0 8px currentColor; }
+.ascii-dg .on, .ascii-dg .focus { text-shadow: 0 0 8px currentColor; }
+.ascii-dg .focus { background: rgba(126 224 143 / 0.16); }
+.ascii-dg .inv { font-weight: 700; text-shadow: none; color: #07090a; }
+.ascii-dg [class*="-t"] { font-weight: 700; }
+.ascii-dg [class*="-s"] { color: var(--text-faint); }
+/* Each role: a dim frame and line at rest, its full colour when lit, reached or inverted. */
+.ascii-dg :is(.b-entry, .r-entry) { color: #2f6470; } .ascii-dg .b-entry-t { color: var(--role-entry); }
+.ascii-dg :is(.b-attack, .r-attack) { color: #7a3a35; } .ascii-dg .b-attack-t { color: var(--attack); }
+.ascii-dg :is(.b-detect, .r-detect) { color: #7a6030; } .ascii-dg .b-detect-t { color: var(--detect); }
+.ascii-dg :is(.b-record, .r-record, .b-respond, .r-respond, .b-response, .r-response) { color: #3f5a45; }
+.ascii-dg :is(.b-record-t, .b-respond-t, .b-response-t) { color: var(--respond); }
+.ascii-dg :is(.b-incident, .r-incident) { color: #7a3a35; } .ascii-dg .b-incident-t { color: var(--critical); }
+.ascii-dg :is(.b-neutral, .r-neutral, .b-plain, .r-plain, .b-path, .r-path) { color: #4a564d; } .ascii-dg :is(.b-neutral-t, .b-plain-t, .b-path-t) { color: var(--text); }
+.ascii-dg :is(.hot, .pk, .on, .focus):is(.b-entry, .r-entry) { color: var(--role-entry); }
+.ascii-dg :is(.hot, .pk, .on, .focus):is(.b-attack, .r-attack, .b-incident, .r-incident) { color: var(--attack); }
+.ascii-dg :is(.hot, .pk, .on, .focus):is(.b-detect, .r-detect) { color: var(--detect); }
+.ascii-dg :is(.hot, .pk, .on, .focus):is(.b-record, .r-record, .b-respond, .r-respond, .b-response, .r-response) { color: var(--respond); }
+.ascii-dg :is(.hot, .pk, .on, .focus):is(.b-neutral, .r-neutral, .b-plain, .r-plain, .b-path, .r-path) { color: var(--text); }
+/* The landing page's projects: green this site, orange the cluster, violet the lab. */
+.ascii-dg :is(.b-site, .r-site) { color: #3f5a45; } .ascii-dg .b-site-t { color: var(--respond); }
+.ascii-dg :is(.b-project, .r-project) { color: #7a4a30; } .ascii-dg .b-project-t { color: var(--serious); }
+.ascii-dg :is(.b-lab, .r-lab) { color: #5a4a7a; } .ascii-dg .b-lab-t { color: #c792ea; }
+.ascii-dg :is(.hot, .pk, .on, .focus):is(.b-site, .r-site) { color: var(--respond); }
+.ascii-dg :is(.hot, .pk, .on, .focus):is(.b-project, .r-project) { color: var(--serious); }
+.ascii-dg :is(.hot, .pk, .on, .focus):is(.b-lab, .r-lab) { color: #c792ea; }
+.ascii-dg .inv:is(.b-attack, .b-incident) { background: var(--attack); } .ascii-dg .inv.b-detect { background: var(--detect); }
+.ascii-dg .inv.b-entry { background: var(--role-entry); } .ascii-dg .inv:is(.b-record, .b-respond) { background: var(--respond); }
+
+.ascii-toast { position: fixed; left: 16px; bottom: 16px; z-index: 2147483001; margin: 0; padding: 6px 12px; font: 13px "LabMono", monospace;
+  color: var(--accent, #7ee08f); background: #07090a; border: 1px dashed currentColor; pointer-events: none; animation: ascii-toast 4.2s steps(1) forwards; }
+@keyframes ascii-toast { 0% { opacity: 1; } 95% { opacity: 1; } 100% { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .ascii-toast { animation: none; } }

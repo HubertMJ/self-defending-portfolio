@@ -1,10 +1,13 @@
 // Loaded as a classic, render-blocking script in <head> so a stored theme choice applies before
 // first paint. Kept to a few lines on purpose: everything else waits for the deferred module.
 import { FOLDED_BY_DEFAULT, FOLD_KEY, startsFolded } from "./lib/folds";
+import { prepaintAscii } from "./ascii/prepaint";
 
 // Scripts run: what the default view leaves to Technical Mode (styles.css .tech-more) is hidden from
 // the first paint; without JavaScript everything shows.
 document.documentElement.classList.add("js");
+// ASCII mode (src/ascii), the site's hidden terminal look: a stored or linked choice applies before paint.
+prepaintAscii();
 
 try {
   const t = localStorage.getItem("theme");
