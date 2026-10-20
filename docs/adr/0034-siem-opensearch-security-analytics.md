@@ -732,8 +732,9 @@ state and the run's raw records, so `sdp_lab_read` also reads `sdp-lab` (lab eve
 or from the disposable VM; the role still names no cluster stream). The API's lab endpoints, all GET,
 read-only, cached 10 s, 404 when there is nothing to show:
 - `/api/lab/latest`: the newest isolated-VM run document (else the newest of any mode), projected
-  through the allow-list, with `history` - the last 7 runs of its mode (`id`, `finished_at`,
-  `duration_s`, `ok` = an incident opened).
+  through the allow-list (variant B adds `run.complete`: false when the validator timed out before
+  the poweroff or every detection), with `history` - the last 7 runs of its mode (`id`,
+  `finished_at`, `duration_s`, `complete`, `ok` = an incident opened).
 - `/api/lab/vm`: `running` or `off`, the last run, the last restore to the clean snapshot and the next
   scheduled run, derived only from the run's lifecycle markers in `sdp-lab` - the API never talks to
   the hypervisor.

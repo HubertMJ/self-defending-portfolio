@@ -283,6 +283,8 @@ func TestProjectVariantB(t *testing.T) {
 	// the findings' and the incident's at_offset_s all survive.
 	var d map[string]any
 	fixture(t, "run2-doc.json", &d)
+	// run.complete (false when the validator timed out) postdates this run; false must survive too.
+	d["run"].(map[string]any)["complete"] = false
 	want, _ := json.Marshal(d)
 
 	// The same unexpected fields at every level as for a generated run must still be dropped.
@@ -309,7 +311,7 @@ func TestProjectVariantB(t *testing.T) {
 func TestProjectVariantAHasNoBFields(t *testing.T) {
 	// A generated run has none of variant B's fields, and the projection adds none of them.
 	body, _ := json.Marshal(project(doc()))
-	for _, key := range []string{"duration_s", "lifecycle", "counters", "history", "pid", "ppid", "at_offset_s", "offset_s"} {
+	for _, key := range []string{"duration_s", "complete", "lifecycle", "counters", "history", "pid", "ppid", "at_offset_s", "offset_s"} {
 		if strings.Contains(string(body), `"`+key+`"`) {
 			t.Errorf("generated run gained %q: %s", key, body)
 		}
@@ -365,12 +367,15 @@ func TestLatestPrefersIsolatedVM(t *testing.T) {
 
 func TestLatestHistory(t *testing.T) {
 	// Nine VM runs, one generated: the history is the newest seven VM runs, newest first, ok when the
-	// run opened its incident, duration_s only where the run document has it.
+	// run opened its incident, duration_s and complete only where the run document has them.
 	var docs []map[string]any
 	for i := 1; i <= 9; i++ {
 		d := runDoc("vm-"+string(rune('0'+i)), "isolated-vm", "2026-10-1"+string(rune('0'+i))+"T03:05:00.000Z", i%3 != 0)
 		if i%2 == 0 {
 			d["run"].(map[string]any)["duration_s"] = 190
+		}
+		if i >= 8 {
+			d["run"].(map[string]any)["complete"] = i == 9
 		}
 		docs = append(docs, d)
 	}
@@ -387,8 +392,8 @@ func TestLatestHistory(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []map[string]any{
-		{"id": "vm-9", "finished_at": "2026-10-19T03:05:00.000Z", "ok": false},
-		{"id": "vm-8", "finished_at": "2026-10-18T03:05:00.000Z", "duration_s": 190.0, "ok": true},
+		{"id": "vm-9", "finished_at": "2026-10-19T03:05:00.000Z", "complete": true, "ok": false},
+		{"id": "vm-8", "finished_at": "2026-10-18T03:05:00.000Z", "duration_s": 190.0, "complete": false, "ok": true},
 		{"id": "vm-7", "finished_at": "2026-10-17T03:05:00.000Z", "ok": true},
 		{"id": "vm-6", "finished_at": "2026-10-16T03:05:00.000Z", "duration_s": 190.0, "ok": false},
 		{"id": "vm-5", "finished_at": "2026-10-15T03:05:00.000Z", "ok": true},

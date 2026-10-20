@@ -196,6 +196,7 @@ func (r *Reader) history(ctx context.Context, mode string) []historyRun {
 				ID         string   `json:"id"`
 				FinishedAt string   `json:"finished_at"`
 				DurationS  *float64 `json:"duration_s"`
+				Complete   *bool    `json:"complete"`
 			} `json:"run"`
 			Incident struct {
 				OpenedAtVariant *int `json:"opened_at_variant"`
@@ -205,7 +206,7 @@ func (r *Reader) history(ctx context.Context, mode string) []historyRun {
 			continue
 		}
 		out = append(out, historyRun{ID: doc.Run.ID, FinishedAt: doc.Run.FinishedAt,
-			DurationS: doc.Run.DurationS, OK: doc.Incident.OpenedAtVariant != nil})
+			DurationS: doc.Run.DurationS, Complete: doc.Run.Complete, OK: doc.Incident.OpenedAtVariant != nil})
 	}
 	return out
 }
@@ -221,13 +222,15 @@ func decode(src map[string]any, v any) bool {
 	return err == nil && json.Unmarshal(raw, v) == nil
 }
 
-// Run is the run's own metadata. DurationS is variant B's.
+// Run is the run's own metadata. DurationS and Complete are variant B's: Complete is false when the
+// validator timed out before the VM's poweroff or before every detection arrived.
 type Run struct {
 	ID         string   `json:"id"`
 	Mode       string   `json:"mode"`
 	StartedAt  string   `json:"started_at"`
 	FinishedAt string   `json:"finished_at"`
 	DurationS  *float64 `json:"duration_s,omitempty"`
+	Complete   *bool    `json:"complete,omitempty"`
 }
 
 type scenario struct {
@@ -303,11 +306,13 @@ type counters struct {
 	Incidents    int `json:"incidents"`
 }
 
-// historyRun is one entry of Replay.History: OK is whether the run opened its incident.
+// historyRun is one entry of Replay.History: OK is whether the run opened its incident; Complete is
+// the run's own run.complete, absent when the document has none.
 type historyRun struct {
 	ID         string   `json:"id"`
 	FinishedAt string   `json:"finished_at"`
 	DurationS  *float64 `json:"duration_s,omitempty"`
+	Complete   *bool    `json:"complete,omitempty"`
 	OK         bool     `json:"ok"`
 }
 
