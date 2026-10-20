@@ -2816,3 +2816,44 @@ test.describe("this session first (mock, ADR 0035 amendment 2026-10-06)", () => 
     });
   }
 });
+
+// ASCII mode, the site's hidden terminal look (src/ascii): off by default, on by a link or by typing
+// "ascii", remembered across visits; the architecture diagram becomes a character drawing that fits
+// the page and still opens its captions.
+test("ASCII mode: a link turns it on, the diagram is drawn in characters, typing ascii turns it off and it is remembered", async ({ page }) => {
+  const errors = guardConsole(page);
+  await page.goto("/?mock=1");
+  await expect(page.locator("html")).not.toHaveClass(/ascii/);
+  await expect(page.locator("pre.ascii-dg")).toHaveCount(0);
+  await page.goto("/?mock=1&ascii=1");
+  await expect(page.locator("html")).toHaveClass(/ascii/);
+  const dg = page.locator("pre.ascii-dg:not([hidden])").first();
+  await expect(dg).toContainText("Cloudflare edge");
+  await expect(dg).toContainText("Falco");
+  await expect(page.locator(".ascii-banner")).toBeVisible();
+  await expect.poll(() => dg.evaluate((el) => el.scrollWidth <= (el.parentElement as HTMLElement).clientWidth + 1)).toBe(true);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  // The drawing passes a click on a box to the diagram's node: its caption opens.
+  await dg.evaluate((pre) => {
+    const lines = (pre.textContent ?? "").split("\n");
+    const r = lines.findIndex((l) => l.includes("Falco Talon"));
+    const rect = pre.getBoundingClientRect();
+    scrollTo({ top: scrollY + rect.top + (r / (lines.length - 1)) * rect.height - innerHeight / 2, behavior: "instant" });
+  });
+  const at = await dg.evaluate((pre) => {
+    const lines = (pre.textContent ?? "").split("\n");
+    const r = lines.findIndex((l) => l.includes("Falco Talon"));
+    const c = lines[r].indexOf("Falco Talon") + 3;
+    const rect = pre.getBoundingClientRect();
+    return { x: rect.left + ((c + 0.5) / [...lines[0]].length) * rect.width, y: rect.top + ((r + 0.5) / (lines.length - 1)) * rect.height };
+  });
+  await page.mouse.click(at.x, at.y);
+  await expect(page.locator('.dg-node[data-node="talon"][aria-expanded="true"]').first()).toBeAttached();
+  await page.locator("body").press("Escape");
+  await page.keyboard.type("ascii");
+  await expect(page.locator("html")).not.toHaveClass(/ascii/);
+  await expect(page.locator("pre.ascii-dg, .ascii-bg, .ascii-banner")).toHaveCount(0);
+  await page.goto("/?mock=1");
+  await expect(page.locator("html")).not.toHaveClass(/ascii/);
+  expect(errors).toEqual([]);
+});
