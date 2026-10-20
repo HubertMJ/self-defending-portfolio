@@ -47,9 +47,10 @@ DEBIAN_SUMS_URL="${DEBIAN_SUMS_URL:-https://cloud.debian.org/images/cloud/trixie
 # detection-lab at a pinned commit (must contain vm/): the VM clones it during setup and builds the
 # canary itself, so copy 1's hash is the VM toolchain's. Required.
 DETLAB_REPO="${DETLAB_REPO:-https://github.com/HubertMJ/detection-lab.git}"
-# detection-lab main merge of the VM side (#12/#13/#14, nested shipping #15). Bump deliberately;
+# detection-lab main merge of the VM side (#12/#13/#14, nested shipping #15, PVE-marker wait #16).
+# Bump deliberately;
 # a VM built from another ref is rebuilt (step 3).
-DETLAB_REF="${DETLAB_REF:-6175e9d2f2b6945c74b86101d5162c65224b6301}"
+DETLAB_REF="${DETLAB_REF:-b4d49f233a49ea99995b47c09c68eac39743942b}"
 SHIPPER_CERT_DIR="${SHIPPER_CERT_DIR:-}"      # tls.crt, tls.key, ca.crt (lab-vm-shipper); required unless --dry-run
 # Dry-run prints the pve writes instead of running them. Honoured from the environment (DRY_RUN=1) as
 # well as the --dry-run flag, so an env-var invocation never falls through to a real run by surprise.
