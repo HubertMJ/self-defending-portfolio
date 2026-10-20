@@ -2847,6 +2847,11 @@ test("ASCII mode: a link turns it on, the diagram is drawn in characters, typing
     const rect = pre.getBoundingClientRect();
     return { x: rect.left + ((c + 0.5) / [...lines[0]].length) * rect.width, y: rect.top + ((r + 0.5) / (lines.length - 1)) * rect.height };
   });
+  // With a pointer that hovers, the box's short words pop up beside it first.
+  if (test.info().project.name === "desktop") {
+    await page.mouse.move(at.x, at.y);
+    await expect(page.locator(".ascii-tip:not([hidden])")).toContainText("Falco Talon");
+  }
   await page.mouse.click(at.x, at.y);
   await expect(page.locator('.dg-node[data-node="talon"][aria-expanded="true"]').first()).toBeAttached();
   await page.locator("body").press("Escape");

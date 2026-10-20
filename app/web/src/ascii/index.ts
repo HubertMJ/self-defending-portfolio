@@ -12,7 +12,7 @@
 // The same directory is copied into every repository that serves a page of the site.
 
 import { boxFx, packet, pick, type Over } from "./grid";
-import { fromSvg, type Drawing } from "./svg";
+import { fromSvg, wrap, type Drawing } from "./svg";
 
 import { KEY } from "./prepaint";
 
@@ -74,7 +74,9 @@ function contentWidth(el: Element | null): number {
 
 // ---------- the parts the mode adds, and how they are taken away ----------
 interface View { svg: SVGSVGElement; pre: HTMLPreElement; d: Drawing; dirty: boolean; onScreen: boolean; mo: MutationObserver; io: IntersectionObserver;
-  packets: { e: Drawing["edges"][number]; pos: number }[]; fx: Map<string, number>; wasLit: Map<Element, boolean>; wasState: Map<string, string>; t: number }
+  packets: { e: Drawing["edges"][number]; pos: number }[]; fx: Map<string, number>; wasLit: Map<Element, boolean>; wasState: Map<string, string>; t: number;
+  /** The box under the pointer, and the popup beside it (or beside the focused node). */
+  hover: string | null; tip: HTMLPreElement; tipFor: string | null; tipT: number }
 
 let views: View[] = [];
 let added: Element[] = [];
@@ -165,7 +167,7 @@ function unmount(): void {
   timers = [];
   watch?.disconnect();
   watch = null;
-  for (const v of views) { v.mo.disconnect(); v.io.disconnect(); v.pre.remove(); v.svg.classList.remove("ascii-src"); }
+  for (const v of views) { v.mo.disconnect(); v.io.disconnect(); v.pre.remove(); v.tip.remove(); v.svg.classList.remove("ascii-src"); }
   views = [];
   added.forEach((el) => el.remove());
   added = [];
@@ -175,7 +177,7 @@ function unmount(): void {
 function scan(): void {
   views = views.filter((v) => {
     if (v.svg.isConnected) return true;
-    v.mo.disconnect(); v.io.disconnect(); v.pre.remove();
+    v.mo.disconnect(); v.io.disconnect(); v.pre.remove(); v.tip.remove();
     return false;
   });
   for (const svg of document.querySelectorAll<SVGSVGElement>("svg")) {
@@ -186,18 +188,32 @@ function scan(): void {
     pre.setAttribute("aria-hidden", "true");
     svg.after(pre);
     svg.classList.add("ascii-src");
+    const tip = document.createElement("pre");
+    tip.className = "ascii-tip";
+    tip.setAttribute("aria-hidden", "true");
+    tip.hidden = true;
+    document.body.append(tip);
     const v: View = { svg, pre, d: fromSvg(svg, narrow ? 48 : 176), dirty: false, onScreen: true, mo: new MutationObserver(() => { v.dirty = true; }),
-      io: new IntersectionObserver((es) => { for (const e of es) v.onScreen = e.isIntersecting; }), packets: [], fx: new Map(), wasLit: new Map(), wasState: new Map(), t: 0 };
+      io: new IntersectionObserver((es) => { for (const e of es) v.onScreen = e.isIntersecting; }), packets: [], fx: new Map(), wasLit: new Map(), wasState: new Map(), t: 0,
+      hover: null, tip, tipFor: null, tipT: 0 };
     // Words and gauges change as a story plays: redraw the grid then (states are read every frame).
     v.mo.observe(svg, { subtree: true, characterData: true, childList: true, attributes: true, attributeFilter: ["data-on"] });
     v.io.observe(pre);
-    pre.addEventListener("click", (e) => {
+    const boxUnder = (e: MouseEvent) => {
       const rect = pre.getBoundingClientRect();
       const c = Math.floor(((e.clientX - rect.left) / rect.width) * v.d.g.w);
       const r = Math.floor(((e.clientY - rect.top) / rect.height) * v.d.g.rows);
-      const b = v.d.g.boxAt(r, c);
+      return v.d.g.boxAt(r, c);
+    };
+    pre.addEventListener("click", (e) => {
+      const b = boxUnder(e);
       if (b) v.d.nodes.get(b.id)?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     });
+    // The popup follows a pointer that can hover; on a touch screen a tap opens the caption instead.
+    if (matchMedia("(hover: hover)").matches) {
+      pre.addEventListener("mousemove", (e) => { const b = boxUnder(e); v.hover = b?.id ?? null; pre.classList.toggle("ascii-dg--over", !!b); });
+      pre.addEventListener("mouseleave", () => { v.hover = null; pre.classList.remove("ascii-dg--over"); });
+    }
     views.push(v);
     frame(v, calm());
   }
@@ -212,10 +228,10 @@ function frame(v: View, still: boolean): void {
   // (Rects, not its own display: a page may hide the variant by hiding its container.)
   const shown = v.svg.getClientRects().length > 0;
   v.pre.hidden = !shown;
-  if (!shown) return;
+  if (!shown) { v.tip.hidden = true; return; }
   // Off screen: no drawing, but keep its size right (the font arriving, a resize), so nothing jumps
   // when it scrolls in.
-  if (!v.onScreen && v.t > 0) { fit(v.pre, v.d.g.w, 14); return; }
+  if (!v.onScreen && v.t > 0) { fit(v.pre, v.d.g.w, 14); v.tip.hidden = true; return; }
   if (v.dirty) { v.d = fromSvg(v.svg, /narrow/.test(v.pre.className) ? 48 : 176); v.dirty = false; v.packets = []; }
   const { g, edges, nodes } = v.d;
   const over: Over = new Map();
@@ -256,7 +272,48 @@ function frame(v: View, still: boolean): void {
   g.render(v.pre, over);
   // Sized to the column it sits in: as large as 14px allows, never wider than its container.
   fit(v.pre, g.w, 14);
+  popup(v, focus, still);
   v.t++;
+}
+
+const TIP_W = 36;
+
+/** The short words of the box under the pointer (or of the focused node), in a small frame beside it,
+ * typed in. Fixed to the screen and never in the flow, so nothing on the page moves. */
+function popup(v: View, focus: Element | null, still: boolean): void {
+  const { g, nodes } = v.d;
+  const focused = [...nodes].find(([, el]) => focus && (el === focus || el.contains(focus)))?.[0] ?? null;
+  const id = v.hover ?? focused;
+  const el = id ? nodes.get(id) : undefined;
+  const text = el?.getAttribute("data-tip");
+  const b = id ? g.boxes.get(id) : undefined;
+  if (!id || !text || !b) { v.tip.hidden = true; v.tipFor = null; return; }
+  if (v.tipFor !== id) { v.tipFor = id; v.tipT = 0; }
+  v.tipT++;
+  const title = [...(el?.querySelector("text")?.textContent?.trim() ?? id)].slice(0, TIP_W - 6).join("");
+  const body = wrap(text, TIP_W - 4);
+  let left = still ? Infinity : v.tipT * 14; // characters revealed so far
+  const frag = document.createDocumentFragment();
+  const span = (cls: string, s: string): void => { const x = document.createElement("span"); x.className = cls; x.textContent = s; frag.append(x); };
+  span("ascii-tip__f", "┌─ "); span("ascii-tip__t", title); span("ascii-tip__f", ` ${"─".repeat(Math.max(1, TIP_W - 5 - [...title].length))}┐\n`);
+  for (const line of body) {
+    const shown = [...line].slice(0, Math.max(0, left)).join("");
+    left -= [...line].length;
+    span("ascii-tip__f", "│ "); frag.append(shown.padEnd(TIP_W - 4)); span("ascii-tip__f", " │\n");
+  }
+  span("ascii-tip__f", `└${"─".repeat(TIP_W - 2)}┘`);
+  v.tip.replaceChildren(frag);
+  v.tip.hidden = false;
+  // Beside the box: to its right if there is room, else to its left; kept on screen.
+  const rect = v.pre.getBoundingClientRect();
+  const cw = rect.width / g.w, rh = rect.height / g.rows;
+  const tw = v.tip.offsetWidth, th = v.tip.offsetHeight;
+  let x = rect.left + (b.c + b.w + 1) * cw;
+  if (x + tw > innerWidth - 8) x = rect.left + (b.c - 1) * cw - tw;
+  x = Math.max(8, Math.min(x, innerWidth - tw - 8));
+  const y = Math.max(8, Math.min(rect.top + b.r * rh, innerHeight - th - 8));
+  v.tip.style.setProperty("left", `${Math.round(x)}px`);
+  v.tip.style.setProperty("top", `${Math.round(y)}px`);
 }
 
 function toast(text: string): void {
