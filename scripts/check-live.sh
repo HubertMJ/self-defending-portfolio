@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # The live site as a visitor sees it: every page and the API answer on their paths with the
-# security headers. EXPECT=landing (the default) is the site after the landing page took `/`;
+# security headers, and the detection lab's page and run document (/lab/, /cluster/api/lab/latest). EXPECT=landing (the default) is the site after the landing page took `/`;
 # EXPECT=cluster is the state before it, when `/` still served the cluster page and the bare /api
 # was routed. Read-only: GETs only, nothing that spends the attack quota.
 #
@@ -39,6 +39,24 @@ case $EXPECT in
   landing)
     check / 200 'What I work with'
     check /lab/ 200 'Detection lab'
+    # The lab page keeps the landing page's CSP to the character (Trusted Types; connect-src 'self'
+    # for the run below), and the API serves the latest run document read-only, schema 1.
+    csp_of() { grep -i '^content-security-policy:' "$1" 2>/dev/null | tr -d '\r' || true; }
+    lab_csp=$(csp_of "$WORK/headers")
+    curl -sS -o /dev/null -D "$WORK/landing-headers" --max-time 20 "$BASE/" || true
+    if [ -n "$lab_csp" ] && [ "$lab_csp" = "$(csp_of "$WORK/landing-headers")" ] \
+      && grep -qF "require-trusted-types-for 'script'" <<<"$lab_csp"; then
+      printf '  ok    %-26s CSP as / (Trusted Types)\n' /lab/
+    else
+      printf '  FAIL  %-26s CSP differs from / or lacks Trusted Types\n' /lab/; failures=$((failures + 1))
+    fi
+    check /cluster/api/lab/latest 200 '"schema"'
+    if python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert d["schema"] == 1 and isinstance(d["sample"], bool); print("  lab run:", d.get("run", {}).get("mode"), d.get("run", {}).get("finished_at"))' "$WORK/body" \
+      && grep -qi '^content-type: application/json' "$WORK/headers"; then
+      printf '  ok    %-26s JSON, schema 1\n' /cluster/api/lab/latest
+    else
+      printf '  FAIL  %-26s not a schema 1 JSON run document\n' /cluster/api/lab/latest; failures=$((failures + 1))
+    fi
     check /api/healthz 404
     # About lives on the landing page only (owner decision 2026-10-14).
     if curl -sS --max-time 20 "$BASE/cluster/" | grep -qF 'id="about"'; then
