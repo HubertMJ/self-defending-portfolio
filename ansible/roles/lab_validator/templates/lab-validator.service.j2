@@ -1,0 +1,43 @@
+# {{ ansible_managed }}
+# Validate the isolated VM's newest run (detection-lab run.py --mode isolated-vm) and write its run
+# document to lab-runs. Runs as {{ lab_validator_user }} with the lab-validator identity; reaches
+# OpenSearch on loopback only and writes nothing on disk.
+[Unit]
+Description=detection lab variant B validator (run document of the isolated VM's newest run)
+After=network-online.target opensearch.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User={{ lab_validator_user }}
+Group={{ lab_validator_user }}
+ExecStart=/usr/bin/python3 -E -s -B {{ lab_validator_dir }}/lab/run.py --mode isolated-vm \
+  --endpoint https://127.0.0.1:9200 \
+  --client-cert {{ lab_validator_key_dir }}/lab-validator.crt \
+  --client-key {{ lab_validator_key_dir }}/lab-validator.key \
+  --cacert {{ lab_validator_key_dir }}/ca.crt \
+  --timeout-s {{ lab_validator_timeout_s }}
+TimeoutStartSec={{ lab_validator_timeout_s + 300 }}
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=yes
+InaccessiblePaths=-/etc/sdp-siem/pki -/etc/opensearch -/etc/opensearch-dashboards -/etc/fluent-bit
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+IPAddressDeny=any
+IPAddressAllow=localhost
+SystemCallArchitectures=native

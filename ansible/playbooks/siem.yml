@@ -61,6 +61,10 @@
     # connections, so beaconing has a real listener. Reachable only from the lab VM (host firewall).
     - role: lab_sink
       tags: [lab_sink]
+    # The variant B validator: a timer that writes the isolated VM's run document to lab-runs, as
+    # lab-validator (after lab_identities, which made that identity).
+    - role: lab_validator
+      tags: [lab_validator]
     # After opensearch: it renews the shipper-siem01 certificate this role publishes to the unit.
     - role: fluent_bit
       tags: [fluent_bit]

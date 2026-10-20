@@ -1,0 +1,14 @@
+---
+# The detection lab's variant B validator (ADR 0034 amendment 2026-10-18): after the isolated VM's
+# daily run (PVE timer lab-vm-run, 03:00 UTC), build that run's document from sdp-lab, the findings
+# and the lab monitor's alerts, and write it to lab-runs, as the lab-validator identity.
+lab_validator_repo_url: https://github.com/HubertMJ/detection-lab.git
+# detection-lab main with run.py --mode isolated-vm (#16). Bump deliberately.
+lab_validator_ref: "7b9079b1dce00b18ce4b4efb544f152f2d8a052b"
+lab_validator_dir: /opt/sdp-lab/detection-lab
+lab_validator_user: "{{ lab_identities_user | default('sdp-lab') }}"
+lab_validator_key_dir: "{{ lab_identities_dir | default('/etc/sdp-lab') }}"
+# 20 minutes after the VM's run starts: it takes ~4 min, the monitor alerts within its 1-min period.
+lab_validator_on_calendar: "*-*-* 03:20:00 UTC"
+# How long one validation waits for power-off, findings and the alert before publishing what it has.
+lab_validator_timeout_s: 1200
