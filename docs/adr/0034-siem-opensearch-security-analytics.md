@@ -696,8 +696,8 @@ be real - the same SIEM, the same Sigma-from-git path - with events that are eit
   - `lab-validator`, role `sdp_lab_validator`: reads `sdp-lab`, the findings and alerts (the
     Security Analytics and Alerting read actions are cluster-wide, as for `sdp_api_read`; its fixed
     queries name log type `sdp_lab` and the lab monitor only) and writes the index `lab-runs`.
-  - `portfolio-api` additionally holds `sdp_lab_read`: read `lab-runs`, nothing else. It still cannot
-    read `sdp-lab` itself.
+  - `portfolio-api` additionally holds `sdp_lab_read`: read `lab-runs` and, since 2026-10-20 (below),
+    `sdp-lab`; nothing else, and no write.
   The copies the lab runs with sit in `/etc/sdp-lab/` (0600, the system user `sdp-lab`), hidden from
   Fluent Bit's sandbox like the PKI directory; the CSR entry point refuses the three names.
 - **`lab-runs`**: one document per run (the page's `LabReplay` shape, schema 1, with `sample: false`
@@ -726,3 +726,16 @@ cluster's.
 **Consequences.** The rule library and ATT&CK matrix on the page list the lab's rules under the
 source `lab` (the index is every rule in `siem/`). The ADR's "seven sources" are eight for the lint,
 the template assertion and the acceptance tests.
+
+**Amended 2026-10-20: the API reads `sdp-lab` for variant B.** The /lab/ page shows the isolated VM's
+state and the run's raw records, so `sdp_lab_read` also reads `sdp-lab` (lab events only: synthetic,
+or from the disposable VM; the role still names no cluster stream). The API's lab endpoints, all GET,
+read-only, cached 10 s, 404 when there is nothing to show:
+- `/api/lab/latest`: the newest isolated-VM run document (else the newest of any mode), projected
+  through the allow-list, with `history` - the last 7 runs of its mode (`id`, `finished_at`,
+  `duration_s`, `ok` = an incident opened).
+- `/api/lab/vm`: `running` or `off`, the last run, the last restore to the clean snapshot and the next
+  scheduled run, derived only from the run's lifecycle markers in `sdp-lab` - the API never talks to
+  the hypervisor.
+- `/api/lab/raw`: the newest VM run's `sdp-lab` records, oldest first, nested as indexed and narrowed
+  to an allow-list of fields.

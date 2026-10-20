@@ -57,11 +57,14 @@ type CorrelationReader interface {
 	JSON() []byte
 }
 
-// LabReader is what GET /api/lab/latest needs from internal/lab: the newest detection-lab run as
-// projected JSON, or false when there is none to show. A nil Config.Lab answers 404, as an
-// unconfigured lab does, so the /lab/ page falls back to its bundled sample.
+// LabReader is what GET /api/lab/latest, /api/lab/vm and /api/lab/raw need from internal/lab: the
+// newest detection-lab run, the lab VM's status and the newest VM run's records, each as finished
+// JSON, or false when there is none to show. A nil Config.Lab answers 404, as an unconfigured lab
+// does, so the /lab/ page falls back to its bundled sample.
 type LabReader interface {
 	Latest(ctx context.Context) ([]byte, bool)
+	VM(ctx context.Context) ([]byte, bool)
+	Raw(ctx context.Context) ([]byte, bool)
 }
 
 // Poster is what the server needs from internal/posture.
@@ -107,8 +110,8 @@ type Config struct {
 	// available:false, as an unconfigured SIEM does.
 	Correlation CorrelationReader
 	SiemIndex   *siemindex.Index
-	// Lab is the newest detection-lab run behind GET /api/lab/latest (ADR 0034 amendment). A nil Lab
-	// answers 404, as an unconfigured lab does.
+	// Lab is the detection lab behind GET /api/lab/latest, /api/lab/vm and /api/lab/raw (ADR 0034
+	// amendment). A nil Lab answers 404, as an unconfigured lab does.
 	Lab LabReader
 
 	// AllowedOrigin is the only Origin a browser may POST from (the site itself).
@@ -192,11 +195,14 @@ func (s *Server) Public() http.Handler {
 	mux.HandleFunc("GET /api/correlation", s.correlation)
 	mux.HandleFunc("GET /api/correlation/rules", s.correlationRules)
 	mux.HandleFunc("GET /api/lab/latest", s.labLatest)
+	mux.HandleFunc("GET /api/lab/vm", s.labVM)
+	mux.HandleFunc("GET /api/lab/raw", s.labRaw)
 	// The same paths without a method: a wrong method gets a JSON 405 instead of net/http's plain
 	// text one, so every /api answer is JSON (the page parses errors too).
 	for _, p := range []string{"/api/healthz", "/api/scenarios", "/api/attack/{id}", "/api/events", "/api/posture",
 		"/api/scenarios/{id}/details", "/api/runs", "/api/runs/{id}", "/api/runs/{id}/commands", "/api/stats", "/api/limits",
-		"/api/provenance", "/api/correlation", "/api/correlation/rules", "/api/lab/latest"} {
+		"/api/provenance", "/api/correlation", "/api/correlation/rules", "/api/lab/latest",
+		"/api/lab/vm", "/api/lab/raw"} {
 		mux.HandleFunc(p, methodNotAllowed)
 	}
 	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
@@ -377,13 +383,31 @@ func (s *Server) correlationRules(w http.ResponseWriter, _ *http.Request) {
 // means "no run yet" - no lab configured, an empty index, or a document that failed the allow-list
 // or size cap - on which the /lab/ page falls back to its bundled sample (ADR 0034 amendment).
 func (s *Server) labLatest(w http.ResponseWriter, r *http.Request) {
+	s.labJSON(w, r, LabReader.Latest, "no run yet")
+}
+
+// labVM answers the lab VM's status (running or off, the last run, restore and next scheduled run),
+// derived by internal/lab from the run's lifecycle markers in sdp-lab only - the API never talks to
+// the hypervisor. A 404 means no marker in the last days, or no lab configured.
+func (s *Server) labVM(w http.ResponseWriter, r *http.Request) {
+	s.labJSON(w, r, LabReader.VM, "vm status unavailable")
+}
+
+// labRaw answers the newest VM run's sdp-lab records, oldest first, narrowed to an allow-list of
+// fields by internal/lab. A 404 means no VM run in the last days, or no lab configured.
+func (s *Server) labRaw(w http.ResponseWriter, r *http.Request) {
+	s.labJSON(w, r, LabReader.Raw, "no run yet")
+}
+
+// labJSON writes one of the lab's finished JSON answers, or a 404 with missing.
+func (s *Server) labJSON(w http.ResponseWriter, r *http.Request, get func(LabReader, context.Context) ([]byte, bool), missing string) {
 	if s.cfg.Lab == nil {
-		writeError(w, http.StatusNotFound, "no run yet")
+		writeError(w, http.StatusNotFound, missing)
 		return
 	}
-	body, ok := s.cfg.Lab.Latest(r.Context())
+	body, ok := get(s.cfg.Lab, r.Context())
 	if !ok {
-		writeError(w, http.StatusNotFound, "no run yet")
+		writeError(w, http.StatusNotFound, missing)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
