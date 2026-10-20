@@ -3,10 +3,12 @@ package lab
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"os"
 	"reflect"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -14,9 +16,10 @@ import (
 )
 
 // fakeSource records the queries it was given and returns a fixed result - or, with docs set,
-// answers like an index: the docs matching every term filter, newest first by SortField, at most
-// Size. It ignores the _source filter, so a field it returns that the response lacks was dropped in
-// code. fail, when set, fails the queries it picks.
+// answers like an index: the docs matching every term filter (and, with ranged, the time range),
+// newest first by SortField, at most Size. It ignores the _source filter, so a field it returns that
+// the response lacks was dropped in code. fail, when set, fails the queries it picks. Like the real
+// client it fails on a cancelled context, and it records whether the context had a deadline.
 type fakeSource struct {
 	gotIndices []string
 	gotQuery   siem.Query
@@ -25,14 +28,22 @@ type fakeSource struct {
 	err        error
 	calls      int
 	docs       []map[string]any
+	ranged     bool
 	fail       func(siem.Query) bool
+	noDeadline bool // a query ran without a deadline
 }
 
-func (f *fakeSource) Search(_ context.Context, indices []string, q siem.Query) (siem.SearchResult, error) {
+func (f *fakeSource) Search(ctx context.Context, indices []string, q siem.Query) (siem.SearchResult, error) {
 	f.calls++
 	f.gotIndices = indices
 	f.gotQuery = q
 	f.queries = append(f.queries, q)
+	if _, ok := ctx.Deadline(); !ok {
+		f.noDeadline = true
+	}
+	if err := ctx.Err(); err != nil {
+		return siem.SearchResult{}, err
+	}
 	if f.fail != nil && f.fail(q) {
 		return siem.SearchResult{}, context.DeadlineExceeded
 	}
@@ -41,7 +52,7 @@ func (f *fakeSource) Search(_ context.Context, indices []string, q siem.Query) (
 	}
 	var match []map[string]any
 	for _, d := range f.docs {
-		if matches(d, q.Filters) {
+		if matches(d, q.Filters) && (!f.ranged || inRange(d, q)) {
 			match = append(match, d)
 		}
 	}
@@ -72,8 +83,19 @@ func matches(d map[string]any, filters []map[string]any) bool {
 	return true
 }
 
-// at reads a dotted path of a nested document.
+// inRange applies the query's time range to a document's TimeField.
+func inRange(d map[string]any, q siem.Query) bool {
+	s, _ := at(d, q.TimeField).(string)
+	t, err := time.Parse(time.RFC3339Nano, s)
+	return err == nil && !t.Before(q.Since) && !t.After(q.Until)
+}
+
+// at reads a dotted path of a document: a flat dotted key, as older documents have, or the nested
+// objects.
 func at(d map[string]any, path string) any {
+	if v, ok := d[path]; ok {
+		return v
+	}
 	var v any = d
 	for _, k := range strings.Split(path, ".") {
 		m, _ := v.(map[string]any)
@@ -420,5 +442,152 @@ func TestLatestHistoryOmitted(t *testing.T) {
 	}
 	if strings.Contains(string(body), `"history"`) {
 		t.Fatalf("history present after a failed query: %s", body)
+	}
+}
+
+func TestLatestPrefersOnlyRecentVMRun(t *testing.T) {
+	// A VM run is preferred only while it is recent: once variant B has stopped for longer than
+	// PreferVM, the newest run of any mode (A) is served, with A's history.
+	now := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		name     string
+		vmAt     string
+		preferVM time.Duration
+		want     string
+	}{
+		{"vm run two days old", "2026-10-18T13:00:00.000Z", 0, "vm-1"},
+		{"vm run four days old", "2026-10-16T11:00:00.000Z", 0, "gen-1"},
+		{"four days old, preferred within five", "2026-10-16T11:00:00.000Z", 5 * 24 * time.Hour, "vm-1"},
+	} {
+		f := &fakeSource{ranged: true, docs: []map[string]any{
+			runDoc("gen-1", "generated", "2026-10-20T09:40:00.000Z", true),
+			runDoc("vm-1", "isolated-vm", tc.vmAt, true),
+		}}
+		body, ok := New(Config{Source: f, Now: func() time.Time { return now }, PreferVM: tc.preferVM}).Latest(context.Background())
+		if !ok {
+			t.Fatalf("%s: no run", tc.name)
+		}
+		var rep Replay
+		if err := json.Unmarshal(body, &rep); err != nil {
+			t.Fatal(err)
+		}
+		if rep.Run.ID != tc.want || len(rep.History) != 1 || rep.History[0].ID != tc.want {
+			t.Errorf("%s: served %q with history %+v, want %q", tc.name, rep.Run.ID, rep.History, tc.want)
+		}
+	}
+}
+
+func TestCacheDetachedFromRequest(t *testing.T) {
+	// The first visitor's request is already cancelled (it disconnected): the fetch still runs under
+	// its own deadline, and neither this visitor's cancellation nor a 404 is cached for the next one.
+	now := time.Date(2026, 10, 18, 10, 0, 0, 0, time.UTC)
+	f := &fakeSource{res: hit(doc())}
+	r := New(Config{Source: f, Now: func() time.Time { return now }})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	r.Latest(ctx)
+	body, ok := r.Latest(context.Background())
+	if !ok || body == nil {
+		t.Fatal("the cancelled first request poisoned the cache")
+	}
+	if f.calls != 2 || f.noDeadline {
+		t.Fatalf("calls = %d (want one fetch of 2), a query without a deadline: %v", f.calls, f.noDeadline)
+	}
+}
+
+// blockingSource holds every search until release is closed.
+type blockingSource struct {
+	release chan struct{}
+	calls   atomic.Int32
+}
+
+func (b *blockingSource) Search(ctx context.Context, _ []string, _ siem.Query) (siem.SearchResult, error) {
+	b.calls.Add(1)
+	<-b.release
+	return hit(doc()), nil
+}
+
+func TestCacheWaitersGiveUp(t *testing.T) {
+	// While OpenSearch is slow, a visitor waits only as long as its own context allows, and the one
+	// fetch in flight is shared rather than repeated.
+	b := &blockingSource{release: make(chan struct{})}
+	r := New(Config{Source: b})
+	for i := 0; i < 3; i++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+		start := time.Now()
+		if _, ok := r.Latest(ctx); ok {
+			t.Fatal("answered before the fetch finished")
+		}
+		cancel()
+		if waited := time.Since(start); waited > 2*time.Second {
+			t.Fatalf("waited %s past its own deadline", waited)
+		}
+	}
+	close(b.release)
+	if _, ok := r.Latest(context.Background()); !ok {
+		t.Fatal("no run after the fetch finished")
+	}
+	if n := b.calls.Load(); n != 2 { // one fetch: the run and its history
+		t.Fatalf("searches = %d, want one fetch of 2", n)
+	}
+}
+
+func TestCacheStaleOnError(t *testing.T) {
+	now := time.Date(2026, 10, 18, 10, 0, 0, 0, time.UTC)
+	f := &fakeSource{res: hit(doc())}
+	var logs strings.Builder
+	r := New(Config{Source: f, Now: func() time.Time { return now }, TTL: 10 * time.Second,
+		Log: slog.New(slog.NewTextHandler(&logs, nil))})
+	good, ok := r.Latest(context.Background())
+	if !ok {
+		t.Fatal("no run")
+	}
+	// OpenSearch starts refusing (a 403 before roles.yml is applied): the good answer is still
+	// served, the failure logged once per fetch, and retried after failTTL rather than every request.
+	f.err = &siem.StatusError{Method: "POST", Path: "/lab-runs/_search", Code: 403}
+	now = now.Add(11 * time.Second)
+	for i := 0; i < 3; i++ {
+		if body, ok := r.Latest(context.Background()); !ok || string(body) != string(good) {
+			t.Fatalf("after an error: ok=%v, want the previous answer", ok)
+		}
+	}
+	if f.calls != 3 {
+		t.Fatalf("calls = %d, want 2 + one failed fetch", f.calls)
+	}
+	if n := strings.Count(logs.String(), "lab query failed"); n != 1 ||
+		!strings.Contains(logs.String(), "endpoint=latest") || !strings.Contains(logs.String(), "status=403") {
+		t.Fatalf("log = %q, want one warning with endpoint and status", logs.String())
+	}
+	now = now.Add(failTTL)
+	r.Latest(context.Background())
+	if f.calls != 4 {
+		t.Fatalf("calls = %d after failTTL, want a retry", f.calls)
+	}
+	// A fetch that succeeds with nothing to show does replace the answer.
+	f.err, f.res = nil, siem.SearchResult{}
+	now = now.Add(failTTL)
+	if _, ok := r.Latest(context.Background()); ok {
+		t.Fatal("an empty index still served the old run")
+	}
+}
+
+func TestCacheErrorWithoutPreviousAnswer(t *testing.T) {
+	// No previous answer: a failure answers false and is remembered for failTTL, not the TTL.
+	now := time.Date(2026, 10, 18, 10, 0, 0, 0, time.UTC)
+	f := &fakeSource{err: context.DeadlineExceeded}
+	r := New(Config{Source: f, Now: func() time.Time { return now }, TTL: 10 * time.Second,
+		Log: slog.New(slog.DiscardHandler)})
+	for i := 0; i < 3; i++ {
+		if _, ok := r.Latest(context.Background()); ok {
+			t.Fatal("ok = true on error")
+		}
+	}
+	if f.calls != 1 {
+		t.Fatalf("calls = %d within failTTL, want 1", f.calls)
+	}
+	f.err, f.res = nil, hit(doc())
+	now = now.Add(failTTL)
+	if _, ok := r.Latest(context.Background()); !ok {
+		t.Fatal("no recovery after failTTL")
 	}
 }

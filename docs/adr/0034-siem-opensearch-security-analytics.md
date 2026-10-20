@@ -730,13 +730,24 @@ the template assertion and the acceptance tests.
 **Amended 2026-10-20: the API reads `sdp-lab` for variant B.** The /lab/ page shows the isolated VM's
 state and the run's raw records, so `sdp_lab_read` also reads `sdp-lab` (lab events only: synthetic,
 or from the disposable VM; the role still names no cluster stream). The API's lab endpoints, all GET,
-read-only, cached 10 s, 404 when there is nothing to show:
-- `/api/lab/latest`: the newest isolated-VM run document (else the newest of any mode), projected
-  through the allow-list (variant B adds `run.complete`: false when the validator timed out before
-  the poweroff or every detection), with `history` - the last 7 runs of its mode (`id`,
-  `finished_at`, `duration_s`, `complete`, `ok` = an incident opened).
+read-only, 404 when there is nothing to show:
+- `/api/lab/latest`: the newest isolated-VM run document if it finished within the last 3 days, else
+  the newest run of any mode (so a stopped variant B gives way to the daily generated run instead of
+  an ever older VM run), projected through the allow-list (variant B adds `run.complete`: false when
+  the validator timed out before the poweroff or every detection), with `history` - the last 7 runs
+  of the served run's mode (`id`, `finished_at`, `duration_s`, `complete`, `ok` = an incident
+  opened).
 - `/api/lab/vm`: `running` or `off`, the last run, the last restore to the clean snapshot and the next
   scheduled run, derived only from the run's lifecycle markers in `sdp-lab` - the API never talks to
   the hypervisor.
 - `/api/lab/raw`: the newest VM run's `sdp-lab` records, oldest first, nested as indexed and narrowed
-  to an allow-list of fields.
+  to an allow-list of fields whose values are checked too (`destination.ip` only inside the beacon's
+  TEST-NET-2 `198.51.100.0/24`, numbers only as numbers, every string at most 512 bytes, `event.code`
+  a Sysmon EventID, `lab.run_id` the lab's run-id pattern); at most 256 KiB, the oldest records left
+  out (`truncated: true`) beyond that.
+A run id that does not match `lab-<yyyymmddThhmmssZ>-<6 hex>` never names the newest run, and
+documents written with flat dotted keys read like nested ones. Each answer is cached 10 s; the
+OpenSearch queries run detached from the visitor's request under their own 8 s deadline, so a
+visitor who disconnects cannot cache a failure for the others; a failed fetch keeps the previous
+answer (or, with none, is retried after 2 s) and is logged once as a warning with the endpoint and
+the HTTP status, never a document - a 403 before `roles.yml` is applied shows in the API's log.

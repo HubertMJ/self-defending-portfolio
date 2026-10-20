@@ -132,6 +132,33 @@ func TestVM(t *testing.T) {
 	}
 }
 
+func TestVMRunIDsAndLegacyMarkers(t *testing.T) {
+	// The newest marker has a malformed run id and is no evidence of a run; the run before it was
+	// written with flat dotted keys, as older documents were, and reads like a nested one.
+	flat := func(marker, ts string) map[string]any {
+		return map[string]any{"@timestamp": ts, "event.action": "lifecycle", "lab.mode": "isolated-vm",
+			"lab.run_id": "lab-20261019T191309Z-4e396b", "lab.marker": marker}
+	}
+	docs := []map[string]any{
+		markerDoc("lab-evil", "start", "2026-10-19T19:30:00.000Z"),
+		flat("rollback", "2026-10-19T19:12:45.000Z"),
+		flat("poweroff_requested", "2026-10-19T19:15:55.000Z"),
+	}
+	now := time.Date(2026, 10, 19, 20, 0, 0, 0, time.UTC)
+	body, ok := New(Config{Source: &fakeSource{docs: docs}, Now: func() time.Time { return now }}).VM(context.Background())
+	if !ok {
+		t.Fatal("ok = false")
+	}
+	var got vmStatus
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatal(err)
+	}
+	want := vmRun{ID: "lab-20261019T191309Z-4e396b", StartedAt: "2026-10-19T19:12:45.000Z", FinishedAt: "2026-10-19T19:15:55.000Z"}
+	if got.LastRun != want || got.State != "off" || !got.SnapshotClean {
+		t.Fatalf("got %+v, want last run %+v, off, clean", got, want)
+	}
+}
+
 func TestVMQuery(t *testing.T) {
 	now := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
 	f := &fakeSource{docs: markerDocs(loadVMRun(t))}

@@ -13,13 +13,14 @@ const (
 	// daily, so three days still find the newest run after a missed day or two.
 	streamLookback = 3 * 24 * time.Hour
 	// maxMarkers caps the lifecycle markers one VM status reads: a run writes eight, so three days of
-	// daily runs are a few dozen.
+	// daily runs are about two dozen, and the cap leaves room for reruns.
 	maxMarkers = 200
 	// defaultDailyStart is the scheduled VM run's start, as an offset from 00:00 UTC (the siem01
 	// timer's OnCalendar).
 	defaultDailyStart = 3 * time.Hour
-	// defaultRunningFor: a run writes a marker at least every few minutes until poweroff, so a run
-	// silent for half an hour without one has died, not kept running.
+	// defaultRunningFor: a whole run, rollback to poweroff, takes a few minutes (190 s for the first
+	// real one), so a run whose newest marker is half an hour old and that never requested poweroff
+	// has died, not kept running.
 	defaultRunningFor = 30 * time.Minute
 	// stamp is the time format of every time this package writes (the run documents' own).
 	stamp = "2006-01-02T15:04:05.000Z"
@@ -53,10 +54,10 @@ type lifecycleMarker struct {
 // VM returns the lab VM's status as JSON, or false when no lifecycle marker is in the window (or the
 // query fails). Cached for the TTL like Latest.
 func (r *Reader) VM(ctx context.Context) ([]byte, bool) {
-	return r.vm.get(r, func() []byte { return r.fetchVM(ctx) })
+	return r.vm.get(ctx, r, r.fetchVM)
 }
 
-func (r *Reader) fetchVM(ctx context.Context) []byte {
+func (r *Reader) fetchVM(ctx context.Context) ([]byte, error) {
 	now := r.now().UTC()
 	res, err := r.src.Search(ctx, []string{siem.LabStream}, siem.Query{
 		TimeField: "@timestamp",
@@ -68,35 +69,36 @@ func (r *Reader) fetchVM(ctx context.Context) []byte {
 		Source:    []string{"@timestamp", "lab.run_id", "lab.marker"},
 	})
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	var markers []lifecycleMarker
 	for _, h := range res.Hits {
+		src := nest(h.Source)
 		var doc struct {
 			Timestamp string `json:"@timestamp"`
 			Lab       struct {
-				RunID  string `json:"run_id"`
 				Marker string `json:"marker"`
 			} `json:"lab"`
 		}
-		if !decode(h.Source, &doc) || doc.Lab.RunID == "" || doc.Lab.Marker == "" {
+		id := runID(src)
+		if !decode(src, &doc) || id == "" || doc.Lab.Marker == "" {
 			continue
 		}
 		at, err := time.Parse(time.RFC3339Nano, doc.Timestamp)
 		if err != nil {
 			continue
 		}
-		markers = append(markers, lifecycleMarker{at: at.UTC(), runID: doc.Lab.RunID, name: doc.Lab.Marker})
+		markers = append(markers, lifecycleMarker{at: at.UTC(), runID: id, name: doc.Lab.Marker})
 	}
 	st, ok := vmState(markers, now, r.runningFor, r.dailyStart)
 	if !ok {
-		return nil
+		return nil, nil
 	}
 	out, err := json.Marshal(st)
 	if err != nil {
-		return nil
+		return nil, nil
 	}
-	return out
+	return out, nil
 }
 
 // vmState derives the status from the markers in any order: the newest run is the run of the newest

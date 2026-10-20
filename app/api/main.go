@@ -150,7 +150,7 @@ func run(log *slog.Logger) error {
 	// GET /api/lab/latest (the lab-runs index), /api/lab/vm and /api/lab/raw (the sdp-lab stream) read
 	// through the same read-only client, with their own short cache (ADR 0034 amendment). A nil source
 	// answers 404 and the page uses its bundled sample.
-	labReader := lab.New(lab.Config{Source: labSource})
+	labReader := lab.New(lab.Config{Source: labSource, Log: log})
 	siemRules, err := siemindex.Load()
 	if err != nil {
 		return fmt.Errorf("siem index: %w", err)

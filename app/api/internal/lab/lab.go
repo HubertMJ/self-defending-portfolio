@@ -10,12 +10,15 @@
 // discipline as defence in depth: it projects the document into a fixed LabReplay shape through an
 // allow-list of fields in code, drops anything unexpected (at the top level, inside each variant,
 // and inside each event), and refuses a document over a size cap. A visitor's request is answered
-// from a short in-process cache, so repeated hits do not query OpenSearch every time.
+// from a short in-process cache, so repeated hits do not query OpenSearch every time; the queries run
+// detached from the visitor's request, and a failed one keeps the previous answer.
 package lab
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -36,6 +39,16 @@ const (
 	// expected daily, so 30 days finds the newest while staying inside the client's bound; a run older
 	// than this is treated as none and the page falls back to its bundled sample.
 	defaultLookback = 30 * 24 * time.Hour
+	// failTTL is how long a failed fetch with no previous answer to fall back on is remembered: long
+	// enough that an OpenSearch outage costs one query per answer every few seconds, short enough
+	// that recovery shows at once.
+	failTTL = 2 * time.Second
+	// fetchTimeout bounds one fetch (up to three searches, each bounded by the client's own timeout).
+	fetchTimeout = 8 * time.Second
+	// defaultPreferVM is how recent an isolated-VM run must be for GET /api/lab/latest to prefer it
+	// over a newer generated run: a VM run is daily, so one older than three days means variant B has
+	// stopped, and the page shows the generated run instead of an ever older VM run.
+	defaultPreferVM = 3 * 24 * time.Hour
 	// maxDoc rejects an oversized _source outright (the validator caps a run at 64 KiB; this leaves
 	// headroom and is the backstop if that cap were ever bypassed).
 	maxDoc = 128 << 10
@@ -74,6 +87,11 @@ type Config struct {
 	// RunningFor is how long after its newest lifecycle marker a VM run without a poweroff marker
 	// still counts as running; zero takes 30 min.
 	RunningFor time.Duration
+	// PreferVM is how recent (by run.finished_at) an isolated-VM run must be for Latest to serve it
+	// before a run of any mode; zero takes 3 days, and it never exceeds Lookback.
+	PreferVM time.Duration
+	// Log gets one warning per failed OpenSearch fetch; nil takes slog.Default().
+	Log *slog.Logger
 }
 
 // Reader fetches, projects and caches the newest run, the VM's state and the newest VM run's records.
@@ -84,30 +102,76 @@ type Reader struct {
 	lookback   time.Duration
 	dailyStart time.Duration
 	runningFor time.Duration
+	preferVM   time.Duration
+	log        *slog.Logger
 
 	latest, vm, raw cache
 }
 
-// cache holds one fetched answer for the TTL. The lock is held across the fetch, so a burst of
-// requests makes at most one OpenSearch call per answer.
+// fetchFunc makes one answer: its JSON, or nil when there is nothing to show. An error is an
+// OpenSearch failure; with a non-nil answer it is a partial one (the history), served and logged.
+type fetchFunc func(ctx context.Context) ([]byte, error)
+
+// cache holds one fetched answer. At most one fetch per answer runs at a time, detached from the
+// request that started it (its own timeout, never that visitor's cancellation), and every request
+// waits for it only as long as its own context allows. A fetch that answers - even "nothing to show"
+// - is served for the TTL; a failed one keeps the previous answer (stale on error) and is retried
+// after failTTL.
 type cache struct {
-	mu  sync.Mutex
-	at  time.Time // when val was set; zero means never fetched
-	val []byte    // the JSON answer, or nil when there is nothing to show
+	name    string // the endpoint, for the log
+	mu      sync.Mutex
+	until   time.Time     // val is served without a fetch until then; zero means never fetched
+	val     []byte        // the JSON answer, or nil when there is nothing to show
+	pending chan struct{} // closed when the running fetch is done; nil when none runs
 }
 
-func (c *cache) get(r *Reader, fetch func() []byte) ([]byte, bool) {
+func (c *cache) get(ctx context.Context, r *Reader, fetch fetchFunc) ([]byte, bool) {
 	if r.src == nil {
 		return nil, false
 	}
 	c.mu.Lock()
-	defer c.mu.Unlock()
-	if !c.at.IsZero() && r.now().Sub(c.at) < r.ttl {
+	if !c.until.IsZero() && r.now().Before(c.until) {
+		defer c.mu.Unlock()
 		return c.val, c.val != nil
 	}
-	c.val = fetch()
-	c.at = r.now()
+	if c.pending == nil {
+		c.pending = make(chan struct{})
+		go c.refresh(context.WithoutCancel(ctx), r, fetch, c.pending)
+	}
+	wait := c.pending
+	c.mu.Unlock()
+	select {
+	case <-wait:
+	case <-ctx.Done(): // this visitor gave up; the fetch carries on for the next one
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	return c.val, c.val != nil
+}
+
+func (c *cache) refresh(ctx context.Context, r *Reader, fetch fetchFunc, done chan struct{}) {
+	defer close(done)
+	ctx, cancel := context.WithTimeout(ctx, fetchTimeout)
+	val, err := fetch(ctx)
+	cancel()
+	if err != nil {
+		// The status says why (403 before roles.yml is applied, 5xx, 0 for a transport error); the
+		// error carries the method and path or the transport's message, never a document.
+		var se *siem.StatusError
+		status := 0
+		if errors.As(err, &se) {
+			status = se.Code
+		}
+		r.log.Warn("lab query failed", "endpoint", c.name, "status", status, "err", err)
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if val != nil || err == nil {
+		c.val, c.until = val, r.now().Add(r.ttl)
+	} else {
+		c.until = r.now().Add(failTTL)
+	}
+	c.pending = nil
 }
 
 // New returns a Reader. A nil cfg.Source is allowed: Latest, VM and Raw then always answer false.
@@ -127,8 +191,16 @@ func New(cfg Config) *Reader {
 	if cfg.RunningFor <= 0 {
 		cfg.RunningFor = defaultRunningFor
 	}
+	if cfg.PreferVM <= 0 {
+		cfg.PreferVM = defaultPreferVM
+	}
+	cfg.PreferVM = min(cfg.PreferVM, cfg.Lookback)
+	if cfg.Log == nil {
+		cfg.Log = slog.Default()
+	}
 	return &Reader{src: cfg.Source, now: cfg.Now, ttl: cfg.TTL, lookback: cfg.Lookback,
-		dailyStart: cfg.DailyStart, runningFor: cfg.RunningFor}
+		dailyStart: cfg.DailyStart, runningFor: cfg.RunningFor, preferVM: cfg.PreferVM, log: cfg.Log,
+		latest: cache{name: "latest"}, vm: cache{name: "vm"}, raw: cache{name: "raw"}}
 }
 
 // Enabled reports whether a SIEM source is configured.
@@ -138,7 +210,7 @@ func (r *Reader) Enabled() bool { return r.src != nil }
 // an empty index, a query error, or a document that fails the size cap or the shape). The answer is
 // cached for the TTL.
 func (r *Reader) Latest(ctx context.Context) ([]byte, bool) {
-	return r.latest.get(r, func() []byte { return r.fetch(ctx) })
+	return r.latest.get(ctx, r, r.fetch)
 }
 
 // runsQuery is the fixed lab-runs search, newest by run.finished_at.
@@ -156,38 +228,40 @@ func (r *Reader) runsQuery(size int, src []string, filters ...map[string]any) si
 	}
 }
 
-// fetch finds the newest isolated-VM run, or failing that the newest run of any mode, projects it
-// and adds the history of its mode; it returns nil for any no-run outcome.
-func (r *Reader) fetch(ctx context.Context) []byte {
+// fetch finds the newest isolated-VM run that finished within preferVM, or failing that the newest
+// run of any mode, projects it and adds the history of its mode; nil for any no-run outcome.
+func (r *Reader) fetch(ctx context.Context) ([]byte, error) {
 	idx := []string{siem.LabRunsIndex}
-	res, err := r.src.Search(ctx, idx, r.runsQuery(1, source, term("run.mode", modeVM)))
+	q := r.runsQuery(1, source, term("run.mode", modeVM))
+	q.Since = r.now().UTC().Add(-r.preferVM)
+	res, err := r.src.Search(ctx, idx, q)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	if len(res.Hits) == 0 {
 		if res, err = r.src.Search(ctx, idx, r.runsQuery(1, source)); err != nil || len(res.Hits) == 0 {
-			return nil
+			return nil, err
 		}
 	}
 	rep := project(res.Hits[0].Source)
 	if rep == nil {
-		return nil
+		return nil, nil
 	}
-	rep.History = r.history(ctx, rep.Run.Mode)
-	out, err := json.Marshal(rep)
-	if err != nil {
-		return nil
+	rep.History, err = r.history(ctx, rep.Run.Mode)
+	out, merr := json.Marshal(rep)
+	if merr != nil {
+		return nil, nil
 	}
-	return out
+	return out, err
 }
 
 // history lists the newest runs of one mode, newest first; nil (omitted) when the query fails or
 // finds nothing, so a history problem never hides the run itself.
-func (r *Reader) history(ctx context.Context, mode string) []historyRun {
+func (r *Reader) history(ctx context.Context, mode string) ([]historyRun, error) {
 	res, err := r.src.Search(ctx, []string{siem.LabRunsIndex},
 		r.runsQuery(historySize, []string{"run", "incident"}, term("run.mode", mode)))
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	var out []historyRun
 	for _, h := range res.Hits {
@@ -208,7 +282,7 @@ func (r *Reader) history(ctx context.Context, mode string) []historyRun {
 		out = append(out, historyRun{ID: doc.Run.ID, FinishedAt: doc.Run.FinishedAt,
 			DurationS: doc.Run.DurationS, Complete: doc.Run.Complete, OK: doc.Incident.OpenedAtVariant != nil})
 	}
-	return out
+	return out, nil
 }
 
 // term is an exact-match filter on a keyword field.
