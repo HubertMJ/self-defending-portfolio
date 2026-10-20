@@ -20,12 +20,13 @@ resources:
 images:
   - name: ghcr.io/hubertmj/detection-lab/lab
     newTag: main
-    # HubertMJ/detection-lab main (commit c390433: #21 "Start run now" and the live view of a run in
-    # progress; #22 the lab's own diagram from the way in; #23 the finished-run note), build-image on main. Pinned by hand, like
-    # cluster/infra/site's hubertjablon.ski pin: scripts/bump-image-digest.sh only rewrites this
-    # project's own images, not this foreign-repo ref. Verified signed with a verified SPDX SBOM
-    # attestation (scripts/verify-image.sh, the detection-lab workflow identity).
-    digest: sha256:705187789592e7318b2925f81331f97db0549030d26027ef41b30f8a92756aba
+    # HubertMJ/detection-lab main (commit 9e3745d: #21 Start run now and the live run view, #22/#25 the
+    # lab's own diagram from the way in - in the hero, clickable, animated, #23 the finished-run note,
+    # #24 how four copies became one incident, #26 the image-build test fix), build-image on main.
+    # Pinned by hand, like cluster/infra/site's hubertjablon.ski pin: scripts/bump-image-digest.sh only
+    # rewrites this project's own images, not this foreign-repo ref. Verified signed with a verified
+    # SPDX SBOM attestation (scripts/verify-image.sh, the detection-lab workflow identity).
+    digest: sha256:771de728e58f0245680301f14bd4946717e23bafd1ec8f0c45be4e1e77142019
 
 # The lab-runner CronJob's SIEM client certificate (KSOPS, ADR 0034), made and encrypted by
 # scripts/siem-lab-runner-cert.sh. The CronJob's own image digest is pinned in cronjob.yaml.
