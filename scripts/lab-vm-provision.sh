@@ -47,13 +47,21 @@ DEBIAN_SUMS_URL="${DEBIAN_SUMS_URL:-https://cloud.debian.org/images/cloud/trixie
 # detection-lab at a pinned commit (must contain vm/): the VM clones it during setup and builds the
 # canary itself, so copy 1's hash is the VM toolchain's. Required.
 DETLAB_REPO="${DETLAB_REPO:-https://github.com/HubertMJ/detection-lab.git}"
-# detection-lab main merge of the VM side (#12/#13/#14, nested shipping #15). Bump deliberately;
+# detection-lab main merge of the VM side (#12/#13/#14, nested shipping #15, PVE-marker wait #16).
+# Bump deliberately;
 # a VM built from another ref is rebuilt (step 3).
-DETLAB_REF="${DETLAB_REF:-6175e9d2f2b6945c74b86101d5162c65224b6301}"
+DETLAB_REF="${DETLAB_REF:-b4d49f233a49ea99995b47c09c68eac39743942b}"
 SHIPPER_CERT_DIR="${SHIPPER_CERT_DIR:-}"      # tls.crt, tls.key, ca.crt (lab-vm-shipper); required unless --dry-run
 # Dry-run prints the pve writes instead of running them. Honoured from the environment (DRY_RUN=1) as
 # well as the --dry-run flag, so an env-var invocation never falls through to a real run by surprise.
 DRY_RUN="${DRY_RUN:-0}"
+# LAB_HOST_ONLY=1: only (re)install the PVE-host units (daily timer, on-demand trigger); the VM, its
+# firewall and its snapshot are left exactly as they are.
+HOST_ONLY="${LAB_HOST_ONLY:-0}"
+# The on-demand trigger ("Start run now" on /lab/): a local file holding the bearer token the cluster
+# API expects (its SOPS Secret's plaintext); empty = leave the trigger alone.
+LAB_TRIGGER_TOKEN_FILE="${LAB_TRIGGER_TOKEN_FILE:-}"
+LAB_TRIGGER_URL="${LAB_TRIGGER_URL:-https://hubertjablon.ski/cluster/api/lab/run/claim}"
 [[ "${1:-}" == "--dry-run" ]] && DRY_RUN=1
 
 IMG_NAME="$(basename "$DEBIAN_IMAGE_URL")"
@@ -99,13 +107,127 @@ snap_exists() { [[ $DRY_RUN == 1 ]] && return 1; pveq qm listsnapshot "$VMID" 2>
 
 # ---- preflight ----
 [[ -r "$SSH_PUBKEY_FILE" ]] || { echo "ssh pubkey not found: $SSH_PUBKEY_FILE" >&2; exit 1; }
-if [[ $DRY_RUN == 0 ]]; then
+if [[ $DRY_RUN == 0 && $HOST_ONLY == 0 ]]; then
   [[ -n "$SHIPPER_CERT_DIR" ]] || { echo "set SHIPPER_CERT_DIR (tls.crt tls.key ca.crt for lab-vm-shipper)" >&2; exit 1; }
   for f in tls.crt tls.key ca.crt; do
     [[ -r "$SHIPPER_CERT_DIR/$f" ]] || { echo "missing $SHIPPER_CERT_DIR/$f" >&2; exit 1; }
   done
 fi
 SSH_PUBKEY="$(cat "$SSH_PUBKEY_FILE")"
+
+# The PVE-host side, also run alone with LAB_HOST_ONLY=1 (no VM rebuild): the daily timer and the
+# on-demand trigger.
+install_host_units() {
+  # ---- 10. the daily timer on the PVE host: markers -> rollback -> start -> inject markers ----
+  say "daily rollback/run timer on the Proxmox node"
+  RUNNER="$(cat <<EOF
+#!/bin/sh
+# detection-lab variant B: revert VM ${VMID} to ${SNAPSHOT} and run it. Managed by lab-vm-provision.sh.
+set -e
+VMID=${VMID}; SNAP=${SNAPSHOT}
+rollback_epoch=\$(date +%s)
+qm rollback \$VMID \$SNAP
+start_epoch=\$(date +%s)
+qm start \$VMID
+# hand the PVE-side timestamps to the guest for the run's timeline (t0 = rollback)
+for i in \$(seq 1 60); do qm guest exec \$VMID -- true >/dev/null 2>&1 && break; sleep 5; done
+qm guest exec \$VMID -- /bin/sh -c "mkdir -p /run/lab && printf 'rollback_epoch=%s\nstart_epoch=%s\n' \$rollback_epoch \$start_epoch > /run/lab/pve-markers"
+EOF
+  )"
+  UNIT="$(cat <<EOF
+[Unit]
+Description=detection-lab variant B daily run (rollback + start VM ${VMID})
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/lab-vm-run.sh
+EOF
+  )"
+  TIMER="$(cat <<EOF
+[Unit]
+Description=detection-lab variant B daily run
+[Timer]
+OnCalendar=*-*-* 03:00:00 UTC
+Persistent=true
+[Install]
+WantedBy=timers.target
+EOF
+  )"
+  if [[ $DRY_RUN == 1 ]]; then
+    echo "--- would write /usr/local/sbin/lab-vm-run.sh, /etc/systemd/system/lab-vm-run.{service,timer} and enable the timer"
+    printf '%s\n' "$RUNNER" | sed 's/^/  runner| /'
+  else
+    printf '%s\n' "$RUNNER" | ssh "$PVE_SSH" "cat > /usr/local/sbin/lab-vm-run.sh && chmod 0755 /usr/local/sbin/lab-vm-run.sh"
+    printf '%s\n' "$UNIT"   | ssh "$PVE_SSH" "cat > /etc/systemd/system/lab-vm-run.service"
+    printf '%s\n' "$TIMER"  | ssh "$PVE_SSH" "cat > /etc/systemd/system/lab-vm-run.timer"
+    pve "systemctl daemon-reload && systemctl enable --now lab-vm-run.timer"
+  fi
+
+  # ---- 11. the on-demand trigger: "Start run now" on /lab/ (outbound only) ----
+  # A visitor's request waits in the cluster API; this host polls for it every 15 s and starts the
+  # same run unit the daily timer starts. Nothing reaches the Proxmox host from outside: it only
+  # makes an HTTPS POST out, authenticated by a bearer token the API holds as a SOPS Secret. The
+  # token lives in a root-only header file (never on a command line). It checks the VM is stopped
+  # and no run is active BEFORE claiming, so a claimed request always starts a run.
+  say "on-demand trigger (polls ${LAB_TRIGGER_URL})"
+  if [[ -z "$LAB_TRIGGER_TOKEN_FILE" ]]; then
+    echo "LAB_TRIGGER_TOKEN_FILE not set; leaving the trigger as it is (installed or not)"
+    return 0
+  fi
+  TRIGGER="$(cat <<EOF
+#!/bin/sh
+# detection-lab variant B on-demand trigger. Managed by lab-vm-provision.sh. Outbound only.
+set -eu
+HDR=/etc/lab-vm/trigger.header
+[ -r "\$HDR" ] || exit 0
+qm status ${VMID} 2>/dev/null | grep -q 'status: stopped' || exit 0
+systemctl is-active --quiet lab-vm-run.service && exit 0
+resp=\$(curl -fsS --max-time 10 -X POST -H @"\$HDR" -H 'Accept: application/json' '${LAB_TRIGGER_URL}') || exit 0
+case "\$resp" in
+  *'"start":true'*) logger -t lab-vm-trigger "visitor run claimed: \$resp"; systemctl start --no-block lab-vm-run.service ;;
+esac
+EOF
+)"
+  TUNIT="$(cat <<EOF
+[Unit]
+Description=detection-lab variant B on-demand trigger (poll the cluster API, start a run)
+After=network-online.target
+Wants=network-online.target
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/lab-vm-trigger.sh
+EOF
+)"
+  TTIMER="$(cat <<EOF
+[Unit]
+Description=detection-lab variant B on-demand trigger, every 15 s
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=15s
+AccuracySec=1s
+[Install]
+WantedBy=timers.target
+EOF
+)"
+  if [[ $DRY_RUN == 1 ]]; then
+    echo "--- would write /usr/local/sbin/lab-vm-trigger.sh, /etc/lab-vm/trigger.header (0600, from LAB_TRIGGER_TOKEN_FILE),"
+    echo "    /etc/systemd/system/lab-vm-trigger.{service,timer} and enable the timer"
+    printf '%s\n' "$TRIGGER" | sed 's/^/  trigger| /'
+  else
+    [[ -r "$LAB_TRIGGER_TOKEN_FILE" ]] || die "LAB_TRIGGER_TOKEN_FILE ${LAB_TRIGGER_TOKEN_FILE} is not readable"
+    printf 'Authorization: Bearer %s\n' "$(tr -d '[:space:]' < "$LAB_TRIGGER_TOKEN_FILE")" \
+      | ssh "$PVE_SSH" "umask 077 && mkdir -p /etc/lab-vm && cat > /etc/lab-vm/trigger.header"
+    printf '%s\n' "$TRIGGER" | ssh "$PVE_SSH" "cat > /usr/local/sbin/lab-vm-trigger.sh && chmod 0755 /usr/local/sbin/lab-vm-trigger.sh"
+    printf '%s\n' "$TUNIT"   | ssh "$PVE_SSH" "cat > /etc/systemd/system/lab-vm-trigger.service"
+    printf '%s\n' "$TTIMER"  | ssh "$PVE_SSH" "cat > /etc/systemd/system/lab-vm-trigger.timer"
+    pve "systemctl daemon-reload && systemctl enable --now lab-vm-trigger.timer"
+  fi
+}
+
+if [[ $HOST_ONLY == 1 ]]; then
+  install_host_units
+  say "done (host units only)"
+  exit 0
+fi
 
 # ---- 1. image on the node (skip if already imported) ----
 say "image ${IMG_NAME} on ${IMPORT_STORAGE}"
@@ -485,49 +607,7 @@ pve "qm shutdown ${VMID} --timeout 120 || qm stop ${VMID}"
 if snap_exists; then pve "qm delsnapshot ${VMID} ${SNAPSHOT}"; fi
 pve "qm snapshot ${VMID} ${SNAPSHOT} --description 'clean lab state; reverted before each run'"
 
-# ---- 10. the daily timer on the PVE host: markers -> rollback -> start -> inject markers ----
-say "daily rollback/run timer on the Proxmox node"
-RUNNER="$(cat <<EOF
-#!/bin/sh
-# detection-lab variant B: revert VM ${VMID} to ${SNAPSHOT} and run it. Managed by lab-vm-provision.sh.
-set -e
-VMID=${VMID}; SNAP=${SNAPSHOT}
-rollback_epoch=\$(date +%s)
-qm rollback \$VMID \$SNAP
-start_epoch=\$(date +%s)
-qm start \$VMID
-# hand the PVE-side timestamps to the guest for the run's timeline (t0 = rollback)
-for i in \$(seq 1 60); do qm guest exec \$VMID -- true >/dev/null 2>&1 && break; sleep 5; done
-qm guest exec \$VMID -- /bin/sh -c "mkdir -p /run/lab && printf 'rollback_epoch=%s\nstart_epoch=%s\n' \$rollback_epoch \$start_epoch > /run/lab/pve-markers"
-EOF
-)"
-UNIT="$(cat <<EOF
-[Unit]
-Description=detection-lab variant B daily run (rollback + start VM ${VMID})
-[Service]
-Type=oneshot
-ExecStart=/usr/local/sbin/lab-vm-run.sh
-EOF
-)"
-TIMER="$(cat <<EOF
-[Unit]
-Description=detection-lab variant B daily run
-[Timer]
-OnCalendar=*-*-* 03:00:00 UTC
-Persistent=true
-[Install]
-WantedBy=timers.target
-EOF
-)"
-if [[ $DRY_RUN == 1 ]]; then
-  echo "--- would write /usr/local/sbin/lab-vm-run.sh, /etc/systemd/system/lab-vm-run.{service,timer} and enable the timer"
-  printf '%s\n' "$RUNNER" | sed 's/^/  runner| /'
-else
-  printf '%s\n' "$RUNNER" | ssh "$PVE_SSH" "cat > /usr/local/sbin/lab-vm-run.sh && chmod 0755 /usr/local/sbin/lab-vm-run.sh"
-  printf '%s\n' "$UNIT"   | ssh "$PVE_SSH" "cat > /etc/systemd/system/lab-vm-run.service"
-  printf '%s\n' "$TIMER"  | ssh "$PVE_SSH" "cat > /etc/systemd/system/lab-vm-run.timer"
-  pve "systemctl daemon-reload && systemctl enable --now lab-vm-run.timer"
-fi
+install_host_units
 
 say "done"
 echo "VM ${VMID} is provisioned, locked down and snapshotted as ${SNAPSHOT}."

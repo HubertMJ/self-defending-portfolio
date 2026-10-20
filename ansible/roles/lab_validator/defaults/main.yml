@@ -3,12 +3,13 @@
 # daily run (PVE timer lab-vm-run, 03:00 UTC), build that run's document from sdp-lab, the findings
 # and the lab monitor's alerts, and write it to lab-runs, as the lab-validator identity.
 lab_validator_repo_url: https://github.com/HubertMJ/detection-lab.git
-# detection-lab main with run.py --mode isolated-vm (#16). Bump deliberately.
-lab_validator_ref: "7b9079b1dce00b18ce4b4efb544f152f2d8a052b"
+# detection-lab main with run.py --mode isolated-vm (#16) and --skip-settled (#20). Bump deliberately.
+lab_validator_ref: "b4d49f233a49ea99995b47c09c68eac39743942b"
 lab_validator_dir: /opt/sdp-lab/detection-lab
 lab_validator_user: "{{ lab_identities_user | default('sdp-lab') }}"
 lab_validator_key_dir: "{{ lab_identities_dir | default('/etc/sdp-lab') }}"
-# 20 minutes after the VM's run starts: it takes ~4 min, the monitor alerts within its 1-min period.
-lab_validator_on_calendar: "*-*-* 03:20:00 UTC"
+# Every 5 minutes, so a run started from /lab/ ("Start run now") shows within minutes; --skip-settled
+# makes each run's validation happen once (a complete document, or a run ended over 2 h ago, is left).
+lab_validator_on_calendar: "*:0/5"
 # How long one validation waits for power-off, findings and the alert before publishing what it has.
-lab_validator_timeout_s: 1200
+lab_validator_timeout_s: 600
