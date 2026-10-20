@@ -128,9 +128,15 @@ func TestEvaluate(t *testing.T) {
 			Status{State: "available", CanStart: true}},
 		{"claimed, no rollback yet: starting", claimedAt("11:56:00"), nil, false, "12:00:59",
 			Status{State: "starting", Request: &RequestView{ID: "req-1", RequestedAt: "2026-10-20T11:55:50.000Z", ClaimedAt: "2026-10-20T11:56:00.000Z"}}},
-		{"no rollback within 5 min: failed, the slot is free", claimedAt("11:55:00"), nil, false, "12:00:00",
-			Status{State: "available", CanStart: true, Reason: "the last requested run did not start",
+		{"no rollback within 5 min: failed, the slot held for a cooldown", claimedAt("11:55:00"), nil, false, "12:00:00",
+			Status{State: "cooldown", Reason: "the last requested run did not start", NextAllowedAt: "2026-10-20T12:30:00.000Z",
 				Request: &RequestView{ID: "req-1", RequestedAt: "2026-10-20T11:54:50.000Z", ClaimedAt: "2026-10-20T11:55:00.000Z"}}},
+		{"a cooldown after the failure: free again", claimedAt("11:25:00"), nil, false, "12:00:00",
+			Status{State: "available", CanStart: true}},
+		{"rollback stamped 30 s before the claim (clock skew) counts", claimedAt("11:50:00"), []lab.Marker{mk(run, "rollback", "11:49:30")}, true, "11:51:00",
+			Status{State: "running", Request: &RequestView{ID: "req-1", RequestedAt: "2026-10-20T11:49:50.000Z", ClaimedAt: "2026-10-20T11:50:00.000Z"}}},
+		{"31 s before is another run's", claimedAt("11:50:00"), []lab.Marker{mk(run, "rollback", "11:49:29")}, true, "11:51:00",
+			Status{State: "starting", Request: &RequestView{ID: "req-1", RequestedAt: "2026-10-20T11:49:50.000Z", ClaimedAt: "2026-10-20T11:50:00.000Z"}}},
 		{"a rollback before the claim is not this run's", claimedAt("11:56:00"), []lab.Marker{mk("lab-20261020T030000Z-dddddd", "rollback", "03:00:00")}, false, "11:57:00",
 			Status{State: "starting", Request: &RequestView{ID: "req-1", RequestedAt: "2026-10-20T11:55:50.000Z", ClaimedAt: "2026-10-20T11:56:00.000Z"}}},
 		{"rollback after the claim: running", claimedAt("11:50:00"), []lab.Marker{mk(run, "rollback", "11:50:05"), mk(run, "start", "11:50:06")}, true, "11:52:00",
@@ -254,6 +260,107 @@ func TestRequestThenSecondRequestIsBusy(t *testing.T) {
 	}
 	if _, ref := s.Request(context.Background()); ref == nil || ref.Code != http.StatusConflict {
 		t.Fatalf("second: %+v, want busy", ref)
+	}
+}
+
+func TestRequestAfterFailedStart(t *testing.T) {
+	// The agent claimed, but no rollback came within 5 min: a second POST is still refused (the run
+	// may yet start), until a cooldown after the failure.
+	now := at("12:00:00")
+	store := &memStore{}
+	s := newService(store, &fakeVM{}, &now)
+	if _, ref := s.Request(context.Background()); ref != nil {
+		t.Fatal(ref)
+	}
+	if c, _ := s.Claim(context.Background()); !c.Start {
+		t.Fatal("no claim")
+	}
+	now = now.Add(5 * time.Minute)
+	_, ref := s.Request(context.Background())
+	if ref == nil || ref.Code != http.StatusTooManyRequests || ref.Error != "cooldown" || ref.NextAllowedAt != "2026-10-20T12:35:00.000Z" {
+		t.Fatalf("after a failed start: %+v, want 429 cooldown until 12:35", ref)
+	}
+	now = at("12:35:00")
+	if _, ref := s.Request(context.Background()); ref != nil {
+		t.Fatalf("after the cooldown: %+v", ref)
+	}
+}
+
+// countingVM counts the marker reads.
+type countingVM struct {
+	fakeVM
+	mu    sync.Mutex
+	calls int
+}
+
+func (c *countingVM) Markers(ctx context.Context) ([]lab.Marker, bool, error) {
+	c.mu.Lock()
+	c.calls++
+	c.mu.Unlock()
+	return c.fakeVM.Markers(ctx)
+}
+
+func TestRequestRefusedWithoutIO(t *testing.T) {
+	// A fresh cached status that says no answers a POST with no store read and no search.
+	now := at("12:00:00")
+	store := &memStore{}
+	vm := &countingVM{}
+	s := newService(store, vm, &now)
+	if _, ref := s.Request(context.Background()); ref != nil {
+		t.Fatal(ref)
+	}
+	loads, calls := store.loads, vm.calls
+	for i := 0; i < 20; i++ {
+		if _, ref := s.Request(context.Background()); ref == nil || ref.Code != http.StatusConflict {
+			t.Fatalf("POST %d: %+v, want busy", i, ref)
+		}
+	}
+	if store.loads != loads || vm.calls != calls {
+		t.Fatalf("refusals cost %d loads and %d searches, want none", store.loads-loads, vm.calls-calls)
+	}
+	// Once the status is older than the TTL, the next POST reads again (and is refused on the read).
+	now = now.Add(2 * time.Second)
+	if _, ref := s.Request(context.Background()); ref == nil || store.loads != loads+1 {
+		t.Fatalf("after the TTL: %+v, loads %d", ref, store.loads-loads)
+	}
+}
+
+// blockingStore signals entered on the first Load and holds every Load until release is closed.
+type blockingStore struct {
+	memStore
+	once    sync.Once
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (b *blockingStore) Load(ctx context.Context) ([]byte, string, error) {
+	b.once.Do(func() { close(b.entered) })
+	<-b.release
+	return b.memStore.Load(ctx)
+}
+
+func TestRequestSerialised(t *testing.T) {
+	// While one POST of this pod is reading and writing, a concurrent one is busy at once, no I/O.
+	now := at("12:00:00")
+	store := &blockingStore{entered: make(chan struct{}), release: make(chan struct{})}
+	s := newService(store, &fakeVM{}, &now)
+	done := make(chan *Refusal)
+	go func() {
+		_, ref := s.Request(context.Background())
+		done <- ref
+	}()
+	<-store.entered // the first Request holds the lock and is reading
+	if _, ref := s.Request(context.Background()); ref == nil || ref.Code != http.StatusConflict {
+		t.Fatalf("concurrent POST: %+v, want busy", ref)
+	}
+	close(store.release)
+	if ref := <-done; ref != nil {
+		t.Fatalf("first POST: %+v", ref)
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if store.loads != 1 {
+		t.Fatalf("loads = %d, want only the first POST's", store.loads)
 	}
 }
 

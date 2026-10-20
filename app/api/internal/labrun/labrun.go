@@ -12,8 +12,9 @@
 // fewer than MaxPerDay visitor runs were started in the current UTC day, and the time is outside the
 // daily maintenance window (the 03:00 VM run and the 03:30 generated run). A queued request the agent
 // does not claim within QueueTimeout expires; a claimed one with no rollback marker within
-// StartTimeout has failed. Both free the slot; they are derived from the stored request, the clock and
-// the markers, never written back, so no background loop is needed.
+// StartTimeout has failed, and holds the slot for a Cooldown as if it had run (the agent may still
+// be starting it: freeing the slot at once could start two). These are derived from the stored
+// request, the clock and the markers, never written back, so no background loop is needed.
 //
 // The state is one ConfigMap, written with optimistic concurrency (the resourceVersion of the read
 // it was derived from): a claim or a new request that raced another write is re-derived from the
@@ -51,6 +52,9 @@ const (
 	defaultWindowStart = 2*time.Hour + 50*time.Minute
 	defaultWindowEnd   = 3*time.Hour + 50*time.Minute
 	defaultStatusTTL   = 2 * time.Second
+	// clockSkew is how much earlier than the claim (the API's clock) a rollback marker (the lab's
+	// clock) may be stamped and still count as the claimed run's.
+	clockSkew = 30 * time.Second
 	// opTimeout bounds one status refresh, request or claim (a marker search and a ConfigMap
 	// read/write or two), detached from the visitor's request.
 	opTimeout = 8 * time.Second
@@ -118,6 +122,10 @@ type Service struct {
 	until   time.Time     // the cached status is served without a refresh until then
 	cached  Status        // the newest status
 	pending chan struct{} // closed when the running refresh is done; nil when none runs
+
+	// requestMu serialises Request in this pod: a burst of POSTs makes one read-and-write at a time,
+	// and the others are turned down without any I/O.
+	requestMu sync.Mutex
 }
 
 // New returns a Service; a token shorter than minToken is treated as none (and logged).
@@ -216,8 +224,8 @@ func (s *Service) phaseOf(r *request, markers []lab.Marker, vmRunning bool, now 
 		}
 		return phaseQueued, time.Time{}
 	}
-	// The run's rollback marker is written after the claim, but only to the second.
-	claimed := r.ClaimedAt.Truncate(time.Second)
+	// The run's rollback marker is written after the claim, to the second and by another clock.
+	claimed := r.ClaimedAt.Add(-clockSkew)
 	var rollback *lab.Marker
 	for i, m := range markers {
 		if m.Name == "rollback" && !m.At.Before(claimed) && (rollback == nil || m.At.Before(rollback.At)) {
@@ -296,9 +304,12 @@ func (s *Service) evaluate(st state, markers []lab.Marker, vmRunning bool, now t
 		out.Request = view(st.Request)
 		return out
 	}
-	if ph == phaseFailed && now.Before(ended.Add(s.cfg.AgentRetry)) {
-		out.Reason = "the last requested run did not start"
+	if ph == phaseFailed && now.Before(ended.Add(s.cfg.Cooldown)) {
+		// The agent was told to start it; a run that begins late must not meet a second one.
+		out.State, out.Reason = StateCooldown, "the last requested run did not start"
+		out.NextAllowedAt = s.allowedFrom(s.latest(ended.Add(s.cfg.Cooldown), markers), out.RunsToday, now)
 		out.Request = view(st.Request)
+		return out
 	}
 	if t := s.latest(time.Time{}, markers); now.Before(t) {
 		out.State, out.NextAllowedAt = StateCooldown, s.allowedFrom(t, out.RunsToday, now)
@@ -439,6 +450,14 @@ func (s *Service) unavailable(reason string) Status {
 	return Status{State: StateUnavailable, MaxPerDay: s.cfg.MaxPerDay, Reason: reason}
 }
 
+// remember caches a status Request has just derived from a fresh read, so the GETs and POSTs of the
+// next StatusTTL are answered from it.
+func (s *Service) remember(st Status) {
+	s.mu.Lock()
+	s.cached, s.until = st, s.cfg.Now().Add(s.cfg.StatusTTL)
+	s.mu.Unlock()
+}
+
 // invalidate drops the cached status after a write, so the next GET shows the change.
 func (s *Service) invalidate() {
 	s.mu.Lock()
@@ -460,11 +479,23 @@ type Queued struct {
 	State string `json:"state"`
 }
 
-// Request queues a run if the rules allow one now, else says why not.
+// Request queues a run if the rules allow one now, else says why not. While the cached status is
+// fresh and says no, or another Request of this pod is in flight, it answers without any I/O: the
+// button can be hammered without each click costing a search and a ConfigMap read.
 func (s *Service) Request(ctx context.Context) (Queued, *Refusal) {
 	if !s.configured() {
 		return Queued{}, &Refusal{Code: http.StatusServiceUnavailable, Error: "unavailable", Reason: "on-demand runs are not configured"}
 	}
+	s.mu.Lock()
+	fresh, cached := !s.until.IsZero() && s.cfg.Now().Before(s.until), s.cached
+	s.mu.Unlock()
+	if fresh && !cached.CanStart {
+		return Queued{}, refusal(cached)
+	}
+	if !s.requestMu.TryLock() {
+		return Queued{}, &Refusal{Code: http.StatusConflict, Error: "busy"}
+	}
+	defer s.requestMu.Unlock()
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), opTimeout)
 	defer cancel()
 	for attempt := 0; attempt < saveAttempts; attempt++ {
@@ -476,6 +507,7 @@ func (s *Service) Request(ctx context.Context) (Queued, *Refusal) {
 		now := s.cfg.Now().UTC()
 		ev := s.evaluate(sn.st, sn.markers, sn.vmRunning, now)
 		if ref := refusal(ev); ref != nil {
+			s.remember(ev)
 			return Queued{}, ref
 		}
 		id, err := newID()
@@ -486,7 +518,7 @@ func (s *Service) Request(ctx context.Context) (Queued, *Refusal) {
 		next.Request = &request{ID: id, RequestedAt: now}
 		switch err := s.write(ctx, next, sn.version); {
 		case err == nil:
-			s.invalidate()
+			s.remember(s.evaluate(next, sn.markers, sn.vmRunning, now))
 			return Queued{ID: id, State: StateQueued}, nil
 		case !errors.Is(err, ErrConflict):
 			s.cfg.Log.Warn("lab run request not stored", "err", err)

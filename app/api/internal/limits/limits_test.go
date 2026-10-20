@@ -331,3 +331,34 @@ func TestConnsGroups(t *testing.T) {
 		t.Fatalf("inGroup = %v", c.inGroup)
 	}
 }
+
+func TestAccepted(t *testing.T) {
+	now := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
+	a := NewAccepted(2, 24*time.Hour, func() time.Time { return now })
+	// Checks alone count nothing.
+	for i := 0; i < 5; i++ {
+		if ok, _ := a.Check("v"); !ok {
+			t.Fatal("refused before anything was accepted")
+		}
+	}
+	a.Add("v")
+	now = now.Add(time.Hour)
+	a.Add("v")
+	ok, next := a.Check("v")
+	if ok || !next.Equal(time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC)) {
+		t.Fatalf("third: ok=%v next=%s, want refused until the first leaves the window", ok, next)
+	}
+	if ok, _ := a.Check("other"); !ok {
+		t.Fatal("another key shares the quota")
+	}
+	now = time.Date(2026, 10, 21, 12, 0, 1, 0, time.UTC)
+	if ok, _ := a.Check("v"); !ok {
+		t.Fatal("still refused after the oldest left the window")
+	}
+	// Emptied keys are dropped.
+	now = now.Add(48 * time.Hour)
+	a.Add("w")
+	if len(a.byKey) != 1 {
+		t.Fatalf("keys = %d, want only w", len(a.byKey))
+	}
+}

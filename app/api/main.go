@@ -13,6 +13,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"os"
@@ -257,11 +258,16 @@ func run(log *slog.Logger) error {
 	return nil
 }
 
-// readToken reads a mounted secret file; a missing file is "not configured", logged once.
+// readToken reads a mounted secret file. A missing file is "not configured" (the Secret is optional);
+// any other read error is a fault worth a warning. Either way the trigger is off.
 func readToken(path string, log *slog.Logger) []byte {
 	b, err := os.ReadFile(path)
-	if err != nil {
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
 		log.Info("lab run trigger off", "reason", "no token file")
+		return nil
+	case err != nil:
+		log.Warn("lab run trigger off: token file unreadable", "err", err)
 		return nil
 	}
 	return bytes.TrimSpace(b)

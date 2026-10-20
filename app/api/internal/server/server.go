@@ -20,6 +20,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/hubertmj/self-defending-portfolio/app/api/internal/clientip"
@@ -125,10 +126,14 @@ type Config struct {
 	// Lab is the detection lab behind GET /api/lab/latest, /api/lab/vm and /api/lab/raw (ADR 0034
 	// amendment). A nil Lab answers 404, as an unconfigured lab does.
 	Lab LabReader
-	// LabRun is the on-demand VM run behind /api/lab/run (ADR 0034 amendment 2026-10-20 (b));
-	// LabRunRequests its own per-visitor budget for POST, on top of Requests (nil: 3 a minute).
+	// LabRun is the on-demand VM run behind /api/lab/run (ADR 0034 amendment 2026-10-20 (b)). Its
+	// POST has budgets of its own on top of Requests, all keyed by the visitor's address block
+	// (clientip.Group): LabRunRequests (nil: 3 a minute), LabRunGlobal for everyone together (nil:
+	// 60 a minute) and LabRunQuota, which counts only accepted requests (nil: 2 a day).
 	LabRun         LabRunner
 	LabRunRequests *limits.Requests
+	LabRunGlobal   *limits.Requests
+	LabRunQuota    *limits.Accepted
 
 	// AllowedOrigin is the only Origin a browser may POST from (the site itself).
 	AllowedOrigin string
@@ -146,6 +151,10 @@ type Config struct {
 // Server holds both handlers.
 type Server struct {
 	cfg Config
+	// claimLogMu guards claimLogAt, when a refused trigger-agent claim was last logged (at most one
+	// warning a minute, so a token-guessing loop cannot flood the log).
+	claimLogMu sync.Mutex
+	claimLogAt time.Time
 	// policyFiles maps a Kyverno policy name to its file in the repository (the rule index), for
 	// /api/posture's violations.
 	policyFiles map[string]string
@@ -173,6 +182,12 @@ func New(cfg Config) *Server {
 	}
 	if cfg.LabRunRequests == nil {
 		cfg.LabRunRequests = limits.NewRequests(3, time.Minute, 10000, nil)
+	}
+	if cfg.LabRunGlobal == nil {
+		cfg.LabRunGlobal = limits.NewRequests(60, time.Minute, 1, nil)
+	}
+	if cfg.LabRunQuota == nil {
+		cfg.LabRunQuota = limits.NewAccepted(2, 24*time.Hour, nil)
 	}
 	if !commitPattern.MatchString(cfg.Commit) {
 		cfg.Commit = ""
@@ -262,7 +277,7 @@ func (s *Server) publicMiddleware(next http.Handler) http.Handler {
 		h.Set("Cache-Control", "no-store")
 		h.Set("X-Content-Type-Options", "nosniff")
 
-		if r.URL.Path != "/api/healthz" && s.cfg.Requests != nil {
+		if r.URL.Path != "/api/healthz" && s.cfg.Requests != nil && !s.agentClaim(r) {
 			if ok, retry := s.cfg.Requests.Allow(clientip.Key(r)); !ok {
 				tooMany(w, retry, "too many requests")
 				return
@@ -282,6 +297,14 @@ func (s *Server) publicMiddleware(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// agentClaim reports whether r is the lab trigger agent's claim with a valid token (checked in
+// constant time). Only that request skips the per-visitor budget: whoever shares the agent's address
+// cannot make it look offline by spending the budget. A wrong token is counted like any request.
+func (s *Server) agentClaim(r *http.Request) bool {
+	return r.Method == http.MethodPost && r.URL.Path == "/api/lab/run/claim" && s.cfg.LabRun != nil &&
+		s.cfg.LabRun.ClaimEnabled() && s.cfg.LabRun.Authorized(r.Header.Get("Authorization"))
 }
 
 func methodNotAllowed(w http.ResponseWriter, _ *http.Request) {
