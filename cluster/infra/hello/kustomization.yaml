@@ -22,4 +22,4 @@ resources:
 images:
   - name: ghcr.io/hubertmj/self-defending-portfolio/web
     newTag: main
-    digest: sha256:b4ef5c398fc2f4849dbafd97c46bd23b88ffb260f74d95bddd52a25b7cbbf2b8
+    digest: sha256:4444508bd6eebb3a223c93e918432dfafe263693ae45c35a684b0bd0a6fcb288
