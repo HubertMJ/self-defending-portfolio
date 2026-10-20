@@ -20,4 +20,4 @@ images:
     # preview -- green dot/top border, "Open the lab", hero says both projects run live; plus PR #5
     # which upgrades libx11 for Trivy CVE-2026-88806). cosign-verified signed + SPDX SBOM
     # (scripts/verify-image.sh).
-    digest: sha256:dddee123ae5b907e10be08bbf324ad8271ba8125d3954fd1a80cb4a6b808b9fe
+    digest: sha256:879e3e31544c00a4005fe457efb3dddc62ea3a7ed12372757bf3f5dd77e85da6
