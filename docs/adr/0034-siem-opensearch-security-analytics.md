@@ -751,3 +751,38 @@ OpenSearch queries run detached from the visitor's request under their own 8 s d
 visitor who disconnects cannot cache a failure for the others; a failed fetch keeps the previous
 answer (or, with none, is retried after 2 s) and is logged once as a warning with the endpoint and
 the HTTP status, never a document - a 403 before `roles.yml` is applied shows in the API's log.
+
+**Amended 2026-10-20 (b): a visitor may start a real VM run.** The /lab/ page gets a "Start run now"
+button that starts a real isolated-VM run (variant B), within limits. The hypervisor never accepts a
+connection for it: a trigger agent on the Proxmox host polls the API **outbound** and starts the run
+itself; the API only queues and hands out requests, and learns what the VM did from the run's
+lifecycle markers in `sdp-lab`, as `/api/lab/vm` does (`internal/labrun`).
+- `GET /api/lab/run`: `{state, can_start, next_allowed_at?, runs_today, max_per_day, request?,
+  reason?}`, state one of `available`, `queued`, `starting`, `running`, `cooldown`, `closed`,
+  `unavailable`; cached 2 s.
+- `POST /api/lab/run` (no body, no credential): `202 {id, state: "queued"}`, or `409 busy` (a request
+  queued or starting, or the VM running - any run, the daily one included), `429 cooldown` (less than
+  30 min since the newest `poweroff_requested`), `429 daily limit` (12 visitor runs started in the
+  current UTC day), `423 closed` (the maintenance window 02:50-03:50 UTC, which keeps the 03:00 VM run
+  and the 03:30 generated run apart from visitors' runs), each with `next_allowed_at`; `503` while
+  the lab or the trigger is not configured or the agent is not answering. Each visitor also has 3
+  POSTs a minute on top of the API's general budget.
+- `POST /api/lab/run/claim` (the agent, `Authorization: Bearer <token>`, compared in constant time
+  with the token of the KSOPS Secret `portfolio-api-lab-trigger`): `{"start": true, "id"}` exactly
+  once for a queued request, else `{"start": false}`; 401 on a wrong token, 404 while no token is
+  configured, and 404 for any other method - the path is in no listing and never cached.
+- The state is one ConfigMap, `lab-run-state` (the newest request and the day's count), written
+  with the resourceVersion of the read it was derived from, so a claim is atomic even with more than
+  one replica; the API's Role may get/update that one object only. A request the agent does not
+  claim within 2 min expires (`unavailable`, "trigger agent not answering", for 10 min); a claimed
+  one is `starting` until a rollback marker newer than the claim, then `running` until its
+  `poweroff_requested`; with no rollback within 5 min it has failed and the slot is free. These are
+  derived from the stored request, the clock and the markers, never written back.
+- **No CSRF surface.** The button's POST is same-origin (the page's CSP is `connect-src 'self'`), and
+  the endpoint has no cookie, session or credential a forged cross-site request could borrow: a
+  forged POST could do no more than the visitor's own click, and the public middleware refuses a POST
+  with a foreign `Origin` or `Sec-Fetch-Site` anyway. The only credential is the agent's token, which
+  no browser holds.
+- What a visitor can cost: at most 12 VM runs a day, one at a time, 30 min apart, never in the
+  maintenance window - each a few minutes of a disposable VM restored from its clean snapshot, on its
+  isolated network.

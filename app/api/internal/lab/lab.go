@@ -108,6 +108,9 @@ type Reader struct {
 	latest, vm, raw cache
 }
 
+// errNoSource is Markers' answer when no SIEM source is configured.
+var errNoSource = errors.New("lab: no SIEM source configured")
+
 // fetchFunc makes one answer: its JSON, or nil when there is nothing to show. An error is an
 // OpenSearch failure; with a non-nil answer it is a partial one (the history), served and logged.
 type fetchFunc func(ctx context.Context) ([]byte, error)

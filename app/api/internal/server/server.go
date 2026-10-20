@@ -25,6 +25,7 @@ import (
 	"github.com/hubertmj/self-defending-portfolio/app/api/internal/clientip"
 	"github.com/hubertmj/self-defending-portfolio/app/api/internal/events"
 	"github.com/hubertmj/self-defending-portfolio/app/api/internal/incidents"
+	"github.com/hubertmj/self-defending-portfolio/app/api/internal/labrun"
 	"github.com/hubertmj/self-defending-portfolio/app/api/internal/limits"
 	"github.com/hubertmj/self-defending-portfolio/app/api/internal/posture"
 	"github.com/hubertmj/self-defending-portfolio/app/api/internal/ruleindex"
@@ -65,6 +66,17 @@ type LabReader interface {
 	Latest(ctx context.Context) ([]byte, bool)
 	VM(ctx context.Context) ([]byte, bool)
 	Raw(ctx context.Context) ([]byte, bool)
+}
+
+// LabRunner is what GET/POST /api/lab/run and POST /api/lab/run/claim need from internal/labrun: the
+// on-demand VM run's status, a visitor's request, and the trigger agent's claim. A nil
+// Config.LabRun answers 404 on all three.
+type LabRunner interface {
+	Status(ctx context.Context) labrun.Status
+	Request(ctx context.Context) (labrun.Queued, *labrun.Refusal)
+	ClaimEnabled() bool
+	Authorized(header string) bool
+	Claim(ctx context.Context) (labrun.Claim, error)
 }
 
 // Poster is what the server needs from internal/posture.
@@ -113,6 +125,10 @@ type Config struct {
 	// Lab is the detection lab behind GET /api/lab/latest, /api/lab/vm and /api/lab/raw (ADR 0034
 	// amendment). A nil Lab answers 404, as an unconfigured lab does.
 	Lab LabReader
+	// LabRun is the on-demand VM run behind /api/lab/run (ADR 0034 amendment 2026-10-20 (b));
+	// LabRunRequests its own per-visitor budget for POST, on top of Requests (nil: 3 a minute).
+	LabRun         LabRunner
+	LabRunRequests *limits.Requests
 
 	// AllowedOrigin is the only Origin a browser may POST from (the site itself).
 	AllowedOrigin string
@@ -154,6 +170,9 @@ func New(cfg Config) *Server {
 	}
 	if cfg.WriteTimeout <= 0 {
 		cfg.WriteTimeout = 10 * time.Second
+	}
+	if cfg.LabRunRequests == nil {
+		cfg.LabRunRequests = limits.NewRequests(3, time.Minute, 10000, nil)
 	}
 	if !commitPattern.MatchString(cfg.Commit) {
 		cfg.Commit = ""
@@ -197,12 +216,17 @@ func (s *Server) Public() http.Handler {
 	mux.HandleFunc("GET /api/lab/latest", s.labLatest)
 	mux.HandleFunc("GET /api/lab/vm", s.labVM)
 	mux.HandleFunc("GET /api/lab/raw", s.labRaw)
+	mux.HandleFunc("GET /api/lab/run", s.labRunStatus)
+	mux.HandleFunc("POST /api/lab/run", s.labRunRequest)
+	// The trigger agent's endpoint. Not in the 405 list below: any other method gets the plain 404 of
+	// an unknown path, and so does POST while no token is configured.
+	mux.HandleFunc("POST /api/lab/run/claim", s.labRunClaim)
 	// The same paths without a method: a wrong method gets a JSON 405 instead of net/http's plain
 	// text one, so every /api answer is JSON (the page parses errors too).
 	for _, p := range []string{"/api/healthz", "/api/scenarios", "/api/attack/{id}", "/api/events", "/api/posture",
 		"/api/scenarios/{id}/details", "/api/runs", "/api/runs/{id}", "/api/runs/{id}/commands", "/api/stats", "/api/limits",
 		"/api/provenance", "/api/correlation", "/api/correlation/rules", "/api/lab/latest",
-		"/api/lab/vm", "/api/lab/raw"} {
+		"/api/lab/vm", "/api/lab/raw", "/api/lab/run"} {
 		mux.HandleFunc(p, methodNotAllowed)
 	}
 	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
