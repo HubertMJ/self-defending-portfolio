@@ -6654,3 +6654,7 @@ html.slide-out-backward body > :not(.site-header) {
     navigation: none;
   }
 }
+
+/* Diagrams are drawings, not text: a drag, double-click or long-press on a box must not select its
+   words or open the text callout (the captions under them stay selectable). */
+.dg { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
