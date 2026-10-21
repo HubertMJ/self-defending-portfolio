@@ -17,9 +17,9 @@ resources:
 images:
   - name: ghcr.io/hubertmj/work-mockups/work
     newTag: main
-    # HubertMJ/work-mockups main (commit e1f064d), build-image on main: the vLLM mock-up, the bridge and
+    # HubertMJ/work-mockups main (commit 45a0e9a; #1), build-image on main: the vLLM mock-up, the bridge and
     # Flota pages, /work/ redirecting to the landing's projects. Pinned by hand, like the lab's pin:
     # scripts/bump-image-digest.sh only rewrites this project's own images, not this foreign-repo ref.
     # Verified signed with a verified SPDX SBOM attestation (scripts/verify-image.sh, the work-mockups
     # workflow identity).
-    digest: sha256:b93817377c7853c9731150413cdd4eec69053aebc5796682843cf1b6763409c9
+    digest: sha256:336084c6cebb462bb54426c28baf8793d735e5c5927efa71ae22609477408aa8
