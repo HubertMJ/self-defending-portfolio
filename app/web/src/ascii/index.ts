@@ -74,7 +74,7 @@ function contentWidth(el: Element | null): number {
 
 // ---------- the parts the mode adds, and how they are taken away ----------
 interface View { svg: SVGSVGElement; pre: HTMLPreElement; d: Drawing; dirty: boolean; onScreen: boolean; mo: MutationObserver; io: IntersectionObserver;
-  packets: { e: Drawing["edges"][number]; pos: number }[]; fx: Map<string, number>; wasLit: Map<Element, boolean>; wasState: Map<string, string>; t: number;
+  packets: { e: Drawing["edges"][number]; pos: number; step: number }[]; fx: Map<string, number>; wasLit: Map<Element, boolean>; wasState: Map<string, string>; t: number;
   /** The box under the pointer, and the popup beside it (or beside the focused node). */
   hover: string | null; tip: HTMLPreElement; tipFor: string | null; tipT: number }
 
@@ -232,7 +232,16 @@ function frame(v: View, still: boolean): void {
   // Off screen: no drawing, but keep its size right (the font arriving, a resize), so nothing jumps
   // when it scrolls in.
   if (!v.onScreen && v.t > 0) { fit(v.pre, v.d.g.w, 14); v.tip.hidden = true; return; }
-  if (v.dirty) { v.d = fromSvg(v.svg, /narrow/.test(v.pre.className) ? 48 : 176); v.dirty = false; v.packets = []; }
+  if (v.dirty) {
+    v.d = fromSvg(v.svg, /narrow/.test(v.pre.className) ? 48 : 176);
+    v.dirty = false;
+    // Packets on their way stay on it: the redrawn grid has the same edges (only words and gauges
+    // change as a story plays), so each rides on from where it was along its edge's new cells.
+    v.packets = v.packets.flatMap((p) => {
+      const e = v.d.edges.find((x) => x.el === p.e.el);
+      return e && p.pos < e.cells.length ? [{ ...p, e: { ...e, k: p.e.k } }] : [];
+    });
+  }
   const { g, edges, nodes } = v.d;
   const over: Over = new Map();
   const focus = document.activeElement;
@@ -251,13 +260,14 @@ function frame(v: View, still: boolean): void {
     if (lit) {
       const k = TONE[e.el?.getAttribute("data-tone") ?? ""] ?? e.k;
       for (const [r, c] of e.cells) over.set(r * g.w + c, [null, `hot ${k}`]);
-      if (!v.wasLit.get(e.el!) && !still) v.packets.push({ e: { ...e, k }, pos: 0 });
+      // A packet the page's own story sends rides at twice the pace, to arrive with the SVG's dot.
+      if (!v.wasLit.get(e.el!) && !still) v.packets.push({ e: { ...e, k }, pos: 0, step: 2 });
     }
     if (e.el) v.wasLit.set(e.el, lit);
   }
   // Packets ride the edges on their own, so the drawing keeps moving between runs: each edge about
   // once every 90 frames (6 s), at random, the pace the owner settled on in the mock-up.
-  if (!still) for (const e of edges) if (Math.random() < 1 / 90) v.packets.push({ e, pos: 0 });
+  if (!still) for (const e of edges) if (Math.random() < 1 / 90) v.packets.push({ e, pos: 0, step: 1 });
   for (const [id, n] of v.fx) {
     if (n <= 0) { v.fx.delete(id); continue; }
     v.fx.set(id, n - 1);
@@ -267,8 +277,10 @@ function frame(v: View, still: boolean): void {
   for (let i = v.packets.length - 1; i >= 0; i--) {
     const p = v.packets[i];
     packet(g, over, p.e.cells, p.pos, p.e.k);
-    p.pos += 1;
-    if (p.pos >= p.e.cells.length) { v.packets.splice(i, 1); if (p.e.to && !v.fx.has(p.e.to)) v.fx.set(p.e.to, FX); }
+    // Every packet shows on its edge's last cell (the arrowhead) before it is gone, whatever its pace.
+    const last = p.e.cells.length - 1;
+    if (p.pos >= last) { v.packets.splice(i, 1); if (p.e.to && !v.fx.has(p.e.to)) v.fx.set(p.e.to, FX); }
+    else p.pos = Math.min(p.pos + p.step, last);
   }
   g.render(v.pre, over);
   // Sized to the column it sits in: as large as 14px allows, never wider than its container.
