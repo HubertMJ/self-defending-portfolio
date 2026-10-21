@@ -561,7 +561,8 @@ function describe(nodes: DiagramNode[], edges: DiagramEdge[]): string {
 
 /**
  * The node panel under both drawings (src/node-panel), written into the page beside them at build time:
- * each part's blurb and where it lives in the repository, for every node either drawing shows.
+ * each part's blurb and where it lives on GitHub (as the lab's panel words it), for every node either
+ * drawing shows.
  */
 export function panel(model: DiagramModel = MODEL): string {
   const shown = new Set([...nodesOf("hero", model), ...nodesOf("narrow", model)].map((n) => n.id));
@@ -576,7 +577,7 @@ export function panel(model: DiagramModel = MODEL): string {
         text: n.blurb,
         role: n.role,
         links: n.sources.map((s) => ({ href: `${REPO_URL}/tree/main/${s}`, label: s })),
-        linksLead: "In the repository: ",
+        linksLead: "On GitHub: ",
       })),
   );
 }

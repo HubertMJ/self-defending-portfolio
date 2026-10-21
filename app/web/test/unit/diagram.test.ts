@@ -200,7 +200,7 @@ describe("the node panel under the diagram: a node's details by keyboard, click 
     const shown = new Set([...nodesOf("hero"), ...nodesOf("narrow")].map((n) => n.id));
     expect(html.match(/class="np-item"/g)).toHaveLength(shown.size);
     expect(html).toContain('<a href="https://github.com/HubertMJ/self-defending-portfolio/tree/main/cluster/infra/falco/" rel="noopener noreferrer" tabindex="-1"><code>cluster/infra/falco/</code></a>');
-    expect(html).toContain("In the repository: ");
+    expect(html).toContain("On GitHub: ");
     // A node with no source (the visitor) has no links line.
     const visitor = html.slice(html.indexOf('data-for="visitor"'), html.indexOf("</div>", html.indexOf('data-for="visitor"')));
     expect(visitor).not.toContain("np-links");
