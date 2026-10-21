@@ -1,0 +1,40 @@
+/* The diagrams' own fonts (src/diagram-fonts): every drawing on the site sets its words in fonts it
+ * ships, so a phone draws exactly what the tests measure. The generic families (system-ui, monospace)
+ * are a different font on every platform (Roboto and Droid Sans Mono on Android, SF on Apple, Segoe
+ * and Consolas on Windows), and a box or a label sized for one is crowded or loose in another.
+ *
+ * Same origin, so the CSP's font-src 'self' covers them. `block`: a drawing waits for its words
+ * rather than paint them in another font first; the files are small. A repository uses the two
+ * custom properties in its own diagram rules.
+ *
+ * The same directory is copied into every repository that serves a page of the site (as src/ascii is);
+ * test/unit/diagram-fonts.test.ts checks the copies agree. */
+
+@font-face {
+  font-family: "LabDiagramSans";
+  src: url("./labsans-bold.woff2") format("woff2");
+  font-weight: 500 900;
+  font-style: normal;
+  font-display: block;
+}
+
+@font-face {
+  font-family: "LabDiagramMono";
+  src: url("./labmono-regular.woff2") format("woff2");
+  font-weight: 100 550;
+  font-style: normal;
+  font-display: block;
+}
+
+@font-face {
+  font-family: "LabDiagramMono";
+  src: url("./labmono-bold.woff2") format("woff2");
+  font-weight: 551 900;
+  font-style: normal;
+  font-display: block;
+}
+
+:root {
+  --diagram-sans: "LabDiagramSans", "DejaVu Sans", Verdana, sans-serif;
+  --diagram-mono: "LabDiagramMono", "DejaVu Sans Mono", monospace;
+}

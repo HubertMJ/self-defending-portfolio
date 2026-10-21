@@ -31,7 +31,8 @@ interface Metrics {
 
 /** The smallest node box and the grid's gaps; a box widens or heightens to fit its words (fitted). */
 const METRICS: Record<"hero" | "full", Metrics> = {
-  hero: { cw: 170, ch: 56, gx: 54, gy: 50, pad: 18, zoneHead: 26, zonePad: 14 },
+  // gx: room between columns for a label on the shaft of a two-way arrow ("tunnel") with air either side.
+  hero: { cw: 170, ch: 56, gx: 84, gy: 50, pad: 18, zoneHead: 26, zonePad: 14 },
   full: { cw: 176, ch: 60, gx: 48, gy: 44, pad: 20, zoneHead: 28, zonePad: 14 },
 };
 
@@ -162,6 +163,13 @@ export function layout(view: View, opts: LayoutOptions = {}, model: DiagramModel
 
 /** Edges stop this far from a node's border, so an arrowhead never touches the box it points at. */
 const GAP = 7;
+/** An arrowhead's length and the air a label keeps from it: a label over a line is centred on the shaft
+ * before the head (and after the tail's, on a two-way edge), never over it. */
+const HEAD = 11;
+const shaftMid = (x0: number, x1: number, both: boolean): number => {
+  const d = Math.sign(x1 - x0) || 1;
+  return (x0 + (both ? d * (GAP + HEAD) : 0) + x1 - d * (GAP + HEAD)) / 2;
+};
 
 /**
  * A node's words, centred in its box: the label and its sublabel as one block. On the page the
@@ -266,7 +274,7 @@ function route(e: DiagramEdge, a: Box, b: Box, m: Metrics): { pts: Pt[]; label: 
     const forward = cx(b) > cx(a);
     const x0 = forward ? right(a) : a.x;
     const x1 = forward ? b.x : right(b);
-    return { pts: [[x0, cy(a)], [x1, cy(a)]], label: [(x0 + x1) / 2, cy(a) - 8] };
+    return { pts: [[x0, cy(a)], [x1, cy(a)]], label: [shaftMid(x0, x1, !!e.both), cy(a) - 8] };
   }
   if (sameCol) {
     const down = cy(b) > cy(a);
@@ -286,7 +294,7 @@ function route(e: DiagramEdge, a: Box, b: Box, m: Metrics): { pts: Pt[]; label: 
   const y0 = down ? bottom(a) : a.y;
   const x0 = cx(a) + 14;
   const x1 = forward ? b.x : right(b);
-  return { pts: [[x0, y0], [x0, cy(b)], [x1, cy(b)]], label: [(x0 + x1) / 2, cy(b) - 8] };
+  return { pts: [[x0, y0], [x0, cy(b)], [x1, cy(b)]], label: [shaftMid(x0, x1, false), cy(b) - 8] };
 }
 
 /**

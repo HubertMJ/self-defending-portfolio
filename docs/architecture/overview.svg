@@ -100,7 +100,7 @@
     <g class="dg-edges">
       <g class="dg-edge dg-edge--flow" data-edge="visitor-cloudflare" data-lit="false">
         <path class="dg-line" d="M301,79.5 L335,79.5" marker-end="url(#ov-arrow-flow)"/>
-        <text class="dg-edgelabel" x="318" y="71.5" text-anchor="middle">HTTPS</text>
+        <text class="dg-edgelabel" x="309" y="71.5" text-anchor="middle">HTTPS</text>
       </g>
       <g class="dg-edge dg-edge--flow" data-edge="cloudflare-cloudflared" data-lit="false">
         <path class="dg-line" d="M623,79.5 L657,79.5" marker-end="url(#ov-arrow-flow)" marker-start="url(#ov-arrow-flow)"/>
@@ -108,15 +108,15 @@
       </g>
       <g class="dg-edge dg-edge--flow" data-edge="cloudflared-gateway" data-lit="false">
         <path class="dg-line" d="M945,79.5 L979,79.5" marker-end="url(#ov-arrow-flow)"/>
-        <text class="dg-edgelabel" x="962" y="71.5" text-anchor="middle">HTTPS</text>
+        <text class="dg-edgelabel" x="953" y="71.5" text-anchor="middle">HTTPS</text>
       </g>
       <g class="dg-edge dg-edge--flow" data-edge="gateway-site" data-lit="false">
         <path class="dg-line" d="M1267,79.5 L1301,79.5" marker-end="url(#ov-arrow-flow)"/>
-        <text class="dg-edgelabel" x="1284" y="71.5" text-anchor="middle">route</text>
+        <text class="dg-edgelabel" x="1275" y="71.5" text-anchor="middle">route</text>
       </g>
       <g class="dg-edge dg-edge--flow" data-edge="pod-falco" data-lit="false">
         <path class="dg-line" d="M301,507.5 L335,507.5" marker-end="url(#ov-arrow-flow)"/>
-        <text class="dg-edgelabel" x="318" y="499.5" text-anchor="middle">syscalls</text>
+        <text class="dg-edgelabel" x="309" y="499.5" text-anchor="middle">syscalls</text>
       </g>
       <g class="dg-edge dg-edge--side" data-edge="twin-falco" data-lit="false">
         <path class="dg-line" d="M301,635.9 L479,635.9 L479,546" marker-end="url(#ov-arrow-side)"/>
@@ -124,7 +124,7 @@
       </g>
       <g class="dg-edge dg-edge--flow" data-edge="talon-kube-apiserver" data-lit="false">
         <path class="dg-line" d="M1267,507.5 L1301,507.5" marker-end="url(#ov-arrow-flow)"/>
-        <text class="dg-edgelabel" x="1284" y="499.5" text-anchor="middle">action</text>
+        <text class="dg-edgelabel" x="1275" y="499.5" text-anchor="middle">action</text>
       </g>
       <g class="dg-edge dg-edge--response" data-edge="kube-apiserver-pod" data-lit="false">
         <path class="dg-line" d="M1431,546 L1431,563.2 L157,563.2 L157,546" marker-end="url(#ov-arrow-response)"/>
@@ -132,7 +132,7 @@
       </g>
       <g class="dg-edge dg-edge--side" data-edge="kube-apiserver-siem" data-lit="false">
         <path class="dg-line" d="M1589,507.5 L1623,507.5" marker-end="url(#ov-arrow-side)"/>
-        <text class="dg-edgelabel" x="1606" y="499.5" text-anchor="middle">logs</text>
+        <text class="dg-edgelabel" x="1597" y="499.5" text-anchor="middle">logs</text>
       </g>
       <g class="dg-edge dg-edge--flow" data-edge="operator-repo" data-lit="false">
         <path class="dg-line" d="M301,229.3 L335,229.3" marker-end="url(#ov-arrow-flow)"/>
@@ -142,7 +142,7 @@
       </g>
       <g class="dg-edge dg-edge--flow" data-edge="repo-argocd" data-lit="false">
         <path class="dg-line" d="M623,229.3 L657,229.3" marker-end="url(#ov-arrow-flow)"/>
-        <text class="dg-edgelabel" x="640" y="221.3" text-anchor="middle">poll</text>
+        <text class="dg-edgelabel" x="631" y="221.3" text-anchor="middle">poll</text>
       </g>
       <g class="dg-edge dg-edge--flow" data-edge="argocd-apps" data-lit="false">
         <path class="dg-line" d="M801,267.8 L801,297.8" marker-end="url(#ov-arrow-flow)"/>
@@ -156,22 +156,22 @@
       </g>
       <g class="dg-edge dg-edge--flow" data-edge="cosign-ghcr" data-lit="false">
         <path class="dg-line" d="M1781,267.8 L1781,336.3 L1589,336.3" marker-end="url(#ov-arrow-flow)"/>
-        <text class="dg-edgelabel" x="1681.5" y="328.3" text-anchor="middle">push</text>
+        <text class="dg-edgelabel" x="1690.5" y="328.3" text-anchor="middle">push</text>
       </g>
       <g class="dg-edge dg-edge--flow" data-edge="ghcr-kyverno" data-lit="false">
         <path class="dg-line" d="M1301,336.3 L1267,336.3" marker-end="url(#ov-arrow-flow)"/>
-        <text class="dg-edgelabel" x="1284" y="328.3" text-anchor="middle">verify</text>
+        <text class="dg-edgelabel" x="1293" y="328.3" text-anchor="middle">verify</text>
       </g>
       <g class="dg-edge dg-edge--side" data-edge="ghcr-posture" data-lit="false">
         <path class="dg-line" d="M1589,336.3 L1623,336.3" marker-end="url(#ov-arrow-side)"/>
       </g>
       <g class="dg-edge dg-edge--flow" data-edge="falco-falcosidekick" data-lit="false">
         <path class="dg-line" d="M623,507.5 L657,507.5" marker-end="url(#ov-arrow-flow)"/>
-        <text class="dg-edgelabel" x="640" y="499.5" text-anchor="middle">alert</text>
+        <text class="dg-edgelabel" x="631" y="499.5" text-anchor="middle">alert</text>
       </g>
       <g class="dg-edge dg-edge--flow" data-edge="falcosidekick-talon" data-lit="false">
         <path class="dg-line" d="M945,507.5 L979,507.5" marker-end="url(#ov-arrow-flow)"/>
-        <text class="dg-edgelabel" x="962" y="499.5" text-anchor="middle">POST</text>
+        <text class="dg-edgelabel" x="953" y="499.5" text-anchor="middle">POST</text>
       </g>
     </g>
     <g class="dg-nodes">
