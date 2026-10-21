@@ -1,0 +1,98 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: work
+  namespace: work
+  labels:
+    app.kubernetes.io/name: work
+spec:
+  replicas: 2
+  # Two old ReplicaSets are enough to roll back with (as in cluster/infra/site).
+  revisionHistoryLimit: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: work
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: work
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        # 101 is the `nginx` user of the nginx-unprivileged base that the work image's Dockerfile builds on.
+        runAsNonRoot: true
+        runAsUser: 101
+        runAsGroup: 101
+        fsGroup: 101
+        seccompProfile:
+          type: RuntimeDefault
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: work
+      containers:
+        - name: nginx
+          # The work mockups served at /work/ (/work/vllm/, /work/bridge/, /work/flota/), built and
+          # signed by HubertMJ/work-mockups' .github/workflows/build-image.yml. Modelled on the lab's web
+          # image: nginx-unprivileged on port 8080 as uid 101 from the start, as PSS `restricted`
+          # requires, answering only under /work/ (and /healthz), so the Gateway passes the /work
+          # prefix through unchanged (cluster/infra/work/httproute.yaml). The tag here is
+          # informational: kustomization.yaml's `images:` pins the digest that is actually pulled
+          # (ADR 0008).
+          image: ghcr.io/hubertmj/work-mockups/work:main
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 200m
+              memory: 64Mi
+          livenessProbe:
+            # The image's /healthz answers from nginx's config without touching the filesystem.
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 1
+            periodSeconds: 10
+          volumeMounts:
+            # readOnlyRootFilesystem means nginx's three writable paths have to be provided. They
+            # are the only writable bytes in the pod, they are per-pod, and they vanish on restart.
+            - name: cache
+              mountPath: /var/cache/nginx
+            - name: run
+              mountPath: /var/run
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: cache
+          emptyDir:
+            sizeLimit: 16Mi
+        - name: run
+          emptyDir:
+            sizeLimit: 1Mi
+        - name: tmp
+          emptyDir:
+            sizeLimit: 16Mi

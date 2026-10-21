@@ -10,7 +10,7 @@
 #    2  kyverno-policies        the ClusterPolicies it enforces (CRDs must exist first)
 #    2  cloudflared             the tunnel (SOPS)
 #    3  gateway                 the Gateway and its HTTP-to-HTTPS redirect
-#    4  hello                   the page
+#    4  hello                   the page (site, lab and work beside it)
 #    5  policy-reporter         reports UI (cluster-internal) + Trivy CVE details plugin
 #    5  trivy-operator          image vulnerability / config / RBAC scanning + PolicyReport adapter
 #    5  kube-bench              daily CIS benchmark CronJob (k3s), results in the Job log
@@ -42,6 +42,7 @@ resources:
   - hello.yaml
   - site.yaml
   - lab.yaml
+  - work.yaml
   - policy-reporter.yaml
   - trivy-operator.yaml
   - kube-bench.yaml

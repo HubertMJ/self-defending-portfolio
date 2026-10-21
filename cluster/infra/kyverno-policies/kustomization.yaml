@@ -14,6 +14,9 @@ resources:
   # The detection lab preview's image (cluster/infra/lab, HubertMJ/detection-lab), lab namespace
   # only; its own policy, and Audit until the first lab image is built - see its header.
   - verify-lab-images.yaml
+  # The work mockups' image (cluster/infra/work, HubertMJ/work-mockups), work namespace only; its own
+  # policy, and Audit until the first work image is built and pinned - see its header.
+  - verify-work-images.yaml
   - restrict-image-registries.yaml
   - disallow-latest-tag.yaml
   # Phase 4, Enforce since plan commit 9 (see the switch marker in each file).
