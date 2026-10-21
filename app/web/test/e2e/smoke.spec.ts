@@ -732,8 +732,18 @@ test.describe("layout (ADR 0035, amended 2026-10-05; ?mock=1)", () => {
     await term.getByRole("button", { name: /Open the terminal/ }).click();
     const input = term.locator("#term-input");
     await expect(input).toBeEnabled({ timeout: 10_000 });
+    // The output at the top, with up to 80 px of the page above it in view - but never so much that the
+    // input leaves the screen: Chrome scrolls a partly hidden input's caret into view on every key
+    // press (1-2 px on a phone with the mock banner), and that is the browser answering a keystroke,
+    // not the page moving. Instant, not the page's smooth scrolling: `before` is read once the page
+    // has stopped, not halfway through the animation.
     await page.evaluate(() => document.querySelector(".term__out")?.scrollIntoView({ behavior: "instant", block: "start" }));
-    await page.evaluate(() => scrollBy(0, -80));
+    await page.evaluate(() => {
+      const below = innerHeight - (document.getElementById("term-input") as HTMLElement).getBoundingClientRect().bottom;
+      scrollBy({ top: -Math.min(80, Math.max(0, Math.floor(below) - 4)), behavior: "instant" });
+    });
+    const inView = () => input.evaluate((e) => { const r = e.getBoundingClientRect(); return r.top >= 0 && r.bottom <= innerHeight; });
+    expect(await inView(), "the input is on screen before the first key").toBe(true);
     const h = () => term.locator(".term__out").evaluate((e) => Math.round(e.getBoundingClientRect().height));
     const before = { out: await h(), y: await page.evaluate(() => scrollY) };
     expect(before.out).toBeGreaterThan(200);
@@ -746,8 +756,9 @@ test.describe("layout (ADR 0035, amended 2026-10-05; ?mock=1)", () => {
     }
     await expect(term.locator(".term__cmd")).toHaveCount(6);
     expect(await h()).toBe(before.out);
-    // (A pixel's rounding of the browser's scroll anchoring aside.)
-    expect(Math.abs((await page.evaluate(() => scrollY)) - before.y)).toBeLessThanOrEqual(1);
+    // Not a pixel: six commands of output, explanations and run updates later, the page is where it was.
+    expect(await page.evaluate(() => scrollY)).toBe(before.y);
+    expect(await inView()).toBe(true);
     // The output scrolls inside, at its bottom; the explanations are one line each, opened on a press.
     const out = await term.locator(".term__out").evaluate((e) => ({ sh: e.scrollHeight, ch: e.clientHeight, top: e.scrollTop }));
     if (out.sh > out.ch) expect(out.top + out.ch).toBeGreaterThanOrEqual(out.sh - 8);
