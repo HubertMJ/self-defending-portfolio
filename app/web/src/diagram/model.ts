@@ -43,7 +43,7 @@ export interface DiagramNode {
   role: Role;
   /** The defence layer this node is the main part of, if any (links the diagram to the defence map). */
   layer?: DefenceLayer;
-  /** One or two sentences for the caption panel. */
+  /** One or two sentences for the node panel under the drawing (src/node-panel). */
   blurb: string;
   /** Repository paths (files or directories) the node is drawn from. */
   sources: string[];

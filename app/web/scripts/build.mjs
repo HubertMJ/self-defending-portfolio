@@ -44,15 +44,18 @@ function stripMockBanner(html) {
 
 /**
  * The hero's architecture diagram, drawn from src/diagram at build time into the static HTML (so it
- * is there before any script, and without one): the wide layout and the phone's vertical one.
+ * is there before any script, and without one): the wide layout, the phone's vertical one and the node
+ * panel under them.
  */
 async function heroDiagrams() {
-  const { layout, serialise, validateModel } = await loadDiagram();
+  const { layout, panel, serialise, validateModel } = await loadDiagram();
   const problems = validateModel();
   if (problems.length) throw new Error(`diagram model: ${problems.join("; ")}`);
   return {
     "diagram.hero": serialise(layout("hero", { idPrefix: "dg", interactive: true }), "    "),
     "diagram.narrow": serialise(layout("narrow", { idPrefix: "dgn", interactive: true }), "    "),
+    // The node panel (src/node-panel): every node's details, laid out at build time so it never moves the page.
+    "diagram.panel": panel(),
   };
 }
 

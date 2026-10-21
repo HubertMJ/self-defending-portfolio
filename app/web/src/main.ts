@@ -7,6 +7,7 @@ import { ApiClient } from "./lib/api";
 import { Backfill } from "./lib/backfill";
 import { byId, h, prefersReducedMotion, replace } from "./lib/dom";
 import { installMock } from "./lib/mock-hook";
+import { mountNodePanels } from "./node-panel";
 import { type CorrelationIncident, isRunId } from "./lib/contract";
 import { type ConnectionState, type EventSourceFactory, EventStream } from "./lib/sse";
 import type { TimelineView } from "./lib/timeline";
@@ -182,9 +183,11 @@ function main(): void {
     evidence.setQuiet(quietRuns, startingTerminal);
   };
   // The hero's live architecture diagram (site redesign 2026-10-12): the SVG is in the static HTML;
-  // this lights the path of the newest run and answers clicks on its nodes. Mounted here, before the
+  // this lights the path of the newest run, and the node panel under it (src/node-panel, as on the
+  // landing page and /work/) shows a node's details on a hover, tap or focus. Mounted here, before the
   // correlation whose data feeds it; the tour below is the same.
-  const diagram = mountDiagram(byId("diagram"), { caption: byId("diagram-caption"), status: byId("diagram-status") });
+  mountNodePanels(byId("diagram"));
+  const diagram = mountDiagram(byId("diagram"), { status: byId("diagram-status") });
   let tourIncidents: readonly CorrelationIncident[] = [];
   /** Re-derive the tour's progress and light the diagram; a no-op until the tour and the titles exist. */
   let refreshTour: () => void = () => {};

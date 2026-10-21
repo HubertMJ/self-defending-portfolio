@@ -1,0 +1,160 @@
+/* The node panel (src/node-panel): a diagram's box details under the drawing. The slot is laid out with
+   every entry stacked in one grid cell, so it is as tall as the tallest from the first paint and never
+   changes height; only opacity and transform move. The accent is the box's colour. */
+
+.np-slot {
+  position: relative;
+  margin-top: 0.75rem;
+}
+
+.np-panel {
+  display: grid;
+  position: relative;
+  padding: 0.75rem 2.75rem 0.8rem 1rem;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--np-accent, var(--border));
+  border-radius: var(--radius-sm, 6px);
+  background: var(--surface);
+  color: var(--text);
+  opacity: 0;
+  transform: translateY(-8px);
+  visibility: hidden;
+  transition: opacity 240ms ease-out, transform 240ms ease-out, visibility 0s linear 240ms, border-color 180ms ease-out;
+}
+
+.np-panel[data-open="true"] {
+  opacity: 1;
+  transform: none;
+  visibility: visible;
+  transition: opacity 240ms ease-out, transform 240ms ease-out, border-color 180ms ease-out;
+}
+
+.np-panel[data-role="path"] { --np-accent: var(--role-entry); }
+.np-panel[data-role="site"] { --np-accent: var(--accent); }
+.np-panel[data-role="project"] { --np-accent: var(--attack); }
+.np-panel[data-role="lab"] { --np-accent: var(--role-lab); }
+.np-panel[data-role="work"] { --np-accent: var(--role-work, var(--role-lab)); }
+/* The detection lab's roles. */
+.np-panel[data-role="entry"] { --np-accent: var(--role-entry); }
+.np-panel[data-role="attack"] { --np-accent: var(--attack); }
+.np-panel[data-role="detect"] { --np-accent: var(--detect); }
+.np-panel[data-role="record"] { --np-accent: var(--role-record); }
+.np-panel[data-role="neutral"] { --np-accent: var(--neutral, var(--border)); }
+
+/* Every entry in the same cell: the last fades out quickly while the next fades in just after it, so
+   two never read over each other; nothing reflows. */
+.np-item {
+  grid-area: 1 / 1;
+  min-width: 0;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 110ms ease-out, visibility 0s linear 110ms;
+}
+
+.np-item[data-on="true"] {
+  opacity: 1;
+  visibility: visible;
+  transition: opacity 200ms ease-out 70ms;
+}
+
+.np-title {
+  margin: 0 0 0.25rem;
+  font-weight: 650;
+}
+
+.np-sub {
+  margin-left: 0.35rem;
+  font: 400 0.75rem var(--font-mono);
+  color: var(--text-faint);
+}
+
+.np-text {
+  margin: 0;
+  max-width: 62ch;
+  color: var(--text-muted);
+  font-size: 0.92rem;
+}
+
+.np-links {
+  margin: 0.4rem 0 0;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  overflow-wrap: anywhere;
+}
+
+.np-links code {
+  font-size: 0.8rem;
+}
+
+.np-more {
+  margin: 0.4rem 0 0;
+  font-size: 0.9rem;
+}
+
+.np-close {
+  position: absolute;
+  top: 0.4rem;
+  right: 0.45rem;
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm, 6px);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 1.15rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.np-close:hover,
+.np-close:focus-visible {
+  border-color: var(--border);
+  color: var(--text);
+}
+
+.np-live {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* The box whose details show, and a box with the keyboard's focus. */
+[data-node].np-on rect {
+  stroke-width: 2.8;
+  filter: brightness(1.12);
+}
+
+[data-node][role="button"] {
+  cursor: pointer;
+}
+
+[data-node]:focus {
+  outline: none;
+}
+
+[data-node]:focus-visible rect {
+  stroke: var(--text);
+  stroke-width: 2.8;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .np-panel,
+  .np-panel[data-open="true"],
+  .np-item,
+  .np-item[data-on="true"] {
+    transition: none;
+  }
+
+  .np-panel {
+    transform: none;
+  }
+}
+
+/* ASCII mode has its own popups beside the boxes. */
+html.ascii .np-slot {
+  display: none;
+}

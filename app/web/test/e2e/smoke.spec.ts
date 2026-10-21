@@ -192,19 +192,24 @@ test.describe("layout (ADR 0035, amended 2026-10-05; ?mock=1)", () => {
     await expect(page.locator('footer.site-footer a[href="#verify"]')).toHaveCount(1);
   });
 
-  test("above the fold: at 1440x900 the whole hero diagram and its caption fit; at 390x844 the first nodes show, the two buttons share a row", async ({ page }) => {
+  test("above the fold: at 1440x900 the whole hero drawing and its status line fit, the node panel's reserved space starts under them; at 390x844 the first nodes show, the two buttons share a row", async ({ page }) => {
     // Measured with the mock banner in the header (the live page has none, so it only has more room).
     await page.setViewportSize({ width: 1440, height: 900 });
     await page.goto("/?mock=1");
     await expect(page.locator("#hero-stats .herostats__num")).toHaveCount(3);
     const desk = await page.evaluate(() => ({
       scrollY: window.scrollY,
-      figureBottom: (document.getElementById("diagram") as HTMLElement).getBoundingClientRect().bottom,
+      drawingBottom: (document.querySelector("#diagram .dg-wide svg") as SVGElement).getBoundingClientRect().bottom,
+      slotTop: (document.querySelector("#diagram .np-slot") as HTMLElement).getBoundingClientRect().top,
       statusBottom: (document.getElementById("diagram-status") as HTMLElement).getBoundingClientRect().bottom,
     }));
     expect(desk.scrollY).toBe(0);
-    expect(desk.statusBottom, "the diagram's caption line is above the fold").toBeLessThanOrEqual(900);
-    expect(desk.figureBottom).toBeLessThanOrEqual(900);
+    expect(desk.statusBottom, "the diagram's status line is above the fold").toBeLessThanOrEqual(900);
+    expect(desk.drawingBottom).toBeLessThanOrEqual(900);
+    // The node panel's slot (always as tall as its tallest entry, so it never moves the page) begins
+    // in view, right under the status line.
+    expect(desk.slotTop).toBeGreaterThanOrEqual(desk.statusBottom);
+    expect(desk.slotTop).toBeLessThan(900);
     await page.setViewportSize({ width: 390, height: 844 });
     await page.goto("/?mock=1");
     await expect(page.locator("#hero-stats .herostats__num")).toHaveCount(3);
@@ -241,38 +246,62 @@ test.describe("layout (ADR 0035, amended 2026-10-05; ?mock=1)", () => {
     expect(await page.evaluate(() => document.documentElement.scrollHeight), "phone").toBeLessThanOrEqual(5200);
   });
 
-  test("the diagram's nodes are reached by keyboard: Tab to one, Enter or Space opens its caption, Escape closes; aria-expanded follows", async ({ page, isMobile }) => {
+  test("the diagram's nodes open the node panel: focus, Enter or Space shows a node's details in reserved space, a hover swaps them, × and Escape close; aria-expanded follows", async ({ page, isMobile }) => {
     const problems = guardConsole(page);
     await page.goto("/?mock=1");
     const svg = page.locator(isMobile ? ".dg-narrow svg" : ".dg-wide svg");
     await expect(svg).toHaveAttribute("role", "group");
     await expect(svg).toHaveAttribute("aria-labelledby", /title .*desc/);
-    // Tab from the primary button reaches the first node (the secondary button is in between).
+    const panel = page.locator("#diagram .np-panel");
+    const shown = page.locator('#diagram .np-item[data-on="true"]');
+    await expect(panel).toHaveAttribute("data-open", "false");
+    // The slot keeps its height whether a node's details show or not: the page never moves.
+    const slotHeight = () => page.locator("#diagram .np-slot").evaluate((el) => el.getBoundingClientRect().height);
+    const closedHeight = await slotHeight();
+    expect(closedHeight).toBeGreaterThan(0);
+    // Tab from the primary button reaches the first node (the secondary button is in between); focus opens its details.
     await page.locator("#hero-cta").focus();
     await page.keyboard.press("Tab");
     await page.keyboard.press("Tab");
     const first = svg.locator(".dg-node").first();
     await expect(first).toBeFocused();
     await expect(first).toHaveAttribute("role", "button");
-    await expect(first).toHaveAttribute("aria-expanded", "false");
     await page.keyboard.press("Enter");
-    const caption = page.locator("#diagram-caption");
-    await expect(caption).toBeVisible();
+    await expect(panel).toHaveAttribute("data-open", "true");
+    await expect(panel).toBeVisible();
     await expect(first).toHaveAttribute("aria-expanded", "true");
-    await expect(caption.locator(".dg-caption__title")).toContainText("Visitor");
+    await expect(shown.locator(".np-title")).toContainText("Visitor");
+    expect(await slotHeight()).toBe(closedHeight);
     await page.keyboard.press("Escape");
-    await expect(caption).toBeHidden();
+    await expect(panel).toHaveAttribute("data-open", "false");
     await expect(first).toHaveAttribute("aria-expanded", "false");
-    // Space on another node opens its caption, with a link into the repository.
+    // Space on another node shows its details, with a link into the repository.
     const falco = svg.locator('.dg-node[data-node="falco"]');
     await falco.focus();
     await page.keyboard.press("Space");
-    await expect(caption).toContainText("Falco watches every syscall over eBPF");
-    await expect(caption.locator('a[href*="/tree/main/cluster/infra/falco"]')).toHaveCount(1);
+    await expect(shown).toContainText("Falco watches every syscall over eBPF");
+    await expect(shown.locator('a[href*="/tree/main/cluster/infra/falco"]')).toHaveCount(1);
     await expect(falco).toHaveAttribute("aria-expanded", "true");
-    await caption.locator(".dg-caption__close").click();
-    await expect(caption).toBeHidden();
+    if (!isMobile) {
+      // A mouse over another node crossfades to its details; leaving keeps them.
+      await svg.locator('.dg-node[data-node="talon"]').hover();
+      await expect(shown).toHaveAttribute("data-for", "talon");
+      await page.mouse.move(0, 0);
+      await expect(shown).toHaveAttribute("data-for", "talon");
+    }
+    await page.locator("#diagram .np-close").click();
+    await expect(panel).toHaveAttribute("data-open", "false");
+    expect(await slotHeight()).toBe(closedHeight);
     expect(problems).toEqual([]);
+  });
+
+  test("the node panel slides and crossfades, and not at all under reduced motion", async ({ page }) => {
+    const durations = () => page.locator("#diagram .np-panel").evaluate((el) => getComputedStyle(el).transitionDuration);
+    await page.goto("/?mock=1");
+    expect(await durations()).toMatch(/0\.24s/);
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await page.goto("/?mock=1");
+    expect(await durations()).toMatch(/^0s(, 0s)*$/);
   });
 
   test("the tour advances through its steps from what the visitor really did (mock)", async ({ page, isMobile }) => {
@@ -2819,7 +2848,7 @@ test.describe("this session first (mock, ADR 0035 amendment 2026-10-06)", () => 
 
 // ASCII mode, the site's hidden terminal look (src/ascii): off by default, on by a link or by typing
 // "ascii", remembered across visits; the architecture diagram becomes a character drawing that fits
-// the page and still opens its captions.
+// the page and still answers a click on a box (the node panel itself is hidden in that look).
 test("ASCII mode: a link turns it on, the diagram is drawn in characters, typing ascii turns it off and it is remembered", async ({ page }) => {
   const errors = guardConsole(page);
   await page.goto("/?mock=1");
@@ -2827,13 +2856,15 @@ test("ASCII mode: a link turns it on, the diagram is drawn in characters, typing
   await expect(page.locator("pre.ascii-dg")).toHaveCount(0);
   await page.goto("/?mock=1&ascii=1");
   await expect(page.locator("html")).toHaveClass(/ascii/);
+  // ASCII mode keeps its own popups beside the boxes: the node panel is not shown.
+  await expect(page.locator("#diagram .np-slot")).toBeHidden();
   const dg = page.locator("pre.ascii-dg:not([hidden])").first();
   await expect(dg).toContainText("Cloudflare edge");
   await expect(dg).toContainText("Falco");
   await expect(page.locator(".ascii-banner")).toBeVisible();
   await expect.poll(() => dg.evaluate((el) => el.scrollWidth <= (el.parentElement as HTMLElement).clientWidth + 1)).toBe(true);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-  // The drawing passes a click on a box to the diagram's node: its caption opens.
+  // The drawing passes a click on a box to the diagram's node, which the node panel marks open.
   await dg.evaluate((pre) => {
     const lines = (pre.textContent ?? "").split("\n");
     const r = lines.findIndex((l) => l.includes("Falco Talon"));
