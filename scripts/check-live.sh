@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # The live site as a visitor sees it: every page and the API answer on their paths with the
-# security headers, and the detection lab's page and run document (/lab/, /cluster/api/lab/latest). EXPECT=landing (the default) is the site after the landing page took `/`;
-# EXPECT=cluster is the state before it, when `/` still served the cluster page and the bare /api
-# was routed. Read-only: GETs only, nothing that spends the attack quota.
+# security headers, the detection lab's page and run document (/lab/, /cluster/api/lab/latest) and
+# the work mockups (/work/vllm/, /work/bridge/, /work/flota/). EXPECT=landing (the default) is the
+# site after the landing page took `/`; EXPECT=cluster is the state before it, when `/` still
+# served the cluster page and the bare /api was routed. Read-only: GETs only, nothing that spends
+# the attack quota.
 #
 #   scripts/check-live.sh                 (or: EXPECT=cluster BASE=https://... scripts/check-live.sh)
 set -euo pipefail
@@ -38,18 +40,29 @@ check /cluster/api/scenarios 200 '"id"'
 case $EXPECT in
   landing)
     check / 200 'What I work with'
-    check /lab/ 200 'Detection lab'
-    # The lab page keeps the landing page's CSP to the character (Trusted Types; connect-src 'self'
-    # for the run below), and the API serves the latest run document read-only, schema 1.
+    # The lab page and the work mockups keep the landing page's CSP to the character (Trusted Types;
+    # connect-src 'self' for the lab's run below), and the API serves the latest run document
+    # read-only, schema 1. csp_as_landing <label> judges the headers of the check just before it.
     csp_of() { grep -i '^content-security-policy:' "$1" 2>/dev/null | tr -d '\r' || true; }
-    lab_csp=$(csp_of "$WORK/headers")
     curl -sS -o /dev/null -D "$WORK/landing-headers" --max-time 20 "$BASE/" || true
-    if [ -n "$lab_csp" ] && [ "$lab_csp" = "$(csp_of "$WORK/landing-headers")" ] \
-      && grep -qF "require-trusted-types-for 'script'" <<<"$lab_csp"; then
-      printf '  ok    %-26s CSP as / (Trusted Types)\n' /lab/
-    else
-      printf '  FAIL  %-26s CSP differs from / or lacks Trusted Types\n' /lab/; failures=$((failures + 1))
-    fi
+    csp_as_landing() {
+      local csp
+      csp=$(csp_of "$WORK/headers")
+      if [ -n "$csp" ] && [ "$csp" = "$(csp_of "$WORK/landing-headers")" ] \
+        && grep -qF "require-trusted-types-for 'script'" <<<"$csp"; then
+        printf '  ok    %-26s CSP as / (Trusted Types)\n' "$1"
+      else
+        printf '  FAIL  %-26s CSP differs from / or lacks Trusted Types\n' "$1"; failures=$((failures + 1))
+      fi
+    }
+    check /lab/ 200 'Detection lab'
+    csp_as_landing /lab/
+    # The work mockups (cluster/infra/work, image from HubertMJ/work-mockups): three pages under the
+    # /work prefix, each with its own title; the route sets the same CSP on every /work path.
+    check /work/vllm/ 200 '<title>vLLM Deployment Manager'
+    check /work/bridge/ 200 '<title>Git forge'
+    check /work/flota/ 200 '<title>Flota'
+    csp_as_landing /work/
     check /cluster/api/lab/latest 200 '"schema"'
     if python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert d["schema"] == 1 and isinstance(d["sample"], bool); print("  lab run:", d.get("run", {}).get("mode"), d.get("run", {}).get("finished_at"))' "$WORK/body" \
       && grep -qi '^content-type: application/json' "$WORK/headers"; then

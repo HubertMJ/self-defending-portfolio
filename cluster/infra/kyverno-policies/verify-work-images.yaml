@@ -1,0 +1,105 @@
+# The work mockups' image policy (cluster/infra/work, HubertMJ/work-mockups), the `work` namespace
+# only. The exact same supply-chain checks as verify-lab-images.yaml - a cosign keyless signature and
+# an SPDX SBOM attestation made by the repository's own build-image.yml workflow on refs/heads/main,
+# discovered through the cosign v3 Sigstore bundle referrers - in its own ClusterPolicy, for the same
+# reason the lab has one: a verifyImages rule's failureAction is resolved for the whole policy, so an
+# Audit rule next to Enforce rules would be enforced anyway. See verify-portfolio-images.yaml's header
+# for the mechanics (keyless/Fulcio/Rekor, SigstoreBundle, the two-field Audit<->Enforce switch).
+#
+# ---- Enforce ----
+#
+# It started as Audit while cluster/infra/work pinned the all-zero placeholder digest (an Enforce rule
+# would have rejected the work Deployment and failed `make validate`'s `kyverno apply`). The first work
+# image is now built, signed and pinned, so both rules are Enforce and verify-signature-work rewrites the
+# reference to the verified digest, as verify-lab-images.yaml was flipped (5ca3db4);
+# verify-sbom-attestation-work keeps mutateDigest/verifyDigest false.
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: verify-work-images
+  annotations:
+    policies.kyverno.io/title: Verify work mockups image signature and SBOM
+    policies.kyverno.io/category: Supply Chain Security
+    policies.kyverno.io/severity: high
+    policies.kyverno.io/subject: Pod
+    policies.kyverno.io/description: >-
+      Every container image in the `work` namespace must carry a cosign keyless signature made by
+      HubertMJ/work-mockups' build-image.yml workflow on refs/heads/main, and an SPDX SBOM
+      attestation signed by the same identity. Enforced.
+spec:
+  # Fail, not Ignore, bounded to the one namespace below, as verify-lab-images.yaml is.
+  failurePolicy: Fail
+  # The same 30 s ceiling as verify-portfolio-images.yaml so a cold verification is not cut off.
+  webhookTimeoutSeconds: 30
+  # Admission only, same reasoning as verify-portfolio-images.yaml.
+  background: false
+  rules:
+    - name: verify-signature-work
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+              namespaces:
+                - work
+      verifyImages:
+        - imageReferences:
+            - "ghcr.io/hubertmj/work-mockups/*"
+          type: SigstoreBundle
+          # Enforce with mutateDigest, as verify-lab-images.yaml: the admitted reference is the verified
+          # digest.
+          failureAction: Enforce
+          mutateDigest: true
+          verifyDigest: true
+          required: true
+          attestors:
+            - count: 1
+              entries:
+                - keyless:
+                    # HubertMJ/work-mockups' build-image.yml on main, anchored at both ends so no
+                    # fork, pull_request run or other workflow in that repository satisfies it. The
+                    # two-line YAML double-quoted continuation keeps it one unbroken regex under the
+                    # column limit, as in verify-lab-images.yaml.
+                    subjectRegExp: "^https://github\\.com/HubertMJ/work-mockups/\
+                      \\.github/workflows/build-image\\.yml@refs/heads/main$"
+                    issuer: https://token.actions.githubusercontent.com
+                    rekor:
+                      url: https://rekor.sigstore.dev
+
+    - name: verify-sbom-attestation-work
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+              namespaces:
+                - work
+      verifyImages:
+        - imageReferences:
+            - "ghcr.io/hubertmj/work-mockups/*"
+          failureAction: Enforce
+          type: SigstoreBundle
+          # Stay false in both states, as verify-portfolio-images.yaml's SBOM rule explains:
+          # verify-signature-work already pins and verifies the digest.
+          mutateDigest: false
+          verifyDigest: false
+          attestations:
+            - type: https://spdx.dev/Document
+              attestors:
+                - count: 1
+                  entries:
+                    - keyless:
+                        subjectRegExp: "^https://github\\.com/HubertMJ/work-mockups/\
+                          \\.github/workflows/build-image\\.yml@refs/heads/main$"
+                        issuer: https://token.actions.githubusercontent.com
+                        rekor:
+                          url: https://rekor.sigstore.dev
+              conditions:
+                - all:
+                    # Shallow on purpose: a signed SPDX document exists and is ours; package-level
+                    # judgement is Trivy's job.
+                    - key: "{{ spdxVersion || '' }}"
+                      operator: NotEquals
+                      value: ""
+                      message: >-
+                        attestation is not an SPDX document: the predicate has no spdxVersion field

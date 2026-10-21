@@ -1,0 +1,25 @@
+# The work mockups (/work/): the image built from HubertMJ/work-mockups. Only the web part of the lab's
+# shape (cluster/infra/lab): no CronJob, no runner, no SOPS/KSOPS. The landing page (/) stays in
+# cluster/infra/site, the lab (/lab/) in cluster/infra/lab and the cluster page (/cluster/) in hello.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: work
+
+resources:
+  - namespace.yaml
+  - deployment.yaml
+  - service.yaml
+  - httproute.yaml
+  - networkpolicy.yaml
+  - ciliumnetworkpolicy.yaml
+
+images:
+  - name: ghcr.io/hubertmj/work-mockups/work
+    newTag: main
+    # HubertMJ/work-mockups main (commit e1f064d), build-image on main: the vLLM mock-up, the bridge and
+    # Flota pages, /work/ redirecting to the landing's projects. Pinned by hand, like the lab's pin:
+    # scripts/bump-image-digest.sh only rewrites this project's own images, not this foreign-repo ref.
+    # Verified signed with a verified SPDX SBOM attestation (scripts/verify-image.sh, the work-mockups
+    # workflow identity).
+    digest: sha256:b93817377c7853c9731150413cdd4eec69053aebc5796682843cf1b6763409c9

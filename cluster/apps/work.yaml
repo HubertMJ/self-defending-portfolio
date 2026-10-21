@@ -1,0 +1,27 @@
+# Wave 4, beside site, lab and hello: the work mockups at /work/ (image from HubertMJ/work-mockups).
+# Its own Application, mirroring lab.yaml: a separate repository and image with its own route and
+# namespace, so it renders and syncs on its own.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: work
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "4"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/HubertMJ/self-defending-portfolio.git
+    targetRevision: main
+    path: cluster/infra/work
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: work
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=false

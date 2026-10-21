@@ -122,3 +122,27 @@ spec:
               - image: "ghcr.io/hubertmj/detection-lab/*"
             =(ephemeralContainers):
               - image: "ghcr.io/hubertmj/detection-lab/*"
+
+    # The work mockups' namespace (cluster/infra/work): one registry path too, the work-mockups
+    # repository's, whose images verify-work-images checks against that repository's workflow.
+    - name: validate-work-registry
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+              namespaces:
+                - work
+      validate:
+        failureAction: Enforce
+        message: >-
+          Images in this namespace must come from ghcr.io/hubertmj/work-mockups/ - the only
+          registry path whose contents the work-mockups repository builds and signs.
+        pattern:
+          spec:
+            containers:
+              - image: "ghcr.io/hubertmj/work-mockups/*"
+            =(initContainers):
+              - image: "ghcr.io/hubertmj/work-mockups/*"
+            =(ephemeralContainers):
+              - image: "ghcr.io/hubertmj/work-mockups/*"

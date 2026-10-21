@@ -1,0 +1,25 @@
+# The one hole in the default-deny above, the same as cluster/infra/lab's: Gateway (cilium-envoy, host
+# network) traffic reaches the pod with the reserved ingress/host identities, not a pod label, so a
+# stock NetworkPolicy ingress rule would never match it (ADR 0010). "host" also covers the kubelet's
+# probes.
+#
+# No egress rule is granted: the work mockups are static pages that call nothing, so the pod needs no
+# DNS, no API server and no internet. Anything it tries to send outbound is dropped and shows up in
+# Hubble - the same posture as cluster/infra/site and cluster/infra/lab.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-gateway-ingress
+  namespace: work
+spec:
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: work
+  ingress:
+    - fromEntities:
+        - ingress
+        - host
+      toPorts:
+        - ports:
+            - port: "8080"
+              protocol: TCP

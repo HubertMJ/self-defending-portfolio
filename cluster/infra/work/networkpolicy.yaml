@@ -1,0 +1,13 @@
+# Default-deny for the namespace, as in cluster/infra/lab: the portable baseline, enforced by Cilium.
+# Selecting no pods' traffic while declaring both policyTypes says "nothing in, nothing out, unless
+# another policy allows it".
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+  namespace: work
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress

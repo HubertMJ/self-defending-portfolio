@@ -13,8 +13,10 @@ posture.
 [hubertjablon.ski](https://hubertjablon.ski) comes from
 [HubertMJ/hubertjablon.ski](https://github.com/HubertMJ/hubertjablon.ski), and the detection lab
 preview at [/lab/](https://hubertjablon.ski/lab/) from its own repository
-[HubertMJ/detection-lab](https://github.com/HubertMJ/detection-lab) and image; this repository runs
-all three (plus the cluster page at `/cluster/`).
+[HubertMJ/detection-lab](https://github.com/HubertMJ/detection-lab) and image, and the work mockups
+at [/work/](https://hubertjablon.ski/work/vllm/) from
+[HubertMJ/work-mockups](https://github.com/HubertMJ/work-mockups) and its image; this repository runs
+all four (plus the cluster page at `/cluster/`).
 <!-- TODO-CONTENT: confirm what the live site serves today and update this line when the phase 5/6 demo goes live. -->
 
 **Status:** phases 0-6 are built and running — a hardened host, GitOps, a public site behind a

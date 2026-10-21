@@ -48,8 +48,16 @@ flowchart LR
             SVC["Service cilium-gateway-portfolio<br/>ClusterIP; LB IP 10.4.1.30 not announced"]
         end
         subgraph NS_SITE["ns site"]
-            SROUTE["HTTPRoute site<br/>/ (exact), /lab, /site-assets<br/>security headers"]
+            SROUTE["HTTPRoute site<br/>/ (exact), /site-assets<br/>security headers"]
             SITE["Deployment site x2<br/>landing page image :8080, uid 101<br/>(built in HubertMJ/hubertjablon.ski)"]
+        end
+        subgraph NS_LAB["ns lab"]
+            LROUTE["HTTPRoute lab<br/>/lab<br/>security headers"]
+            LAB["Deployment lab x2<br/>lab image :8080, uid 101<br/>(built in HubertMJ/detection-lab)"]
+        end
+        subgraph NS_WORK["ns work"]
+            WROUTE["HTTPRoute work<br/>/work<br/>security headers"]
+            WORKD["Deployment work x2<br/>work image :8080, uid 101<br/>(built in HubertMJ/work-mockups)"]
         end
         subgraph NS_HELLO["ns hello"]
             ROUTE["HTTPRoute hello<br/>/cluster rewritten to /, every other path<br/>security headers"]
@@ -67,6 +75,8 @@ flowchart LR
     SVC --- ENVOY
     ENVOY --- GW
     GW --> SROUTE --> SITE
+    GW --> LROUTE --> LAB
+    GW --> WROUTE --> WORKD
     GW --> ROUTE --> WEB
     GW --> AROUTE --> API
 ```
@@ -84,7 +94,7 @@ What the diagram claims, and where it is written down:
 | HTTP is redirected to HTTPS twice: the `:80` listener, and `X-Forwarded-Proto: http` on `:443` | [`httproute-https-redirect.yaml`](../../cluster/infra/gateway/httproute-https-redirect.yaml), [`cluster/infra/hello/httproute.yaml`](../../cluster/infra/hello/httproute.yaml) |
 | HSTS, CSP, nosniff, Referrer-Policy, Permissions-Policy, COOP are set at the Gateway | [`cluster/infra/hello/httproute.yaml`](../../cluster/infra/hello/httproute.yaml) |
 | The route's CSP is exactly the web image's (same-origin scripts/styles/`connect-src`, Trusted Types enforced); CI fails if the two strings differ | [`app/web/security-headers.conf`](../../app/web/security-headers.conf), [`scripts/check-web-csp.sh`](../../scripts/check-web-csp.sh), [ADR 0019](../adr/0019-frontend-stack-and-csp.md) |
-| The landing page is the entry: `/` (exact), `/lab` and `/site-assets` go to the site image; hello keeps every other path and serves the cluster page at `/cluster/`, the prefix cut before nginx so the image is unchanged; an exact match and a longer prefix outrank hello's `/`, and the site route repeats the HTTP-to-HTTPS redirect and hello's headers | [`cluster/infra/site/httproute.yaml`](../../cluster/infra/site/httproute.yaml), [`cluster/infra/hello/httproute.yaml`](../../cluster/infra/hello/httproute.yaml), [`scripts/check-web-csp.sh`](../../scripts/check-web-csp.sh) |
+| The landing page is the entry: `/` (exact) and `/site-assets` go to the site image, `/lab` to the detection lab's image and `/work` to the work mockups' image; hello keeps every other path and serves the cluster page at `/cluster/`, the prefix cut before nginx so the image is unchanged; an exact match and a longer prefix outrank hello's `/`, and the site, lab and work routes repeat the HTTP-to-HTTPS redirect and hello's headers | [`cluster/infra/site/httproute.yaml`](../../cluster/infra/site/httproute.yaml), [`cluster/infra/lab/httproute.yaml`](../../cluster/infra/lab/httproute.yaml), [`cluster/infra/work/httproute.yaml`](../../cluster/infra/work/httproute.yaml), [`cluster/infra/hello/httproute.yaml`](../../cluster/infra/hello/httproute.yaml), [`scripts/check-web-csp.sh`](../../scripts/check-web-csp.sh) |
 | `/cluster/api` wins over hello's `/cluster` (longer prefix) and reaches the pod as `/api`; the bare `/api` is not routed (it falls to hello's nginx, which answers 404). The route repeats the HTTP-to-HTTPS redirect and sets its own headers, CSP `default-src 'none'` | [`cluster/infra/portfolio-api/httproute.yaml`](../../cluster/infra/portfolio-api/httproute.yaml), [ADR 0015](../adr/0015-portfolio-api.md) |
 | Envoy trusts exactly one `X-Forwarded-For` hop (cloudflared) | [`cluster/apps/cilium.yaml`](../../cluster/apps/cilium.yaml) (`xffNumTrustedHops: 1`) |
 | `site` is shaped like `hello`: default-deny, ingress only from `ingress`/`host` on 8080, no egress, PSS `restricted` | [`cluster/infra/site/`](../../cluster/infra/site/) |
@@ -290,7 +300,9 @@ it is summarised), [`cluster/infra/portfolio-api/rbac.yaml`](../../cluster/infra
 | `kyverno` | restricted | none (egress open, see threat model) | admission, background, cleanup, reports controllers | [`cluster/apps/kyverno.yaml`](../../cluster/apps/kyverno.yaml) |
 | `cloudflared` | restricted | CNP, explicit egress | tunnel x2 | [`cluster/infra/cloudflared/`](../../cluster/infra/cloudflared/) |
 | `gateway` | restricted | n/a (no pods) | Gateway, redirect route, TLS Secret | [`cluster/infra/gateway/`](../../cluster/infra/gateway/) |
-| `site` | restricted | default-deny + CNP | the landing page and `/lab/` (image from [hubertjablon.ski](https://github.com/HubertMJ/hubertjablon.ski)) | [`cluster/infra/site/`](../../cluster/infra/site/) |
+| `site` | restricted | default-deny + CNP | the landing page (image from [hubertjablon.ski](https://github.com/HubertMJ/hubertjablon.ski)) | [`cluster/infra/site/`](../../cluster/infra/site/) |
+| `lab` | restricted | default-deny + CNPs | the detection lab preview (`/lab/`, image from [detection-lab](https://github.com/HubertMJ/detection-lab)), its daily run CronJob | [`cluster/infra/lab/`](../../cluster/infra/lab/) |
+| `work` | restricted | default-deny + CNP | the work mockups (`/work/`, image from [work-mockups](https://github.com/HubertMJ/work-mockups)) | [`cluster/infra/work/`](../../cluster/infra/work/) |
 | `hello` | restricted | default-deny + CNP | the cluster page (`/cluster/`) | [`cluster/infra/hello/`](../../cluster/infra/hello/) |
 | `policy-reporter` | restricted | default-deny + CNPs | reports UI | [`cluster/infra/policy-reporter/`](../../cluster/infra/policy-reporter/) |
 | `trivy-system` | restricted | default-deny + CNPs (FQDN allow-list) | Trivy operator, server, scan Jobs, adapter | [`cluster/infra/trivy-operator/`](../../cluster/infra/trivy-operator/) |
