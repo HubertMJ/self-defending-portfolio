@@ -2,6 +2,7 @@
 // adds the live panels on top, each of which degrades to its own offline state independently.
 
 import { setupAscii } from "./ascii";
+import { sayHello } from "./console-hello";
 import { ApiClient } from "./lib/api";
 import { Backfill } from "./lib/backfill";
 import { byId, h, prefersReducedMotion, replace } from "./lib/dom";
@@ -79,6 +80,8 @@ function main(): void {
   if (prefersReducedMotion()) document.documentElement.classList.add("reduced-motion");
   setupThemeToggle();
   setupAscii("Self-defending cluster");
+  // The DevTools greeting the site's other pages print too, with this image's commit (/build.json).
+  sayHello({ repo: "self-defending-portfolio", buildInfo: "/build.json" });
   // The sticky header's height (the mock banner included), for what sticks below it (the tour panel).
   const header = document.querySelector<HTMLElement>(".site-header");
   if (header && typeof ResizeObserver === "function") {
