@@ -7,26 +7,36 @@
   margin-top: 0.75rem;
 }
 
+/* The panel is the reserved slot's grid: transparent, as tall as its tallest entry. What shows is the box
+   behind the entries, as tall as the entry that shows. Opening slides and fades the whole panel. */
 .np-panel {
   display: grid;
   position: relative;
-  padding: 0.75rem 2.75rem 0.8rem 1rem;
-  border: 1px solid var(--border);
-  border-left: 3px solid var(--np-accent, var(--border));
-  border-radius: var(--radius-sm, 6px);
-  background: var(--surface);
   color: var(--text);
   opacity: 0;
   transform: translateY(-8px);
   visibility: hidden;
-  transition: opacity 240ms ease-out, transform 240ms ease-out, visibility 0s linear 240ms, border-color 180ms ease-out;
+  transition: opacity 240ms ease-out, transform 240ms ease-out, visibility 0s linear 240ms;
 }
 
 .np-panel[data-open="true"] {
   opacity: 1;
   transform: none;
   visibility: visible;
-  transition: opacity 240ms ease-out, transform 240ms ease-out, border-color 180ms ease-out;
+  transition: opacity 240ms ease-out, transform 240ms ease-out;
+}
+
+.np-box {
+  position: absolute;
+  inset: 0 0 auto;
+  box-sizing: border-box;
+  height: var(--np-h, 100%);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--np-accent, var(--border));
+  border-radius: var(--radius-sm, 6px);
+  background: var(--surface);
+  pointer-events: none;
+  transition: height 200ms ease-out, border-color 180ms ease-out;
 }
 
 .np-panel[data-role="path"] { --np-accent: var(--role-entry); }
@@ -45,7 +55,10 @@
    two never read over each other; nothing reflows. */
 .np-item {
   grid-area: 1 / 1;
+  align-self: start;
+  position: relative;
   min-width: 0;
+  padding: 0.75rem 2.75rem 0.8rem 1rem;
   opacity: 0;
   visibility: hidden;
   transition: opacity 110ms ease-out, visibility 0s linear 110ms;
@@ -93,6 +106,7 @@
 
 .np-close {
   position: absolute;
+  z-index: 1;
   top: 0.4rem;
   right: 0.45rem;
   width: 2rem;
@@ -144,6 +158,7 @@
 @media (prefers-reduced-motion: reduce) {
   .np-panel,
   .np-panel[data-open="true"],
+  .np-box,
   .np-item,
   .np-item[data-on="true"] {
     transition: none;

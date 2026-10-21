@@ -272,6 +272,14 @@ test.describe("layout (ADR 0035, amended 2026-10-05; ?mock=1)", () => {
     await expect(first).toHaveAttribute("aria-expanded", "true");
     await expect(shown.locator(".np-title")).toContainText("Visitor");
     expect(await slotHeight()).toBe(closedHeight);
+    // The box hugs the entry that shows, while the slot keeps the tallest entry's height: the visitor's
+    // short entry sits in a box well short of the slot.
+    const sizes = () =>
+      page.locator("#diagram").evaluate((f) => {
+        const hgt = (sel: string) => f.querySelector(sel)?.getBoundingClientRect().height ?? 0;
+        return { box: hgt(".np-box"), item: hgt(".np-item[data-on='true']"), slot: hgt(".np-slot") };
+      });
+    await expect.poll(async () => { const z = await sizes(); return Math.abs(z.box - z.item) < 2 && z.box < z.slot - 20; }).toBe(true);
     await page.keyboard.press("Escape");
     await expect(panel).toHaveAttribute("data-open", "false");
     await expect(first).toHaveAttribute("aria-expanded", "false");
@@ -282,10 +290,24 @@ test.describe("layout (ADR 0035, amended 2026-10-05; ?mock=1)", () => {
     await expect(shown).toContainText("Falco watches every syscall over eBPF");
     await expect(shown.locator('a[href*="/tree/main/cluster/infra/falco"]')).toHaveCount(1);
     await expect(falco).toHaveAttribute("aria-expanded", "true");
+    await expect.poll(async () => { const z = await sizes(); return Math.abs(z.box - z.item) < 2; }).toBe(true);
     if (!isMobile) {
       // A mouse over another node crossfades to its details; leaving keeps them.
       await svg.locator('.dg-node[data-node="talon"]').hover();
       await expect(shown).toHaveAttribute("data-for", "talon");
+      // Talon's role is this page's own "respond": the box takes its accent (styles.css, on the panel).
+      await expect(panel).toHaveAttribute("data-role", "respond");
+      // Polled: the accent crossfades (border-color 180 ms).
+      const accent = () =>
+        page.locator("#diagram").evaluate((f) => {
+          const probe = document.createElement("i");
+          probe.style.color = "var(--respond)";
+          f.append(probe);
+          const respond = getComputedStyle(probe).color;
+          probe.remove();
+          return getComputedStyle(f.querySelector(".np-box") as HTMLElement).borderLeftColor === respond;
+        });
+      await expect.poll(accent).toBe(true);
       await page.mouse.move(0, 0);
       await expect(shown).toHaveAttribute("data-for", "talon");
     }

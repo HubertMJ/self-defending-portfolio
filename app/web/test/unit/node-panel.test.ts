@@ -13,7 +13,7 @@ const root = resolve(__dirname, "..", "..");
 const FILES = ["index.ts", "markup.ts", "node-panel.css"];
 const fingerprint = (dir: string) => createHash("sha256").update(FILES.map((f) => `${f}\n${readFileSync(join(dir, f), "utf8")}`).join("\n--\n")).digest("hex");
 /** Change the module in one repository, copy it to the others, and update this line in each. */
-const PINNED = "4fd03cf1e971db1194db555f0ccd810815d2424cae82ac98e085f341d21d6a39";
+const PINNED = "7e6237ed02985bae9ef53284784481c4b46707ac96cced97f82af5cc388999ff";
 
 describe("the shared module", () => {
   test("is the copy every repository carries", () => {

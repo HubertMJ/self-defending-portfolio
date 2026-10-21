@@ -23,7 +23,8 @@ function mount(slot: HTMLElement): void {
   const panel = slot.querySelector<HTMLElement>(".np-panel");
   const close = slot.querySelector<HTMLButtonElement>(".np-close");
   const live = slot.querySelector<HTMLElement>(".np-live");
-  if (!figure || !panel || !close || !live) return;
+  const box = slot.querySelector<HTMLElement>(".np-box");
+  if (!figure || !panel || !close || !live || !box) return;
   const items = new Map([...panel.querySelectorAll<HTMLElement>(".np-item")].map((it) => [it.dataset.for ?? "", it]));
   const nodes = [...figure.querySelectorAll<SVGElement>("svg [data-node]")].filter((n) => items.has(n.getAttribute("data-node") ?? ""));
   let open: string | null = null;
@@ -32,8 +33,24 @@ function mount(slot: HTMLElement): void {
   // While the panel hands the focus back to a box on closing, that focus must not reopen it.
   let quiet = false;
 
+  // The box hugs the entry that shows (CSSOM, which the CSP allows): its height follows the entry's,
+  // smoothly in the stylesheet, while the slot around it keeps the tallest entry's height.
+  // Opening snaps to the entry; only a swap between entries (or a reflow) glides.
+  const fit = (snap = false): void => {
+    const it = open === null ? undefined : items.get(open);
+    if (!it) return;
+    if (snap) box.style.setProperty("transition", "none");
+    box.style.setProperty("--np-h", `${it.offsetHeight}px`);
+    if (snap) {
+      void box.offsetHeight;
+      box.style.removeProperty("transition");
+    }
+  };
+  if (typeof ResizeObserver === "function") new ResizeObserver(() => fit()).observe(panel);
+
   const set = (id: string | null): void => {
     if (id === open) return;
+    const opening = open === null;
     open = id;
     panel.dataset.open = String(id !== null);
     close.tabIndex = id === null ? -1 : 0;
@@ -50,6 +67,7 @@ function mount(slot: HTMLElement): void {
     }
     const it = id === null ? undefined : items.get(id);
     if (it) panel.dataset.role = it.dataset.role ?? "";
+    fit(opening);
     // Said once, politely: the box's name and its sentence.
     live.textContent = it ? `${it.querySelector(".np-title")?.textContent ?? ""}: ${it.querySelector(".np-text")?.textContent ?? ""}` : "";
   };

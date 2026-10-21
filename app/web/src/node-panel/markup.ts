@@ -1,6 +1,7 @@
 // The node panel's markup (src/node-panel): one slot under a diagram, holding every node's details at
 // once, stacked in a single grid cell. The slot is as tall as its tallest entry from the first paint,
-// whichever entry shows and whether any does, so opening, swapping and closing never move the page.
+// whichever entry shows and whether any does, so opening, swapping and closing never move the page; it
+// is invisible itself, and a box behind the entries hugs the one that shows.
 // Strings for the build script, which writes the slot into the page beside the drawings.
 //
 // The same directory is copied into every repository that serves a page of the site (as src/ascii is);
@@ -42,6 +43,7 @@ export function panelMarkup(key: string, items: PanelItem[]): string {
   return (
     `<div class="np-slot" id="np-${esc(key)}">` +
     `<div class="np-panel" data-open="false">` +
+    `<div class="np-box" aria-hidden="true"></div>` +
     `<button type="button" class="np-close" aria-label="Close the details" tabindex="-1">×</button>` +
     entries.join("") +
     `<p class="np-live" aria-live="polite"></p>` +
