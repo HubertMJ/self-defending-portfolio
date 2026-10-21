@@ -8,6 +8,8 @@
 
 import { type DiagramEdge, type DiagramModel, type DiagramNode, type DiagramZone, MODEL, type View, nodesOf } from "./model";
 import { type Tree, t } from "./tree";
+import { panelMarkup } from "../node-panel/markup";
+import { REPO_URL } from "../ui/common";
 
 interface Box {
   x: number;
@@ -555,4 +557,27 @@ function layoutNarrow(opts: LayoutOptions, model: DiagramModel): Tree {
 function describe(nodes: DiagramNode[], edges: DiagramEdge[]): string {
   const name = (id: string) => nodes.find((n) => n.id === id)?.label ?? id;
   return `${nodes.length} components: ${nodes.map((n) => n.label).join(", ")}. Connections: ${edges.map((e) => `${name(e.from)} to ${name(e.to)}${e.label ? ` (${e.label})` : ""}`).join("; ")}.`;
+}
+
+/**
+ * The node panel under both drawings (src/node-panel), written into the page beside them at build time:
+ * each part's blurb and where it lives on GitHub (as the lab's panel words it), for every node either
+ * drawing shows.
+ */
+export function panel(model: DiagramModel = MODEL): string {
+  const shown = new Set([...nodesOf("hero", model), ...nodesOf("narrow", model)].map((n) => n.id));
+  return panelMarkup(
+    "diagram",
+    model.nodes
+      .filter((n) => shown.has(n.id))
+      .map((n) => ({
+        id: n.id,
+        title: n.label,
+        sub: n.sub,
+        text: n.blurb,
+        role: n.role,
+        links: n.sources.map((s) => ({ href: `${REPO_URL}/tree/main/${s}`, label: s })),
+        linksLead: "On GitHub: ",
+      })),
+  );
 }

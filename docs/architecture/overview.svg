@@ -195,10 +195,11 @@
         <text class="dg-label" x="137" y="28.5" text-anchor="middle">Cilium Gateway</text>
         <text class="dg-sub" x="137" y="43.5" text-anchor="middle">ns gateway · :443 · LE cert (DNS-01)</text>
       </g>
-      <g class="dg-node dg-node--plain dg-role--entry" id="ov-site" data-node="site" data-state="idle" transform="translate(1308 48)">
+      <g class="dg-node dg-node--plain dg-role--entry dg-node--sub2" id="ov-site" data-node="site" data-state="idle" transform="translate(1308 48)">
         <rect class="dg-box" width="274" height="63" rx="8"/>
-        <text class="dg-label" x="137" y="28.5" text-anchor="middle">The pages + this API</text>
-        <text class="dg-sub" x="137" y="43.5" text-anchor="middle">site · hello · lab · portfolio-api</text>
+        <text class="dg-label" x="137" y="21" text-anchor="middle">The pages + this API</text>
+        <text class="dg-sub" x="137" y="36" text-anchor="middle">site · hello · lab · work ·</text>
+        <text class="dg-sub" x="137" y="51" text-anchor="middle">portfolio-api</text>
       </g>
       <g class="dg-node dg-node--control dg-role--respond dg-node--sub2" id="ov-kube-apiserver" data-node="kube-apiserver" data-state="idle" transform="translate(1308 476)">
         <rect class="dg-box" width="274" height="63" rx="8"/>
@@ -256,7 +257,7 @@
         <rect class="dg-box" width="274" height="63" rx="8"/>
         <text class="dg-label" x="137" y="21" text-anchor="middle">Argo CD</text>
         <text class="dg-sub" x="137" y="36" text-anchor="middle">ns argocd · KSOPS + age</text>
-        <text class="dg-sub dg-note" x="137" y="51" text-anchor="middle">21 Applications</text>
+        <text class="dg-sub dg-note" x="137" y="51" text-anchor="middle">22 Applications</text>
       </g>
       <g class="dg-node dg-node--plain dg-role--neutral" id="ov-apps" data-node="apps" data-state="idle" transform="translate(664 304.8)">
         <rect class="dg-box" width="274" height="63" rx="8"/>
@@ -267,7 +268,7 @@
         <rect class="dg-box" width="274" height="63" rx="8"/>
         <text class="dg-label" x="137" y="21" text-anchor="middle">build-images.yml</text>
         <text class="dg-sub" x="137" y="36" text-anchor="middle">web · api · scenario ·</text>
-        <text class="dg-sub" x="137" y="51" text-anchor="middle">+ site &amp; lab repos</text>
+        <text class="dg-sub" x="137" y="51" text-anchor="middle">+ site, lab &amp; work repos</text>
       </g>
       <g class="dg-node dg-node--control dg-role--neutral" id="ov-trivy" data-node="trivy" data-state="idle" transform="translate(1308 197.79999999999998)">
         <rect class="dg-box" width="274" height="63" rx="8"/>

@@ -11,6 +11,8 @@
 @import "diagram-traffic.css";
 /* ASCII mode, the hidden terminal look (src/ascii): inert unless html.ascii is set. */
 @import "./ascii/ascii.css";
+/* The diagram's node panel (src/node-panel): a part's details under the drawing, in the normal look. */
+@import "./node-panel/node-panel.css";
 
 :root {
   color-scheme: dark;
@@ -5791,47 +5793,10 @@ html[data-tech="on"] .dg-label {
   margin: 0;
 }
 
-.dg-caption {
-  margin-top: 0.85rem;
-  padding: 0.9rem 1rem;
-  border: 1px solid var(--border);
-  border-left: 3px solid var(--accent);
-  border-radius: var(--radius-sm);
-  background: var(--surface);
-  position: relative;
-}
+/* The node panel's accent for the one role of this page its shared stylesheet does not name. */
+.np-panel[data-role="respond"] { --np-accent: var(--respond); }
 
-.dg-caption__title {
-  font-weight: 650;
-  margin: 0 0 0.3rem;
-}
-
-.dg-caption__sub {
-  font: 0.72rem var(--font-mono);
-  color: var(--text-faint);
-  font-weight: 400;
-}
-
-.dg-caption__text {
-  color: var(--text-muted);
-  font-size: 0.92rem;
-  margin: 0 0 0.5rem;
-  max-width: 48rem;
-}
-
-.dg-caption__sources code {
-  font-size: 0.78rem;
-}
-
-.dg-caption__close {
-  position: absolute;
-  top: 0.4rem;
-  right: 0.4rem;
-  line-height: 1;
-  padding: 0.1rem 0.5rem;
-}
-
-/* Without JavaScript the "pick a part" hint and the caption do nothing: hide the hint. */
+/* Without JavaScript the "pick a part" hint and the node panel do nothing: hide the hint. */
 html:not(.js) .needs-js {
   display: none;
 }

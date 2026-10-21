@@ -2,10 +2,12 @@
 // adds the live panels on top, each of which degrades to its own offline state independently.
 
 import { setupAscii } from "./ascii";
+import { sayHello } from "./console-hello";
 import { ApiClient } from "./lib/api";
 import { Backfill } from "./lib/backfill";
 import { byId, h, prefersReducedMotion, replace } from "./lib/dom";
 import { installMock } from "./lib/mock-hook";
+import { mountNodePanels } from "./node-panel";
 import { type CorrelationIncident, isRunId } from "./lib/contract";
 import { type ConnectionState, type EventSourceFactory, EventStream } from "./lib/sse";
 import type { TimelineView } from "./lib/timeline";
@@ -79,6 +81,8 @@ function main(): void {
   if (prefersReducedMotion()) document.documentElement.classList.add("reduced-motion");
   setupThemeToggle();
   setupAscii("Self-defending cluster");
+  // The DevTools greeting the site's other pages print too, with this image's commit (/build.json).
+  sayHello({ repo: "self-defending-portfolio", buildInfo: "/build.json" });
   // The sticky header's height (the mock banner included), for what sticks below it (the tour panel).
   const header = document.querySelector<HTMLElement>(".site-header");
   if (header && typeof ResizeObserver === "function") {
@@ -179,9 +183,11 @@ function main(): void {
     evidence.setQuiet(quietRuns, startingTerminal);
   };
   // The hero's live architecture diagram (site redesign 2026-10-12): the SVG is in the static HTML;
-  // this lights the path of the newest run and answers clicks on its nodes. Mounted here, before the
+  // this lights the path of the newest run, and the node panel under it (src/node-panel, as on the
+  // landing page and /work/) shows a node's details on a hover, tap or focus. Mounted here, before the
   // correlation whose data feeds it; the tour below is the same.
-  const diagram = mountDiagram(byId("diagram"), { caption: byId("diagram-caption"), status: byId("diagram-status") });
+  mountNodePanels(byId("diagram"));
+  const diagram = mountDiagram(byId("diagram"), { status: byId("diagram-status") });
   let tourIncidents: readonly CorrelationIncident[] = [];
   /** Re-derive the tour's progress and light the diagram; a no-op until the tour and the titles exist. */
   let refreshTour: () => void = () => {};

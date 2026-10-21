@@ -8,10 +8,11 @@ import { describe, expect, it } from "vitest";
 import { buildTimeline } from "../../src/lib/timeline";
 import { MODEL, ROLE_LEGEND, nodesOf, validateModel } from "../../src/diagram/model";
 import { FULL_MODEL } from "../../src/diagram/model-docs";
-import { PAD_X, TRAFFIC, fitReport, layout, textWidth, trafficCss, wrapSub } from "../../src/diagram/layout";
+import { PAD_X, TRAFFIC, fitReport, layout, panel, textWidth, trafficCss, wrapSub } from "../../src/diagram/layout";
 import { serialise } from "../../src/diagram/tree";
 import { renderDocsSvg } from "../../src/diagram/docs";
 import { describeStates, mountDiagram, pathOf } from "../../src/ui/diagram";
+import { mountNodePanels } from "../../src/node-panel";
 import { svg as svgEl } from "../../src/lib/dom";
 import type { Tree } from "../../src/diagram/tree";
 import type { StreamEvent } from "../../src/lib/contract";
@@ -179,55 +180,72 @@ function readdirApps(): number {
   return readdirSync(dir).filter((f) => f.endsWith(".yaml") && f !== "kustomization.yaml").length;
 }
 
-/** The hero figure as the build injects it: the SVG tree walked into real DOM, plus the caption mounts. */
-function heroFigure(): { figure: HTMLElement; caption: HTMLElement; status: HTMLElement } {
+/** The hero figure as the build injects it: the SVG tree walked into real DOM, the node panel's markup and the status line. */
+function heroFigure(): { figure: HTMLElement; status: HTMLElement } {
   const walk = (node: Tree | string): Node => (typeof node === "string" ? document.createTextNode(node) : svgEl(node.tag, node.attrs, ...node.children.map(walk)));
   const figure = document.createElement("figure");
   figure.append(walk(layout("hero", { interactive: true })));
-  const caption = document.createElement("div");
-  caption.hidden = true;
   const status = document.createElement("p");
-  figure.append(status, caption);
+  figure.append(status);
+  figure.insertAdjacentHTML("beforeend", panel());
   document.body.replaceChildren(figure);
-  return { figure, caption, status };
+  return { figure, status };
 }
 
-describe("mountDiagram: nodes open a caption by click and keyboard, the SIEM state survives setRun", () => {
+describe("the node panel under the diagram: a node's details by keyboard, click and close; the SIEM state survives setRun", () => {
   const key = (el: Element, k: string) => el.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true }));
 
-  it("Enter and Space open the caption with the node's blurb and repo link, Escape and the close button shut it; aria-expanded follows", () => {
-    const { figure, caption, status } = heroFigure();
-    mountDiagram(figure, { caption, status });
+  it("the build writes one entry per drawn node, its blurb and repository links, as text", () => {
+    const html = panel();
+    const shown = new Set([...nodesOf("hero"), ...nodesOf("narrow")].map((n) => n.id));
+    expect(html.match(/class="np-item"/g)).toHaveLength(shown.size);
+    expect(html).toContain('<a href="https://github.com/HubertMJ/self-defending-portfolio/tree/main/cluster/infra/falco/" rel="noopener noreferrer" tabindex="-1"><code>cluster/infra/falco/</code></a>');
+    expect(html).toContain("On GitHub: ");
+    // A node with no source (the visitor) has no links line.
+    const visitor = html.slice(html.indexOf('data-for="visitor"'), html.indexOf("</div>", html.indexOf('data-for="visitor"')));
+    expect(visitor).not.toContain("np-links");
+  });
+
+  it("Enter and Space open the node's details with its blurb and repo link, Escape and × close them; aria-expanded follows", () => {
+    const { figure, status } = heroFigure();
+    mountNodePanels(figure);
+    mountDiagram(figure, { status });
+    const panelEl = figure.querySelector(".np-panel") as HTMLElement;
+    const shownItem = () => figure.querySelector('.np-item[data-on="true"]') as HTMLElement | null;
     const falco = figure.querySelector('.dg-node[data-node="falco"]') as SVGGElement;
     expect(falco.getAttribute("tabindex")).toBe("0");
     expect(falco.getAttribute("role")).toBe("button");
+    expect(panelEl.dataset.open).toBe("false");
     key(falco, "Enter");
-    expect(caption.hidden).toBe(false);
+    expect(panelEl.dataset.open).toBe("true");
+    expect(panelEl.dataset.role).toBe("detect");
     expect(falco.getAttribute("aria-expanded")).toBe("true");
-    expect(caption.textContent).toContain("Falco watches every syscall over eBPF");
-    expect(caption.querySelector('a[href^="https://github.com/HubertMJ/self-defending-portfolio/tree/main/cluster/infra/falco"]')).not.toBeNull();
-    key(falco, "Escape");
-    expect(caption.hidden).toBe(true);
+    expect(shownItem()?.textContent).toContain("Falco watches every syscall over eBPF");
+    const link = shownItem()?.querySelector('a[href^="https://github.com/HubertMJ/self-defending-portfolio/tree/main/cluster/infra/falco"]') as HTMLAnchorElement;
+    expect(link.tabIndex).toBe(0);
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+    expect(panelEl.dataset.open).toBe("false");
     expect(falco.getAttribute("aria-expanded")).toBe("false");
+    expect(link.tabIndex).toBe(-1);
     key(falco, " ");
-    expect(caption.hidden).toBe(false);
-    (caption.querySelector(".dg-caption__close") as HTMLButtonElement).click();
-    expect(caption.hidden).toBe(true);
-    // A click on another node swaps the caption; a click on the open node closes it.
+    expect(panelEl.dataset.open).toBe("true");
+    (figure.querySelector(".np-close") as HTMLButtonElement).click();
+    expect(panelEl.dataset.open).toBe("false");
+    // A click on another node swaps the details in place.
     const pod = figure.querySelector('.dg-node[data-node="pod"]') as SVGGElement;
+    key(falco, "Enter");
     pod.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    expect(caption.textContent).toContain("What the pod is allowed to be");
+    expect(shownItem()?.dataset.for).toBe("pod");
+    expect(shownItem()?.textContent).toContain("What the pod is allowed to be");
     expect(pod.getAttribute("aria-expanded")).toBe("true");
     expect(falco.getAttribute("aria-expanded")).toBe("false");
-    pod.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    expect(caption.hidden).toBe(true);
-    // The caption shows no markup from a blurb: text only.
-    expect(caption.querySelector("script")).toBeNull();
+    // The details show no markup from a blurb: text only.
+    expect(figure.querySelector(".np-slot script")).toBeNull();
   });
 
   it("setRun lights the path and names the lit nodes in words; setSiem is kept across a later setRun", () => {
-    const { figure, caption, status } = heroFigure();
-    const d = mountDiagram(figure, { caption, status });
+    const { figure, status } = heroFigure();
+    const d = mountDiagram(figure, { status });
     d.setSiem(true);
     const siem = figure.querySelector('.dg-node[data-node="siem"]') as SVGGElement;
     const siemEdge = figure.querySelector('.dg-edge[data-edge="kube-apiserver-siem"]') as SVGGElement;
