@@ -6,14 +6,13 @@
 # Audit rule next to Enforce rules would be enforced anyway. See verify-portfolio-images.yaml's header
 # for the mechanics (keyless/Fulcio/Rekor, SigstoreBundle, the two-field Audit<->Enforce switch).
 #
-# ---- Audit until the digest is pinned, then Enforce ----
+# ---- Enforce ----
 #
-# Audit because the first work image has not been built or signed yet and cluster/infra/work pins the
-# all-zero placeholder digest: an Enforce rule would reject the work Deployment and `make validate`'s
-# `kyverno apply` would fail. In Audit the placeholder is reported as an audit warning and is never
-# admitted as verified. In the SAME commit that pins the real digest, flip both rules Audit -> Enforce
-# and verify-signature-work's mutateDigest false -> true, exactly as verify-lab-images.yaml was flipped
-# (5ca3db4); verify-sbom-attestation-work keeps mutateDigest/verifyDigest false.
+# It started as Audit while cluster/infra/work pinned the all-zero placeholder digest (an Enforce rule
+# would have rejected the work Deployment and failed `make validate`'s `kyverno apply`). The first work
+# image is now built, signed and pinned, so both rules are Enforce and verify-signature-work rewrites the
+# reference to the verified digest, as verify-lab-images.yaml was flipped (5ca3db4);
+# verify-sbom-attestation-work keeps mutateDigest/verifyDigest false.
 apiVersion: kyverno.io/v1
 kind: ClusterPolicy
 metadata:
@@ -26,8 +25,7 @@ metadata:
     policies.kyverno.io/description: >-
       Every container image in the `work` namespace must carry a cosign keyless signature made by
       HubertMJ/work-mockups' build-image.yml workflow on refs/heads/main, and an SPDX SBOM
-      attestation signed by the same identity. Audit until the first work image is built and the
-      digest pinned (see the header), then Enforce.
+      attestation signed by the same identity. Enforced.
 spec:
   # Fail, not Ignore, bounded to the one namespace below, as verify-lab-images.yaml is.
   failurePolicy: Fail
@@ -48,10 +46,10 @@ spec:
         - imageReferences:
             - "ghcr.io/hubertmj/work-mockups/*"
           type: SigstoreBundle
-          # Audit for now; see the header. mutateDigest must be false while auditing (Kyverno refuses
-          # an Audit rule that rewrites the image reference), and flips to true with the action.
-          failureAction: Audit
-          mutateDigest: false
+          # Enforce with mutateDigest, as verify-lab-images.yaml: the admitted reference is the verified
+          # digest.
+          failureAction: Enforce
+          mutateDigest: true
           verifyDigest: true
           required: true
           attestors:
@@ -79,7 +77,7 @@ spec:
       verifyImages:
         - imageReferences:
             - "ghcr.io/hubertmj/work-mockups/*"
-          failureAction: Audit
+          failureAction: Enforce
           type: SigstoreBundle
           # Stay false in both states, as verify-portfolio-images.yaml's SBOM rule explains:
           # verify-signature-work already pins and verifies the digest.

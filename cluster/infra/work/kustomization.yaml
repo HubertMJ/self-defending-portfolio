@@ -17,10 +17,9 @@ resources:
 images:
   - name: ghcr.io/hubertmj/work-mockups/work
     newTag: main
-    # PLACEHOLDER DIGEST, to be pinned before merge. The first image has not been built yet by
-    # HubertMJ/work-mockups' build-image.yml on main, so this is the all-zero placeholder that
-    # scripts/check-image-digests.sh refuses on main. In the commit that pins the real digest (by
-    # hand, like the lab's: scripts/bump-image-digest.sh only rewrites this project's own images),
-    # check it first with scripts/verify-image.sh and the work-mockups identity, and flip
-    # cluster/infra/kyverno-policies/verify-work-images.yaml to Enforce (see its header).
-    digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+    # HubertMJ/work-mockups main (commit e1f064d), build-image on main: the vLLM mock-up, the bridge and
+    # Flota pages, /work/ redirecting to the landing's projects. Pinned by hand, like the lab's pin:
+    # scripts/bump-image-digest.sh only rewrites this project's own images, not this foreign-repo ref.
+    # Verified signed with a verified SPDX SBOM attestation (scripts/verify-image.sh, the work-mockups
+    # workflow identity).
+    digest: sha256:b93817377c7853c9731150413cdd4eec69053aebc5796682843cf1b6763409c9
