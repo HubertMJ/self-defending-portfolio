@@ -3,7 +3,11 @@
 // serves a page of the site, beside its own diagram tests. What it holds a drawing to:
 // - a box's words sit inside it, 8 units clear of its sides;
 // - a label on the drawing (an edge's words, a zone's title) keeps 2 units clear of every box and every
-//   arrowhead, does not touch a line, does not overlap another label, and stays inside the drawing.
+//   arrowhead, does not touch a line, does not overlap another label, and stays inside the drawing;
+// - a line starts and ends at a box (within 9 units of its border, never inside it), so no arrow points
+//   at nothing, and runs under no box on the way;
+// - an arrowhead has room: the straight run it ends shows 10 units of line behind the head, and a
+//   two-way line keeps 14 between its two heads; no two arrowheads touch.
 // A text's box is its em box (ascent to descent), so these are clearances of the ink and then some.
 
 import type { Page } from "@playwright/test";
@@ -52,6 +56,44 @@ export async function diagramProblems(page: Page): Promise<string[]> {
         if (p.getAttribute("marker-end")) head(len, Math.max(0, len - 2));
         if (p.getAttribute("marker-start")) head(0, Math.min(len, 2));
       }
+      // Where a line may end: on a box, within reach of its border (each drawing stops its lines a few
+      // units short: 2 to 7), not inside it.
+      const reach = 9;
+      const outside = (q: DOMPoint, r: B) => Math.max(r.x - q.x, q.x - r.x - r.width, r.y - q.y, q.y - r.y - r.height);
+      for (const p of lines) {
+        const len = p.getTotalLength();
+        const what = `${name}: the line "${(p.getAttribute("d") ?? "").slice(0, 40)}"`;
+        for (const [end, l] of [["start", 0], ["end", len]] as const) {
+          const q = at(p, l);
+          const d = Math.min(...boxes.map(({ b }) => outside(q, b)));
+          if (d > reach) out.push(`${what} ${end}s ${d.toFixed(0)} from any box`);
+          else if (d < -1) out.push(`${what} ${end}s inside a box`);
+        }
+        for (let l = 3; l <= len - 3; l += 1) {
+          const q = at(p, l);
+          const under = boxes.find(({ b }) => outside(q, b) < -2);
+          if (under) {
+            out.push(`${what} runs under "${under.n.getAttribute("data-node")}"`);
+            break;
+          }
+        }
+        // The straight run behind a head: back from the tip while the line keeps its direction.
+        const run = (tip: number, dir: 1 | -1) => {
+          const a = at(p, tip);
+          const b = at(p, tip + dir * Math.min(2, len));
+          const n = Math.hypot(b.x - a.x, b.y - a.y) || 1;
+          let l = 2;
+          for (; l <= len; l += 1) {
+            const q = at(p, tip + dir * l);
+            if (Math.abs(((q.x - a.x) * (b.y - a.y) - (q.y - a.y) * (b.x - a.x)) / n) > 0.5) break;
+          }
+          return l - 1;
+        };
+        const ends = [p.getAttribute("marker-end") ? run(len, -1) : 0, p.getAttribute("marker-start") ? run(0, 1) : 0];
+        for (const r of ends) if (r && r < 11 + 10) out.push(`${what} has ${(r - 11).toFixed(0)} of line behind its arrowhead`);
+        if (ends[0] && ends[1] && ends[0] >= len - 1 && len < 2 * 11 + 14) out.push(`${what} has ${(len - 22).toFixed(0)} between its two arrowheads`);
+      }
+      for (const [i, h] of heads.entries()) if (heads.slice(i + 1).some((o) => hit(h, o))) out.push(`${name}: two arrowheads touch at ${h.x.toFixed(0)},${h.y.toFixed(0)}`);
       const onLine = (b: B) =>
         lines.some((p) => {
           for (let l = 0; l <= p.getTotalLength(); l += 1) {

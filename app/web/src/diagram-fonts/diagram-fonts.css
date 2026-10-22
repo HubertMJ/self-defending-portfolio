@@ -38,3 +38,9 @@
   --diagram-sans: "LabDiagramSans", "DejaVu Sans", Verdana, sans-serif;
   --diagram-mono: "LabDiagramMono", "DejaVu Sans Mono", monospace;
 }
+
+/* A drawing's words measured from the glyphs' outlines, not rounded to whole screen pixels at the
+   drawing's scale (as hinting does on some screens): they take the same room at every width. */
+svg text {
+  text-rendering: geometricPrecision;
+}

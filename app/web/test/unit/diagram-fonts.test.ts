@@ -6,36 +6,43 @@ import { describe, expect, test } from "vitest";
 // src/diagram-fonts (the fonts every drawing sets its words in) and test/e2e/diagram-check.ts (what the
 // drawings are measured against) are copied into every repository that serves a page of the site, as
 // src/ascii is. This file is identical in each of them too: it pins the copies' fingerprint, and where
-// another repository's checkout sits beside this one it compares the two byte for byte.
+// another repository's checkout sits beside this one it compares the two byte for byte. An image's build
+// stage copies only test/unit/, so the measure is pinned on its own and checked only where it is present.
 
 const root = resolve(__dirname, "..", "..");
-const FILES = [
+const FONTS = [
   "src/diagram-fonts/diagram-fonts.css",
   "src/diagram-fonts/LICENSE.txt",
   "src/diagram-fonts/labsans-bold.woff2",
   "src/diagram-fonts/labmono-regular.woff2",
   "src/diagram-fonts/labmono-bold.woff2",
-  "test/e2e/diagram-check.ts",
 ];
-const fingerprint = (base: string) => {
+const MEASURE = "test/e2e/diagram-check.ts";
+const FILES = [...FONTS, MEASURE];
+const fingerprint = (base: string, files: string[]) => {
   const h = createHash("sha256");
-  for (const f of FILES) h.update(`${f}\n`).update(readFileSync(join(base, f))).update("\n--\n");
+  for (const f of files) h.update(`${f}\n`).update(readFileSync(join(base, f))).update("\n--\n");
   return h.digest("hex");
 };
-/** Change a file in one repository, copy it to the others, and update this line in each. */
-const PINNED = "b17b37cfd57b62920f278556bcf9c708fb7d65887bef7dadb4c78490655fa0e2";
+/** Change a file in one repository, copy it to the others, and update these lines in each. */
+const PINNED_FONTS = "264215387685b5517e28399e9da53fc10c1623f62f3fcb20e51402bc56d1aa52";
+const PINNED_MEASURE = "e1a0e5667e542c6fba5672861f9bb759e2b2b6f23fe82f16f77ddd3f5599e43f";
 
 describe("the diagrams' fonts and their measure", () => {
   test("are the copies every repository carries", () => {
-    expect(fingerprint(root)).toBe(PINNED);
+    expect(fingerprint(root, FONTS)).toBe(PINNED_FONTS);
+  });
+
+  test.skipIf(!existsSync(join(root, MEASURE)))("measure with the copy every repository carries", () => {
+    expect(fingerprint(root, [MEASURE])).toBe(PINNED_MEASURE);
   });
 
   test("match a sibling checkout's copies byte for byte, where one is beside this one", () => {
     const peers = ["site-ascii", "hubertjablon.ski", "work-mockups", "detlab-b4/web", "detection-lab/web", "sdp-labfix/app/web", "self-defending-portfolio/app/web"];
     const bases = [1, 2, 3].flatMap((up) => peers.map((peer) => resolve(root, ...Array(up).fill(".."), ...peer.split("/"))));
     for (const base of new Set(bases)) {
-      if (base === root || !FILES.every((f) => existsSync(join(base, f)))) continue;
-      for (const f of FILES) expect(readFileSync(join(base, f)).equals(readFileSync(join(root, f))), `${base}/${f}`).toBe(true);
+      if (base === root || !FONTS.every((f) => existsSync(join(base, f)))) continue;
+      for (const f of FILES.filter((f) => existsSync(join(root, f)) && existsSync(join(base, f)))) expect(readFileSync(join(base, f)).equals(readFileSync(join(root, f))), `${base}/${f}`).toBe(true);
     }
   });
 

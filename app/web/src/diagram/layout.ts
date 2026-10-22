@@ -477,16 +477,21 @@ function layoutGrid(view: "hero" | "full", opts: LayoutOptions, model: DiagramMo
   );
 }
 
+/** How far into the left margin a line that skips rows runs: its head's 11 units, 10 of line behind it, and a GAP. */
+const SKIP = 30;
+
 /** The phone's geometry: the story's nodes top to bottom, the answer looping back up the right side. */
 function narrowGeometry(model: DiagramModel) {
   const nodes = nodesOf("narrow", model);
   const fit = fitted(nodes, 236, 50);
-  const m: Metrics = { cw: fit.cw, ch: fit.ch, gx: 0, gy: 30, pad: 12, zoneHead: 18, zonePad: 0 };
+  // gy: a row's arrow keeps 10 units of line behind its head (38 less a GAP at each end, less the head).
+  const m: Metrics = { cw: fit.cw, ch: fit.ch, gx: 0, gy: 38, pad: 12, zoneHead: 18, zonePad: 0 };
   const boxes = new Map<string, Box>();
   const heads: { x: number; y: number; title: string }[] = [];
   let y = m.pad;
   let zone = "";
-  const x = m.pad + 20;
+  // The left margin holds the skipping line's run: SKIP units out, and its head's room on the way back.
+  const x = m.pad + 36;
   const order = new Map(nodes.map((n, i) => [n.id, i]));
   for (const n of nodes) {
     if (n.zone !== zone) {
@@ -516,7 +521,7 @@ function narrowGeometry(model: DiagramModel) {
         label = [cx(a) + 9, (bottom(a) + b.y) / 2 + 4];
       } else if (down) {
         // Skips rows: down the left margin. The margins are too narrow for its words.
-        pts = [[a.x, cy(a)], [a.x - 12, cy(a)], [a.x - 12, cy(b)], [b.x, cy(b)]];
+        pts = [[a.x, cy(a)], [a.x - SKIP, cy(a)], [a.x - SKIP, cy(b)], [b.x, cy(b)]];
       } else {
         // The answer, back up the right side.
         const xr = right(a) + 28;
