@@ -7,7 +7,11 @@
 // - a line starts and ends at a box (within 9 units of its border, never inside it), so no arrow points
 //   at nothing, and runs under no box on the way;
 // - an arrowhead has room: the straight run it ends shows 10 units of line behind the head, and a
-//   two-way line keeps 14 between its two heads; no two arrowheads touch.
+//   two-way line keeps 14 between its two heads; no two arrowheads touch;
+// - lines keep apart: no two cross, no two run side by side (parallel, closer than 16, for more than 40
+//   units), and no two arrowheads sit within 24 of each other on one side of a box. A fan is the
+//   exception: lines that leave one point (or reach one) may share a trunk, run on top of each other
+//   (0 apart, not near), and end in one arrowhead where they reach one tip from one direction.
 // A text's box is its em box (ascent to descent), so these are clearances of the ink and then some.
 
 import type { Page } from "@playwright/test";
@@ -41,6 +45,8 @@ export async function diagramProblems(page: Page): Promise<string[]> {
       const lines = [...svg.querySelectorAll<SVGPathElement>("path")].filter((p) => !p.closest("defs, marker, [data-node]") && /edge|line/.test(p.getAttribute("class") ?? "") && !/glow|head|arrow|dot/.test(p.getAttribute("class") ?? ""));
       // An arrowhead's area: 11 units back from the line's end, 5.5 either side of it.
       const heads: B[] = [];
+      const tips: DOMPoint[] = [];
+      const ways: [number, number][] = [];
       for (const p of lines) {
         const len = p.getTotalLength();
         const head = (tip: number, back: number) => {
@@ -48,6 +54,10 @@ export async function diagramProblems(page: Page): Promise<string[]> {
           const b = at(p, back);
           const n = Math.hypot(a.x - b.x, a.y - b.y) || 1;
           const [dx, dy] = [(a.x - b.x) / n, (a.y - b.y) / n];
+          // Lines of a fan meeting at one tip from one direction draw one arrowhead there.
+          if (tips.some((q, i) => Math.hypot(q.x - a.x, q.y - a.y) < 0.5 && Math.hypot(ways[i][0] - dx, ways[i][1] - dy) < 0.05)) return;
+          tips.push(a);
+          ways.push([dx, dy]);
           const pts = [[a.x, a.y], [a.x - dx * 11 + dy * 5.5, a.y - dy * 11 - dx * 5.5], [a.x - dx * 11 - dy * 5.5, a.y - dy * 11 + dx * 5.5]];
           const xs = pts.map((q) => q[0]);
           const ys = pts.map((q) => q[1]);
@@ -94,6 +104,69 @@ export async function diagramProblems(page: Page): Promise<string[]> {
         if (ends[0] && ends[1] && ends[0] >= len - 1 && len < 2 * 11 + 14) out.push(`${what} has ${(len - 22).toFixed(0)} between its two arrowheads`);
       }
       for (const [i, h] of heads.entries()) if (heads.slice(i + 1).some((o) => hit(h, o))) out.push(`${name}: two arrowheads touch at ${h.x.toFixed(0)},${h.y.toFixed(0)}`);
+      // Each line as its straight runs (a corner ends one; a curve is many short ones), in the drawing's units.
+      type P = { x: number; y: number };
+      const stops = lines.map((p) => [at(p, 0), at(p, p.getTotalLength())]);
+      const runs = lines.map((p) => {
+        const len = p.getTotalLength();
+        const rs: [P, P][] = [];
+        let [s, e] = [at(p, 0), at(p, Math.min(1, len))];
+        for (let l = 2; l < len + 1; l += 1) {
+          const q = at(p, Math.min(l, len));
+          const n = Math.hypot(e.x - s.x, e.y - s.y) || 1;
+          if (Math.abs(((q.x - s.x) * (e.y - s.y) - (q.y - s.y) * (e.x - s.x)) / n) > 0.5) {
+            rs.push([s, e]);
+            s = e;
+          }
+          e = q;
+        }
+        rs.push([s, e]);
+        return rs;
+      });
+      const xy = (q: P) => `${q.x.toFixed(0)},${q.y.toFixed(0)}`;
+      const meet = (a: P, b: P) => Math.hypot(a.x - b.x, a.y - b.y) < 1;
+      for (const [i, ra] of runs.entries()) {
+        for (const [j, rb] of runs.entries()) {
+          if (j <= i) continue;
+          // Two lines of one fan: they leave one point or reach one.
+          const fan = meet(stops[i][0], stops[j][0]) || meet(stops[i][1], stops[j][1]);
+          for (const [a0, a1] of ra) {
+            for (const [b0, b1] of rb) {
+              const [ax, ay, bx, by] = [a1.x - a0.x, a1.y - a0.y, b1.x - b0.x, b1.y - b0.y];
+              const [la, lb] = [Math.hypot(ax, ay), Math.hypot(bx, by)];
+              if (!la || !lb) continue;
+              const den = ax * by - ay * bx;
+              // Crossing: each run passes through the other's inside, a unit or more from its ends.
+              if (Math.abs(den) / (la * lb) > 0.02) {
+                const t = ((b0.x - a0.x) * by - (b0.y - a0.y) * bx) / den;
+                const u = ((b0.x - a0.x) * ay - (b0.y - a0.y) * ax) / den;
+                if (t * la > 1 && (1 - t) * la > 1 && u * lb > 1 && (1 - u) * lb > 1) out.push(`${name}: two lines cross at ${xy({ x: a0.x + t * ax, y: a0.y + t * ay })}`);
+                continue;
+              }
+              // Side by side: parallel runs, closer than 16, sharing more than 40 of their length.
+              const gap = Math.abs((b0.x - a0.x) * ay - (b0.y - a0.y) * ax) / la;
+              const [s0, s1] = [((b0.x - a0.x) * ax + (b0.y - a0.y) * ay) / la, ((b1.x - a0.x) * ax + (b1.y - a0.y) * ay) / la];
+              const shared = Math.min(la, Math.max(s0, s1)) - Math.max(0, Math.min(s0, s1));
+              // A fan's trunk: its lines on top of each other, which is one line.
+              if (fan && gap < 0.5) continue;
+              if (gap < 16 && shared > 40) out.push(`${name}: two lines run side by side, ${gap.toFixed(0)} apart for ${shared.toFixed(0)}, at ${xy(a0)} to ${xy(a1)} and ${xy(b0)} to ${xy(b1)}`);
+            }
+          }
+        }
+      }
+      // Arrowheads on one side of a box: the side the tip faces, and how far apart along it.
+      const sides = tips.map((q) => {
+        const near = boxes.map(({ n, b }) => ({ n, d: [b.x - q.x, q.x - b.x - b.width, b.y - q.y, q.y - b.y - b.height] })).map((o) => ({ ...o, out: Math.max(...o.d) }));
+        const o = near.reduce((a, b) => (b.out < a.out ? b : a));
+        return o.out > reach ? null : { n: o.n, side: o.d.indexOf(o.out), q };
+      });
+      for (const [i, a] of sides.entries()) {
+        for (const b of sides.slice(i + 1)) {
+          if (!a || !b || a.n !== b.n || a.side !== b.side) continue;
+          const along = a.side < 2 ? Math.abs(a.q.y - b.q.y) : Math.abs(a.q.x - b.q.x);
+          if (along < 24) out.push(`${name}: two arrowheads ${along.toFixed(0)} apart on "${a.n.getAttribute("data-node")}"'s ${["left", "right", "top", "bottom"][a.side]} side, at ${xy(a.q)} and ${xy(b.q)}`);
+        }
+      }
       const onLine = (b: B) =>
         lines.some((p) => {
           for (let l = 0; l <= p.getTotalLength(); l += 1) {

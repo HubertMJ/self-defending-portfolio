@@ -256,14 +256,16 @@ const r1 = (n: number) => Math.round(n * 10) / 10;
 const pathD = (pts: Pt[]) => pts.map(([x, y], i) => `${i ? "L" : "M"}${r1(x)},${r1(y)}`).join(" ");
 
 /** An orthogonal path between two boxes (border to border); and where its label sits. */
-function route(e: DiagramEdge, a: Box, b: Box, m: Metrics): { pts: Pt[]; label: Pt; vertical?: boolean } {
+function route(e: DiagramEdge, a: Box, b: Box, m: Metrics, all: Box[]): { pts: Pt[]; label: Pt; vertical?: boolean } {
   const r = e.route ?? "auto";
   const sameRow = Math.abs(cy(a) - cy(b)) < 1;
   const sameCol = Math.abs(cx(a) - cx(b)) < 1;
   if (r === "under") {
-    const y = Math.max(bottom(a), bottom(b)) + m.gy * 0.55;
+    // Below every box it passes under in or beneath its row, so a line up from one of those never crosses it.
     const x0 = cx(a) - 14;
     const x1 = cx(b);
+    const below = all.filter((o) => o.y >= Math.min(a.y, b.y) && o.x < Math.max(x0, x1) && right(o) > Math.min(x0, x1));
+    const y = Math.max(bottom(a), bottom(b), ...below.map(bottom)) + m.gy * 0.55;
     return { pts: [[x0, bottom(a)], [x0, y], [x1, y], [x1, bottom(b)]], label: [(x0 + x1) / 2, y - 7] };
   }
   if (r === "over") {
@@ -431,7 +433,7 @@ function gridGeometry(view: "hero" | "full", model: DiagramModel, notes?: Record
   };
   const zoneBoxes = zones.map((z) => [z, zoneBox(z)] as const);
   const edges = model.edges.filter((e) => boxes.has(e.from) && boxes.has(e.to) && (view === "full" || e.detail === "hero") && (!e.views || e.views.includes(view)));
-  const routes = new Map(edges.map((e) => [`${e.from}-${e.to}`, route(e, boxes.get(e.from) as Box, boxes.get(e.to) as Box, m)]));
+  const routes = new Map(edges.map((e) => [`${e.from}-${e.to}`, route(e, boxes.get(e.from) as Box, boxes.get(e.to) as Box, m, [...boxes.values()])]));
   return { m, nodes, boxes, zoneBoxes, edges, routes, subs: fit.subs };
 }
 
@@ -450,7 +452,7 @@ function layoutGrid(view: "hero" | "full", opts: LayoutOptions, model: DiagramMo
     height = Math.max(height, bottom(b));
   }
   // The "under" routes run below their row.
-  for (const e of edges) if (e.route === "under") height = Math.max(height, Math.max(bottom(boxes.get(e.from) as Box), bottom(boxes.get(e.to) as Box)) + m.gy * 0.55 + 4);
+  for (const e of edges) if (e.route === "under") height = Math.max(height, (routes.get(`${e.from}-${e.to}`) as ReturnType<typeof route>).pts[1][1] + 4);
   width += m.pad;
   height += m.pad;
   // A zone grown up for its subtitle's line may reach above the first row's: the drawing starts above it.
