@@ -100,8 +100,8 @@ describe("diagram layout", () => {
     // The tunnel: one line, a head at each end; every other line one head.
     const tunnel = hero.match(/data-edge="cloudflare-cloudflared"[^]*?<\/g>/)?.[0] ?? "";
     expect((tunnel.match(/marker-(start|end)=/g) ?? []).length).toBe(2);
-    // Cloudflare's box ends at x=200, cloudflared's starts at 254: the line runs 207 to 247.
-    expect(tunnel).toMatch(/class="dg-line" d="M207,[\d.]+ L247,[\d.]+"/);
+    // Cloudflare's box ends at x=200, cloudflared's starts at 284 (gutter 84): the line runs 207 to 277.
+    expect(tunnel).toMatch(/class="dg-line" d="M207,[\d.]+ L277,[\d.]+"/);
   });
 
   it("interactive nodes are focusable buttons inside a role=group svg; the docs view is one role=img", () => {

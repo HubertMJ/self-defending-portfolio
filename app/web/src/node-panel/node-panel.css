@@ -58,7 +58,9 @@
   align-self: start;
   position: relative;
   min-width: 0;
-  padding: 0.75rem 2.75rem 0.8rem 1rem;
+  /* Only the title's line keeps clear of the close button: the sentence below runs the whole width, so
+     an entry, and the slot reserved for the tallest, is as short as its words allow. */
+  padding: 0.65rem 0.85rem 0.7rem 0.95rem;
   opacity: 0;
   visibility: hidden;
   transition: opacity 110ms ease-out, visibility 0s linear 110ms;
@@ -72,6 +74,7 @@
 
 .np-title {
   margin: 0 0 0.25rem;
+  padding-right: 2.1rem;
   font-weight: 650;
 }
 
@@ -86,6 +89,7 @@
   max-width: 62ch;
   color: var(--text-muted);
   font-size: 0.92rem;
+  line-height: 1.5;
 }
 
 .np-links {

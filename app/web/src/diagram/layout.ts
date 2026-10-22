@@ -31,7 +31,8 @@ interface Metrics {
 
 /** The smallest node box and the grid's gaps; a box widens or heightens to fit its words (fitted). */
 const METRICS: Record<"hero" | "full", Metrics> = {
-  hero: { cw: 170, ch: 56, gx: 54, gy: 50, pad: 18, zoneHead: 26, zonePad: 14 },
+  // gx: room between columns for a label on the shaft of a two-way arrow ("tunnel") with air either side.
+  hero: { cw: 170, ch: 56, gx: 84, gy: 50, pad: 18, zoneHead: 26, zonePad: 14 },
   full: { cw: 176, ch: 60, gx: 48, gy: 44, pad: 20, zoneHead: 28, zonePad: 14 },
 };
 
@@ -162,6 +163,13 @@ export function layout(view: View, opts: LayoutOptions = {}, model: DiagramModel
 
 /** Edges stop this far from a node's border, so an arrowhead never touches the box it points at. */
 const GAP = 7;
+/** An arrowhead's length and the air a label keeps from it: a label over a line is centred on the shaft
+ * before the head (and after the tail's, on a two-way edge), never over it. */
+const HEAD = 11;
+const shaftMid = (x0: number, x1: number, both: boolean): number => {
+  const d = Math.sign(x1 - x0) || 1;
+  return (x0 + (both ? d * (GAP + HEAD) : 0) + x1 - d * (GAP + HEAD)) / 2;
+};
 
 /**
  * A node's words, centred in its box: the label and its sublabel as one block. On the page the
@@ -266,7 +274,7 @@ function route(e: DiagramEdge, a: Box, b: Box, m: Metrics): { pts: Pt[]; label: 
     const forward = cx(b) > cx(a);
     const x0 = forward ? right(a) : a.x;
     const x1 = forward ? b.x : right(b);
-    return { pts: [[x0, cy(a)], [x1, cy(a)]], label: [(x0 + x1) / 2, cy(a) - 8] };
+    return { pts: [[x0, cy(a)], [x1, cy(a)]], label: [shaftMid(x0, x1, !!e.both), cy(a) - 8] };
   }
   if (sameCol) {
     const down = cy(b) > cy(a);
@@ -286,7 +294,7 @@ function route(e: DiagramEdge, a: Box, b: Box, m: Metrics): { pts: Pt[]; label: 
   const y0 = down ? bottom(a) : a.y;
   const x0 = cx(a) + 14;
   const x1 = forward ? b.x : right(b);
-  return { pts: [[x0, y0], [x0, cy(b)], [x1, cy(b)]], label: [(x0 + x1) / 2, cy(b) - 8] };
+  return { pts: [[x0, y0], [x0, cy(b)], [x1, cy(b)]], label: [shaftMid(x0, x1, false), cy(b) - 8] };
 }
 
 /**
@@ -469,16 +477,21 @@ function layoutGrid(view: "hero" | "full", opts: LayoutOptions, model: DiagramMo
   );
 }
 
+/** How far into the left margin a line that skips rows runs: its head's 11 units, 10 of line behind it, and a GAP. */
+const SKIP = 30;
+
 /** The phone's geometry: the story's nodes top to bottom, the answer looping back up the right side. */
 function narrowGeometry(model: DiagramModel) {
   const nodes = nodesOf("narrow", model);
   const fit = fitted(nodes, 236, 50);
-  const m: Metrics = { cw: fit.cw, ch: fit.ch, gx: 0, gy: 30, pad: 12, zoneHead: 18, zonePad: 0 };
+  // gy: a row's arrow keeps 10 units of line behind its head (38 less a GAP at each end, less the head).
+  const m: Metrics = { cw: fit.cw, ch: fit.ch, gx: 0, gy: 38, pad: 12, zoneHead: 18, zonePad: 0 };
   const boxes = new Map<string, Box>();
   const heads: { x: number; y: number; title: string }[] = [];
   let y = m.pad;
   let zone = "";
-  const x = m.pad + 20;
+  // The left margin holds the skipping line's run: SKIP units out, and its head's room on the way back.
+  const x = m.pad + 36;
   const order = new Map(nodes.map((n, i) => [n.id, i]));
   for (const n of nodes) {
     if (n.zone !== zone) {
@@ -508,7 +521,7 @@ function narrowGeometry(model: DiagramModel) {
         label = [cx(a) + 9, (bottom(a) + b.y) / 2 + 4];
       } else if (down) {
         // Skips rows: down the left margin. The margins are too narrow for its words.
-        pts = [[a.x, cy(a)], [a.x - 12, cy(a)], [a.x - 12, cy(b)], [b.x, cy(b)]];
+        pts = [[a.x, cy(a)], [a.x - SKIP, cy(a)], [a.x - SKIP, cy(b)], [b.x, cy(b)]];
       } else {
         // The answer, back up the right side.
         const xr = right(a) + 28;

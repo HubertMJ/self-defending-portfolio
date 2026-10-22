@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { chromium, defineConfig, devices } from "@playwright/test";
 
 // Smoke tests against the built site. By default they start scripts/serve.mjs (same headers as the
@@ -44,6 +45,14 @@ export default defineConfig({
   projects: [
     { name: "desktop", use: { ...devices["Desktop Chrome"] } },
     { name: "phone", use: { ...devices["Pixel 7"] } },
+    // The diagram tests again with other generic fonts (Liberation for sans, mono and system-ui): the
+    // drawings ship their own fonts, so a phone or a desktop with other fonts draws what is tested.
+    // PW_FONTCONFIG points at another setup (Android's Roboto and Droid Sans Mono, say) for a local run.
+    ...(["desktop", "phone"] as const).map((n) => ({
+      name: `${n}-fonts`,
+      use: { ...devices[n === "desktop" ? "Desktop Chrome" : "Pixel 7"], launchOptions: { ...(executablePath ? { executablePath } : {}), env: { ...process.env, FONTCONFIG_FILE: process.env.PW_FONTCONFIG ?? fileURLToPath(new URL("./test/e2e/fonts/liberation.conf", import.meta.url)) } } },
+      grep: /@fonts/,
+    })),
   ],
   // The stub servers serve this checkout's dist/ (the production bundle) whatever BASE_URL points at: they stand in for an
   // API, which a deployed image does not let a test choose.

@@ -13,6 +13,8 @@
 @import "./ascii/ascii.css";
 /* The diagram's node panel (src/node-panel): a part's details under the drawing, in the normal look. */
 @import "./node-panel/node-panel.css";
+/* The diagrams' own fonts (src/diagram-fonts): every device draws the words the tests measured. */
+@import "./diagram-fonts/diagram-fonts.css";
 
 :root {
   color-scheme: dark;
@@ -5491,14 +5493,14 @@ html[data-terminal="off"] .needs-terminal {
 }
 
 .dg-zonetitle {
-  font: 600 0.72rem var(--font-mono);
+  font: 600 0.72rem var(--diagram-mono);
   letter-spacing: 0.08em;
   text-transform: uppercase;
   fill: var(--text-faint);
 }
 
 .dg-zonesub {
-  font: 0.68rem var(--font-mono);
+  font: 0.68rem var(--diagram-mono);
   fill: var(--text-faint);
 }
 
@@ -5536,13 +5538,13 @@ html[data-terminal="off"] .needs-terminal {
 }
 
 .dg-label {
-  font: 650 0.84rem var(--font-sans);
+  font: 650 0.84rem var(--diagram-sans);
   fill: var(--text);
 }
 
 /* Muted, not faint: the tinted boxes need the stronger grey for AA; on a lit box, the text colour. */
 .dg-sub {
-  font: 0.64rem var(--font-mono);
+  font: 0.64rem var(--diagram-mono);
   fill: var(--text-muted);
 }
 
@@ -5591,8 +5593,9 @@ html[data-tech="on"] .dg-label {
 
 /* Above its line, on a knock-out of the page's background. */
 .dg-edgelabel {
-  font: 0.66rem var(--font-sans);
+  font: 0.66rem var(--diagram-mono);
   fill: var(--text-faint);
+  /* A halo in the page's colour: a line passing under a label never makes it unreadable. */
   paint-order: stroke;
   stroke: var(--bg);
   stroke-width: 5px;

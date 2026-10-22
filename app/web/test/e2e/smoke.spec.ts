@@ -1,4 +1,5 @@
 import { type ConsoleMessage, type Page, expect, test } from "@playwright/test";
+import { diagramProblems } from "./diagram-check";
 
 /**
  * Fails the test on any CSP or Trusted Types violation and on any script error. Network errors
@@ -2925,4 +2926,18 @@ test("ASCII mode: a link turns it on, the diagram is drawn in characters, typing
   await page.goto("/?mock=1");
   await expect(page.locator("html")).not.toHaveClass(/ascii/);
   expect(errors).toEqual([]);
+});
+
+// The diagram set in the fonts it ships, measured at phone and desktop widths: the words in their boxes
+// with room, every label clear of boxes, arrowheads, lines and other labels (diagram-check.ts, shared
+// with the site's other repositories). Tagged @fonts: it runs again with other system fonts.
+test("the diagram draws in its own fonts and keeps its clearances at every width @fonts", async ({ page }) => {
+  for (const width of [360, 390, 1280]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto("/?mock=1");
+    const problems = await diagramProblems(page);
+    expect(await page.evaluate(() => document.fonts.check("650 14px LabDiagramSans") && document.fonts.check("10.5px LabDiagramMono"))).toBe(true);
+    expect(await page.locator("svg.dg:visible .dg-label").first().evaluate((t) => getComputedStyle(t).fontFamily)).toMatch(/^"?LabDiagramSans/);
+    expect(problems, `at ${width}`).toEqual([]);
+  }
 });
