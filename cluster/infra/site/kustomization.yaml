@@ -16,7 +16,7 @@ resources:
 images:
   - name: ghcr.io/hubertmj/hubertjablon.ski/site
     newTag: main
-    # HubertMJ/hubertjablon.ski e08d23e (PR #14 node panel; PR #13: five project cards, three of them systems from work,
+    # HubertMJ/hubertjablon.ski 2bb959c (PR #15 diagram fonts; PR #13: five project cards, three of them systems from work,
     # linking to /work/ in cluster/infra/work; the ASCII popup inside an open dialog). cosign-verified
     # signed + SPDX SBOM (scripts/verify-image.sh).
-    digest: sha256:e86ec43dfb67a27bf5b362c8dd15adb358ac5f044b3850f94ac4012f38041196
+    digest: sha256:d845769bfccd68ca231c9a64018b85521ef8d506fb0ff58bde686a40dfc866cd
