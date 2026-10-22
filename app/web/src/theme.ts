@@ -30,13 +30,14 @@ try {
   if (FOLDED_BY_DEFAULT.length) document.documentElement.dataset.folded = FOLDED_BY_DEFAULT.join(" ");
 }
 
-// Moving between the landing page (/), the cluster and the lab slides like an iPhone app (owner
-// decision 2026-10-16): a page opened comes in from the right, and the way back slides the other way,
-// the old page out to the right and the one behind it in from the left. Back is going home, by the
-// header's logo or a link, and the browser's or mouse's back button (styles.css,
-// :active-view-transition-type). Set here, in the render-blocking script, because pagereveal fires
-// before the first frame of the new page. Any other move keeps the plain cross-fade.
-const DESKTOPS = ["/cluster/", "/", "/lab/"];
+// Moving between the landing page (/), the cluster, the lab and the three work pages slides like an
+// iPhone app (owner decision 2026-10-16): a page opened comes in from the right, and the way back
+// slides the other way, the old page out to the right and the one behind it in from the left. Back
+// is going home, by the header's logo or a link, and the browser's or mouse's back button
+// (styles.css, :active-view-transition-type). Set here, in the render-blocking script, because
+// pagereveal fires before the first frame of the new page. Any other move keeps the plain
+// cross-fade.
+const DESKTOPS = ["/cluster/", "/", "/lab/", "/work/vllm/", "/work/bridge/", "/work/flota/"];
 const desktop = (url: string | undefined): number => {
   if (!url) return -1;
   try {
