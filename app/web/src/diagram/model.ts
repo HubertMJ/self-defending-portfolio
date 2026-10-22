@@ -98,11 +98,11 @@ export const LAYER_BLURBS: Record<DefenceLayer, string> = {
 export const MODEL: DiagramModel = {
   zones: [
     { id: "internet", title: "Internet", detail: "hero", at: { hero: [0, 0, 1, 2], full: [0, 0, 2, 1] } },
-    { id: "k3s01", title: "k3s01", sub: "one VM · Ansible-hardened · nftables input drop · Cilium", detail: "hero", at: { hero: [1, 0, 4, 3.2], full: [2, 0, 4, 1] } },
+    { id: "k3s01", title: "k3s01", sub: "one VM · Ansible-hardened · nftables input drop · Cilium", detail: "hero", at: { hero: [1, 0, 4, 3.5], full: [2, 0, 4, 1] } },
     { id: "siem01", title: "siem01", sub: "own VM · append-only", detail: "hero", at: { hero: [5, 1.6, 1, 1.6], full: [5, 4, 1, 1] } },
     { id: "gitops", title: "GitOps: every cluster change is a commit", detail: "full", at: { full: [0, 1.4, 3, 2.2] } },
     { id: "supply", title: "Supply chain: only our own images, only if signed on main", detail: "full", at: { full: [3, 1.4, 3, 2.2] } },
-    { id: "runtime", title: "Detection and response: no human in the loop, sandbox only", detail: "full", at: { full: [0, 4, 5, 2.2] } },
+    { id: "runtime", title: "Detection and response: no human in the loop, sandbox only", detail: "full", at: { full: [0, 4, 5, 2.5] } },
   ],
   nodes: [
     // ---- the path in ----
@@ -114,7 +114,7 @@ export const MODEL: DiagramModel = {
     { id: "kube-apiserver", label: "kube-apiserver", sub: "RBAC: sandbox pods only", zone: "k3s01", detail: "hero", tone: "control", role: "respond", layer: "admission", blurb: "The API creates the sandbox pod through it, and Talon's answer goes through it too. Kyverno admits only signed images in the restricted profile; the audit log of every call ships to the SIEM.", sources: ["cluster/infra/kyverno-policies/", "cluster/infra/portfolio-api/"], at: { hero: [4, 1], full: [4, 4] } },
     // ---- the attack and the answer ----
     { id: "pod", label: "Sandbox pod", sub: "sandbox · non-root · no token", zone: "k3s01", detail: "hero", tone: "plain", role: "attack", layer: "pod-security", blurb: LAYER_BLURBS["pod-security"], sources: ["cluster/infra/sandbox/", "cluster/infra/sandbox/scenarios/"], at: { hero: [1, 1], full: [0, 4] } },
-    { id: "twin", label: "Unguarded twin", sub: "sandbox-unguarded", zone: "k3s01", detail: "hero", tone: "plain", role: "neutral", blurb: "The same pod, the same policies, the same attack, in a namespace Talon's rules do not match: Falco still sees it, nothing answers. The difference between the two is what the response is worth.", sources: ["cluster/infra/sandbox-unguarded/", "docs/adr/0031-unguarded-twin-namespace.md"], at: { hero: [1, 2.2], full: [0, 5.2] } },
+    { id: "twin", label: "Unguarded twin", sub: "sandbox-unguarded", zone: "k3s01", detail: "hero", tone: "plain", role: "neutral", blurb: "The same pod, the same policies, the same attack, in a namespace Talon's rules do not match: Falco still sees it, nothing answers. The difference between the two is what the response is worth.", sources: ["cluster/infra/sandbox-unguarded/", "docs/adr/0031-unguarded-twin-namespace.md"], at: { hero: [2, 2.2], full: [1, 5.2] } },
     { id: "falco", label: "Falco", sub: "modern eBPF · falco", zone: "k3s01", detail: "hero", tone: "control", role: "detect", layer: "runtime", blurb: "Falco watches every syscall over eBPF. A shell with a terminal, a sensitive file read, a network tool, a binary run from the shop volume: each matches a rule within milliseconds.", sources: ["cluster/infra/falco/"], at: { hero: [2, 1], full: [1, 4] } },
     { id: "talon", label: "Falco Talon", sub: "falco-response", zone: "k3s01", detail: "hero", tone: "control", role: "respond", layer: "runtime", blurb: "Falcosidekick hands each alert to Talon, whose rules match only the sandbox namespace: terminate the pod, or label it so Cilium cuts it off both ways.", sources: ["cluster/infra/falco-response/"], at: { hero: [3, 1], full: [3, 4] } },
     { id: "siem", label: "OpenSearch SIEM", sub: "Sigma rules · correlation", zone: "siem01", detail: "hero", tone: "control", role: "record", blurb: "Fluent Bit ships every alert, action, flow, audit line and terminal command to a SIEM on its own VM that the cluster can append to but not rewrite. Sigma rules from this repository run there; the API joins their findings into incidents.", sources: ["siem/", "ansible/roles/fluent_bit/", "docs/adr/0034-siem-opensearch-security-analytics.md"], at: { hero: [5, 1.9], full: [5, 4] } },
@@ -126,7 +126,7 @@ export const MODEL: DiagramModel = {
     { from: "gateway", to: "site", kind: "flow", label: "route", detail: "hero" },
     { from: "site", to: "kube-apiserver", kind: "flow", label: "starts the pod", detail: "hero", route: "hv", views: ["hero"] },
     { from: "pod", to: "falco", kind: "flow", label: "syscalls", detail: "hero" },
-    { from: "twin", to: "falco", kind: "side", label: "syscalls", detail: "hero", route: "hv" },
+    { from: "twin", to: "falco", kind: "side", label: "syscalls", detail: "hero" },
     { from: "falco", to: "talon", kind: "flow", label: "alert", detail: "hero", views: ["hero"] },
     { from: "talon", to: "kube-apiserver", kind: "flow", label: "action", detail: "hero" },
     { from: "kube-apiserver", to: "pod", kind: "response", label: "delete or quarantine", detail: "hero", route: "under" },
