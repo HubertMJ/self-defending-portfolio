@@ -22,4 +22,4 @@ images:
     # scripts/bump-image-digest.sh only rewrites this project's own images, not this foreign-repo ref.
     # Verified signed with a verified SPDX SBOM attestation (scripts/verify-image.sh, the work-mockups
     # workflow identity).
-    digest: sha256:61ba87e08ae67af53129919143a8d666a4760645b7b5ee1a6fab18f0b08ac90e
+    digest: sha256:60cbe9e082fb32f87b7ec152ceedb58f870b89875bda41070a5c6cc24d4b2133
