@@ -19,4 +19,4 @@ images:
     # HubertMJ/hubertjablon.ski 2bb959c (PR #15 diagram fonts; PR #13: five project cards, three of them systems from work,
     # linking to /work/ in cluster/infra/work; the ASCII popup inside an open dialog). cosign-verified
     # signed + SPDX SBOM (scripts/verify-image.sh).
-    digest: sha256:a283d555f2643ae6581fddc0292a42b7bc706a8feee0bfcf724d2b569e2d3b34
+    digest: sha256:fd8443b4e10ea8b4603d70ec48b389fe21221848c8564d0baf2db2de3224b7e3
