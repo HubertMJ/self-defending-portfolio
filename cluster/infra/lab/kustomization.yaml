@@ -27,7 +27,7 @@ images:
     # hubertjablon.ski pin: scripts/bump-image-digest.sh only rewrites this project's own images, not
     # this foreign-repo ref. Verified signed with a verified SPDX SBOM attestation
     # (scripts/verify-image.sh, the detection-lab workflow identity).
-    digest: sha256:191e6e2e12ad7017276972c8e1c4ac17cf77e73f59ad588bc423db8a6b61f6ef
+    digest: sha256:09ddd93fd26b602aa0721d467ec772cff71a0c76826826a4543c68d5f84d2a0f
 
 # The lab-runner CronJob's SIEM client certificate (KSOPS, ADR 0034), made and encrypted by
 # scripts/siem-lab-runner-cert.sh. The CronJob's own image digest is pinned in cronjob.yaml.
