@@ -68,7 +68,7 @@
 #     suite: upstream's `make unit-tests` over all of ./... takes longer than this repository's CI
 #     budget, and its privileged half needs a kernel this build does not get.
 #   * the binaries with upstream's make targets (CGO off, -s -w, upstream's ldflags and build tags),
-#     so `cilium-dbg version` reads "1.19.8 5791d208 <commit date> go1.26.9" - upstream's string but
+#     so `cilium-dbg version` reads "1.19.8 5791d208 <commit date> go1.26.10" - upstream's string but
 #     for the Go release (upstream's says go1.26.8; the Go below is the one change of toolchain). One
 #     ldflag is added, for scanners: the Go build info records the main module as the pseudo-version
 #     "v0.0.0-<date>-5791d208dda4+dirty" (the tree differs from the tag by go.mod/go.sum/vendor), and
@@ -91,15 +91,14 @@
 # keep cilium_version / targetRevision in step (ADR 0008), push.
 #
 # Bases pinned by tag and digest (ADR 0008), resolved from the registries' index manifests:
-#   golang:1.26.9                     docker.io  (the same pin as the talon change in this rebuild;
-#                                                 1.26.8's standard library has fixed findings, HIGH
-#                                                 among them)
+#   golang:1.26.10                    docker.io  (the same pin as app/talon; 1.26.9's standard
+#                                                 library has a fixed HIGH, CVE-2026-111943)
 #   cilium-runtime:ccc1a8e2...        quay.io    (upstream's CILIUM_RUNTIME_IMAGE at CILIUM_COMMIT)
 #   cilium-envoy:v1.37.6-...          quay.io    (upstream's CILIUM_ENVOY_IMAGE at CILIUM_COMMIT, also
 #                                                 the chart's envoy.image)
 FROM quay.io/cilium/cilium-envoy:v1.37.6-1789133542-cbec91f666af0bf742da986d43832932dbb26b82@sha256:af7382699576b9e65e9184efa52eeca0b58aea70ad6e511bf260c91d9f740463 AS cilium-envoy
 
-FROM docker.io/library/golang:1.26.9@sha256:d7722066f0b60ceccb6c0643cbed1f5f9e15506ac237146c95333504d7805d89 AS tools
+FROM docker.io/library/golang:1.26.10@sha256:672c944cfd07599b5f1bb179869270cdc94c6254e41db4d431259693cb286b82 AS tools
 # gops and the CNI loopback plugin as upstream's images/runtime/build-gops.sh and build-cni.sh at
 # CILIUM_COMMIT build them - the same releases, `go build` with the same flags - but with this
 # stage's Go instead of upstream's 1.26.8, fetched by the commit each tag points at instead of a tag
@@ -116,7 +115,7 @@ RUN git init -q . \
  && test "$(git rev-parse HEAD)" = "$GOPS_COMMIT" \
  && CGO_ENABLED=0 go build -buildvcs=false -ldflags "-s -w" -o /out/usr/bin/gops github.com/google/gops \
  && go version -m /out/usr/bin/gops | grep -q 'GOARCH=amd64' \
- && go version /out/usr/bin/gops | grep -q ': go1\.26\.9$'
+ && go version /out/usr/bin/gops | grep -q ': go1\.26\.10$'
 WORKDIR /go/src/github.com/containernetworking/cni
 # containernetworking/plugins tag v1.9.1; built from its vendor/, as upstream's script does.
 RUN git init -q . \
@@ -128,10 +127,10 @@ RUN git init -q . \
       -ldflags "-s -w -X github.com/containernetworking/plugins/pkg/utils/buildversion.BuildVersion=v1.9.1" \
       ./plugins/main/loopback \
  && go version -m /out/cni/loopback | grep -q 'GOARCH=amd64' \
- && go version /out/cni/loopback | grep -q ': go1\.26\.9$' \
+ && go version /out/cni/loopback | grep -q ': go1\.26\.10$' \
  && /out/cni/loopback --version 2>&1 | grep -qx 'CNI loopback plugin v1\.9\.1'
 
-FROM docker.io/library/golang:1.26.9@sha256:d7722066f0b60ceccb6c0643cbed1f5f9e15506ac237146c95333504d7805d89 AS deps
+FROM docker.io/library/golang:1.26.10@sha256:672c944cfd07599b5f1bb179869270cdc94c6254e41db4d431259693cb286b82 AS deps
 # cilium/cilium tag v1.19.8 (annotated tag 9f826a3d..., commit below).
 ARG CILIUM_COMMIT=5791d208dda456da8d08e9389c3d22514dc2db77
 # Upstream's path: the Makefiles and a few tests derive paths from it.
@@ -175,7 +174,7 @@ RUN GIT_VERSION="$(git show -s --format='%h %aI' | sed 's/Z$/+00:00/')" \
  && mv LICENSE.all /out/LICENSE.all \
  && cp images/cilium/init-container.sh plugins/cilium-cni/install-plugin.sh \
        plugins/cilium-cni/cni-uninstall.sh /out/ \
- && /out/usr/bin/cilium-dbg version 2>/dev/null | grep -qx 'Client: 1\.19\.8 5791d208 2026-09-15T18:23:52+00:00 go version go1\.26\.9 linux/amd64'
+ && /out/usr/bin/cilium-dbg version 2>/dev/null | grep -qx 'Client: 1\.19\.8 5791d208 2026-09-15T18:23:52+00:00 go version go1\.26\.10 linux/amd64'
 
 FROM quay.io/cilium/cilium-runtime:ccc1a8e2e299ac61182dcaddbf65cf324ec509b7@sha256:02a3f11fa19cfc9d990cf84ec3bba9f368c4644a1a7b1b6e6c21f29f95db45f6
 # The OS findings: OpenSSL (CVE-2026-84782, HIGH) and perl-base 5.38.2-3.2ubuntu0.4 (CVE-2026-15534,

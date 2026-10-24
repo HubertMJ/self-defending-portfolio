@@ -6,7 +6,7 @@
 # carries 13 HIGH with Trivy 0.75.0 on 2026-10-02: 8 in the Go standard library the binary was
 # compiled with (1.26.5; fixed in 1.26.6), 2 in jq and 3 in OpenSSL (libcrypto3, libssl3, openssl;
 # Alpine packages), and none in kube-bench's own dependencies. So this build changed no module at
-# first: the same go.mod/go.sum, compiled with a current Go (1.26.9 since 2026-10-10), on a base that
+# first: the same go.mod/go.sum, compiled with a current Go (1.26.10 since 2026-10-24), on a base that
 # carries only what the k3s checks run. Since 2026-10-10 one dependency has a HIGH with a fix
 # (golang.org/x/net v0.56.0, CVE-2026-78669, fixed in v0.60.0; Trivy 0.75.0), so modules/ raises it.
 #
@@ -80,10 +80,10 @@
 # list against the one below; push.
 #
 # Bases pinned by tag and digest (ADR 0008):
-#   golang:1.26.9      docker.io, the pin app/api and app/talon use (1.26.8's standard library has
-#                      fixed HIGH findings)
+#   golang:1.26.10     docker.io, the pin app/api and app/talon use (1.26.9's standard library has a
+#                      fixed HIGH, CVE-2026-111943)
 #   wolfi-base:latest  cgr.dev/chainguard
-FROM docker.io/library/golang:1.26.9@sha256:d7722066f0b60ceccb6c0643cbed1f5f9e15506ac237146c95333504d7805d89 AS deps
+FROM docker.io/library/golang:1.26.10@sha256:672c944cfd07599b5f1bb179869270cdc94c6254e41db4d431259693cb286b82 AS deps
 # aquasecurity/kube-bench tag v0.16.0.
 ARG KUBE_BENCH_COMMIT=5c6c22d51b926020e7414e1f1e051851d1a2feff
 WORKDIR /src
@@ -119,13 +119,24 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 GOFLAGS=-buildvcs=false \
 FROM cgr.dev/chainguard/wolfi-base:latest@sha256:824f77df45397eb954dfb963db255907ee8842e3446353ce93d688e5e862f51d
 # busybox is named so that it stays in the world file when wolfi-base (the meta package that pulls in
 # apk-tools) is removed: it is /bin/sh and the text tools of every audit.
+# The last five come with the pinned wolfi-base digest or with systemd and are named only to raise
+# them to the build that fixes a HIGH (Trivy 0.70.0, 2026-10-24): ca-certificates-bundle
+# 20260909-r2 (CVE-2026-111943, fixed in r3), curl and libcurl-openssl4 8.22.0-r4 (CVE-2026-92392,
+# fixed in 8.23.0-r0) and libbrotli{common,dec,enc}1 1.2.0-r5 (CVE-2026-111497, fixed in r7);
+# kubectl-1.37 1.37.1-r2 had CVE-2026-111943 too (fixed in r3).
 RUN apk add --no-cache \
       busybox=1.38.0-r2 \
       systemd=261.3-r2 \
       procps=4.0.7-r1 \
       findutils=4.11.0-r2 \
-      kubectl-1.37=1.37.1-r2 \
-      kubectl-1.37-default=1.37.1-r2 \
+      kubectl-1.37=1.37.1-r3 \
+      kubectl-1.37-default=1.37.1-r3 \
+      ca-certificates-bundle=20260909-r3 \
+      curl=8.23.0-r0 \
+      libcurl-openssl4=8.23.0-r0 \
+      libbrotlicommon1=1.2.0-r7 \
+      libbrotlidec1=1.2.0-r7 \
+      libbrotlienc1=1.2.0-r7 \
  && apk del --no-network --purge wolfi-base apk-tools \
  && rm -rf /var/cache/apk /etc/apk/cache \
  && journalctl --version | head -n1 \

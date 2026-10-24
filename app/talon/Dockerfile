@@ -51,9 +51,10 @@
 #     ...` and tests/scenarios/offline.sh passes `rules check ...`.
 #
 # Bases pinned by tag and digest (ADR 0008), resolved from the registries' index manifests:
-#   golang:1.26.9                          docker.io   (1.26.8's standard library has fixed findings)
+#   golang:1.26.10                         docker.io   (1.26.9's standard library has a fixed HIGH,
+#                                                       CVE-2026-111943)
 #   distroless/static-debian13:nonroot     gcr.io      (as app/api)
-FROM docker.io/library/golang:1.26.9@sha256:d7722066f0b60ceccb6c0643cbed1f5f9e15506ac237146c95333504d7805d89 AS deps
+FROM docker.io/library/golang:1.26.10@sha256:672c944cfd07599b5f1bb179869270cdc94c6254e41db4d431259693cb286b82 AS deps
 ARG TALON_COMMIT=d273e352f80e114954f40c9843fd0a1b71a30d57
 WORKDIR /src
 # Fetch exactly one commit by its hash (GitHub serves any reachable commit by id), then refuse to go

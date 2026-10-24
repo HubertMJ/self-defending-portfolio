@@ -12,7 +12,7 @@ set -euo pipefail
 IMAGE=${1:?usage: $0 <image ref>}
 DOCKER=${DOCKER:-docker}
 NAME=cilium
-VERSION='1.19.8 5791d208 2026-09-15T18:23:52+00:00 go version go1.26.9 linux/amd64'
+VERSION='1.19.8 5791d208 2026-09-15T18:23:52+00:00 go version go1.26.10 linux/amd64'
 
 failures=0
 # Every failure is printed for the log and as a GitHub Actions `::error::` annotation, so the reason
@@ -48,7 +48,7 @@ check "cilium-dbg version (client)" "$(run cilium-dbg version | head -1)" "Clien
 # The CNI plugin prints its version on stderr (stdout is reserved for CNI results): merged inside
 # the container, never with docker's own output.
 check "cilium-cni --version" "$(run sh -c '/opt/cni/bin/cilium-cni --version 2>&1' | head -1)" "Cilium CNI plugin $VERSION"
-check "hubble version" "$(run hubble version)" "hubble v1.19.8@HEAD-5791d208 compiled with go1.26.9 on linux/amd64"
+check "hubble version" "$(run hubble version)" "hubble v1.19.8@HEAD-5791d208 compiled with go1.26.10 on linux/amd64"
 for bin in cilium-dbg cilium-health cilium-health-responder cilium-bugtool cilium-mount cilium-sysctlfix; do
   check "$bin --help exits 0" "$(run "$bin" --help >/dev/null; echo $?)" 0
 done

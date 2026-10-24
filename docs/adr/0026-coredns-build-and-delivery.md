@@ -360,3 +360,10 @@ runs, and the shipped binary is not affected. printf goes back on for the three 
 them. go.mod also says `godebug default=go1.25`, so the binary keeps the run-time defaults it had
 under `go 1.25.0` (`go version -m` shows the go1.25 DefaultGODEBUG set): the language-version bump
 changes what vet reads, not how CoreDNS behaves. The image reaches the cluster only through the k3s role (`k3s_coredns_image`), as before.
+
+## Amendment 2026-10-24: Go 1.26.10
+
+Trivy 0.70.0's database of 2026-10-24 reports a HIGH in Go 1.26.9's standard library
+(CVE-2026-111943, fixed in 1.26.10), so the builder moves to golang:1.26.10, as every Go image here
+(ADR 0025, amendment of the same date). modules/ is unchanged. The image reaches the cluster only
+through the k3s role (`k3s_coredns_image`), as before.

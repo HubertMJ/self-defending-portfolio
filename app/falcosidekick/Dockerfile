@@ -38,8 +38,12 @@
 #     otlploghttp and otelslog carry no finding: they are raised with the log exporter because the
 #     otel/log API they compile against changed between v0.19.0 and v0.21.0 (otelslog v0.20.0 is the
 #     release built on otel v1.45.0 and log v0.21.0). x/net v0.60.0 requires x/crypto v0.57.0, which
-#     also fixes x/crypto's two MEDIUM findings. `diff` against upstream's go.mod at
-#     FALCOSIDEKICK_COMMIT shows the whole set.
+#     also fixes x/crypto's two MEDIUM findings. Then, for the HIGH in klauspost/compress v1.18.4
+#     (CVE-2026-63209, fixed in v1.18.7; 2026-10-24), on top of that result:
+#       go get github.com/klauspost/compress@v1.18.7
+#       go mod tidy
+#     which moved nothing else. `diff` against upstream's go.mod at FALCOSIDEKICK_COMMIT shows the
+#     whole set.
 #   * upstream's own test suite (`make test`: `go vet` + `go test -race`) runs in the builder against
 #     the raised dependencies, with --network=none: no tests, no image (as app/talon, app/ksops).
 #   * the binary as upstream's release builds it (.goreleaser.yml + Makefile LDFLAGS): CGO off,
@@ -58,10 +62,10 @@
 # carries all of them, this image can go and the upstream one comes back), push.
 #
 # Bases pinned by tag and digest (ADR 0008):
-#   golang:1.26.9                          docker.io   (as app/talon; 1.26.8's standard library has
-#                                                       fixed findings)
+#   golang:1.26.10                         docker.io   (as app/talon; 1.26.9's standard library has
+#                                                       a fixed HIGH, CVE-2026-111943)
 #   distroless/static-debian13:nonroot     gcr.io      (as app/api, app/talon and app/ksops)
-FROM docker.io/library/golang:1.26.9@sha256:d7722066f0b60ceccb6c0643cbed1f5f9e15506ac237146c95333504d7805d89 AS deps
+FROM docker.io/library/golang:1.26.10@sha256:672c944cfd07599b5f1bb179869270cdc94c6254e41db4d431259693cb286b82 AS deps
 # falcosecurity/falcosidekick tag 2.35.0.
 ARG FALCOSIDEKICK_COMMIT=09883e3f55dade3c2ab2a471736ea5519aeac418
 WORKDIR /src
