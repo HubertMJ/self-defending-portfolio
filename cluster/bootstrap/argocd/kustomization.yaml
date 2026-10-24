@@ -36,7 +36,7 @@ images:
   # the cluster only through `kubectl apply -k cluster/bootstrap/argocd` (docs/bootstrap.md 8.6).
   - name: ghcr.io/hubertmj/self-defending-portfolio/ksops
     newTag: main
-    digest: sha256:b888860a78abc0ec9182025c5bd5a46463a221ce0a9d21c4dc33a48f533d3463
+    digest: sha256:0b144aafa64da71fe2bd218f82845fccb998350fb94bc35815f6cbd68c8cf5f4
   # Argo CD itself - argocd-server, the repo-server and its copyutil init container, the application
   # controller and Redis's secret-init init container all run install.yaml's
   # quay.io/argoproj/argocd:v3.5.4 - replaced by this repository's build of the same release,
@@ -51,7 +51,7 @@ images:
   - name: quay.io/argoproj/argocd
     newName: ghcr.io/hubertmj/self-defending-portfolio/argocd
     newTag: main
-    digest: sha256:58dedb3d08ee42cdb9ddbf68a3edc03cbcf10915df13349fc8e0c0af56c9d20b
+    digest: sha256:bb4858432b204662e0cc25e0e4b68da854a6cf9694b1266e4cdbdc749937f05a
 
 patches:
   - path: argocd-cm.yaml
