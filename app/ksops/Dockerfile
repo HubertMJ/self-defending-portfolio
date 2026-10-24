@@ -59,10 +59,10 @@
 # caught up with - if it carries all of them, this image can go and the upstream one comes back), push.
 #
 # Bases pinned by tag and digest (ADR 0008), resolved from the registries' index manifests:
-#   golang:1.26.9                          docker.io   (as app/talon; 1.26.8's standard library has
-#                                                       fixed findings)
+#   golang:1.26.10                         docker.io   (as app/talon; 1.26.9's standard library has
+#                                                       a fixed HIGH, CVE-2026-111943)
 #   distroless/static-debian13:nonroot     gcr.io      (as app/api and app/talon)
-FROM docker.io/library/golang:1.26.9@sha256:d7722066f0b60ceccb6c0643cbed1f5f9e15506ac237146c95333504d7805d89 AS deps
+FROM docker.io/library/golang:1.26.10@sha256:672c944cfd07599b5f1bb179869270cdc94c6254e41db4d431259693cb286b82 AS deps
 # viaduct-ai/kustomize-sops tag v4.5.1 (also master as of 2026-10-02).
 ARG KSOPS_COMMIT=d9442dc3153d9c16e517a68ce8926c9507386429
 WORKDIR /src

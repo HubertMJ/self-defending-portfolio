@@ -38,7 +38,7 @@
 #     run in the builder against the raised dependencies, with --network=none: no tests, no image.
 #   * the binary as upstream's Makefile builds it: CGO off, -mod=readonly, -trimpath, the same
 #     k8s.io/client-go/pkg/version variables (what `--version` prints), plus -s and an empty build id.
-#     The Go standard library is the toolchain's: 1.26.9 instead of 1.26.4.
+#     The Go standard library is the toolchain's: 1.26.10 instead of 1.26.4.
 #   * runtime: distroless `static` nonroot, the base app/api, app/talon and app/ksops use. Upstream's
 #     image is distroless `static` too, with the binary at /metrics-server and USER 65534; both are
 #     kept, so the Deployment's args and its runAsUser are what k3s's manifest used.
@@ -48,10 +48,10 @@
 # compare upstream's manifests/ with cluster/infra/metrics-server, push.
 #
 # Bases pinned by tag and digest (ADR 0008):
-#   golang:1.26.9                          docker.io   (as app/talon; 1.26.8's standard library has
-#                                                       fixed findings)
+#   golang:1.26.10                         docker.io   (as app/talon; 1.26.9's standard library has
+#                                                       a fixed HIGH, CVE-2026-111943)
 #   distroless/static-debian13:nonroot     gcr.io      (as app/api, app/talon and app/ksops)
-FROM docker.io/library/golang:1.26.9@sha256:d7722066f0b60ceccb6c0643cbed1f5f9e15506ac237146c95333504d7805d89 AS deps
+FROM docker.io/library/golang:1.26.10@sha256:672c944cfd07599b5f1bb179869270cdc94c6254e41db4d431259693cb286b82 AS deps
 # kubernetes-sigs/metrics-server tag v0.9.0.
 ARG METRICS_SERVER_COMMIT=2a7c4b2c7d46552ff47f4aeaa3a735c582587ecd
 WORKDIR /src
