@@ -434,3 +434,25 @@ the pinned wolfi-base digest. app/api moves the same way (golang:1.26.9, x/net v
 run-time defaults it had under `go 1.25.0` (`go version -m` shows the go1.25 DefaultGODEBUG set) and
 the language-version bump changes no behaviour (as the Cilium images' go.mod, ADR 0028). kube-bench's
 go.mod is upstream's `go 1.26.3`, unchanged.
+
+## Amendment 2026-10-24: Go 1.26.10, klauspost/compress v1.18.7, kube-bench's Wolfi packages
+
+Trivy 0.70.0's database of 2026-10-24 reports a HIGH in Go 1.26.9's standard library
+(CVE-2026-111943, fixed in 1.26.10) in every binary built with it, so CI's CRITICAL,HIGH gate would
+refuse the next build of every Go image here. The builder moves to golang:1.26.10 in app/talon,
+app/falcosidekick, app/trivy-operator, app/ksops, app/metrics-server, app/kube-bench, app/argocd (all
+four of its Go builds), app/api and app/scenario; app/coredns and the Cilium images move the same way
+(ADR 0026, ADR 0028). Besides:
+- github.com/klauspost/compress (CVE-2026-63209, HIGH, fixed in v1.18.7): v1.18.4 in falcosidekick
+  and helm, v1.18.0 in argocd. `go get github.com/klauspost/compress@v1.18.7` + `go mod tidy` on top
+  of each `modules/`, which moved nothing else. talon, trivy-operator and coredns already link a
+  1.19 release.
+- argocd: libcurl3t64-gnutls 8.18.0-1ubuntu2.7 (CVE-2026-92392, HIGH, fixed in 8.18.0-1ubuntu2.8)
+  needs no line: the runtime stage's `apt-get dist-upgrade` (ADR 0027) takes the fixed build.
+- kube-bench: packages that come with the pinned wolfi-base digest or with systemd are named in the
+  `apk add` at the fixed builds - ca-certificates-bundle 20260909-r3 (CVE-2026-111943), curl and
+  libcurl-openssl4 8.23.0-r0 (CVE-2026-92392), libbrotli{common,dec,enc}1 1.2.0-r7
+  (CVE-2026-111497) - and kubectl-1.37 moves to 1.37.1-r3 (CVE-2026-111943).
+
+Verified locally: each image built from this tree scans 0 with Trivy 0.70.0 `--severity
+CRITICAL,HIGH --ignore-unfixed`, and upstream's tests pass in every build (app/api's own tests too).

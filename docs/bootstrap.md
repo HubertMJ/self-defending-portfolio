@@ -959,7 +959,7 @@ bundled `coredns.yaml`; the pin is `k3s_coredns_image` in `ansible/roles/k3s/def
    ```sh
    IMG=ghcr.io/hubertmj/self-defending-portfolio/coredns@sha256:<digest>
    scripts/verify-image.sh "$IMG"
-   docker run --rm "$IMG" -version          # CoreDNS-1.14.7 / linux/amd64, go1.26.9 (go1.26.8 before 2026-10-10), 427fc80
+   docker run --rm "$IMG" -version          # CoreDNS-1.14.7 / linux/amd64, go1.26.10 (go1.26.9 before 2026-10-24), 427fc80
    printf '.:53 {\n  hosts {\n    10.4.1.20 k3s01\n  }\n}\n' > /tmp/Corefile
    docker run -d --name cdns --read-only --cap-drop ALL --cap-add NET_BIND_SERVICE \
      --security-opt no-new-privileges -v /tmp/Corefile:/Corefile:ro "$IMG" -conf /Corefile
@@ -1076,8 +1076,8 @@ the rollback rehearsed in your head before you start.
    kubectl -n kube-system get ds,deploy -l app.kubernetes.io/part-of=cilium -o wide
    kubectl -n kube-system exec ds/cilium -c cilium-agent -- cilium-dbg status --brief   # OK
    kubectl -n kube-system exec ds/cilium -c cilium-agent -- cilium-dbg version
-   # Client: 1.19.8 5791d208 2026-09-15T18:23:52+00:00 go version go1.26.9 linux/amd64 (Daemon: the same)
-   # (go1.26.8 for the images before the 2026-10-10 rebuild, ADR 0028 amendment)
+   # Client: 1.19.8 5791d208 2026-09-15T18:23:52+00:00 go version go1.26.10 linux/amd64 (Daemon: the same)
+   # (go1.26.9 for the images before the 2026-10-24 rebuild, go1.26.8 before 2026-10-10, ADR 0028 amendments)
    kubectl -n kube-system exec ds/cilium -c cilium-agent -- cilium-dbg status --verbose \
      | grep -E 'KubeProxyReplacement|Envoy|Hubble|Controller Status|Proxy Status|Cluster health'
    RELAY=$(kubectl -n kube-system get svc hubble-relay -o jsonpath='{.spec.clusterIP}')
@@ -1177,7 +1177,7 @@ the rollback rehearsed in your head before you start.
    # seven lines, all ghcr.io/hubertmj/self-defending-portfolio/cilium:main@sha256:<digest>
    kubectl -n kube-system exec ds/cilium -c cilium-agent -- cilium-dbg status --brief   # OK
    kubectl -n kube-system exec ds/cilium -c cilium-agent -- cilium-dbg version
-   # identical to the baseline, except the Go release (go1.26.9 after the 2026-10-10 rebuild)
+   # identical to the baseline, except the Go release (go1.26.10 after the 2026-10-24 rebuild)
    kubectl -n kube-system exec ds/cilium -c cilium-agent -- cilium-dbg status --verbose \
      | grep -E 'KubeProxyReplacement|Envoy|Hubble|Controller Status|Proxy Status|Cluster health'
    kubectl -n kube-system logs ds/cilium -c cilium-agent --since=10m | grep -E 'level=(error|fatal)'
@@ -1436,7 +1436,7 @@ in the bootstrap kustomization, so the last step is again a manual apply (ADR 00
    ```sh
    img=ghcr.io/hubertmj/self-defending-portfolio/argocd@sha256:<digest>
    scripts/verify-image.sh "$img"
-   docker run --rm "$img" argocd version --client     # argocd: v3.5.4+d6d5b24.dirty, go1.26.9
+   docker run --rm "$img" argocd version --client     # argocd: v3.5.4+d6d5b24.dirty, go1.26.10
    docker run --rm "$img" sh -c 'test ! -e /usr/bin/pebble && helm version --short; kustomize version'
    docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:0.75.0 image \
      --severity CRITICAL,HIGH,MEDIUM,LOW --ignore-unfixed --quiet "$img"      # 0 everywhere
