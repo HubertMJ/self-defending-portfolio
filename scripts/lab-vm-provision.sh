@@ -351,11 +351,13 @@ fi
 # place and force cloud-init to re-run (new NoCloud instance id via a fresh system uuid), then drop the
 # snapshot so it is recaptured after the isolation check. A VM with no snapshot is incomplete (e.g.
 # cloud-init failed on a wrong network), and one built from another DETLAB_REF holds old scenario code
-# (a cloud-init re-run cannot re-clone /opt/lab-src): destroy either and recreate clean. The ref is
+# (a cloud-init re-run cannot re-clone /opt/lab-src), and one whose disk is not on VM_STORAGE would keep
+# wearing the old storage: destroy any of these and recreate clean. The ref is
 # recorded in the VM description. Either way the end state is the same (idempotent).
 say "VM ${VMID} (${VM_NAME})"
 ref_matches() { [[ $DRY_RUN == 1 ]] && return 1; pveq qm config "$VMID" | grep -q "^description:.*detection-lab ${DETLAB_REF}"; }
-if vm_exists && snap_exists && ref_matches; then
+on_storage() { [[ $DRY_RUN == 1 ]] && return 1; pveq qm config "$VMID" | grep -q "^scsi0: ${VM_STORAGE}:"; }
+if vm_exists && snap_exists && ref_matches && on_storage; then
   echo "VMID ${VMID} is provisioned; migrating net0 tag=${VM_VLAN} and ipconfig0 ${VM_IP}, re-running setup"
   if [[ $DRY_RUN == 1 ]]; then
     echo "would: qm stop ${VMID}; set net0 tag=${VM_VLAN}; set ipconfig0 ip=${VM_IP},gw=${VM_GW}; set nameserver ${VM_DNS}; refresh cicustom; new smbios uuid; qm cloudinit update; delete snapshot ${SNAPSHOT}"
@@ -371,7 +373,9 @@ if vm_exists && snap_exists && ref_matches; then
     pveq qm delsnapshot "$VMID" "$SNAPSHOT" >/dev/null 2>&1 || true
   fi
 elif vm_exists; then
-  if snap_exists; then
+  if snap_exists && ref_matches; then
+    echo "VMID ${VMID} has its disk outside ${VM_STORAGE}; destroying and recreating"
+  elif snap_exists; then
     echo "VMID ${VMID} was built from another detection-lab ref (want ${DETLAB_REF}); destroying and recreating"
   else
     echo "VMID ${VMID} exists but has no ${SNAPSHOT} snapshot (incomplete); destroying and recreating"
