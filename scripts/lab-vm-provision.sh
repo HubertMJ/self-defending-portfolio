@@ -22,7 +22,12 @@ VM_NAME="${VM_NAME:-lab-vm}"
 VM_CORES="${VM_CORES:-1}"
 VM_MEMORY_MB="${VM_MEMORY_MB:-1536}"
 VM_DISK_GB="${VM_DISK_GB:-8}"
-VM_STORAGE="${VM_STORAGE:-local-lvm}"         # the VM disk (lvmthin)
+VM_STORAGE="${VM_STORAGE:-Lexar}"             # the VM disks: the NVMe dir storage, not local-lvm (that
+                                              # thin pool sits on the PVE boot USB stick)
+# qcow2 so the dir storage can hold the lab-clean snapshot (raw on dir cannot); empty = storage default,
+# e.g. VM_STORAGE=local-lvm VM_DISK_FORMAT= for an lvmthin pool.
+VM_DISK_FORMAT="${VM_DISK_FORMAT-qcow2}"
+DISK_FMT="${VM_DISK_FORMAT:+,format=${VM_DISK_FORMAT}}"
 IMPORT_STORAGE="${IMPORT_STORAGE:-local}"     # advertises 'import' content
 SNIPPET_STORAGE="${SNIPPET_STORAGE:-Lexar}"   # advertises 'snippets' content
 VM_BRIDGE="${VM_BRIDGE:-vmbr0}"
@@ -378,9 +383,9 @@ if ! vm_exists; then
     --cpu host --cores ${VM_CORES} --memory ${VM_MEMORY_MB} --balloon 0 \
     --scsihw virtio-scsi-single --agent 1 --serial0 socket --vga serial0 \
     --net0 virtio,bridge=${VM_BRIDGE},tag=${VM_VLAN},firewall=1 \
-    --efidisk0 ${VM_STORAGE}:0,efitype=4m,pre-enrolled-keys=0 \
-    --scsi0 ${VM_STORAGE}:0,import-from=${IMPORT_STORAGE}:import/${IMG_NAME},discard=on,ssd=1 \
-    --ide2 ${VM_STORAGE}:cloudinit --boot order=scsi0 \
+    --efidisk0 ${VM_STORAGE}:0,efitype=4m,pre-enrolled-keys=0${DISK_FMT} \
+    --scsi0 ${VM_STORAGE}:0,import-from=${IMPORT_STORAGE}:import/${IMG_NAME}${DISK_FMT},discard=on,ssd=1 \
+    --ide2 ${VM_STORAGE}:cloudinit${DISK_FMT} --boot order=scsi0 \
     --ciuser ${VM_USER} --ipconfig0 ip=${VM_IP},gw=${VM_GW} --nameserver ${VM_DNS} \
     --cicustom user=${SNIPPET_STORAGE}:snippets/${SNIPPET_NAME} \
     --ciupgrade 0 --onboot 0 \
