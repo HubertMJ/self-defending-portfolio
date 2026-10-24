@@ -20,11 +20,10 @@
 # Bumping: together with app/cilium (see there).
 #
 # Bases pinned by tag and digest (ADR 0008):
-#   golang:1.26.9                     docker.io  (the same pin as the talon change in this rebuild;
-#                                                 1.26.8's standard library has fixed findings, HIGH
-#                                                 among them)
+#   golang:1.26.10                    docker.io  (the same pin as app/talon; 1.26.9's standard
+#                                                 library has a fixed HIGH, CVE-2026-111943)
 #   distroless/static-debian13:nonroot gcr.io    (upstream's BASE_IMAGE digest at CILIUM_COMMIT)
-FROM docker.io/library/golang:1.26.9@sha256:d7722066f0b60ceccb6c0643cbed1f5f9e15506ac237146c95333504d7805d89 AS tools
+FROM docker.io/library/golang:1.26.10@sha256:672c944cfd07599b5f1bb179869270cdc94c6254e41db4d431259693cb286b82 AS tools
 # gops as upstream's images/runtime/build-gops.sh at CILIUM_COMMIT builds it - the same release,
 # `go build` with the same flags - but with this stage's Go instead of upstream's 1.26.8, fetched by
 # the commit the tag points at instead of a tag tarball (app/cilium/Dockerfile, the tools stage).
@@ -38,9 +37,9 @@ RUN git init -q . \
  && test "$(git rev-parse HEAD)" = "$GOPS_COMMIT" \
  && CGO_ENABLED=0 go build -buildvcs=false -ldflags "-s -w" -o /out/usr/bin/gops github.com/google/gops \
  && go version -m /out/usr/bin/gops | grep -q 'GOARCH=amd64' \
- && go version /out/usr/bin/gops | grep -q ': go1\.26\.9$'
+ && go version /out/usr/bin/gops | grep -q ': go1\.26\.10$'
 
-FROM docker.io/library/golang:1.26.9@sha256:d7722066f0b60ceccb6c0643cbed1f5f9e15506ac237146c95333504d7805d89 AS deps
+FROM docker.io/library/golang:1.26.10@sha256:672c944cfd07599b5f1bb179869270cdc94c6254e41db4d431259693cb286b82 AS deps
 # cilium/cilium tag v1.19.8 (annotated tag 9f826a3d..., commit below).
 ARG CILIUM_COMMIT=5791d208dda456da8d08e9389c3d22514dc2db77
 # Upstream's path: the Makefiles and a few tests derive paths from it.
@@ -79,7 +78,7 @@ RUN GIT_VERSION="$(git show -s --format='%h %aI' | sed 's/Z$/+00:00/')" \
  && make GIT_VERSION="$GIT_VERSION" GOARCH=amd64 DESTDIR=/out EXTRA_GO_BUILD_LDFLAGS="$SCANNER_VERSION_LDFLAG" \
       build-container-hubble-relay install-container-binary-hubble-relay licenses-all \
  && mv LICENSE.all /out/LICENSE.all \
- && /out/usr/bin/hubble-relay version | grep -qx 'Hubble-relay: 1\.19\.8 5791d208 2026-09-15T18:23:52+00:00 go version go1\.26\.9 linux/amd64'
+ && /out/usr/bin/hubble-relay version | grep -qx 'Hubble-relay: 1\.19\.8 5791d208 2026-09-15T18:23:52+00:00 go version go1\.26\.10 linux/amd64'
 
 FROM gcr.io/distroless/static-debian13:nonroot@sha256:e2e927ec666bae08560abb3c55d0659eceabb657f56b6782ab500a9fc7f555e3
 LABEL maintainer="maintainer@cilium.io"

@@ -237,3 +237,13 @@ Rollout: as any rebuild, `scripts/bump-image-digest.sh` per image and the three 
 the rollback is reverting that bump commit, back to the previous own digests. Before the agent step,
 `sudo k3s crictl images --digests | grep cilium` on the node must still list the previous agent
 digest, so that a rollback needs no pull.
+
+## Amendment 2026-10-24: Go 1.26.10
+
+Trivy 0.70.0's database of 2026-10-24 reports a HIGH in Go 1.26.9's standard library
+(CVE-2026-111943, fixed in 1.26.10) in every Go binary of the agent, operator and relay images,
+gops and loopback included. The three builds and their tools stages move to golang:1.26.10, as every
+Go image here (ADR 0025, amendment of the same date); modules/ is unchanged. The version strings, the
+tools stages' assertions and the smoke tests now say `go1.26.10`. cilium-envoy has no Go binary of
+ours and is not rebuilt. Rollout as in the amendment of 2026-10-10: operator + relay, then the
+agent (docs/bootstrap.md 8.8).
