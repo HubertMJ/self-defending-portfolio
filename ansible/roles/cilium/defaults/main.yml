@@ -77,7 +77,7 @@ cilium_values:
     # cluster/apps/cilium.yaml, bumped together by scripts/bump-image-digest.sh.
     image:
       # yamllint disable-line rule:line-length
-      override: ghcr.io/hubertmj/self-defending-portfolio/cilium-operator-generic:main@sha256:d1158b4fee55dfdb1b9c100ab6b28faa698be53bf96e8c81e5ca2fbfe7852ef0
+      override: ghcr.io/hubertmj/self-defending-portfolio/cilium-operator-generic:main@sha256:62fc40151f221a7bac1dad897b5e8a9e6acba823846fbad03e257dc0cc602a25
   # Hubble gives flow visibility, which is the point of a self-defending
   # deployment. The UI stays off until it is fronted by the tunnel.
   hubble:
@@ -87,7 +87,7 @@ cilium_values:
       # ADR 0028, as operator.image above.
       image:
         # yamllint disable-line rule:line-length
-        override: ghcr.io/hubertmj/self-defending-portfolio/hubble-relay:main@sha256:d51e22995ec6c98b77f9bb0e7e26b1c29388d488276b866e8cbb0ccffd760126
+        override: ghcr.io/hubertmj/self-defending-portfolio/hubble-relay:main@sha256:8f2e6f5b7d713bad4ecfdc5b894aa98c5cc16740ea9e56a6635db8e342255eee
     ui:
       enabled: false
     # Flow export for the SIEM (ADR 0034); identical to cluster/apps/cilium.yaml, the reasoning is there.

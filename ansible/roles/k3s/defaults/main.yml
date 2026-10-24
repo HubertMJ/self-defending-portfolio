@@ -54,7 +54,7 @@ k3s_coredns_own: true
 # Bumped with scripts/bump-image-digest.sh coredns <digest>; scripts/check-image-digests.sh refuses
 # the all-zero placeholder here as it does under cluster/. Applied only by running this role.
 k3s_coredns_image: >-
-  ghcr.io/hubertmj/self-defending-portfolio/coredns:main@sha256:dd28c445e0bcf237dc7854dae54e273555ea5870f4d6142111f6432215f74855
+  ghcr.io/hubertmj/self-defending-portfolio/coredns:main@sha256:d2b9cd76d9d5cf79bff001f0b31112a385643a3f31f05609855637c8d0db4d94
 
 # ClusterIP of the kube-dns Service and kubelet's --cluster-dns, from this one value. k3s's default
 # (the tenth address of k3s_service_cidr); every running pod's resolv.conf already names it, so it
