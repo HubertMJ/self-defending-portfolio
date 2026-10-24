@@ -64,9 +64,15 @@
 #     Argo CD's notification packages pass their tests against it; notifications-engine's own slack
 #     tests pass but for two that expect an empty `blocks=[]` form field, which slack-go v0.23.1
 #     leaves out when there are no blocks. No notifications controller runs here (ADR 0024).
+#     Then, for the HIGH in klauspost/compress (CVE-2026-63209: v1.18.0 in argocd, v1.18.4 in helm;
+#     fixed in v1.18.7; 2026-10-24), on top of that result:
+#       argocd:    go get github.com/klauspost/compress@v1.18.7
+#       helm:      go get github.com/klauspost/compress@v1.18.7
+#       then       go mod tidy
+#     which moved nothing else.
 #     `diff` against upstream's go.mod at each commit shows the whole set. The Kubernetes libraries,
 #     gitops-engine (in-tree, `replace`d) and every replace directive upstream has are untouched.
-#   * Go 1.26.9 for all four, the golang image app/talon and app/ksops use (upstream: 1.26.4 for
+#   * Go 1.26.10 for all four, the golang image app/talon and app/ksops use (upstream: 1.26.4 for
 #     argocd and helm; the vendors' 1.24.0 and 1.25.3 for kustomize and git-lfs).
 #   * upstream's own unit tests run in the builder against the raised dependencies, with
 #     --network=none and as an unprivileged user (as upstream's CI; several argocd tests check that a
@@ -102,10 +108,11 @@
 # back), and take the node image pin from upstream's Dockerfile at that commit.
 #
 # Bases pinned by tag and digest (ADR 0008), resolved from the registries' index manifests:
-#   golang:1.26.9      docker.io   (as app/talon, app/ksops)
+#   golang:1.26.10     docker.io   (as app/talon, app/ksops; 1.26.9's standard library has a fixed
+#                                   HIGH, CVE-2026-111943)
 #   node:24.14.1       docker.io   (upstream's argocd-ui stage, same tag and digest)
 #   ubuntu:26.04       docker.io   (upstream's BASE_IMAGE, a newer digest of the same tag)
-ARG GOLANG_IMAGE=docker.io/library/golang:1.26.9@sha256:d7722066f0b60ceccb6c0643cbed1f5f9e15506ac237146c95333504d7805d89
+ARG GOLANG_IMAGE=docker.io/library/golang:1.26.10@sha256:672c944cfd07599b5f1bb179869270cdc94c6254e41db4d431259693cb286b82
 
 ####################################################################################################
 # Sources: each fetched by one full commit hash, checked, then its dependencies swapped and verified.
@@ -221,7 +228,7 @@ ENV HOME=/tmp/home GOCACHE=/tmp/gocache GOFLAGS=-buildvcs=false
 # go test's own vet checks less printf, then printf alone on every package but `commands`: x/net
 # v0.60.0 needs `go 1.26.0` in go.mod (upstream: 1.23.0), and at that language version vet's printf
 # check flags a line upstream has always had (commands/lockverifier.go passes a *git.Ref to %q in a
-# translated message). Every check of go test's default list (cmd/go/internal/test, Go 1.26.9) still
+# translated message). Every check of go test's default list (cmd/go/internal/test, Go 1.26.10) still
 # runs on every package; only printf on that one package is left out.
 RUN --network=none go test -count=1 \
       -vet=atomic,bool,buildtags,directive,errorsas,ifaceassert,nilfunc,slog,stringintconv,tests ./... \
