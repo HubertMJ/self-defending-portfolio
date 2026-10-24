@@ -26,4 +26,4 @@ resources:
 images:
   - name: ghcr.io/hubertmj/self-defending-portfolio/kube-bench
     newTag: main
-    digest: sha256:523b88a9c7f789f9f7b15eac9342b0be1c03ccc420f0e9502b1c0ba6657636f2
+    digest: sha256:444d50d17b536f811b07a4a4981107451e311e9da1c1da6b4eb609035a9fbbf1

@@ -20,7 +20,7 @@ resources:
 images:
   - name: ghcr.io/hubertmj/self-defending-portfolio/talon
     newTag: main
-    digest: sha256:09abf2292438fee5f503fe61eaffe72cf8eb2ad90b9af68e9319edabb03bdbfe
+    digest: sha256:3c84742949c969391bdad1ec521edd5fe307128759a347cc4396277e0164444a
 
 configMapGenerator:
   # Hash-suffixed names: a changed rule or setting is a new ConfigMap and rolls the Deployment, which is
