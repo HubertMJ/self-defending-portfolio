@@ -40,6 +40,11 @@
 #     Minimal version selection and `go mod tidy` then raised further transitive modules (the
 #     cloud.google.com and opentelemetry families, k8s.io/kubectl, among others) to what those
 #     require; `diff` against upstream's go.mod at TALON_COMMIT shows the whole set.
+#     Then, for the HIGH in go-jose (CVE-2026-116587, a DoS parsing JWKs with RSA keys: v4.1.4,
+#     fixed in v4.1.6; 2026-10-29), on top of that result:
+#       go get github.com/go-jose/go-jose/v4@v4.1.6
+#       go mod tidy
+#     which moved nothing else.
 #   * upstream's own test suite runs in the builder (`go vet` + `go test`) against the raised
 #     dependencies: no tests, no image (as app/api).
 #   * the binary as upstream builds it (.ko.yaml): CGO off, -trimpath, stripped, the same

@@ -34,6 +34,11 @@
 #     v0.60.0 requires x/crypto v0.57.0, which also fixes x/crypto's two MEDIUM findings. `diff`
 #     against upstream's go.mod at TRIVY_OPERATOR_COMMIT shows the whole set. Trivy itself (the library the operator embeds for
 #     config audits and report types) and the Kubernetes libraries are upstream's versions.
+#     Then, for the HIGH in go-jose (CVE-2026-116587, a DoS parsing JWKs with RSA keys: v4.1.4,
+#     fixed in v4.1.6; 2026-10-29), on top of that result:
+#       go get github.com/go-jose/go-jose/v4@v4.1.6
+#       go mod tidy
+#     which moved nothing else.
 #   * upstream's own unit tests (`mage test:unit`: `go test -short -timeout 60s ./...`, with
 #     magefile.go's CGO_ENABLED=0 and GOEXPERIMENT=jsonv2) run in the builder against the raised
 #     dependencies, with --network=none: no tests, no image. The envtest and integration suites skip

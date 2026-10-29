@@ -60,6 +60,11 @@
 #     after `go mod download` has checked every module against the hashes in go.sum and
 #     `go mod verify` has checked the extracted copies against them (the public checksum database is
 #     consulted only for a module go.sum does not list, and go.sum lists them all).
+#     Then, for the HIGH in go-jose (CVE-2026-116587, a DoS parsing JWKs with RSA keys: v4.1.4,
+#     fixed in v4.1.6; 2026-10-29), on top of that result:
+#       go get github.com/go-jose/go-jose/v4@v4.1.6
+#       go mod tidy
+#     which moved nothing else.
 #   * upstream's own unit tests for the packages the raised modules reach - the Envoy xDS server and
 #     its go-control-plane types, Hubble (observer, peer, relay, parser, the CEL flow filters), the
 #     monitor's packet decoding and the datapath probes (gopacket), cilium-health, the CNI
