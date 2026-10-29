@@ -44,6 +44,11 @@
 #       go mod tidy
 #     which moved nothing else. `diff` against upstream's go.mod at FALCOSIDEKICK_COMMIT shows the
 #     whole set.
+#     Then, for the HIGH in go-jose (CVE-2026-116587, a DoS parsing JWKs with RSA keys: v4.1.4,
+#     fixed in v4.1.6; 2026-10-29), on top of that result:
+#       go get github.com/go-jose/go-jose/v4@v4.1.6
+#       go mod tidy
+#     which moved nothing else.
 #   * upstream's own test suite (`make test`: `go vet` + `go test -race`) runs in the builder against
 #     the raised dependencies, with --network=none: no tests, no image (as app/talon, app/ksops).
 #   * the binary as upstream's release builds it (.goreleaser.yml + Makefile LDFLAGS): CGO off,

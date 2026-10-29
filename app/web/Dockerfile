@@ -36,8 +36,9 @@ USER root
 # 4.7.2-r0), CVE-2026-77214 (HIGH, fixed in libexpat 2.9.0-r0) and CVE-2026-88806 (HIGH, fixed in
 # libx11 1.8.14-r0). Upgraded in place from Alpine's repositories until the next base-image bump
 # carries the fixes; then this line goes.
-# brotli-libs 1.2.0-r1 too: CVE-2026-111497 (HIGH, fixed in 1.2.1-r0), the same way.
-RUN apk --no-cache upgrade pcre2 tiff libexpat libx11 brotli-libs
+# brotli-libs 1.2.0-r1 too: CVE-2026-111497 (HIGH, fixed in 1.2.1-r0), the same way; and curl and
+# libcurl 8.22.0-r0: CVE-2026-92392 (HIGH, 2026-10-29).
+RUN apk --no-cache upgrade pcre2 tiff libexpat libx11 brotli-libs curl libcurl
 
 # Our nginx.conf includes no conf.d, so the shipped default vhost is dead config. It is removed
 # rather than left in place because the base image's 10-listen-on-ipv6-by-default.sh entrypoint

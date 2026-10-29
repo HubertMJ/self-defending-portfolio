@@ -38,6 +38,11 @@
 #     upstream's go.mod at KSOPS_COMMIT shows the whole set.
 #     sops, age and kustomize/api - the modules that actually do the decryption and the KRM I/O - are
 #     upstream's versions, untouched.
+#     Then, for the HIGH in go-jose (CVE-2026-116587, a DoS parsing JWKs with RSA keys: v4.1.4,
+#     fixed in v4.1.6; 2026-10-29), on top of that result:
+#       go get github.com/go-jose/go-jose/v4@v4.1.6
+#       go mod tidy
+#     which moved nothing else.
 #   * upstream's own test suite (`go vet` + `go test -race`, as upstream's `make test`) runs in the
 #     builder against the raised dependencies, with --network=none: no tests, no image (as app/api,
 #     app/talon). One test is skipped, TestKSOPSPluginInstallation: it shells out to a `kustomize`

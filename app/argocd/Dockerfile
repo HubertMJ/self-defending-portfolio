@@ -69,7 +69,10 @@
 #       argocd:    go get github.com/klauspost/compress@v1.18.7
 #       helm:      go get github.com/klauspost/compress@v1.18.7
 #       then       go mod tidy
-#     which moved nothing else.
+#     which moved nothing else. Then, for the HIGH in go-jose (CVE-2026-116587, a DoS parsing JWKs
+#     with RSA keys: v4.1.4 in argocd, fixed in v4.1.6; 2026-10-29):
+#       argocd:    go get github.com/go-jose/go-jose/v4@v4.1.6
+#       then       go mod tidy
 #     `diff` against upstream's go.mod at each commit shows the whole set. The Kubernetes libraries,
 #     gitops-engine (in-tree, `replace`d) and every replace directive upstream has are untouched.
 #   * Go 1.26.10 for all four, the golang image app/talon and app/ksops use (upstream: 1.26.4 for
@@ -310,6 +313,12 @@ RUN GIT_COMMIT=$ARGOCD_COMMIT \
 ####################################################################################################
 FROM docker.io/library/ubuntu:26.04@sha256:3595d7fc4286a33fad0fd853a4063e654287a9c3787437d7937c94ca3f7a804e
 
+# The day Ubuntu's archive was last taken in. CI caches layers (build-images.yml, cache-from gha), so
+# a rebuild alone reuses the dist-upgrade below as it was the first time: on 2026-10-29 libbrotli1
+# stayed at 1.2.0-3build1 (CVE-2026-111497, HIGH) with 1.2.0-3ubuntu0.1 in the archive. Changing the
+# date is what makes the layer run again; set it to the day of the change.
+ARG APT_SNAPSHOT=2026-10-29
+
 USER root
 
 ENV ARGOCD_USER_ID=999 \
@@ -320,6 +329,7 @@ RUN groupadd -g $ARGOCD_USER_ID argocd && \
     mkdir -p /home/argocd && \
     chown argocd:0 /home/argocd && \
     chmod g=u /home/argocd && \
+    echo "apt: $APT_SNAPSHOT" && \
     apt-get update && \
     apt-get dist-upgrade -y && \
     apt-get install --no-install-recommends -y \
