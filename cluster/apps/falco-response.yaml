@@ -50,7 +50,7 @@ spec:
           image:
             registry: ghcr.io
             repository: hubertmj/self-defending-portfolio/falcosidekick
-            tag: "main@sha256:419932c1bbb70226250822cda57f600cb0b02f0efa58b1d06adc9bcbf7f721bf"
+            tag: "main@sha256:962a07cab084e610e372c2f6d7f850e9178544905e39b747c2f548f3a15874a1"
           # One node; a second replica would only double the alerts forwarded per event if Falco ever
           # retried, and adds nothing to availability here.
           replicaCount: 1
